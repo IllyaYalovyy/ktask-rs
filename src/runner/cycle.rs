@@ -35,11 +35,14 @@ pub(super) fn run(
                 evidence: String::new(),
                 verified_tree: String::new(),
             };
-            if let Some(previous) = previous.filter(|p| p.round > 0) {
-                progress.phase = match previous.phase.as_str() {
-                    "replanned" => "fix",
-                    "judge" | "fix" => "judge",
-                    _ => "check",
+            if let Some(previous) = previous {
+                progress.phase = if repair || previous.phase == "replanned" {
+                    "judge"
+                } else {
+                    match previous.phase.as_str() {
+                        "judge" | "fix" => "judge",
+                        _ => "check",
+                    }
                 }
                 .into();
                 progress.context.push_str(&format!(
@@ -77,7 +80,12 @@ pub(super) fn run(
             service.save_progress(run, &progress)?;
         }
         let answers = service.answers(run)?;
+        let attempts_used = service
+            .task(run.task)?
+            .ok_or_else(|| Error::Conflict("Current task disappeared during execution".into()))?
+            .attempts_used;
         let outcome = match progress.phase.as_str() {
+            "fix" if run.definition.attempt_limit.is_some_and(|limit| attempts_used >= limit) => Outcome::Failed("protocol", "Coding attempt limit exhausted after the read-only failure judge; work and evidence retained. Increase the limit or insert a prerequisite through Remediate before another worker runs.".into()),
             "implement" | "fix" => ai(
                 service,
                 run,
@@ -255,7 +263,10 @@ fn escalation(report: &str) -> Outcome {
             text
         })
         .unwrap_or_else(|| report.to_owned());
-    Outcome::Question(format!(
-        "Critical findings remain after {REPAIR_ROUNDS} repair rounds. Work and evidence are preserved; no additional repair worker will start automatically. Which scope change or missing product decision should guide the next work?\n{readable}"
-    ))
+    Outcome::Failed(
+        "review",
+        format!(
+            "Critical findings remain after {REPAIR_ROUNDS} repair rounds. Work and evidence are preserved; no additional repair worker will start automatically. Inspect findings and apply explicit model escalation or remediation before retrying.\n{readable}"
+        ),
+    )
 }

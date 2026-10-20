@@ -104,7 +104,7 @@ fn task_text(task: &Task) -> String {
         ));
     }
     text.push_str(&format!(
-        "Attempt limit: {} · timeout ms: {}\n",
+        "Attempt limit: {} · task active timeout ms: {}\n",
         limit(d.attempt_limit),
         limit(d.timeout_ms)
     ));

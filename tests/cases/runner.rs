@@ -119,6 +119,9 @@ while [ "$#" -gt 0 ]; do
  case "$1" in -m) shift; model="$1";; resume) shift; session="$1";; esac
  shift
 done
+if [ '{mode}' = check-launch-failure ]; then
+ printf '%s %s\n' "$$" "$PPID" >> "$HOME/launch-fixture-pids"
+fi
 prompt=$(cat)
 printf '%s' "$prompt" > "$HOME/prompt-$model"
 case "$prompt" in *"Repair plan from the failure judge"*) printf '%s' "$prompt" > "$HOME/prompt-repair-worker";; esac
@@ -139,13 +142,18 @@ case "$prompt" in *"You are the failure judge"*)
  judge_mode='{mode}'
  case "$prompt" in *"Human answer"*) judge_mode=normal;; esac
  case "$judge_mode" in
-  judge-insert) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"insert\",\"tasks\":[{{\"title\":\"Repair prerequisite\",\"goal\":\"Finish the preserved result\",\"criteria\":[\"result.txt contains verified\"]}}],\"reason\":\"Preserve the partial implementation before the repair\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
-  judge-revise) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"revise\",\"title\":\"Clarified task\",\"goal\":\"Do the clarified thing.\",\"criteria\":[\"Clarified check passes\"],\"reason\":\"The goal contradicted the criteria\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
+  judge-insert) if [ ! -f "$HOME/judge-inserted" ]; then touch "$HOME/judge-inserted"; printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"insert\",\"tasks\":[{{\"title\":\"Repair prerequisite\",\"goal\":\"Finish the preserved result\",\"criteria\":[\"result.txt contains verified\"]}}],\"reason\":\"Preserve the partial implementation before the repair\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; else printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"repair\",\"plan\":\"Verify the prerequisite and finish the original\",\"reason\":\"Prerequisite is complete\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; fi; exit 0;;
+  judge-revise|judge-revise-always) if [ '{mode}' = judge-revise-always ] || [ ! -f "$HOME/judge-revised" ]; then touch "$HOME/judge-revised"; printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"revise\",\"title\":\"Clarified task\",\"goal\":\"Do the clarified thing.\",\"criteria\":[\"Clarified check passes\"],\"reason\":\"The goal contradicted the criteria\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; else printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"repair\",\"plan\":\"Verify the revised task\",\"reason\":\"Revision is ready\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; fi; exit 0;;
   judge-ask) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"ask\",\"question\":\"Keep or drop the legacy export?\",\"reason\":\"Both readings satisfy the criteria\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
   *) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"repair\",\"plan\":\"Rerun the check after writing result.txt\",\"reason\":\"The check failed on a missing file\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
  esac;;
 esac
 case '{mode}' in
+ check-launch-failure)
+  if [ "$model" = execution ] && [ ! -f "$HOME/check-launch-armed" ]; then
+   touch "$HOME/check-launch-armed"
+   chmod 600 "$HOME/check-launch-ktask-dev"
+  fi;;
  minor-required|validation-critical)
   if [ '{mode}' = validation-critical ] && [ "$model" = validation ]; then printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Mandatory proof is missing\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": false, \"evidence\": \"Required boundary behavior is not verified\"}}], \"findings\": [{{\"severity\": \"critical\", \"description\": \"result.txt:1: boundary case needs correction\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{}}}}'; exit 0; fi
   if [ '{mode}' = minor-required ]; then
@@ -205,6 +213,57 @@ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":
         self.provider("normal")?;
         Ok(())
     }
+    /// Revoke only this sandbox's copied executable after implementation. The running
+    /// supervisor survives, but its next guardian spawn gets a real EACCES from the OS.
+    fn fail_check_launch(&self) -> Result<PathBuf> {
+        let binary = self.scratch.path().join("check-launch-ktask-dev");
+        fs::copy(BIN, &binary)?;
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
+        self.provider("check-launch-failure")?;
+        self.add("Recover check guardian launch")?;
+        self.ok(&["edit", "1", "--attempt-limit", "1"])?;
+        self.add("Must wait for verified recovery")?;
+        Ok(binary)
+    }
+    fn launch_workers_reaped(&self) -> Result {
+        for pid in
+            fs::read_to_string(self.scratch.path().join("launch-fixture-pids"))?.split_whitespace()
+        {
+            assert!(
+                !PathBuf::from(format!("/proc/{pid}")).exists(),
+                "fixture provider/guardian {pid} survived cleanup"
+            );
+        }
+        let lease = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(self.root.join(".git/ktask-worker.lock"))?;
+        lease.try_lock()?;
+        assert_eq!(lease.metadata()?.len(), 0, "uncleared guardian marker");
+        println!(
+            "CHECK LAUNCH CLEANUP: provider/guardian PIDs absent; worker lease free and marker empty"
+        );
+        self.no_scratch()
+    }
+    fn supervisor_stopped(&self) -> Result {
+        let lease = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(self.root.join(".git/ktask-runner.lock"))?;
+        let until = Instant::now() + Duration::from_secs(5);
+        loop {
+            match lease.try_lock() {
+                Ok(()) => {
+                    println!("CHECK LAUNCH CLEANUP: supervisor lease released");
+                    return Ok(());
+                }
+                Err(std::fs::TryLockError::WouldBlock) if Instant::now() < until => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
     /// A project check that fails exactly once, so the next attempt goes through the judge.
     fn fail_first_check(&self) -> Result {
         let marker = self.scratch.path().join("check-ran");
@@ -258,7 +317,7 @@ fn review_cycles_accept_only_minor_findings_after_ten_repairs_in_real_tui() -> R
             } else {
                 t.send("r")?;
             }
-            f.state(if critical { "waiting" } else { "succeeded" })?;
+            f.state(if critical { "failed" } else { "succeeded" })?;
             println!(
                 "REVIEW LOOP DECISION mouse={mouse} critical={critical}\n{}",
                 t.screen("decision", |s| {
@@ -271,7 +330,7 @@ fn review_cycles_accept_only_minor_findings_after_ten_repairs_in_real_tui() -> R
             );
             let task = f.ok(&["show", "1"])?;
             assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
-            assert_eq!(task["attempts_used"], if critical { 0 } else { 1 });
+            assert_eq!(task["attempts_used"], 1);
             let db = f.db()?;
             let round: i64 = db.connection().query_row(
                 "SELECT repair_round FROM attempt_progress WHERE attempt_id=1",
@@ -285,7 +344,7 @@ fn review_cycles_accept_only_minor_findings_after_ten_repairs_in_real_tui() -> R
                     [],
                     |r| r.get::<_, i64>(0)
                 )?,
-                0
+                if critical { 1 } else { 0 }
             );
             assert_eq!(
                 db.connection().query_row(
@@ -320,7 +379,7 @@ fn review_cycles_accept_only_minor_findings_after_ten_repairs_in_real_tui() -> R
             );
             if critical {
                 assert!(
-                    task["attempts"][0]["question"]
+                    task["attempts"][0]["outcome"]
                         .as_str()
                         .unwrap()
                         .contains("10 repair rounds")
@@ -379,7 +438,7 @@ fn pause_at_tenth_review_resumes_the_phase_without_an_eleventh_repair() -> Resul
         } else {
             t.send("r")?;
         }
-        f.state("waiting")?;
+        f.state("failed")?;
         println!(
             "TENTH REVIEW RESUMED mouse={mouse}\n{}",
             t.screen("critical decision", |s| s
@@ -466,14 +525,17 @@ fn mandatory_criteria_and_validation_findings_still_block_after_ten_rounds() -> 
         let f = Fixture::new()?;
         f.provider(mode)?;
         f.add("Mandatory evidence cannot be waived")?;
-        f.ok(&["run", "--one"])?;
-        f.state("waiting")?;
+        assert_eq!(
+            f.process().args(["run", "--one"]).output()?.status.code(),
+            Some(4)
+        );
+        f.state("failed")?;
         let task = f.ok(&["show", "1"])?;
         assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
-        let question = task["attempts"][0]["question"].as_str().unwrap();
-        assert!(question.contains("Critical findings remain after 10 repair rounds"));
-        assert!(question.contains("Required boundary behavior is not verified"));
-        assert!(!question.contains("\"assessment\""));
+        let outcome = task["attempts"][0]["outcome"].as_str().unwrap();
+        assert!(outcome.contains("Critical findings remain after 10 repair rounds"));
+        assert!(outcome.contains("Required boundary behavior is not verified"));
+        assert!(!outcome.contains("\"assessment\""));
         let db = f.db()?;
         assert_eq!(
             db.connection()
@@ -494,20 +556,21 @@ fn mandatory_criteria_and_validation_findings_still_block_after_ten_rounds() -> 
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
         println!(
             "MANDATORY DECISION {mode}\n{}",
-            t.screen("question", |s| s.contains("Critical findings remain"))?
+            t.screen("failure", |s| s.contains("FAILED"))?
         );
         if mouse {
-            t.click("w Answer")?;
+            t.click("Enter Details")?;
         } else {
-            t.send("w")?;
+            t.send("\r")?;
         }
         println!(
             "MANDATORY DECISION DETAILS {mode}\n{}",
-            t.screen("full decision", |s| s.contains("Which scope change")
-                || s.contains("Required boundary behavior"))?
+            t.screen("full decision", |s| s
+                .contains("Required boundary behavior")
+                || s.contains("Critical findings remain"))?
         );
         t.send("\x1b")?;
-        t.screen("question closed", |s| !s.contains("Answer AI question"))?;
+        t.screen("details closed", |s| s.contains("FAILED"))?;
         t.send("q")?;
         t.finish()?;
         f.no_scratch()?;
@@ -594,7 +657,7 @@ fn failed_repair_judge_is_repeated_before_a_retry_worker_runs() -> Result {
     f.fail_first_check()?;
     f.add("Retry the failed judge before repairing")?;
     let output = f.process().args(["run", "--one"]).output()?;
-    assert_eq!(output.status.code(), Some(4));
+    assert_eq!(output.status.code(), Some(0));
     let db = f.db()?;
     assert_eq!(
         db.connection().query_row(
@@ -602,9 +665,8 @@ fn failed_repair_judge_is_repeated_before_a_retry_worker_runs() -> Result {
             [],
             |r| r.get::<_, String>(0)
         )?,
-        "judge"
+        "complete"
     );
-    f.ok(&["run", "--one"])?;
     f.state("succeeded")?;
     let roles = fs::read_to_string(f.scratch.path().join("provider-invocations"))?;
     assert_eq!(
@@ -633,11 +695,11 @@ fn failed_repair_judge_is_repeated_before_a_retry_worker_runs() -> Result {
 #[test]
 fn automatic_revisions_cannot_reset_the_ten_round_budget() -> Result {
     let f = Fixture::new()?;
-    f.provider("judge-revise")?;
+    f.provider("judge-revise-always")?;
     f.add("Repeated revisions still have one repair budget")?;
     f.ok(&["check-set", "build", "--command", "exit 7"])?;
-    f.ok(&["run"])?;
-    f.state("waiting")?;
+    assert_eq!(f.process().args(["run"]).output()?.status.code(), Some(4));
+    f.state("failed")?;
     let task = f.ok(&["show", "1"])?;
     assert_eq!(task["selected_revision"], 11);
     assert_eq!(task["attempts_used"], 0);
@@ -645,10 +707,17 @@ fn automatic_revisions_cannot_reset_the_ten_round_budget() -> Result {
     let db = f.db()?;
     assert_eq!(
         db.connection()
-            .query_row("SELECT max(repair_round) FROM attempt_progress", [], |r| {
+            .query_row("SELECT automatic_replans FROM tasks WHERE id=1", [], |r| {
                 r.get::<_, i64>(0)
             })?,
         10
+    );
+    assert_eq!(
+        db.connection()
+            .query_row("SELECT max(repair_round) FROM attempt_progress", [], |r| {
+                r.get::<_, i64>(0)
+            })?,
+        1
     );
     assert_eq!(
         db.connection().query_row(
@@ -664,7 +733,7 @@ fn automatic_revisions_cannot_reset_the_ten_round_budget() -> Result {
             [],
             |r| r.get::<_, i64>(0)
         )?,
-        20
+        11
     );
     assert_eq!(
         db.connection().query_row(
@@ -672,7 +741,7 @@ fn automatic_revisions_cannot_reset_the_ten_round_budget() -> Result {
             [],
             |r| r.get::<_, i64>(0)
         )?,
-        0
+        1
     );
     f.no_scratch()?;
     Ok(())
@@ -688,7 +757,10 @@ fn check_evidence_preserves_unicode_split_across_pipe_reads() -> Result {
         f.ok(&["check-set", "build", "--command", &command])?;
         f.add("Unicode evidence")?;
         let result = f.process().args(["run", "--json"]).output()?;
-        assert_eq!(result.status.code(), Some(0));
+        assert_eq!(
+            result.status.code(),
+            Some(if exit_code == 0 { 0 } else { 4 })
+        );
         let db = f.db()?;
         let artifacts = db
             .connection()
@@ -788,7 +860,7 @@ fn failed_check_transcript_is_retained_for_remediation() -> Result {
     ])?;
     f.add("Preserve failure evidence")?;
     let result = f.process().args(["run", "--json"]).output()?;
-    assert_eq!(result.status.code(), Some(0));
+    assert_eq!(result.status.code(), Some(4));
     let prompt = fs::read_to_string(f.scratch.path().join("prompt-remediation"))?;
     let db = f.db()?;
     let relative: String = db.connection().query_row(
@@ -861,9 +933,9 @@ fn check_failure_is_real_and_remediation_stays_with_current() -> Result {
     f.add("Failure")?;
     f.add("Must not start")?;
     let failed = f.process().args(["run", "--queue"]).output()?;
-    assert_eq!(failed.status.code(), Some(0));
+    assert_eq!(failed.status.code(), Some(4));
     let task = f.ok(&["show", "1"])?;
-    assert_eq!(task["status"], "waiting");
+    assert_eq!(task["status"], "failed");
     assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
     assert!(
         f.ok(&["show", "2"])?["attempts"]
@@ -1141,7 +1213,7 @@ fn reviewer_that_keeps_asking_stops_the_task_without_a_question_or_budget() -> R
     );
     assert_eq!(
         fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-        "execution\nreview\nreview\n"
+        "execution\nreview\nreview\nreview\nreview\nreview\nreview\n"
     );
     assert_eq!(
         f.db()?
@@ -1706,7 +1778,7 @@ fn protocol_errors_timeouts_and_transport_never_fake_success_or_spend_coding_bud
         assert_eq!(o.status.code(), Some(4));
         let task = f.ok(&["show", "1"])?;
         assert_eq!(task["status"], "failed");
-        assert_eq!(task["attempts_used"], 0);
+        assert_eq!(task["attempts_used"], if mode == "slow" { 1 } else { 0 });
         assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
         f.no_scratch()?;
     }
@@ -2775,6 +2847,272 @@ fn automatic_prerequisite_preserves_work_and_original_repair_round() -> Result {
 }
 
 #[test]
+fn exhausted_original_gets_one_retry_after_prerequisite_in_mouse_and_keyboard_tuis() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("review-critical")?;
+        f.add("Original at its coding limit")?;
+        f.ok(&["edit", "1", "--attempt-limit", "1"])?;
+        assert_eq!(
+            f.process().args(["run", "--one"]).output()?.status.code(),
+            Some(4)
+        );
+        assert_eq!(f.ok(&["show", "1"])?["attempts_used"], 1);
+        f.provider("judge-insert")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+        println!(
+            "EXHAUSTED CURRENT mouse={mouse}\n{}",
+            t.screen("failed current", |s| s.contains("FAILED")
+                && s.contains("Budget 1 of 1 used"))?
+        );
+        if mouse {
+            t.click("t Retry")?;
+        } else {
+            t.send("t")?;
+        }
+        println!(
+            "RECOVERED CURRENT mouse={mouse}\n{}",
+            t.screen("prerequisite and original completed", |s| s
+                .contains("Queue complete.")
+                && s.contains("History 2"))?
+        );
+        t.send("q")?;
+        t.finish()?;
+        let original = f.ok(&["show", "1"])?;
+        assert_eq!(original["lifecycle"], "succeeded");
+        assert_eq!(original["attempts_used"], 2);
+        assert_eq!(original["definition"]["attempt_limit"], 2);
+        assert_eq!(original["attempts"].as_array().unwrap().len(), 3);
+        assert_eq!(original["attempts"][0]["revision"], 2);
+        assert_eq!(original["revisions"][1]["definition"]["attempt_limit"], 1);
+        assert_eq!(original["revisions"][2]["definition"]["attempt_limit"], 2);
+        let db = f.db()?;
+        assert_eq!(
+            db.connection().query_row(
+                "SELECT recovery_root_id FROM tasks WHERE id=2",
+                [],
+                |r| r.get::<_, i64>(0)
+            )?,
+            1
+        );
+        assert_eq!(db.connection().query_row("SELECT count(*) FROM attempt_steps s JOIN attempts a ON a.id=s.attempt_id WHERE a.task_id=1 AND s.role='remediation' AND s.report LIKE 'Repair:%'", [], |r| r.get::<_,i64>(0))?, 11);
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn configured_task_deadline_counts_earlier_attempt_time_and_identifies_the_limit() -> Result {
+    let f = Fixture::new()?;
+    f.provider("malformed-work")?;
+    f.add("Deadline across retries")?;
+    assert!(f.ok(&["show", "1"])?["definition"]["timeout_ms"].is_null());
+    f.ok(&["edit", "1", "--timeout-ms", "10000"])?;
+    assert_eq!(
+        f.process().args(["run", "--one"]).output()?.status.code(),
+        Some(4)
+    );
+    f.db()?
+        .connection()
+        .execute("UPDATE attempts SET active_ms=9999 WHERE task_id=1", [])?;
+    f.provider("normal")?;
+    assert_eq!(
+        f.process().args(["run", "--one"]).output()?.status.code(),
+        Some(4)
+    );
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "failed");
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 2);
+    assert!(
+        task["attempts"][1]["outcome"]
+            .as_str()
+            .unwrap()
+            .contains("configured task-wide limit")
+    );
+    assert_eq!(task["attempts_used"], 1);
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn real_tui_individual_check_timeout_remains_separate_from_task_deadline() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.add("Keep supervisor checks bounded")?;
+        f.add("Blocked behind timed out check")?;
+        f.ok(&[
+            "check-set",
+            "build",
+            "--command",
+            "sleep 30",
+            "--timeout-ms",
+            "200",
+        ])?;
+        if mouse {
+            f.ok(&["edit", "1", "--timeout-ms", "30000"])?;
+        } else {
+            assert!(f.ok(&["show", "1"])?["definition"]["timeout_ms"].is_null());
+        }
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 34)?;
+        t.screen("check timeout fixture ready", |s| s.contains("r Run queue"))?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        println!(
+            "INDIVIDUAL CHECK TIMEOUT mouse={mouse}\n{}",
+            t.screen("individual check timeout", |s| s.contains("FAILED")
+                && s.contains("Individual supervisor check timeout reached"))?
+        );
+        f.supervisor_stopped()?;
+        let failed = f.ok(&["show", "1"])?;
+        println!("INDIVIDUAL CHECK TIMEOUT TASK {failed}");
+        assert!(failed["attempts"][0]["active_ms"].as_i64().unwrap() >= 200);
+        assert!(
+            !failed["attempts"][0]["outcome"]
+                .as_str()
+                .unwrap()
+                .contains("task-wide")
+        );
+        assert_eq!(
+            f.db()?.connection().query_row(
+                "SELECT failure_category FROM attempts WHERE task_id=1",
+                [],
+                |r| r.get::<_, String>(0),
+            )?,
+            "timeout"
+        );
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+            "execution\n"
+        );
+        assert!(
+            f.ok(&["show", "2"])?["attempts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn repeated_rate_limits_stop_after_three_waits_without_spending_coding_budget() -> Result {
+    let f = Fixture::new()?;
+    f.provider("rate")?;
+    f.add("Rate limit must stop")?;
+    for wait in 1..=3 {
+        f.ok(&["run", "--one"])?;
+        let task = f.ok(&["show", "1"])?;
+        assert_eq!(task["status"], "waiting");
+        assert_eq!(
+            f.db()?.connection().query_row(
+                "SELECT rate_waits FROM attempts WHERE task_id=1",
+                [],
+                |r| r.get::<_, i64>(0)
+            )?,
+            wait
+        );
+        f.db()?.connection().execute(
+            "UPDATE attempts SET resume_at_ms=waiting_since_ms WHERE task_id=1",
+            [],
+        )?;
+    }
+    assert_eq!(
+        f.process().args(["run", "--one"]).output()?.status.code(),
+        Some(4)
+    );
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "failed");
+    assert_eq!(task["attempts_used"], 0);
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+    assert!(
+        task["attempts"][0]["outcome"]
+            .as_str()
+            .unwrap()
+            .contains("after 3 waits")
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn zero_round_replan_rejudges_before_the_next_worker() -> Result {
+    let f = Fixture::new()?;
+    f.provider("malformed-work")?;
+    f.add("Judge every replan")?;
+    assert_eq!(
+        f.process().args(["run", "--one"]).output()?.status.code(),
+        Some(4)
+    );
+    f.provider("judge-revise")?;
+    f.ok(&["run", "--one"])?;
+    assert_eq!(f.ok(&["show", "1"])?["lifecycle"], "succeeded");
+    let reports: Vec<String> = f.db()?.connection().prepare("SELECT report FROM attempt_steps WHERE role='remediation' AND report IS NOT NULL ORDER BY id")?.query_map([], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
+    assert!(
+        reports
+            .iter()
+            .any(|report| report.contains("Task revised by the failure judge"))
+    );
+    assert!(reports.iter().any(|report| report.starts_with("Repair:")));
+    assert_eq!(
+        f.db()?.connection().query_row(
+            "SELECT automatic_replans FROM tasks WHERE id=1",
+            [],
+            |row| row.get::<_, i64>(0)
+        )?,
+        1
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn retry_reservation_preserves_revision_history_and_rejects_stale_edit() -> Result {
+    use ktask_rs_mk3::application::{Service, VersionedTask};
+    let f = Fixture::new()?;
+    f.provider("review-critical")?;
+    f.add("Original with exhausted limit")?;
+    f.ok(&["edit", "1", "--attempt-limit", "1"])?;
+    assert_eq!(
+        f.process().args(["run", "--one"]).output()?.status.code(),
+        Some(4)
+    );
+    let mut service = Service::open(f.db()?, &f.root, None)?;
+    let original = service.current_task()?.unwrap();
+    let target = VersionedTask {
+        id: original.id,
+        version: original.version,
+    };
+    let mut repair = original.definition().definition.clone();
+    repair.title = "Prerequisite".into();
+    ktask_rs_mk3::runner::remediation::apply(
+        &mut service,
+        target,
+        None,
+        &[repair],
+        "Repair first",
+        true,
+    )?;
+    let revised = service.task(target.id)?.unwrap();
+    assert!(revised.version > target.version);
+    assert_eq!(revised.revisions[1].definition.attempt_limit, Some(1));
+    assert_eq!(revised.revisions[2].definition.attempt_limit, Some(2));
+    assert_eq!(revised.attempts[0].revision, 2);
+    assert!(
+        service
+            .revise(target, &original.definition().definition, true)
+            .is_err()
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
 fn background_startup_returns_actual_error_in_cli_and_tui() -> Result {
     for (mouse, cols, rows) in [(false, 70, 22), (true, 120, 30)] {
         let f = Fixture::new()?;
@@ -3145,7 +3483,7 @@ fn executable_busy_recheck_retains_both_outcomes_without_a_second_coding_attempt
         };
         f.ok(&["check-set", "build", "--command", command])?;
         let result = f.process().args(["run"]).output()?;
-        assert!(result.status.success());
+        assert_eq!(result.status.success(), !persistent);
         let task = f.ok(&["show", "1"])?;
         assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
         let db = f.db()?;
@@ -3157,7 +3495,7 @@ fn executable_busy_recheck_retains_both_outcomes_without_a_second_coding_attempt
             .collect::<rusqlite::Result<Vec<_>>>()?;
         if persistent {
             assert_eq!(checks, vec![("failed".into(), 1); 22]);
-            assert_eq!(task["status"], "waiting");
+            assert_eq!(task["status"], "failed");
         } else {
             assert_eq!(checks, vec![("failed".into(), 1), ("succeeded".into(), 0)]);
         }
@@ -3180,9 +3518,438 @@ fn executable_busy_recheck_retains_both_outcomes_without_a_second_coding_attempt
                 assert_eq!(prompt.matches("step-").count(), 2);
             }
         } else {
-            assert_eq!(task["attempts_used"], 0);
+            assert_eq!(task["attempts_used"], 1);
         }
         f.no_scratch()?;
+    }
+    Ok(())
+}
+
+/// Read persisted failures and their independently retained supervisor transcripts.
+fn assert_check_launch_records(f: &Fixture, failed: usize, passed: bool) -> Result<Vec<i64>> {
+    let db = f.db()?;
+    let records = db.connection().prepare(
+        "SELECT id,attempt_id,state,exit_code,started_at_ms,report FROM attempt_steps WHERE task_id=1 AND role='check' ORDER BY id",
+    )?.query_map([], |r| Ok((
+        r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?,
+        r.get::<_, Option<i32>>(3)?, r.get::<_, i64>(4)?, r.get::<_, String>(5)?,
+    )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    println!("CHECK LAUNCH RECORDS {records:#?}");
+    assert_eq!(records.len(), failed + usize::from(passed));
+    for (index, (id, attempt, state, code, _, report)) in records.iter().enumerate() {
+        assert_eq!(*attempt, 1, "automatic retries must retain their attempt");
+        if index < failed {
+            assert_eq!(state, "failed");
+            assert_eq!(*code, None, "failed launch never executes the check");
+            assert!(report.contains("Permission denied"), "{report}");
+        } else {
+            assert_eq!(state, "succeeded");
+            assert_eq!(*code, Some(0));
+        }
+        let path = format!("evidence/attempt-1/step-{id}.log");
+        let artifact: (String, String, i64) = db.connection().query_row(
+            "SELECT name,media_type,size_bytes FROM artifacts WHERE attempt_id=1 AND relative_path=?1 AND pruned_at_ms IS NULL",
+            [&path], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        let transcript = fs::read_to_string(f.scratch.path().join("state/ktask-dev").join(&path))?;
+        println!("CHECK LAUNCH ARTIFACT {path} {artifact:?}\n{transcript}");
+        assert_eq!(artifact.0, "build");
+        assert_eq!(artifact.2, transcript.len() as i64);
+    }
+    let progress: (i64, String) = db.connection().query_row(
+        "SELECT repair_round,phase FROM attempt_progress WHERE attempt_id=1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    assert_eq!(
+        progress.0, 0,
+        "infrastructure failures must not start coding repairs"
+    );
+    Ok(records.iter().map(|r| r.4).collect())
+}
+
+#[test]
+fn real_tui_check_launch_failure_recovers_same_attempt_and_continues_queue() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        let binary = f.fail_check_launch()?;
+        let mut t =
+            Terminal::open_project(binary.to_str().unwrap(), f.scratch.path(), &f.root, 120, 34)?;
+        t.screen("launch fixture ready", |s| s.contains("r Run queue"))?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        println!(
+            "CHECK LAUNCH TRANSIENT mouse={mouse}\n{}",
+            t.screen("check launch backoff", |s| s
+                .contains("Check infrastructure failed")
+                && s.contains("retry 1/2 after 1s"))?
+        );
+        let retrying = f.ok(&["show", "1"])?;
+        assert_eq!(retrying["attempts_used"], 0);
+        assert_eq!(retrying["attempts"].as_array().unwrap().len(), 1);
+        assert_check_launch_records(&f, 1, false)?;
+        f.launch_workers_reaped()?;
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
+        println!(
+            "CHECK LAUNCH TRANSIENT COMPLETE mouse={mouse}\n{}",
+            t.screen("queue recovered", |s| s.contains("Queue complete.")
+                && s.contains("History 2"))?
+        );
+        let first = f.ok(&["show", "1"])?;
+        assert_eq!(first["status"], "succeeded");
+        assert_eq!(first["attempts_used"], 1);
+        assert_eq!(first["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
+        let launches = assert_check_launch_records(&f, 1, true)?;
+        assert!(
+            launches[1] - launches[0] >= 1000,
+            "1s backoff skipped: {launches:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+            "execution\nreview\nvalidation\nexecution\nreview\nvalidation\n"
+        );
+        t.send("q")?;
+        t.finish()?;
+        f.launch_workers_reaped()?;
+        f.supervisor_stopped()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn real_tui_check_launch_failure_exhausts_three_launches_and_blocks_queue() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        let binary = f.fail_check_launch()?;
+        let mut t =
+            Terminal::open_project(binary.to_str().unwrap(), f.scratch.path(), &f.root, 120, 34)?;
+        t.screen("launch fixture ready", |s| s.contains("r Run queue"))?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        for (retry, seconds) in [(1, 1), (2, 2)] {
+            println!(
+                "CHECK LAUNCH PERSISTENT mouse={mouse} retry={retry}\n{}",
+                t.screen("check launch bounded backoff", |s| s
+                    .contains("Check infrastructure failed")
+                    && s.contains(&format!("retry {retry}/2 after {seconds}s")))?
+            );
+        }
+        println!(
+            "CHECK LAUNCH EXHAUSTED mouse={mouse}\n{}",
+            t.screen("launch retries exhausted", |s| s.contains("FAILED")
+                && s.contains("Permission denied"))?
+        );
+        let first = f.ok(&["show", "1"])?;
+        println!("CHECK LAUNCH EXHAUSTED TASK {first}");
+        assert_eq!(first["status"], "failed");
+        assert_eq!(first["attempts_used"], 0);
+        assert_eq!(first["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            f.db()?.connection().query_row(
+                "SELECT failure_category FROM attempts WHERE task_id=1",
+                [],
+                |r| r.get::<_, String>(0)
+            )?,
+            "environment"
+        );
+        let second = f.ok(&["show", "2"])?;
+        assert_eq!(second["status"], "ready");
+        assert!(second["attempts"].as_array().unwrap().is_empty());
+        let launches = assert_check_launch_records(&f, 3, false)?;
+        assert!(
+            launches[1] - launches[0] >= 1000,
+            "1s backoff skipped: {launches:?}"
+        );
+        assert!(
+            launches[2] - launches[1] >= 2000,
+            "2s backoff skipped: {launches:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+            "execution\n"
+        );
+        f.launch_workers_reaped()?;
+        f.supervisor_stopped()?;
+        t.send("q")?;
+        t.finish()?;
+        let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 34)?;
+        println!(
+            "CHECK LAUNCH FAILURE RETAINED mouse={mouse}\n{}",
+            reopened.screen("retained environment failure", |s| s.contains("FAILED")
+                && s.contains("Permission denied"))?
+        );
+        assert_check_launch_records(&f, 3, false)?;
+        reopened.send("q")?;
+        reopened.finish()?;
+        f.launch_workers_reaped()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn real_tui_check_launch_failure_pause_cancels_backoff_and_resumes_same_attempt() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        let binary = f.fail_check_launch()?;
+        let mut t =
+            Terminal::open_project(binary.to_str().unwrap(), f.scratch.path(), &f.root, 120, 34)?;
+        t.screen("launch fixture ready", |s| s.contains("r Run queue"))?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        let failures = if mouse { 2 } else { 1 };
+        println!(
+            "CHECK LAUNCH BEFORE PAUSE mouse={mouse}\n{}",
+            t.screen("check launch backoff before pause", |s| s
+                .contains("Check infrastructure failed")
+                && s.contains(&format!("retry {failures}/2")))?
+        );
+        let active_before_pause = f.ok(&["show", "1"])?["attempts"][0]["active_ms"]
+            .as_i64()
+            .unwrap();
+        thread::sleep(Duration::from_millis(250));
+        if mouse {
+            t.click("p Pause")?;
+        } else {
+            t.send("p")?;
+        }
+        println!(
+            "CHECK LAUNCH PAUSED mouse={mouse}\n{}",
+            t.screen("paused launch retries", |s| s.contains("PAUSED")
+                && s.contains("supervisor absent")
+                && s.contains("r Resume"))?
+        );
+        let first = f.ok(&["show", "1"])?;
+        let paused_active = first["attempts"][0]["active_ms"].as_i64().unwrap();
+        assert!(
+            paused_active >= active_before_pause + 200,
+            "cancelled backoff time was lost: {active_before_pause} -> {paused_active}"
+        );
+        println!("CHECK LAUNCH CANCELLED ACTIVE TIME {active_before_pause} -> {paused_active}");
+        assert_eq!(first["attempts_used"], 0);
+        assert_eq!(first["attempts"].as_array().unwrap().len(), 1);
+        let before = assert_check_launch_records(&f, failures, false)?;
+        f.launch_workers_reaped()?;
+        f.supervisor_stopped()?;
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
+        thread::sleep(Duration::from_millis(2200));
+        assert_eq!(assert_check_launch_records(&f, failures, false)?, before);
+        assert_eq!(f.ok(&["show", "1"])?["status"], "paused");
+        assert_eq!(
+            f.ok(&["show", "1"])?["attempts"][0]["active_ms"],
+            paused_active,
+            "paused time must stay excluded"
+        );
+        assert!(
+            f.ok(&["show", "2"])?["attempts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let resumed_at = Instant::now();
+        if mouse {
+            t.click("r Resume")?;
+        } else {
+            t.send("r")?;
+        }
+        println!(
+            "CHECK LAUNCH RESUMED mouse={mouse}\n{}",
+            t.screen("resumed launch recovery", |s| s.contains("Queue complete.")
+                && s.contains("History 2"))?
+        );
+        let first = f.ok(&["show", "1"])?;
+        assert_eq!(first["status"], "succeeded");
+        assert_eq!(first["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(first["attempts_used"], 1);
+        let resumed_active = first["attempts"][0]["active_ms"].as_i64().unwrap();
+        assert!(resumed_active >= paused_active);
+        assert!(
+            resumed_active - paused_active <= resumed_at.elapsed().as_millis() as i64 + 100,
+            "resume counted paused time or the previous segment twice"
+        );
+        println!(
+            "CHECK LAUNCH RESUMED ACTIVE TIME {paused_active} -> {resumed_active}; 2200ms pause excluded"
+        );
+        assert_check_launch_records(&f, failures, true)?;
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+            "execution\nreview\nvalidation\nexecution\nreview\nvalidation\n"
+        );
+        t.send("q")?;
+        t.finish()?;
+        f.launch_workers_reaped()?;
+    }
+    Ok(())
+}
+
+fn assert_deadline_retry_finished(f: &Fixture, first_attempt: &Value, limit: i64) -> Result {
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        let retried = f.ok(&["show", "1"])?;
+        if retried["attempts"].as_array().unwrap().len() == 2 && retried["status"] == "failed" {
+            println!("CHECK LAUNCH DEADLINE RETRY TASK {retried}");
+            assert_eq!(&retried["attempts"][0], first_attempt);
+            assert!(
+                retried["attempts"][1]["outcome"]
+                    .as_str()
+                    .unwrap()
+                    .contains("configured task-wide limit")
+            );
+            let total = retried["attempts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a["active_ms"].as_i64().unwrap())
+                .sum::<i64>();
+            assert!(total >= limit);
+            return Ok(());
+        }
+        assert!(
+            Instant::now() < until,
+            "deadline Retry did not finish: {retried}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn real_tui_check_launch_backoff_deadline_survives_restart_and_requires_explicit_increase() -> Result
+{
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        let binary = f.fail_check_launch()?;
+        let limit = 2500;
+        f.ok(&["edit", "1", "--timeout-ms", "2500", "--attempt-limit", "3"])?;
+        let mut t =
+            Terminal::open_project(binary.to_str().unwrap(), f.scratch.path(), &f.root, 120, 34)?;
+        t.screen("deadline launch fixture ready", |s| {
+            s.contains("r Run queue")
+        })?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        println!(
+            "CHECK LAUNCH DEADLINE BACKOFF mouse={mouse}\n{}",
+            t.screen("deadline during second launch backoff", |s| s
+                .contains("Check infrastructure failed")
+                && s.contains("retry 2/2 after 2s"))?
+        );
+        let before = f.ok(&["show", "1"])?;
+        assert_eq!(before["attempts_used"], 0);
+        assert!(before["attempts"][0]["active_ms"].as_i64().unwrap() < limit);
+        let launches = assert_check_launch_records(&f, 2, false)?;
+        println!(
+            "CHECK LAUNCH DEADLINE EXPIRED mouse={mouse}\n{}",
+            t.screen("configured deadline expired", |s| s.contains("FAILED")
+                && s.contains("configured task-wide limit"))?
+        );
+        f.supervisor_stopped()?;
+        let failed = f.ok(&["show", "1"])?;
+        let first_attempt = failed["attempts"][0].clone();
+        let recorded = first_attempt["active_ms"].as_i64().unwrap();
+        println!("CHECK LAUNCH DEADLINE TASK {failed}");
+        assert!(recorded >= limit, "backoff time not persisted: {recorded}");
+        assert_eq!(
+            failed["attempts_used"], 1,
+            "task deadline is an agent failure"
+        );
+        assert_eq!(assert_check_launch_records(&f, 2, false)?, launches);
+        assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+            "execution\n"
+        );
+        assert!(
+            f.ok(&["show", "2"])?["attempts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        f.launch_workers_reaped()?;
+        t.send("q")?;
+        t.finish()?;
+
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
+        let mut t =
+            Terminal::open_project(binary.to_str().unwrap(), f.scratch.path(), &f.root, 120, 34)?;
+        println!(
+            "CHECK LAUNCH DEADLINE RESTART mouse={mouse}\n{}",
+            t.screen("restart retains configured deadline failure", |s| s
+                .contains("FAILED")
+                && s.contains("t Retry")
+                && s.contains("configured task-wide limit"))?
+        );
+        if mouse {
+            t.click("t Retry")?;
+        } else {
+            t.send("t")?;
+        }
+        assert_deadline_retry_finished(&f, &first_attempt, limit)?;
+        f.supervisor_stopped()?;
+        println!(
+            "CHECK LAUNCH DEADLINE RETRY BLOCKED mouse={mouse}\n{}",
+            t.screen("retry still blocked by configured deadline", |s| s
+                .contains("FAILED")
+                && s.contains("configured task-wide limit"))?
+        );
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+            "execution\n",
+            "expired retry must not start even a judge worker"
+        );
+        assert_eq!(assert_check_launch_records(&f, 2, false)?, launches);
+        assert!(
+            f.ok(&["show", "2"])?["attempts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
+        f.launch_workers_reaped()?;
+
+        f.ok(&["edit", "1", "--timeout-ms", "30000"])?;
+        t.screen("increased task deadline ready for retry", |s| {
+            s.contains("t Retry")
+        })?;
+        if mouse {
+            t.click("t Retry")?;
+        } else {
+            t.send("t")?;
+        }
+        println!(
+            "CHECK LAUNCH DEADLINE INCREASE RECOVERED mouse={mouse}\n{}",
+            t.screen("increased deadline permits judged recovery", |s| s
+                .contains("Queue complete.")
+                && s.contains("History 2"))?
+        );
+        let recovered = f.ok(&["show", "1"])?;
+        assert_eq!(recovered["status"], "succeeded");
+        assert_eq!(recovered["attempts"][0], first_attempt);
+        assert_eq!(recovered["attempts"].as_array().unwrap().len(), 3);
+        assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+            "execution\nremediation\nremediation\nreview\nvalidation\nexecution\nreview\nvalidation\n"
+        );
+        let judge_prompt = fs::read_to_string(f.scratch.path().join("prompt-judge"))?;
+        assert!(judge_prompt.contains("You are the failure judge"));
+        assert!(judge_prompt.contains("read-only"));
+        println!("CHECK LAUNCH DEADLINE RECOVERY JUDGE\n{judge_prompt}");
+        t.send("q")?;
+        t.finish()?;
+        f.supervisor_stopped()?;
+        f.launch_workers_reaped()?;
     }
     Ok(())
 }

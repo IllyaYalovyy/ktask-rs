@@ -40,8 +40,11 @@ attempts.wait_reason distinguishes question, rate_limit, and provider_unavailabl
 records waiting_since_ms and optional resume_at_ms (earliest UTC resume time). A rate limit
 normally suspends the same attempt; it is not a failed coding attempt. Question waits require
 answers before resumption. Wait events retain the history after the current wait fields clear.
+Three rate-limit waits per attempt use visible 60, 120 and 240 second backoffs; exhaustion
+stops automatic execution and retains work for an explicit retry.
 
-Each revision has attempt_limit and attempt_timeout_ms (positive, NULL = unlimited).
+Each revision has attempt_limit and attempt_timeout_ms (positive, NULL = unlimited). New,
+imported, planned and repair tasks default to unlimited active time.
 attempt_limit applies across ALL revisions of the task; escalation does not reset usage.
 attempts_used counts succeeded attempts and failures in check/review/validation/agent/unknown.
 Rate-limit, transport, environment, protocol, timeout, interruption, and cancellation do not
@@ -49,10 +52,14 @@ consume the coding-attempt budget. Number is an audit sequence, not budget usage
 Here timeout means an infrastructure/request timeout. Exhausting the active execution limit
 is an agent failure and consumes budget; it must not be mislabeled as infrastructure.
 
-attempt_timeout_ms limits active execution time for that attempt's exact revision. Paused and
-waiting time never enters active_ms. Start checks the attempt budget; resume checks elapsed
-active time and the wait deadline. The supervisor accounts active time with a monotonic clock,
-stops work at the limit, and flushes terminal evidence after worker shutdown.
+attempt_timeout_ms limits cumulative active execution time across the task's attempts, using
+the active revision's configured limit. Paused and waiting time never enters active_ms. Start
+checks the attempt budget; resume checks elapsed active time and the wait deadline. The
+supervisor accounts active time with a monotonic clock, stops work at the limit, and flushes
+terminal evidence after worker shutdown. Individual check timeouts remain separate.
+Automatic judge replans share a durable ten-handoff budget with inserted prerequisites.
+When prerequisites are inserted at an exhausted coding limit, one retry is reserved in a
+new ready revision; old attempts keep their original revision and limits.
 
 ## Storage conventions
 
@@ -88,6 +95,7 @@ erDiagram
     projects ||--o{ project_checks : "project_id"
     projects ||--o| execution_sessions : "project_id"
     projects ||--o{ tasks : "project_id"
+    tasks ||--o{ tasks : "recovery_root_id"
     tasks ||--o{ task_revisions : "task_id"
     task_revisions ||--o{ revision_models : "task_id, revision"
     task_revisions ||--o{ acceptance_criteria : "task_id, revision"
@@ -279,6 +287,7 @@ One execution against an exact revision; retry creates another row. This is the 
 | `started_at_ms` | INTEGER | no | Start time. |
 | `finished_at_ms` | INTEGER | yes | Finish time; NULL while active. |
 | `active_ms` | INTEGER | no | Accumulated active duration, nonnegative; default 0. |
+| `rate_waits` | INTEGER | no | Number of rate-limit waits in this attempt, at most three. |
 | `wait_reason` | TEXT | yes | question, rate_limit, provider_unavailable; required only while waiting. |
 | `waiting_since_ms` | INTEGER | yes | Start of the current wait; required only while waiting. |
 | `resume_at_ms` | INTEGER | yes | Earliest resume time for a timed wait; NULL means no scheduled time. |
@@ -528,7 +537,7 @@ Versioned definition, limits, and approval decision. Select the newest ready rev
 | `created_by_kind` | TEXT | no | human, ai, or system; creator attribution, including drafts. |
 | `created_by` | TEXT | no | Nonblank creator identifier. |
 | `attempt_limit` | INTEGER | yes | Maximum charged attempts for the task across revisions; positive, NULL = unlimited. |
-| `attempt_timeout_ms` | INTEGER | yes | Active-time limit per attempt in milliseconds; positive, NULL = unlimited. Waiting/paused time is excluded. |
+| `attempt_timeout_ms` | INTEGER | yes | Cumulative task active-time limit in milliseconds; positive, NULL = unlimited. Waiting/paused time is excluded. |
 | `created_at_ms` | INTEGER | no | Creation time. |
 | `decided_at_ms` | INTEGER | yes | Decision time, not before creation. |
 | `decided_by_kind` | TEXT | yes | human, ai, system; NULL for draft. |
@@ -549,6 +558,8 @@ Stable task identity, readiness, and final resolution. Execution status exists o
 | `order_key` | TEXT | no | Canonical fractional string, BINARY execution order; never NULL. |
 | `lifecycle` | TEXT | no | new, ready, blocked, succeeded, succeeded_override, failed_skipped, superseded, cancelled, deleted. |
 | `origin` | TEXT | no | human, planner, remediator, import. |
+| `recovery_root_id` | INTEGER | yes | Original task whose automatic replan budget this prerequisite shares. |
+| `automatic_replans` | INTEGER | no | Number of automatic judge handoffs for the recovery root, at most ten. |
 | `row_version` | INTEGER | no | Positive optimistic concurrency version, default 1. |
 | `created_at_ms` | INTEGER | no | Creation time. |
 | `updated_at_ms` | INTEGER | no | Last command time; not before creation. |
@@ -559,6 +570,7 @@ Stable task identity, readiness, and final resolution. Execution status exists o
 
 - PK `(id)`.
 - FK `(project_id)` → `projects(id)`.
+- FK `(recovery_root_id)` → `tasks(id)`.
 - Index `ix_tasks_history`: `INDEX ix_tasks_history ON tasks(project_id, closed_at_ms DESC, id DESC)`.
 - UQ `(project_id, order_key)`.
 - UQ `(id, project_id)`.

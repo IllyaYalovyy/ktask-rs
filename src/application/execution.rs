@@ -302,6 +302,13 @@ impl Service {
     pub fn active_time(&self, run: &Run, active_ms: i64) -> Result<()> {
         require(self.db.connection().execute("UPDATE attempts SET active_ms=?2 WHERE id=?1 AND execution_token=?3 AND state='running' AND active_ms<=?2", params![run.attempt,active_ms,run.token])? == 1, "Runner lost ownership of attempt")
     }
+    pub fn earlier_task_active_ms(&self, run: &Run) -> Result<i64> {
+        Ok(self.db.connection().query_row(
+            "SELECT coalesce(sum(active_ms),0) FROM attempts WHERE task_id=?1 AND id<>?2",
+            params![run.task, run.attempt],
+            |row| row.get(0),
+        )?)
+    }
     pub fn request_pause(&mut self, target: VersionedTask) -> Result<()> {
         let tx = self
             .db
@@ -359,7 +366,7 @@ impl Service {
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let now = now_ms();
-        require(tx.execute("UPDATE attempts SET state='waiting',wait_reason='rate_limit',waiting_since_ms=?2,resume_at_ms=?2+60000,report=?3 WHERE id=?1 AND execution_token=?4 AND state='running'",params![run.attempt,now,message,run.token])?==1,"Attempt ownership lost")?;
+        require(tx.execute("UPDATE attempts SET state='waiting',wait_reason='rate_limit',waiting_since_ms=?2,resume_at_ms=?2+60000*(1 << rate_waits),rate_waits=rate_waits+1,report=?3 WHERE id=?1 AND execution_token=?4 AND state='running' AND rate_waits<3",params![run.attempt,now,message,run.token])?==1,"Rate-limit recovery exhausted or attempt ownership lost")?;
         tx.execute("UPDATE attempt_steps SET state='interrupted',finished_at_ms=?2,report=?3 WHERE attempt_id=?1 AND state='running'",params![run.attempt,now,message])?;
         tx.execute("UPDATE model_calls SET state='failed',finished_at_ms=?2,error=?3 WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id=?1) AND state='running'",params![run.attempt,now,message])?;
         tx.execute(
@@ -370,10 +377,17 @@ impl Service {
             "INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message)
              VALUES (?1,?2,?3,?4,'attempt.waiting','info',?5)",
             params![self.project_id,run.task,run.attempt,now,
-                "Provider rate limited; same attempt retained. Resume eligible in 60 seconds (backoff, not a provider reset estimate)"],
+                "Provider rate limited; same attempt retained. Scheduled bounded backoff (not a provider reset estimate)"],
         )?;
         tx.commit()?;
         Ok(())
+    }
+    pub fn rate_waits(&self, run: &Run) -> Result<i64> {
+        Ok(self.db.connection().query_row(
+            "SELECT rate_waits FROM attempts WHERE id=?1 AND execution_token=?2",
+            params![run.attempt, run.token],
+            |row| row.get(0),
+        )?)
     }
     pub fn answer(&mut self, target: VersionedTask, answer: &str) -> Result<()> {
         require(!answer.trim().is_empty(), "An answer is required")?;

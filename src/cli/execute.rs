@@ -242,7 +242,7 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
                 criteria: add.criterion.clone(),
                 models: service.defaults()?,
                 attempt_limit: Some(3),
-                timeout_ms: Some(600_000),
+                timeout_ms: None,
             };
             add.settings.apply(&mut d)?;
             Ok(created(service.create(

@@ -44,7 +44,16 @@ fn run(binary: &Path, root: &Path, args: &[&str]) -> Result<std::process::Output
 fn retained_data(db: &Connection) -> Result<Vec<Vec<Vec<rusqlite::types::Value>>>> {
     let mut data = Vec::new();
     for table in ["tasks", "task_revisions", "attempts", "events"] {
-        let mut query = db.prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))?;
+        let columns = match table {
+            "tasks" => {
+                "id,project_id,order_key,lifecycle,origin,row_version,created_at_ms,updated_at_ms,closed_at_ms,resolution_reason,resolved_by_kind,resolved_by"
+            }
+            "attempts" => {
+                "id,project_id,task_id,revision,number,state,execution_token,started_at_ms,finished_at_ms,active_ms,wait_reason,waiting_since_ms,resume_at_ms,outcome,failure_category,base_commit,head_commit,report"
+            }
+            _ => "*",
+        };
+        let mut query = db.prepare(&format!("SELECT {columns} FROM {table} ORDER BY rowid"))?;
         data.push(
             query
                 .query_map([], |row| {

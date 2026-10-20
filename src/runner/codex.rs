@@ -129,6 +129,7 @@ pub fn parse_judgment(text: &str) -> Result<Judgment> {
         Judgment::Insert { tasks, reason } => {
             !blank(reason)
                 && !tasks.is_empty()
+                && tasks.len() <= 3
                 && tasks.iter().all(|t| {
                     !blank(&t.title)
                         && !blank(&t.goal)
@@ -171,7 +172,7 @@ pub fn breakdown_definitions(
             criteria: t.criteria.clone(),
             models: defaults.clone(),
             attempt_limit: Some(3),
-            timeout_ms: Some(600_000),
+            timeout_ms: None,
         })
         .collect()
 }

@@ -373,16 +373,13 @@ fn infrastructure_failures_do_not_exhaust_task_attempt_budget() -> Result {
         )?,
         1
     );
-    assert!(
-        store
-            .start_attempt(StartAttempt {
-                task_id: id,
-                expected_version: 2,
-                execution_token: "over-budget",
-                now_ms: 140
-            })
-            .is_err()
-    );
+    // A failed current may start its read-only judge even with no coding budget.
+    store.start_attempt(StartAttempt {
+        task_id: id,
+        expected_version: 2,
+        execution_token: "judge-at-budget",
+        now_ms: 140,
+    })?;
     Ok(())
 }
 

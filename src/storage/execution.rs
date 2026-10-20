@@ -58,7 +58,7 @@ impl Database {
              WHERE id = ?1 AND row_version = ?2 AND lifecycle = 'ready'
                AND status IN ('ready', 'failed', 'interrupted', 'cancelled')
                AND revision_lifecycle = 'ready'
-               AND (attempt_limit IS NULL OR attempts_used < attempt_limit)",
+               AND (status='failed' OR attempt_limit IS NULL OR attempts_used < attempt_limit)",
                 params![command.task_id, command.expected_version],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )

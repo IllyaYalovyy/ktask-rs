@@ -42,6 +42,32 @@ fn insert_revision(
 }
 
 impl Service {
+    /// Automatic judge handoffs share one durable budget, including inserted prerequisites.
+    pub fn automatic_replans(&self, task: i64) -> Result<i64> {
+        let count = self.db.connection().query_row(
+            "SELECT root.automatic_replans FROM tasks current JOIN tasks root ON root.id=coalesce(current.recovery_root_id,current.id) WHERE current.id=?1 AND current.project_id=?2",
+            params![task, self.project_id], |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+
+    pub fn record_automatic_replan(&mut self, task: i64) -> Result<()> {
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let root: i64 = tx.query_row(
+            "SELECT coalesce(recovery_root_id,id) FROM tasks WHERE id=?1 AND project_id=?2",
+            params![task, self.project_id],
+            |row| row.get(0),
+        )?;
+        require(tx.execute(
+            "UPDATE tasks SET automatic_replans=automatic_replans+1 WHERE id=?1 AND project_id=?2 AND automatic_replans<10",
+            params![root, self.project_id],
+        )? == 1, "Automatic recovery exhausted after 10 judge replans; edit current or apply manual remediation")?;
+        tx.commit()?;
+        Ok(())
+    }
     /// Retain an interactive failure judgment without changing the failed attempt.
     pub fn record_failure_judgment(
         &mut self,
@@ -182,17 +208,12 @@ impl Service {
             model.is_some() ^ !repairs.is_empty(),
             "Choose one remediation strategy",
         )?;
-        let existing = if model.is_some() {
-            Some(
-                self.task(target.id)?
-                    .ok_or_else(|| Error::Conflict("Task disappeared".into()))?
-                    .definition()
-                    .definition
-                    .clone(),
-            )
-        } else {
-            None
-        };
+        let existing = self
+            .task(target.id)?
+            .ok_or_else(|| Error::Conflict("Task disappeared".into()))?
+            .definition()
+            .definition
+            .clone();
         let tx = self
             .db
             .connection_mut()
@@ -221,7 +242,15 @@ impl Service {
         };
         let mut ids = Vec::new();
         if let Some(model) = model {
-            let mut definition = existing.expect("escalation definition loaded");
+            let mut definition = existing.clone();
+            let used: i64 = tx.query_row(
+                "SELECT attempts_used FROM task_details WHERE id=?1",
+                [target.id],
+                |row| row.get(0),
+            )?;
+            if definition.attempt_limit.is_some_and(|limit| limit <= used) {
+                definition.attempt_limit = Some(used.saturating_add(1));
+            }
             require(
                 definition.models[0].as_ref() != Some(&model),
                 "Escalation must change the execution model or effort",
@@ -251,9 +280,41 @@ impl Service {
             for definition in repairs {
                 definition.validate()?;
             }
+            let used: i64 = tx.query_row(
+                "SELECT attempts_used FROM task_details WHERE id=?1",
+                [target.id],
+                |row| row.get(0),
+            )?;
+            if existing.attempt_limit.is_some_and(|limit| limit <= used) {
+                let mut revised = existing.clone();
+                revised.attempt_limit = Some(used.saturating_add(1));
+                let number: i64 = tx.query_row(
+                    "SELECT max(revision)+1 FROM task_revisions WHERE task_id=?1",
+                    [target.id],
+                    |row| row.get(0),
+                )?;
+                insert_revision(&tx, target.id, number, &revised, true, now, &remediator)?;
+                tx.execute(
+                    "UPDATE task_revisions SET change_reason=?3 WHERE task_id=?1 AND revision=?2",
+                    params![
+                        target.id,
+                        number,
+                        "One bounded retry after prerequisite work"
+                    ],
+                )?;
+                bump(&tx, target, now)?;
+                event(
+                    &tx,
+                    self.project_id,
+                    target.id,
+                    now,
+                    "remediation.retry_reserved",
+                    "One bounded retry reserved in a new revision; earlier attempts and failures retained",
+                )?;
+            }
             let keys = ordering::keys_before(&tx, self.project_id, Some(target.id), repairs.len())?;
             for (definition, key) in repairs.iter().zip(keys) {
-                tx.execute("INSERT INTO tasks(project_id,order_key,lifecycle,origin,created_at_ms,updated_at_ms) VALUES (?1,?2,?3,'remediator',?4,?4)", params![self.project_id,key,if ready {"ready"} else {"new"},now])?;
+                tx.execute("INSERT INTO tasks(project_id,order_key,lifecycle,origin,recovery_root_id,created_at_ms,updated_at_ms) VALUES (?1,?2,?3,'remediator',(SELECT coalesce(recovery_root_id,id) FROM tasks WHERE id=?5),?4,?4)", params![self.project_id,key,if ready {"ready"} else {"new"},now,target.id])?;
                 let id = tx.last_insert_rowid();
                 insert_revision(&tx, id, 1, definition, ready, now, &remediator)?;
                 tx.execute(

@@ -299,7 +299,7 @@ pub struct Settings {
     /// Positive count or unlimited. New tasks default to 3.
     #[arg(long, value_parser = limit)]
     pub attempt_limit: Option<Limit>,
-    /// Positive milliseconds or unlimited. New tasks default to 600000.
+    /// Positive task-wide active milliseconds or unlimited. New tasks default to unlimited.
     #[arg(long, value_parser = limit)]
     pub timeout_ms: Option<Limit>,
 }

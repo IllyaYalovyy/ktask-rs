@@ -1,4 +1,4 @@
-use super::{Context, Outcome, codex, execute, process::Invocation};
+use super::{Context, Outcome, codex, execute, operational_backoff, process::Invocation};
 use crate::{
     application::{
         Service,
@@ -17,7 +17,7 @@ pub(super) fn run(
 ) -> Result<Outcome> {
     let mut evidence = String::new();
     for check in checks {
-        for recheck in 0..=1 {
+        for recheck in 0..=2 {
             let (outcome, path) = run_one(service, run, ctx, check)?;
             match outcome {
                 Outcome::Passed(_) => {
@@ -32,9 +32,22 @@ pub(super) fn run(
                 }
                 Outcome::Failed(category, message) => {
                     let message = format!("{message}; supervisor transcript: {}", path.display());
+                    if category == "environment" && recheck < 2 {
+                        service.output(run, "system", &format!(
+                            "Check infrastructure failed · automatic retry {}/2 after {}s · transcript retained; Pause cancels",
+                            recheck + 1, 1 << recheck,
+                        ))?;
+                        if let Some(outcome) = operational_backoff(service, run, ctx, recheck)? {
+                            return Ok(outcome);
+                        }
+                        continue;
+                    }
                     if category == "check" && recheck == 0 && executable_busy(&path)? {
                         evidence.push_str(&format!("\nEarlier supervisor check failed with executable contention: {message}. One verification retry follows, without another AI worker. This does not prove the root cause is fixed."));
-                        service.output(run, "system", "Check encountered ETXTBSY (executable busy): verification retry 1/1 in the same attempt; original failure and transcript retained")?;
+                        service.output(run, "system", "Check encountered ETXTBSY (executable busy): verification retry 1/1 after 1s in the same attempt; original failure and transcript retained; Pause cancels")?;
+                        if let Some(outcome) = operational_backoff(service, run, ctx, 0)? {
+                            return Ok(outcome);
+                        }
                         continue;
                     }
                     return Ok(Outcome::Failed(category, message));
@@ -98,6 +111,9 @@ fn run_one(
         false,
         &mut stream,
     );
+    if let Ok(Outcome::Failed("environment", message)) = &result {
+        service.finish_step(&step, false, message, None)?;
+    }
     let relative = format!("evidence/attempt-{}/step-{}.log", run.attempt, step.id);
     let path = ctx.paths.state.join(&relative);
     std::fs::create_dir_all(path.parent().expect("evidence directory"))?;

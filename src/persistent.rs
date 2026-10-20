@@ -873,7 +873,7 @@ impl App {
                             .defaults()
                             .map_err(|e| e.to_string())?,
                         attempt_limit: Some(3),
-                        timeout_ms: Some(600_000),
+                        timeout_ms: None,
                     }
                 };
                 definition.title = dialog.value(0).into();

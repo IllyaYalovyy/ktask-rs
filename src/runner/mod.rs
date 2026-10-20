@@ -60,6 +60,27 @@ struct Context<'a> {
     cursor: i64,
     started: Instant,
     prior_ms: i64,
+    earlier_task_ms: i64,
+}
+impl Context<'_> {
+    fn active_ms(&self) -> i64 {
+        self.prior_ms
+            .saturating_add(self.started.elapsed().as_millis().min(i64::MAX as u128) as i64)
+    }
+
+    fn persist_active_time(&self, service: &Service, run: &Run) -> Result<()> {
+        service.active_time(run, self.active_ms())
+    }
+
+    fn deadline_outcome(&self, run: &Run) -> Option<Outcome> {
+        run.definition
+            .timeout_ms
+            .filter(|&limit| self.earlier_task_ms.saturating_add(self.active_ms()) >= limit)
+            .map(|_| Outcome::Failed(
+                "agent",
+                "Active time limit reached (configured task-wide limit); work and evidence retained. Increase the task limit explicitly before retrying".into(),
+            ))
+    }
 }
 fn executable(name: &str) -> Result<PathBuf> {
     std::env::split_paths(
@@ -257,6 +278,7 @@ fn run_inner(
             cursor,
             started: Instant::now(),
             prior_ms: run.active_ms,
+            earlier_task_ms: service.earlier_task_active_ms(&run)?,
         };
         // Only an attempt that directly follows a failure is a repair; a judge-replanned
         // attempt ends as interrupted, so the next one starts fresh on the new plan.
@@ -303,6 +325,7 @@ fn run_inner(
                     .verified_tree,
             ) {
                 Ok(head) => {
+                    context.persist_active_time(service, &run)?;
                     service.finish_run(&run, "succeeded", None, &summary, Some(&head))?;
                     if !options.queue {
                         return Ok(summary);
@@ -313,15 +336,23 @@ fn run_inner(
             },
             other => other,
         };
+        // Include orchestration and operational backoff, even when no worker launched.
+        // Freeze the clock before handing ownership to a pause, wait, or later attempt.
+        context.persist_active_time(service, &run)?;
         match outcome {
             Outcome::RateLimit => {
+                if service.rate_waits(&run)? >= 3 {
+                    let reason = "Provider rate-limit recovery exhausted after 3 waits; same task and work retained. Retry current explicitly when the provider is available";
+                    service.finish_run(&run, "failed", Some("rate_limit"), reason, None)?;
+                    return Err(Error::Conflict(reason.into()));
+                }
                 service.rate_wait(&run, "Provider rate limited; session retained")?;
                 if options.queue && wait_for_backoff(service, &run, &context)? {
                     continue;
                 }
                 service.release_supervisor(&run)?;
                 return Ok(
-                    "Waiting for rate limit backoff; resume the same attempt after 60 seconds"
+                    "Waiting for scheduled rate-limit backoff; resume the same attempt when eligible"
                         .into(),
                 );
             }
@@ -343,7 +374,15 @@ fn run_inner(
             }
             Outcome::Replanned(judgment) => {
                 let message = describe(&judgment);
+                if service.automatic_replans(run.task)? >= 10 {
+                    let reason = format!(
+                        "Automatic recovery exhausted after 10 judge replans; latest judgment: {message}. Work and evidence retained. Edit current or apply manual remediation to continue."
+                    );
+                    service.finish_run(&run, "failed", Some("protocol"), &reason, None)?;
+                    return Err(Error::Conflict(reason));
+                }
                 service.finish_run(&run, "interrupted", Some("interrupted"), &message, None)?;
+                service.record_automatic_replan(run.task)?;
                 apply_judgment(service, &run, paths, workspace, judgment)?;
                 service.replan_applied(&run)?;
                 if stop.load(Ordering::Relaxed) {
@@ -493,26 +532,50 @@ fn ai(
 ) -> Result<Outcome> {
     for retry in 0..=2 {
         let outcome = ai_turn(service, run, ctx, role, evidence, None)?;
-        if !matches!(outcome, Outcome::Failed("transport", _)) || retry == 2 {
+        if !matches!(
+            outcome,
+            Outcome::Failed("transport" | "protocol" | "environment", _)
+        ) || retry == 2
+        {
             return Ok(outcome);
         }
         service.output(
             run,
             "system",
             &format!(
-                "Provider connection failed · automatic retry {}/2 · same attempt, work retained",
-                retry + 1
+                "Provider turn failed · automatic retry {}/2 after {}s · same attempt, work retained; Pause cancels",
+                retry + 1,
+                1 << retry
             ),
         )?;
-        let until = Instant::now() + Duration::from_secs(1 << retry);
-        while Instant::now() < until {
-            if ctx.stop.load(Ordering::Relaxed) || service.control_cursor(run)? > ctx.cursor {
-                return Ok(Outcome::Paused);
-            }
-            std::thread::sleep(Duration::from_millis(100));
+        if let Some(outcome) = operational_backoff(service, run, ctx, retry)? {
+            return Ok(outcome);
         }
     }
     unreachable!("bounded provider retries")
+}
+fn operational_backoff(
+    service: &Service,
+    run: &Run,
+    ctx: &Context<'_>,
+    retry: u32,
+) -> Result<Option<Outcome>> {
+    let until = Instant::now() + Duration::from_secs(1 << retry);
+    loop {
+        if ctx.stop.load(Ordering::Relaxed) || service.control_cursor(run)? > ctx.cursor {
+            ctx.persist_active_time(service, run)?;
+            return Ok(Some(Outcome::Paused));
+        }
+        if let Some(outcome) = ctx.deadline_outcome(run) {
+            ctx.persist_active_time(service, run)?;
+            return Ok(Some(outcome));
+        }
+        if Instant::now() >= until {
+            ctx.persist_active_time(service, run)?;
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 /// One provider turn. A first `blocked` answer is nudged once in the same session, because
 /// permission and sandbox limits are not questions for the owner; only a repeated, genuine
@@ -660,6 +723,31 @@ fn judge(service: &mut Service, run: &Run, ctx: &mut Context<'_>) -> Result<Outc
     judge_attempt(service, run, ctx, failed)
 }
 fn judge_attempt(
+    service: &mut Service,
+    run: &Run,
+    ctx: &mut Context<'_>,
+    failed: i64,
+) -> Result<Outcome> {
+    for retry in 0..=2 {
+        let outcome = judge_once(service, run, ctx, failed)?;
+        if !matches!(
+            outcome,
+            Outcome::Failed("transport" | "protocol" | "environment", _)
+        ) || retry == 2
+        {
+            return Ok(outcome);
+        }
+        service.output(run, "system", &format!(
+            "Failure judge failed · automatic retry {}/2 after {}s · same attempt, evidence retained; Pause cancels",
+            retry + 1, 1 << retry,
+        ))?;
+        if let Some(outcome) = operational_backoff(service, run, ctx, retry)? {
+            return Ok(outcome);
+        }
+    }
+    unreachable!("bounded judge retries")
+}
+fn judge_once(
     service: &mut Service,
     run: &Run,
     ctx: &mut Context<'_>,
@@ -829,6 +917,12 @@ fn apply_judgment(
             reason,
         } => {
             let mut definition = run.definition.clone();
+            if let Some(limit) = definition.attempt_limit {
+                let used = task.attempts_used;
+                if limit <= used {
+                    definition.attempt_limit = Some(used.saturating_add(1));
+                }
+            }
             definition.title = title;
             definition.goal = goal;
             definition.criteria = criteria;
@@ -870,30 +964,42 @@ fn execute(
     ai: bool,
     stream: &mut codex::Stream,
 ) -> Result<Outcome> {
-    let mut worker = Worker::spawn(&ctx.paths.executable, spec)?;
+    ctx.persist_active_time(service, run)?;
+    if let Some(outcome) = ctx.deadline_outcome(run) {
+        ctx.persist_active_time(service, run)?;
+        return Ok(outcome);
+    }
+    let mut worker = match Worker::spawn(&ctx.paths.executable, spec) {
+        Ok(worker) => worker,
+        Err(error) => {
+            ctx.persist_active_time(service, run)?;
+            return Ok(Outcome::Failed("environment", error.to_string()));
+        }
+    };
     let started = Instant::now();
     let mut interrupted = None;
     let mut last_tick = Instant::now();
     let mut stdout = output::Utf8Stream::default();
     let mut stderr = output::Utf8Stream::default();
     loop {
-        let active = ctx.prior_ms + ctx.started.elapsed().as_millis() as i64;
         if interrupted.is_none() {
             if ctx.stop.load(Ordering::Relaxed) || service.control_cursor(run)? > ctx.cursor {
                 interrupted = Some(Outcome::Paused);
                 worker.stop();
-            } else if timeout.is_some_and(|n| started.elapsed().as_millis() >= n as u128)
-                || run.definition.timeout_ms.is_some_and(|n| active >= n)
-            {
+            } else if timeout.is_some_and(|n| started.elapsed().as_millis() >= n as u128) {
                 interrupted = Some(Outcome::Failed(
                     "timeout",
-                    "Active time limit reached; work retained".into(),
+                    "Individual supervisor check timeout reached; work and transcript retained"
+                        .into(),
                 ));
+                worker.stop();
+            } else if let Some(outcome) = ctx.deadline_outcome(run) {
+                interrupted = Some(outcome);
                 worker.stop();
             }
         }
         if last_tick.elapsed() >= Duration::from_secs(1) {
-            service.active_time(run, active)?;
+            ctx.persist_active_time(service, run)?;
             last_tick = Instant::now();
         }
         match worker.messages.recv_timeout(Duration::from_millis(40)) {
@@ -929,7 +1035,7 @@ fn execute(
                         service.output(run, source, &text)?;
                     }
                 }
-                service.active_time(run, active)?;
+                ctx.persist_active_time(service, run)?;
                 if interrupted.is_none() && ai && stream.rate_limited {
                     return Ok(Outcome::RateLimit);
                 }

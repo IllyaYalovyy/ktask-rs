@@ -83,7 +83,7 @@ impl Default for Settings {
                 effort: Some(if i == 0 { "medium" } else { "high" }.into()),
             }),
             attempt_limit: 3,
-            timeout_ms: 600_000,
+            timeout_ms: 0,
         }
     }
 }
@@ -122,7 +122,7 @@ impl Revision {
             .collect::<Vec<_>>()
             .join("\n");
         format!(
-            "Revision {} · {}\n{models}\nAttempt limit: {} · active time limit: {} ms",
+            "Revision {} · {}\n{models}\nAttempt limit: {} · task active time limit: {}",
             self.number,
             if self.state == RevisionState::Draft {
                 "Needs approval"
@@ -134,7 +134,11 @@ impl Revision {
             } else {
                 self.settings.attempt_limit.to_string()
             },
-            self.settings.timeout_ms
+            if self.settings.timeout_ms == 0 {
+                "unlimited".into()
+            } else {
+                format!("{} ms", self.settings.timeout_ms)
+            }
         )
     }
 }

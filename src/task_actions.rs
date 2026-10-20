@@ -28,7 +28,7 @@ impl App {
             },
         ));
         fields.push(Field::text(
-            "Active time limit ms (blank = unlimited)",
+            "Active time limit ms (task-wide; blank = unlimited)",
             &if revision.settings.timeout_ms == 0 {
                 String::new()
             } else {
