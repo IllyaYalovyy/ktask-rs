@@ -294,6 +294,7 @@ CREATE TABLE artifacts (
 ) STRICT;
 
 CREATE INDEX ix_tasks_history ON tasks(project_id, closed_at_ms DESC, id DESC);
+CREATE INDEX ix_revisions_ready ON task_revisions(task_id, lifecycle, revision DESC);
 CREATE INDEX ix_task_links_related ON task_links(related_task_id, project_id);
 CREATE INDEX ix_attempts_project ON attempts(project_id, id);
 CREATE INDEX ix_attempts_revision ON attempts(task_id, revision);

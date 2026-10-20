@@ -89,18 +89,28 @@ fn failed_upgrade_rolls_back_ddl_data_and_migration_ledger() -> Result {
 }
 
 #[test]
-fn modified_missing_and_foreign_migrations_are_not_reset_or_adopted() -> Result {
+fn unrecognized_missing_and_foreign_migrations_are_not_reset_or_adopted() -> Result {
     let scratch = sandbox()?;
     let mut store = Database::open_in(scratch.path())?;
     let db = store.connection_mut();
     db.execute(
-        "UPDATE schema_migrations SET sql = sql || ' -- changed'",
+        "UPDATE schema_migrations SET sql = sql || ' DROP TABLE projects;'",
         [],
     )?;
-    assert!(apply(db, ALL).unwrap_err().to_string().contains("differs"));
+    assert!(
+        apply(db, ALL)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot reconcile")
+    );
     db.execute("UPDATE schema_migrations SET sql = ?1", [ALL[0].sql])?;
     db.execute("UPDATE schema_migrations SET version = 2", [])?;
-    assert!(apply(db, ALL).unwrap_err().to_string().contains("differs"));
+    assert!(
+        apply(db, ALL)
+            .unwrap_err()
+            .to_string()
+            .contains("unrecognized")
+    );
     db.execute("UPDATE schema_migrations SET version = 1", [])?;
     db.execute("DELETE FROM schema_migrations", [])?;
     assert!(apply(db, ALL).is_err());
@@ -121,6 +131,213 @@ fn modified_missing_and_foreign_migrations_are_not_reset_or_adopted() -> Result 
     foreign.pragma_update(None, "application_id", 12345)?;
     assert!(Database::open_in(&foreign_root).is_err());
     assert_eq!(count(&foreign, "unrelated"), 1);
+    Ok(())
+}
+
+#[test]
+fn v1_reconciliation_copies_data_and_rejects_incompatible_columns() -> Result {
+    let scratch = sandbox()?;
+    let mut store = Database::open_in(scratch.path())?;
+    let db = store.connection_mut();
+    db.execute(
+        "INSERT INTO projects(name, root_path, created_at_ms) VALUES ('kept', x'2f776f726b', 1)",
+        [],
+    )?;
+    db.execute(
+        "INSERT INTO projects(name, root_path, created_at_ms) VALUES ('removed', x'2f6f6c64', 1)",
+        [],
+    )?;
+    db.execute("DELETE FROM projects WHERE name = 'removed'", [])?;
+    let old = ALL[0].sql.replace(
+        "CREATE INDEX ix_revisions_ready ON task_revisions(task_id, lifecycle, revision DESC);\n",
+        "",
+    );
+    assert_ne!(old, ALL[0].sql);
+    db.execute("DROP INDEX ix_revisions_ready", [])?;
+    db.execute("UPDATE schema_migrations SET sql = ?1", [&old])?;
+    apply(db, ALL)?;
+    assert_eq!(count(db, "projects"), 1);
+    assert_eq!(
+        db.query_row("SELECT sql FROM schema_migrations", [], |row| row
+            .get::<_, String>(0))?,
+        ALL[0].sql
+    );
+    assert_eq!(count(db, "schema_migrations"), 1);
+    db.execute(
+        "INSERT INTO projects(name, root_path, created_at_ms) VALUES ('next', x'2f6e657874', 1)",
+        [],
+    )?;
+    assert_eq!(
+        db.last_insert_rowid(),
+        3,
+        "AUTOINCREMENT must not reuse deleted IDs"
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE name = 'ix_revisions_ready'",
+            [],
+            |row| row.get::<_, i64>(0)
+        )?,
+        1
+    );
+
+    // The recorded definition is still genuine, but a required new column has
+    // no value for an existing project. The entire attempted rebuild rolls back.
+    let incompatible = Box::leak(
+        ALL[0]
+            .sql
+            .replace("    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0)\n) STRICT;", "    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),\n    required_new TEXT NOT NULL\n) STRICT;")
+            .into_boxed_str(),
+    );
+    let newer = [Migration {
+        name: ALL[0].name,
+        sql: incompatible,
+    }];
+    let message = apply(db, &newer).unwrap_err().to_string();
+    assert!(message.contains("cannot reconcile schema 1"), "{message}");
+    assert!(message.contains("previous binary"), "{message}");
+    assert_eq!(count(db, "projects"), 2);
+    assert_eq!(
+        db.query_row("SELECT sql FROM schema_migrations", [], |row| row
+            .get::<_, String>(0))?,
+        ALL[0].sql
+    );
+    assert!(db.prepare("SELECT required_new FROM projects").is_err());
+    Ok(())
+}
+
+#[test]
+fn v1_reconciliation_adds_nullable_column_without_losing_rows() -> Result {
+    let scratch = sandbox()?;
+    let mut store = Database::open_in(scratch.path())?;
+    let db = store.connection_mut();
+    db.execute(
+        "INSERT INTO projects(name, root_path, created_at_ms) VALUES ('kept', x'2f776f726b', 1)",
+        [],
+    )?;
+    let with_column = Box::leak(
+        ALL[0]
+            .sql
+            .replace(
+                "    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0)\n) STRICT;",
+                "    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),\n    description TEXT\n) STRICT;",
+            )
+            .into_boxed_str(),
+    );
+    let edited = [Migration {
+        name: ALL[0].name,
+        sql: with_column,
+    }];
+    apply(db, &edited)?;
+    assert_eq!(
+        db.query_row("SELECT name, description FROM projects", [], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })?,
+        ("kept".into(), None)
+    );
+    assert_eq!(count(db, "schema_migrations"), 1);
+    assert!(!db.prepare("PRAGMA foreign_key_check")?.exists([])?);
+    Ok(())
+}
+
+#[test]
+fn v1_reconciliation_rejects_silent_row_loss_and_rolls_back() -> Result {
+    let scratch = sandbox()?;
+    let mut store = Database::open_in(scratch.path())?;
+    let db = store.connection_mut();
+    db.execute(
+        "INSERT INTO projects(name, root_path, created_at_ms) VALUES ('kept', x'2f776f726b', 1)",
+        [],
+    )?;
+    let changed = Box::leak(
+        format!(
+            "{}\nCREATE TRIGGER discard_copied_project AFTER INSERT ON projects \
+             BEGIN DELETE FROM projects WHERE id = NEW.id; END;",
+            ALL[0].sql
+        )
+        .into_boxed_str(),
+    );
+    let edited = [Migration {
+        name: ALL[0].name,
+        sql: changed,
+    }];
+    let message = apply(db, &edited).unwrap_err().to_string();
+    assert!(
+        message.contains("retained rows changed in projects"),
+        "{message}"
+    );
+    assert_eq!(count(db, "projects"), 1);
+    assert_eq!(
+        db.query_row("SELECT sql FROM schema_migrations", [], |row| row
+            .get::<_, String>(0))?,
+        ALL[0].sql
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE name = 'discard_copied_project'",
+            [],
+            |row| row.get::<_, i64>(0)
+        )?,
+        0
+    );
+    Ok(())
+}
+
+#[test]
+fn v1_reconciliation_refuses_real_values_that_cast_to_the_same_blob() -> Result {
+    let mut db = Connection::open_in_memory()?;
+    let old: &'static str = Box::leak(
+        format!(
+            "{}\nCREATE TABLE real_samples(value REAL) STRICT;",
+            ALL[0].sql
+        )
+        .into_boxed_str(),
+    );
+    let old_migration = [Migration {
+        name: ALL[0].name,
+        sql: old,
+    }];
+    apply(&mut db, &old_migration)?;
+    let first = 0.0_f64;
+    let second = -0.0_f64;
+    assert_ne!(first.to_bits(), second.to_bits());
+    let first_blob: String =
+        db.query_row("SELECT hex(CAST(?1 AS BLOB))", [first], |row| row.get(0))?;
+    let second_blob: String =
+        db.query_row("SELECT hex(CAST(?1 AS BLOB))", [second], |row| row.get(0))?;
+    assert_eq!(
+        first_blob, second_blob,
+        "the former check would miss this change"
+    );
+    db.execute(
+        "INSERT INTO real_samples(value) VALUES (?1), (?2)",
+        (first, second),
+    )?;
+
+    let edited = Box::leak(
+        format!("{old}\nCREATE INDEX ix_real_samples ON real_samples(value);").into_boxed_str(),
+    );
+    let new_migration = [Migration {
+        name: ALL[0].name,
+        sql: edited,
+    }];
+    let message = apply(&mut db, &new_migration).unwrap_err().to_string();
+    assert!(message.contains("REAL values in real_samples"), "{message}");
+    assert!(message.contains("database left unchanged"), "{message}");
+    assert_eq!(count(&db, "real_samples"), 2);
+    assert_eq!(
+        db.query_row("SELECT sql FROM schema_migrations", [], |row| row
+            .get::<_, String>(0))?,
+        old
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE name = 'ix_real_samples'",
+            [],
+            |row| row.get::<_, i64>(0)
+        )?,
+        0
+    );
     Ok(())
 }
 

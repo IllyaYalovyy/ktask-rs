@@ -4,7 +4,12 @@ Sources: [initial schema](../migrations/0001_relational_state.sql),
 [ordering](../src/storage/ordering.rs), [execution records](../src/storage/execution.rs),
 [token normalization](../src/storage/usage.rs).
 
-This is the unreleased first schema. Edit 0001 in place; no prior-schema conversions exist.
+This is the unreleased first schema. Edit 0001 in place. On open, an existing V1
+database is reconciled inside one transaction: the live schema must match its recorded
+definition, retained columns are copied into the current definition, and integrity and
+foreign keys must pass. Reconciliation refuses retained REAL values because the current
+row comparison cannot verify their binary identity. Incompatible edits leave the database unchanged and require the
+previous binary or a backup. No conversion migrations are maintained.
 
 ## Lifecycle and current task
 
@@ -494,6 +499,7 @@ Versioned definition, limits, and approval decision. Select the newest ready rev
 
 - PK `(task_id, revision)`.
 - FK `(task_id)` → `tasks(id)`.
+- Index `ix_revisions_ready`: `INDEX ix_revisions_ready ON task_revisions(task_id, lifecycle, revision DESC)`.
 
 ### tasks
 
