@@ -127,7 +127,7 @@ pub struct App {
     pub cleanup_fail_once: bool,
     pub clean_retry: bool,
     pub auto_advance: bool,
-    pub(crate) continuation_pending: Option<usize>,
+    pub(crate) execution_session: Option<crate::application::session::ExecutionSession>,
     pub last_workspace: Option<usize>,
     pub tick_ms: u64,
     pub hits: Vec<(Rect, Action)>,
@@ -211,7 +211,7 @@ impl App {
             cleanup_fail_once: false,
             clean_retry: false,
             auto_advance: true,
-            continuation_pending: None,
+            execution_session: None,
             last_workspace: Some(1),
             tick_ms: 400,
             hits: Vec::new(),
@@ -627,16 +627,6 @@ impl App {
         }
     }
     fn refresh_persistent(&mut self) -> bool {
-        if let Some(expected) = self.continuation_pending {
-            match self.reload() {
-                Ok(()) if self.current().is_some_and(|task| task.id == expected) => {
-                    self.continue_queue()
-                }
-                Ok(()) => self.continuation_pending = None,
-                Err(error) => self.message(error),
-            }
-            return true;
-        }
         match self
             .service
             .as_ref()

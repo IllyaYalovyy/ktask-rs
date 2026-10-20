@@ -5,6 +5,13 @@
   Keep planning brief. Separate specifications and breakdown are optional, never prerequisites
   merely because implementation details are unspecified. Preserve the full goal and acceptance bar.
 
+- The normal lifecycle is implement → review → fix → validate within one attempt. Use
+  Sol for implementation and Astra for review, remediation and validation in this project.
+  Findings are changes requested, not task failures. Persist phase and the ten-repair-round
+  limit across pause/resume. Each repair starts with a read-only judge and regenerates proof.
+  Only unresolved critical findings after ten rounds require escalation; minor findings may
+  remain if mandatory criteria and checks pass. Preserve historical failed records as recorded.
+
 - Normal TUI tasks are now persistent. The owner authorized SQLite wiring through shared
   application commands. Keep deterministic execution/AI fixtures isolated behind `--demo`;
   never execute them against a real project or open its database in demo mode.
@@ -40,8 +47,10 @@
   Keep per-role model/optional effort and attempt/time limits on each revision. Rate-limit
   waits resume the same attempt; infrastructure failures do not consume the coding budget.
 - Judges never run anything: review holds the Clean Code bar on the diff, validation checks the
-  evidence is complete. Every repair attempt opens with the read-only failure judge, whose
-  decision (repair, revise, insert, escalate, ask) is applied before any worker runs. Permission,
+  evidence is complete. Every repair opens with a read-only judge. During normal rounds, apply its repair,
+  revise or insert decision before a worker; carry the original task’s ten-round count across
+  replans. Owner/model escalation waits until unresolved critical findings remain after ten
+  rounds. Standalone recovery from actual failures retains all five judge decisions. Permission,
   sandbox and tooling limits are never questions for the owner.
 - Normalize input_tokens to uncached input for every provider; cache read/write are disjoint.
 - Before switching tasks, preserve useful work, stop/reap workers, and clean owned scratch.

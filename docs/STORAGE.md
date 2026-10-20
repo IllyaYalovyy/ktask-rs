@@ -18,6 +18,7 @@ previous binary or a backup. No conversion migrations are maintained.
 | Task | new, ready, blocked, succeeded, succeeded_override, failed_skipped, superseded, cancelled, deleted | Readiness and final resolution, NOT live execution state |
 | Revision | draft, ready, rejected, retired | Approval of an exact definition, limits, and model configuration |
 | Attempt | running, paused, waiting, succeeded, failed, interrupted, cancelled | Execution state; retry creates another attempt, resume does not |
+| Execution session | running, waiting, paused, stopped, completed | Project scheduler intent and stop reason; independent of the attempt |
 
 task_details selects the newest **ready** revision. A newer draft appears separately as
 pending_revision/title/goal and does not replace approved inputs. Rejected/retired revisions
@@ -85,6 +86,7 @@ erDiagram
     }
     projects ||--o{ project_models : "project_id"
     projects ||--o{ project_checks : "project_id"
+    projects ||--o| execution_sessions : "project_id"
     projects ||--o{ tasks : "project_id"
     tasks ||--o{ task_revisions : "task_id"
     task_revisions ||--o{ revision_models : "task_id, revision"
@@ -106,6 +108,7 @@ erDiagram
     projects ||--o{ ai_sessions : "project_id"
     project_checks o|--o{ attempt_steps : "project_check_id, project_id"
     ai_sessions o|--o{ attempt_steps : "session_id, project_id, task_id, role, provider"
+    attempts ||--o| attempt_progress : "attempt_id"
     attempts ||--o{ attempt_steps : "attempt_id, project_id, task_id, revision"
     acceptance_criteria ||--o{ criterion_results : "task_id, revision, criterion_ordinal"
     attempt_steps ||--o{ criterion_results : "step_id, task_id, revision"
@@ -206,9 +209,25 @@ Ordered output chunks, not one row per character. Writer assigns a positive mono
 - PK `(attempt_id, sequence)`.
 - FK `(attempt_id)` → `attempts(id)`.
 
+### attempt_progress
+
+Durable phase within one attempt. Initial implementation is round zero; at most ten repair rounds follow. Pause, rate waits and resume retain this row and the current evidence. Automatic revision/prerequisite handoffs carry the original task’s round count; only a successfully applied replan authorizes the successor worker. Source fingerprints invalidate stale proof before checks/review/validation or checkpointing. Findings do not close the attempt or consume another coding attempt. After every fix, current check/review/validation evidence is regenerated. Minor findings may be accepted only with all required criteria and checks satisfied; unresolved critical findings wait for a decision after round ten.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `attempt_id` | INTEGER | no | Owning attempt. |
+| `repair_round` | INTEGER | no | Zero for implementation, then 1 through 10. |
+| `phase` | TEXT | no | implement, judge, replanned, fix, check, review, validate, decide, complete. |
+| `context` | TEXT | no | Current findings and authorized repair plan. |
+| `evidence` | TEXT | no | Current round's assessments and durable transcript references. |
+| `verified_tree` | TEXT | no | Git tree fingerprint binding the retained proof to source content. |
+
+- PK `(attempt_id)`.
+- FK `(attempt_id)` → `attempts(id)`.
+
 ### attempt_steps
 
-Ordered phases inside an attempt. AI phases record session/provider/model and optional effort; tool checks record command context. Terminal steps require finish time. The two composite parent keys enforce exact revision/project references in criterion_results and model_calls; attempt_id/ordinal enforces phase order.
+Ordered phases inside an attempt. A completed assessment requesting fixes has state changes_requested; its provider call succeeded. Unmet criterion evidence uses needs_work, not a failed task. AI phases record session/provider/model and optional effort; tool checks record command context. Terminal steps require finish time. The two composite parent keys enforce exact revision/project references in criterion_results and model_calls; attempt_id/ordinal enforces phase order.
 
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
@@ -321,6 +340,24 @@ Append-only command/runner audit and activity feed. Task and attempt are optiona
 - Index `ix_events_attempt`: `INDEX ix_events_attempt ON events(attempt_id, id)`.
 - Index `ix_events_task`: `INDEX ix_events_task ON events(task_id, id)`.
 - Index `ix_events_project`: `INDEX ix_events_project ON events(project_id, id)`.
+
+### execution_sessions
+
+One project-scoped execution policy. The mode records the actual started run, separate
+from the saved preference used for the next explicit Run. A waiting queue resumes after
+an authorized intervention; paused and Run one sessions require another Run. The
+workspace lease and explicit worker recovery still govern execution.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `project_id` | INTEGER | no | Owning project. |
+| `mode` | TEXT | no | queue or one. |
+| `state` | TEXT | no | running, waiting, resume_requested, paused, stopped, completed. |
+| `reason` | TEXT | no | Durable reason for the current scheduler state. |
+| `updated_at_ms` | INTEGER | no | Last state change time. |
+
+- PK `(project_id)`.
+- FK `(project_id)` → `projects(id)`.
 
 ### model_calls
 

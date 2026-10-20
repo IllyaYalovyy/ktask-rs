@@ -93,16 +93,68 @@ impl Workspace {
     pub fn clean(&self) -> Result<bool> {
         Ok(git(&self.root, &["status", "--porcelain"])?.is_empty())
     }
-    pub fn checkpoint(&self, task: i64, attempt: i64, base: &str) -> Result<String> {
-        self.commit(base, &format!("ktask: task #{task}, attempt #{attempt}"))
+    /// Hash the exact tracked/untracked content a checkpoint would include, without
+    /// changing the user's index. Git's tree identity includes paths, modes and bytes.
+    pub fn fingerprint(&self, scratch_root: &Path) -> Result<String> {
+        let scratch = crate::scratch::Scratch::new(scratch_root)?;
+        let index = git(
+            &self.root,
+            &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+        )?;
+        let index = Path::new(&index);
+        if index.exists() {
+            std::fs::copy(index, scratch.path().join("index"))?;
+        }
+        let mut tree = String::new();
+        for args in [&["add", "--all"][..], &["write-tree"][..]] {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&self.root)
+                .args([
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "-c",
+                    "core.fsmonitor=false",
+                ])
+                .args(args)
+                .env("GIT_INDEX_FILE", scratch.path().join("index"))
+                .env("TMPDIR", scratch.path())
+                .output()?;
+            if !output.status.success() {
+                return Err(Error::Conflict(format!(
+                    "Cannot fingerprint worktree: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )));
+            }
+            tree = String::from_utf8(output.stdout)
+                .map_err(std::io::Error::other)?
+                .trim()
+                .into();
+        }
+        scratch.close()?;
+        Ok(tree)
+    }
+    pub fn checkpoint(
+        &self,
+        task: i64,
+        attempt: i64,
+        base: &str,
+        verified_tree: &str,
+    ) -> Result<String> {
+        self.commit(
+            base,
+            &format!("ktask: task #{task}, attempt #{attempt}"),
+            Some(verified_tree),
+        )
     }
     pub fn preserve(&self, task: i64, attempt: i64, base: &str) -> Result<String> {
         self.commit(
             base,
             &format!("ktask: preserve unfinished task #{task}, attempt #{attempt} for remediation"),
+            None,
         )
     }
-    fn commit(&self, base: &str, message: &str) -> Result<String> {
+    fn commit(&self, base: &str, message: &str, verified_tree: Option<&str>) -> Result<String> {
         if self.head()? != base {
             return Err(Error::Conflict(
                 "Agent changed HEAD; preserve work and inspect before continuing".into(),
@@ -110,6 +162,14 @@ impl Workspace {
         }
         if !self.clean()? {
             git(&self.root, &["add", "--all"])?;
+            if let Some(expected) = verified_tree
+                && git(&self.root, &["write-tree"])? != expected
+            {
+                return Err(Error::Conflict(
+                    "Worktree changed after validation; work retained, verification must run again"
+                        .into(),
+                ));
+            }
             git(
                 &self.root,
                 &[
@@ -126,6 +186,12 @@ impl Workspace {
                     message,
                 ],
             )?;
+        } else if let Some(expected) = verified_tree
+            && git(&self.root, &["rev-parse", "HEAD^{tree}"])? != expected
+        {
+            return Err(Error::Conflict(
+                "Worktree changed after validation; verification must run again".into(),
+            ));
         }
         self.head()
     }

@@ -62,6 +62,12 @@ impl App {
         Ok(app)
     }
     pub(crate) fn reload(&mut self) -> Result<(), String> {
+        self.execution_session = self
+            .service
+            .as_ref()
+            .unwrap()
+            .execution_session()
+            .map_err(|e| e.to_string())?;
         let snapshot = self
             .service
             .as_mut()
@@ -222,10 +228,24 @@ impl App {
                 .paths()
                 .map_err(|e| e.to_string())
                 .and_then(|paths| {
+                    let resume = self.current().is_some_and(|task| {
+                        matches!(
+                            task.status(),
+                            Status::Paused | Status::Waiting | Status::Question
+                        )
+                    });
+                    let queue = if resume {
+                        self.execution_session
+                            .as_ref()
+                            .map_or(self.auto_advance, |session| session.mode == "queue")
+                    } else {
+                        self.auto_advance
+                    };
                     crate::runner::background(
                         self.service.as_mut().expect("SQLite mode"),
                         &paths,
-                        self.auto_advance,
+                        queue,
+                        false,
                     )
                     .map_err(|e| e.to_string())
                 }),
@@ -346,41 +366,22 @@ impl App {
 
     /// A committed intervention must not be presented as a failed form if starting fails.
     pub(crate) fn continue_queue(&mut self) {
-        if !self.auto_advance {
-            self.continuation_pending = None;
-            return;
-        }
-        self.continuation_pending = None;
-        let runnable = self.current().is_some_and(|task| {
-            task.definition().kind == Kind::Ai
-                && (task.status() == Status::Pending
-                    || task.status().failed()
-                    || (task.status() == Status::Question
-                        && self
-                            .service
-                            .as_ref()
-                            .unwrap()
-                            .open_question(task.id as i64)
-                            .is_ok_and(|question| question.is_none())))
-        });
-        if !runnable {
-            return;
-        }
-        if self.supervisor_alive {
-            self.continuation_pending = self.current().map(|task| task.id);
-            return;
-        }
         let result = self
             .instance
             .paths()
             .map_err(|e| e.to_string())
             .and_then(|paths| {
-                crate::runner::background(self.service.as_mut().unwrap(), &paths, true)
+                crate::runner::continue_after_intervention(self.service.as_mut().unwrap(), &paths)
                     .map_err(|e| e.to_string())
             });
         match result {
-            Ok(()) => self.committed("Saved to SQLite · queue continuing automatically"),
-            Err(error) => self.message(format!("Saved to SQLite · queue stopped: {error}")),
+            Ok(true) => self.committed("Saved to SQLite · queue continuing automatically"),
+            Ok(false) => {
+                if let Err(error) = self.reload() {
+                    self.message(format!("Saved to SQLite, but refresh failed: {error}"));
+                }
+            }
+            Err(error) => self.committed(&format!("Saved to SQLite · queue waiting: {error}")),
         }
     }
 
@@ -726,7 +727,7 @@ impl App {
                     .push_str("\nOutput is recorded execution evidence, not simulation.");
             }
             DialogKind::Help => {
-                dialog.body = dialog.body.replace("All tasks, models, runs, and files are simulated.", "Changes save immediately. Run starts Codex in a background supervisor; Pause stops it.\nChecks, review and validation gate success. Failed work uses the remediation model.\nx abandons a waiting attempt without spending budget. Break down uses the planning model.");
+                dialog.body = dialog.body.replace("All tasks, models, runs, and files are simulated.", "Changes save immediately. Run starts Codex in a background supervisor; Pause stops it.\nChecks, review and validation gate success. Review findings enter the normal fix loop, with up to ten repair rounds before critical findings need a decision.\nx abandons a waiting attempt without spending budget. Break down uses the planning model.");
             }
             _ => {}
         }
@@ -1172,7 +1173,11 @@ fn report_text(attempt: &domain::Attempt) -> String {
         let state = if attempt.state == "waiting" && i + 1 == last {
             "waiting"
         } else {
-            step.state.as_str()
+            if step.state == "changes_requested" {
+                "fixes requested"
+            } else {
+                step.state.as_str()
+            }
         };
         text.push_str(&format!("{} · {state}: {finding}", step_label(&step.role)));
     }

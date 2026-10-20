@@ -1,5 +1,6 @@
 mod checks;
 pub(crate) mod codex;
+mod cycle;
 mod output;
 pub(crate) mod process;
 pub mod remediation;
@@ -32,6 +33,7 @@ use workspace::Workspace;
 pub struct Options {
     pub queue: bool,
     pub notify: bool,
+    pub continue_session: bool,
     pub recover: bool,
     pub confirm_worker_cleanup: bool,
     pub recover_target: Option<VersionedTask>,
@@ -39,6 +41,10 @@ pub struct Options {
 enum Outcome {
     Passed(String),
     Failed(&'static str, String),
+    Changes {
+        report: String,
+        critical: bool,
+    },
     Paused,
     Question(String),
     RateLimit,
@@ -77,6 +83,67 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
         &service.project_root()?,
         options.recover && options.confirm_worker_cleanup,
     )?;
+    let mut owns_session = false;
+    let result = run_inner(service, paths, options, &workspace, &mut owns_session);
+    if !owns_session {
+        return result;
+    }
+    let mut requested = false;
+    if let Some(session) = service.execution_session()?
+        && session.state != "paused"
+    {
+        let (state, reason) = match &result {
+            Err(error) => {
+                let current = service.current_task()?;
+                if session.mode == "queue" && current.is_some_and(|t| t.status == "failed") {
+                    ("waiting", error.to_string())
+                } else {
+                    ("stopped", error.to_string())
+                }
+            }
+            Ok(message) => {
+                let current = service.current_task()?;
+                match current {
+                    None => ("completed", message.clone()),
+                    Some(task) if task.status == "paused" => ("paused", message.clone()),
+                    Some(task) if session.mode == "one" && task.status != "waiting" => {
+                        ("stopped", "Run one completed the current task".into())
+                    }
+                    Some(task)
+                        if task.status == "waiting"
+                            || task.status == "failed"
+                            || task.definition().lifecycle != "ready"
+                            || task.definition().definition.kind
+                                == crate::application::Kind::Human =>
+                    {
+                        ("waiting", message.clone())
+                    }
+                    _ => ("stopped", message.clone()),
+                }
+            }
+        };
+        requested = service.settle_execution_session(state, &reason)?;
+    }
+    // Keep the lease until the final state is committed. An intervention that
+    // arrived during this handoff is retained and claims the next supervisor.
+    drop(workspace);
+    if requested
+        || service
+            .execution_session()?
+            .is_some_and(|s| s.state == "resume_requested")
+    {
+        let _ = continue_pending_session(service, paths);
+    }
+    result
+}
+
+fn run_inner(
+    service: &mut Service,
+    paths: &Paths,
+    options: &Options,
+    workspace: &Workspace,
+    owns_session: &mut bool,
+) -> Result<String> {
     if options.recover {
         if options.confirm_worker_cleanup
             && service
@@ -88,6 +155,17 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
         service.recover_run(options.recover_target)?;
         return Ok("Recovered abandoned attempt; retry explicitly".into());
     }
+    if options.continue_session {
+        require(
+            service
+                .execution_session()?
+                .is_some_and(|s| s.mode == "queue" && s.state == "running"),
+            "Queue session is no longer active; use Run to start again",
+        )?;
+    } else {
+        service.start_execution_session(options.queue)?;
+    }
+    *owns_session = true;
     let codex = executable("codex")?;
     let stop = process::stopped()?;
     let checks = service.checks()?;
@@ -97,6 +175,12 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
     )?;
     let mut notified = false;
     loop {
+        if service
+            .execution_session()?
+            .is_some_and(|s| s.state == "paused")
+        {
+            return Ok("Paused; no later task started".into());
+        }
         if stop.load(Ordering::Relaxed) {
             return Ok("Runner stopped; no next task started".into());
         }
@@ -123,6 +207,21 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
                 "Configure all four roles with provider codex before execution",
             )?;
         }
+        let models = &task.definition().definition.models;
+        let implementation = models[0].as_ref().expect("models checked");
+        for (role, model) in crate::application::ROLES.iter().zip(models).skip(1) {
+            let model = model.as_ref().expect("models checked");
+            require(
+                (model.provider.as_str(), model.model.as_str())
+                    != (
+                        implementation.provider.as_str(),
+                        implementation.model.as_str(),
+                    ),
+                &format!(
+                    "Configure a stronger {role} model distinct from the implementation model; changing effort alone is insufficient"
+                ),
+            )?;
+        }
         let base = workspace.head()?;
         require(
             workspace.clean()? || service.attempt_base(task.id)?.as_deref() == Some(&base),
@@ -142,6 +241,9 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
             &token,
             &base,
         )?;
+        if options.queue {
+            service.supervisor_continuing_queue()?;
+        }
         if options.notify && !notified {
             println!("ready");
             std::io::stdout().flush()?;
@@ -149,7 +251,7 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
         notified = true;
         let mut context = Context {
             paths,
-            workspace: &workspace,
+            workspace,
             codex: codex.clone(),
             stop: Arc::clone(&stop),
             cursor,
@@ -177,7 +279,7 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
                 !checks.is_empty(),
                 "Configure at least one enabled project check",
             )?;
-            pipeline(service, &run, &mut context, &checks, repair)
+            cycle::run(service, &run, &mut context, &checks, repair)
         });
         let outcome = match result {
             Ok(outcome) => outcome,
@@ -191,7 +293,15 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
             outcome
         };
         let outcome = match outcome {
-            Outcome::Passed(summary) => match workspace.checkpoint(run.task, run.attempt, &base) {
+            Outcome::Passed(summary) => match workspace.checkpoint(
+                run.task,
+                run.attempt,
+                &base,
+                &service
+                    .progress(&run)?
+                    .ok_or_else(|| Error::Conflict("Missing verified workflow state".into()))?
+                    .verified_tree,
+            ) {
                 Ok(head) => {
                     service.finish_run(&run, "succeeded", None, &summary, Some(&head))?;
                     if !options.queue {
@@ -234,79 +344,116 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
             Outcome::Replanned(judgment) => {
                 let message = describe(&judgment);
                 service.finish_run(&run, "interrupted", Some("interrupted"), &message, None)?;
-                apply_judgment(service, &run, paths, &workspace, judgment)?;
+                apply_judgment(service, &run, paths, workspace, judgment)?;
+                service.replan_applied(&run)?;
                 if stop.load(Ordering::Relaxed) {
                     return Ok(message);
                 }
                 continue;
             }
-            Outcome::Failed(category, mut message) => {
-                let exhausted = coding_failure(category)
-                    && run
-                        .definition
-                        .attempt_limit
-                        .is_some_and(|limit| task.attempts_used + 1 >= limit);
-                if exhausted
-                    && !stop.load(Ordering::Relaxed)
-                    && service.control_cursor(&run)? <= context.cursor
-                {
-                    // Diagnose the final failure while this attempt still owns its worker.
-                    // The coding limit stops another repair, not read-only diagnosis.
-                    let diagnosis = match judge_attempt(service, &run, &mut context, run.attempt) {
-                        Ok(Outcome::Passed(plan)) => format!("Next repair plan: {plan}"),
-                        Ok(Outcome::Replanned(proposal)) => format!(
-                            "Proposed recovery: {}",
-                            serde_json::to_string(&proposal).expect("judgment JSON")
-                        ),
-                        Ok(Outcome::Question(question)) => {
-                            format!("Product decision needed: {question}")
-                        }
-                        Ok(Outcome::Failed(_, error)) => format!("Diagnosis failed: {error}"),
-                        Ok(Outcome::Paused) => "Diagnosis interrupted by pause".into(),
-                        Ok(Outcome::RateLimit) => {
-                            "Diagnosis deferred by provider rate limit".into()
-                        }
-                        Err(error) => format!("Diagnosis unavailable: {error}"),
-                    };
-                    message.push_str(&format!("\n{diagnosis}\nAutomatic repair stopped at the configured attempt limit; no additional worker was started."));
-                    service.output(&run, "system", &diagnosis)?;
-                }
+            Outcome::Failed(category, message) => {
                 service.finish_run(&run, "failed", Some(category), &message, None)?;
-                let next = service
-                    .current_task()?
-                    .ok_or_else(|| Error::Conflict("Current task disappeared".into()))?;
-                let budget = next.definition().definition.attempt_limit;
-                if coding_failure(category)
-                    && budget.is_none_or(|n| next.attempts_used < n)
-                    && !stop.load(Ordering::Relaxed)
-                {
-                    continue;
-                }
                 return Err(Error::Conflict(format!(
-                    "Task #{} stopped ({category}){}: {message}",
-                    run.task,
-                    if budget.is_some_and(|n| next.attempts_used >= n) {
-                        format!(
-                            "; automatic repair budget exhausted ({}/{})",
-                            next.attempts_used,
-                            budget.unwrap()
-                        )
-                    } else {
-                        String::new()
-                    },
+                    "Task #{} stopped ({category}): {message}",
+                    run.task
                 )));
             }
-            Outcome::Passed(_) => unreachable!(),
+            Outcome::Passed(_) | Outcome::Changes { .. } => unreachable!(),
         }
     }
 }
 
-fn coding_failure(category: &str) -> bool {
-    matches!(category, "check" | "review" | "validation" | "agent")
-}
-
 pub fn supervisor_alive(service: &Service) -> Result<bool> {
     Workspace::supervisor_alive(&service.project_root()?)
+}
+
+/// Called after a committed answer, approval or Human acknowledgment. The
+/// conditional state change elects one window to launch the next supervisor.
+pub fn continue_after_intervention(service: &mut Service, paths: &Paths) -> Result<bool> {
+    continue_session(service, paths, true)
+}
+
+/// The exiting supervisor may claim an intervention already recorded by
+/// another process, but must never create a new intervention itself.
+fn continue_pending_session(service: &mut Service, paths: &Paths) -> Result<bool> {
+    continue_session(service, paths, false)
+}
+
+fn continue_session(service: &mut Service, paths: &Paths, intervention: bool) -> Result<bool> {
+    let result = continue_session_inner(service, paths, intervention);
+    if let Err(error) = &result {
+        service.continuation_error(&format!("Continuation could not be confirmed: {error}"))?;
+    }
+    result
+}
+
+fn continue_session_inner(
+    service: &mut Service,
+    paths: &Paths,
+    intervention: bool,
+) -> Result<bool> {
+    let Some(session) = service.execution_session()? else {
+        return Ok(false);
+    };
+    if session.mode == "one" {
+        if intervention {
+            service.single_intervention_resolved()?;
+        }
+        return Ok(false);
+    }
+    if session.mode != "queue"
+        || if intervention {
+            !matches!(
+                session.state.as_str(),
+                "running" | "waiting" | "resume_requested"
+            )
+        } else {
+            session.state != "resume_requested"
+        }
+    {
+        return Ok(false);
+    }
+    let Some(task) = service.current_task()? else {
+        if intervention {
+            service.complete_execution_session_if_empty()?;
+        }
+        return Ok(false);
+    };
+    if task.definition().definition.kind != crate::application::Kind::Ai
+        || task.definition().lifecycle != "ready"
+        || !matches!(
+            task.status.as_str(),
+            "ready" | "failed" | "waiting" | "paused"
+        )
+        || service.open_question(task.id)?.is_some()
+    {
+        return Ok(false);
+    }
+    if intervention {
+        service.request_execution_continuation()?;
+    }
+    if supervisor_alive(service)? {
+        return Ok(false);
+    }
+    if matches!(task.status.as_str(), "waiting" | "paused")
+        && let Some(attempt) = task.attempts.last()
+        && !service.supervisor_released(attempt.id)?
+    {
+        // A missing release event still requires explicit recovery, even after
+        // an answer arrives from another window.
+        return Ok(false);
+    }
+    if !service.resume_execution_session()? {
+        return Ok(false);
+    }
+    if let Err(error) = background(service, paths, true, true) {
+        if !supervisor_alive(service)? {
+            service
+                .continuation_launch_failed(&format!("Continuation could not start: {error}"))?;
+        }
+        return Err(error);
+    }
+    Ok(true)
 }
 
 fn wait_for_backoff(service: &mut Service, run: &Run, ctx: &Context<'_>) -> Result<bool> {
@@ -336,60 +483,6 @@ fn wait_for_backoff(service: &mut Service, run: &Run, ctx: &Context<'_>) -> Resu
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-}
-fn pipeline(
-    service: &mut Service,
-    run: &Run,
-    ctx: &mut Context<'_>,
-    checks: &[crate::application::execution::Check],
-    repair: bool,
-) -> Result<Outcome> {
-    let answers = service.answers(run)?;
-    let prior = service
-        .task(run.task)?
-        .map(|t| {
-            t.attempts
-                .iter()
-                .rev()
-                .filter_map(|a| a.outcome.as_deref())
-                .take(1)
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .unwrap_or_default();
-    let mut context = format!(
-        "{answers}\nPrior failure context (scope only; not proof of current success): {prior}"
-    );
-    let role = if repair { "remediation" } else { "execution" };
-    if repair {
-        match judge(service, run, ctx)? {
-            Outcome::Passed(plan) => {
-                context.push_str(&format!("\nRepair plan from the failure judge:\n{plan}"));
-            }
-            other => return Ok(other),
-        }
-    }
-    let mut evidence = match ai(service, run, ctx, role, &context)? {
-        Outcome::Passed(s) => {
-            format!(
-                "{context}\nCurrent attempt executor assessment (not independent evidence):\n{s}"
-            )
-        }
-        other => return Ok(other),
-    };
-    match checks::run(service, run, ctx, checks)? {
-        Outcome::Passed(checks) => evidence.push_str(&checks),
-        other => return Ok(other),
-    }
-    for role in ["review", "validation"] {
-        match ai(service, run, ctx, role, &evidence)? {
-            Outcome::Passed(s) => evidence.push_str(&format!("\n{role}: {s}")),
-            other => return Ok(other),
-        };
-    }
-    Ok(Outcome::Passed(
-        "Checks, independent review and goal validation passed; checkpoint saved".into(),
-    ))
 }
 fn ai(
     service: &mut Service,
@@ -499,7 +592,7 @@ fn ai_turn(
         }
     };
     if assessment.outcome == "blocked" {
-        service.finish_step(&step, false, &assessment.summary, None)?;
+        service.finish_assessment(&step, false, &assessment.summary)?;
         let question = assessment.question.expect("validated");
         if nudge.is_none() {
             return ai_turn(service, run, ctx, role, evidence, Some(&question));
@@ -512,7 +605,14 @@ fn ai_turn(
         }
         return Ok(Outcome::Question(question));
     }
-    let passed = assessment.outcome == "complete" && assessment.criteria.iter().all(|c| c.passed);
+    let critical = assessment.criteria.iter().any(|c| !c.passed)
+        || assessment
+            .findings
+            .iter()
+            .any(|f| f.severity == codex::Severity::Critical)
+        || assessment.outcome == "failed";
+    let needs_work =
+        critical || !assessment.findings.is_empty() || assessment.outcome == "changes_requested";
     for criterion in &assessment.criteria {
         service.criterion(
             run,
@@ -522,27 +622,25 @@ fn ai_turn(
             &criterion.evidence,
         )?;
     }
-    service.finish_step(&step, passed, &assessment.summary, None)?;
-    Ok(if passed {
-        Outcome::Passed(
-            serde_json::json!({
-                "task_id": run.task,
-                "attempt_id": run.attempt,
-                "step_id": step.id,
-                "role": role,
-                "assessment": assessment,
-            })
-            .to_string(),
-        )
+    let mut summary = assessment.summary.clone();
+    for finding in &assessment.findings {
+        let severity = if finding.severity == codex::Severity::Critical {
+            "Critical"
+        } else {
+            "Minor"
+        };
+        summary.push_str(&format!("\n{severity}: {}", finding.description));
+    }
+    service.finish_assessment(&step, needs_work, &summary)?;
+    let report = serde_json::json!({
+        "task_id": run.task, "attempt_id": run.attempt,
+        "step_id": step.id, "role": role, "assessment": assessment,
+    })
+    .to_string();
+    Ok(if needs_work {
+        Outcome::Changes { report, critical }
     } else {
-        Outcome::Failed(
-            if matches!(role, "review" | "validation") {
-                role
-            } else {
-                "agent"
-            },
-            assessment.summary,
-        )
+        Outcome::Passed(report)
     })
 }
 /// The failure judge: a read-only turn of the remediation model that decides whether the
@@ -572,28 +670,52 @@ fn judge_attempt(
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex")))
         .ok_or_else(|| Error::Conflict("Codex auth home is not configured".into()))?;
-    let step = service.start_ai_step(run, "remediation", model, &scope.to_string_lossy(), false)?;
+    let step = service.start_ai_step(
+        run,
+        "remediation",
+        model,
+        &format!("{}#read-only-judge", scope.to_string_lossy()),
+        false,
+    )?;
     service.output(
         run,
         "system",
         &format!(
-            "failure judge: {}/{} · read-only",
+            "Fix planning: {}/{} · read-only",
             model.provider, model.model
         ),
     )?;
-    let evidence = format!(
+    let mut evidence = format!(
         "{}\nRecorded answers for this attempt:\n{}\n{}",
         service.attempt_evidence(failed, &ctx.paths.state)?,
         service.answers(run)?,
         service.failure_decisions(run.task)?,
     );
+    let progress = service.progress(run)?;
+    let normal_cycle = progress.as_ref().is_some_and(|p| p.round > 0);
+    if let Some(progress) = progress {
+        evidence.push_str(&format!(
+            "\nCurrent workflow state: {}\n{}\n",
+            progress.label(),
+            progress.context
+        ));
+    }
+    let mut prompt = codex::judge_prompt(run, &evidence);
+    let mut schema = codex::judge_schema();
+    if normal_cycle {
+        prompt.push_str("\nThis is a normal review/fix round within the same active task, not a failed task. Revalidate the current findings; preserve the goal and useful work. Prefer repair. You may revise the task or insert prerequisites only if needed, retaining the full goal and acceptance bar. The repair counter follows the original task across automatic revisions and prerequisite handoffs. Do not ask the owner or escalate models during these rounds; unresolved critical findings are escalated only after ten repair rounds.");
+        schema["properties"]["judgment"]["anyOf"]
+            .as_array_mut()
+            .expect("judge alternatives")
+            .truncate(3);
+    }
     let invocation = Invocation {
         executable: ctx.codex.clone(),
         // Sandbox follows the validation role: read-only by design.
         args: codex::args(model, &step, "validation")?,
         cwd: ctx.workspace.root.clone(),
-        prompt: codex::judge_prompt(run, &evidence),
-        schema: Some(codex::judge_schema()),
+        prompt,
+        schema: Some(schema),
         scratch_root: ctx.paths.cache.join("workers"),
         worker_lock: ctx.workspace.worker_lock.clone(),
     };
@@ -627,6 +749,18 @@ fn judge_attempt(
             return Ok(Outcome::Failed("protocol", e.to_string()));
         }
     };
+    if normal_cycle
+        && !matches!(
+            judgment,
+            codex::Judgment::Repair { .. }
+                | codex::Judgment::Revise { .. }
+                | codex::Judgment::Insert { .. }
+        )
+    {
+        let message = "Fix planner must repair, revise or insert during the normal ten-round cycle; owner escalation waits for the final critical decision";
+        service.finish_step(&step, false, message, None)?;
+        return Ok(Outcome::Failed("protocol", message.into()));
+    }
     let (summary, outcome) = match judgment {
         codex::Judgment::Repair { plan, reason } => (
             format!("Repair: {reason}\nAuthorized repair plan:\n{plan}"),
@@ -855,7 +989,12 @@ pub fn abandon_task(
 }
 
 /// Launch the exact supervisor executable, never a PATH-selected ktask or a rebuild target.
-pub fn background(service: &mut Service, paths: &Paths, queue: bool) -> Result<()> {
+pub fn background(
+    service: &mut Service,
+    paths: &Paths,
+    queue: bool,
+    continue_session: bool,
+) -> Result<()> {
     drop(Workspace::acquire(&service.project_root()?)?);
     require(
         !service.checks()?.is_empty(),
@@ -888,6 +1027,9 @@ pub fn background(service: &mut Service, paths: &Paths, queue: bool) -> Result<(
         .stderr(log)
         .process_group(0);
     command.arg(if queue { "--queue" } else { "--one" });
+    if continue_session {
+        command.arg("--continue-session");
+    }
     let mut child = command.spawn()?;
     let output = child.stdout.take().expect("piped stdout");
     let (tx, rx) = std::sync::mpsc::channel();

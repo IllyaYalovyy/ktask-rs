@@ -8,6 +8,16 @@ CREATE TABLE projects (
     created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0)
 ) STRICT;
 
+-- Execution intent is project scoped and survives terminals and interventions.
+-- Attempt state remains solely on attempts; this records the scheduler's policy.
+CREATE TABLE execution_sessions (
+    project_id INTEGER PRIMARY KEY REFERENCES projects(id),
+    mode TEXT NOT NULL CHECK (mode IN ('queue', 'one')),
+    state TEXT NOT NULL CHECK (state IN ('running', 'waiting', 'resume_requested', 'paused', 'stopped', 'completed')),
+    reason TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+    updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0)
+) STRICT;
+
 -- Defaults are copied into revision_models, not followed through a mutable reference.
 CREATE TABLE project_models (
     project_id INTEGER NOT NULL REFERENCES projects(id),
@@ -144,6 +154,16 @@ CREATE TABLE attempts (
 CREATE UNIQUE INDEX ux_live_attempt_task ON attempts(task_id) WHERE state IN ('running', 'paused', 'waiting');
 CREATE UNIQUE INDEX ux_running_attempt_project ON attempts(project_id) WHERE state = 'running';
 
+-- Normal implementation/review/fix/validation progress survives supervisor restarts.
+CREATE TABLE attempt_progress (
+    attempt_id INTEGER PRIMARY KEY REFERENCES attempts(id),
+    repair_round INTEGER NOT NULL DEFAULT 0 CHECK (repair_round BETWEEN 0 AND 10),
+    phase TEXT NOT NULL CHECK (phase IN ('implement','judge','replanned','fix','check','review','validate','decide','complete')),
+    context TEXT NOT NULL DEFAULT '',
+    evidence TEXT NOT NULL DEFAULT '',
+    verified_tree TEXT NOT NULL DEFAULT ''
+) STRICT;
+
 -- Provider session != worker process != attempt. Waiting may have no process at all.
 CREATE TABLE ai_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -170,7 +190,7 @@ CREATE TABLE attempt_steps (
     revision INTEGER NOT NULL,
     ordinal INTEGER NOT NULL CHECK (ordinal > 0),
     role TEXT NOT NULL CHECK (role IN ('execution', 'check', 'review', 'validation', 'remediation')),
-    state TEXT NOT NULL CHECK (state IN ('running', 'succeeded', 'failed', 'interrupted', 'skipped')),
+    state TEXT NOT NULL CHECK (state IN ('running', 'succeeded', 'changes_requested', 'failed', 'interrupted', 'skipped')),
     session_id INTEGER,
     provider TEXT,
     model TEXT,
@@ -205,7 +225,7 @@ CREATE TABLE criterion_results (
     task_id INTEGER NOT NULL,
     revision INTEGER NOT NULL,
     criterion_ordinal INTEGER NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('running', 'passed', 'failed', 'skipped')),
+    state TEXT NOT NULL CHECK (state IN ('running', 'passed', 'needs_work', 'failed', 'skipped')),
     evidence TEXT,
     PRIMARY KEY (step_id, criterion_ordinal),
     FOREIGN KEY (step_id, task_id, revision) REFERENCES attempt_steps(id, task_id, revision),

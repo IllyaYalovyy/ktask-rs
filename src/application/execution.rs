@@ -307,11 +307,36 @@ impl Service {
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let attempt: Option<i64> = tx.query_row("SELECT latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2 AND row_version=?3 AND status IN ('running','waiting')", params![self.project_id,target.id,target.version], |r| r.get(0)).optional()?;
-        let attempt = attempt.ok_or_else(|| {
-            Error::Conflict("Only running current can pause; refresh the task".into())
+        let current: Option<(String,Option<i64>)> = tx.query_row("SELECT status,latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2 AND row_version=?3", params![self.project_id,target.id,target.version], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
+        let (status, latest) = current.ok_or_else(|| {
+            Error::Conflict("Current task changed; refresh before pausing".into())
         })?;
-        tx.execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'runner.pause','info','Pause requested; stopping worker')", params![self.project_id,target.id,attempt,now_ms()])?;
+        let session: Option<(String, String)> = tx
+            .query_row(
+                "SELECT mode,state FROM execution_sessions WHERE project_id=?1",
+                [self.project_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let active = session.as_ref().is_some_and(|(_, state)| {
+            matches!(state.as_str(), "running" | "waiting" | "resume_requested")
+        });
+        let attempt = if matches!(status.as_str(), "running" | "waiting") {
+            latest
+        } else {
+            None
+        };
+        require(
+            attempt.is_some() || active,
+            "Only an active current or queue handoff can pause",
+        )?;
+        let reason = if attempt.is_some() {
+            "Pause requested; stopping worker"
+        } else {
+            "Pause requested; no later task will start"
+        };
+        tx.execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'runner.pause','info',?5)", params![self.project_id,target.id,attempt,now_ms(),reason])?;
+        tx.execute("UPDATE execution_sessions SET state='paused',reason=?2,updated_at_ms=?3 WHERE project_id=?1", params![self.project_id,reason,now_ms()])?;
         tx.commit()?;
         Ok(())
     }
@@ -431,13 +456,41 @@ impl Service {
         report: &str,
         exit: Option<i32>,
     ) -> Result<()> {
+        self.complete_step(
+            step,
+            if success { "succeeded" } else { "failed" },
+            success,
+            report,
+            exit,
+        )
+    }
+    pub fn finish_assessment(&mut self, step: &Step, needs_work: bool, report: &str) -> Result<()> {
+        self.complete_step(
+            step,
+            if needs_work {
+                "changes_requested"
+            } else {
+                "succeeded"
+            },
+            true,
+            report,
+            None,
+        )
+    }
+    fn complete_step(
+        &mut self,
+        step: &Step,
+        state: &str,
+        success: bool,
+        report: &str,
+        exit: Option<i32>,
+    ) -> Result<()> {
         let tx = self
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let state = if success { "succeeded" } else { "failed" };
         tx.execute("UPDATE attempt_steps SET state=?2,report=?3,finished_at_ms=?4,exit_code=CASE WHEN role='check' THEN ?5 ELSE NULL END WHERE id=?1 AND state='running'", params![step.id,state,report,now_ms(),exit])?;
-        tx.execute("UPDATE model_calls SET state=?2,finished_at_ms=?3,error=?4 WHERE step_id=?1 AND state='running'", params![step.id,state,now_ms(),if success {None} else {Some(report)}])?;
+        tx.execute("UPDATE model_calls SET state=?2,finished_at_ms=?3,error=?4 WHERE step_id=?1 AND state='running'", params![step.id,if success {"succeeded"} else {"failed"},now_ms(),if success {None} else {Some(report)}])?;
         tx.commit()?;
         Ok(())
     }
@@ -449,7 +502,7 @@ impl Service {
         passed: bool,
         evidence: &str,
     ) -> Result<()> {
-        self.db.connection().execute("INSERT INTO criterion_results(step_id,task_id,revision,criterion_ordinal,state,evidence) VALUES (?1,?2,?3,?4,?5,?6)", params![step.id,run.task,run.revision,ordinal,if passed {"passed"} else {"failed"},evidence])?;
+        self.db.connection().execute("INSERT INTO criterion_results(step_id,task_id,revision,criterion_ordinal,state,evidence) VALUES (?1,?2,?3,?4,?5,?6)", params![step.id,run.task,run.revision,ordinal,if passed {"passed"} else {"needs_work"},evidence])?;
         Ok(())
     }
     /// Finalize only after descendants are stopped/reaped and owned scratch is cleaned.

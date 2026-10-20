@@ -18,6 +18,7 @@ impl App {
             }
             Action::Run => {
                 self.view == View::Current
+                    && !(self.service.is_some() && self.supervisor_alive)
                     && current.is_some_and(|t| {
                         t.definition().kind == Kind::Ai
                             && match t.status() {
@@ -77,6 +78,14 @@ impl App {
                     && current.is_some_and(|t| {
                         t.status() == Status::Running
                             || (self.service.is_some() && t.status() == Status::Waiting)
+                            || (self.service.is_some()
+                                && self.execution_session.as_ref().is_some_and(|session| {
+                                    session.mode == "queue"
+                                        && matches!(
+                                            session.state.as_str(),
+                                            "running" | "waiting" | "resume_requested"
+                                        )
+                                }))
                     })
             }
             Action::Answer => {

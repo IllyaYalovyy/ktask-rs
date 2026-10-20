@@ -233,14 +233,26 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         one,
         background,
         notify,
+        continue_session,
     } = command
     {
+        let resuming = service
+            .current_task()?
+            .is_some_and(|task| matches!(task.status.as_str(), "paused" | "waiting"));
         let queue = *queue
             || (!*one
-                && service.preferences(&paths.config)?.continuation
-                    == application::preferences::Continuation::Queue);
+                && if resuming {
+                    service.execution_session()?.map_or(
+                        service.preferences(&paths.config)?.continuation
+                            == application::preferences::Continuation::Queue,
+                        |session| session.mode == "queue",
+                    )
+                } else {
+                    service.preferences(&paths.config)?.continuation
+                        == application::preferences::Continuation::Queue
+                });
         let message = if *background {
-            crate::runner::background(&mut service, &paths, queue)?;
+            crate::runner::background(&mut service, &paths, queue, *continue_session)?;
             "Runner started; inspect Current in the TUI".to_owned()
         } else {
             crate::runner::run(
@@ -249,6 +261,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
                 &crate::runner::Options {
                     queue,
                     notify: *notify,
+                    continue_session: *continue_session,
                     recover: false,
                     confirm_worker_cleanup: false,
                     recover_target: None,
@@ -399,7 +412,25 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             cli.json,
         );
     }
-    emit(execute::command(&mut service, command)?, cli.json)
+    let mut reply = execute::command(&mut service, command)?;
+    if matches!(
+        command,
+        Command::Answer { .. }
+            | Command::Approve { .. }
+            | Command::Ack { .. }
+            | Command::Resolve { .. }
+    ) {
+        // The edit is committed. Report any continuation failure alongside its
+        // successful receipt, and retain the reason in the execution session.
+        if let Err(error) = crate::runner::continue_after_intervention(&mut service, &paths) {
+            let message = error.to_string();
+            reply.data["continuation_error"] = json!(message);
+            reply
+                .text
+                .push_str(&format!("Continuation could not be confirmed: {message}\n"));
+        }
+    }
+    emit(reply, cli.json)
 }
 
 fn validate(cli: &Cli) -> Result<()> {

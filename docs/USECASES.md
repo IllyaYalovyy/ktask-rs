@@ -47,3 +47,5 @@
 - Change Configuration → apply valid settings or cancel unchanged; invalid settings show an error without replacing saved values.
 - Open About → read application identity and version → return to the previous screen unchanged.
 - Use CLI → perform the same nonvisual operations and inspect their results; screen navigation, layout, and mouse preferences are TUI-only.
+
+- Implement → review → fix → validate is the normal lifecycle inside one active attempt. Sol implements; stronger Astra models review, repair and validate. Execution preflight rejects reuse of the implementation model for those roles. Each repair starts with read-only planning, then checks and independent review/validation run again. Pause and resume preserve phase and repair round. Review findings show “fixes requested”, never a failed task. Up to ten repair rounds are allowed; after them, independent validation distinguishes concrete critical blockers from recorded minor findings. Critical blockers wait for a decision; minor notes can remain only when all mandatory criteria and checks pass.

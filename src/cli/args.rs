@@ -73,13 +73,16 @@ pub enum Command {
         background: bool,
         #[arg(long, hide = true)]
         notify: bool,
+        /// Internal handoff after an intervention in an existing queue session.
+        #[arg(long, hide = true)]
+        continue_session: bool,
     },
     /// Request pause; state changes only after the worker is stopped and scratch cleaned.
     Pause {
         #[command(flatten)]
         target: Target,
     },
-    /// Save an answer to current's open question, then use resume.
+    /// Save an answer; an active queue session continues automatically.
     Answer {
         #[command(flatten)]
         target: Target,

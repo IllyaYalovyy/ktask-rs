@@ -102,10 +102,14 @@ fn running_fixture(
 ) -> Result<(Service, ktask_rs_mk3::application::execution::Run)> {
     let mut writer = service(root)?;
     let mut task = definition(title);
-    for model in &mut task.models {
+    for (role, model) in task.models.iter_mut().enumerate() {
         *model = Some(ModelConfig {
             provider: "codex".into(),
-            model: "fixture-model".into(),
+            model: if role == 0 {
+                "fixture-model".into()
+            } else {
+                format!("fixture-judge-{role}")
+            },
             effort: None,
         });
     }
@@ -246,7 +250,11 @@ fn failed_task(root: &Path) -> Result<(i64, i64)> {
     for role in 0..4 {
         d.models[role] = Some(ModelConfig {
             provider: "codex".into(),
-            model: "fixture-model".into(),
+            model: if role == 0 {
+                "fixture-model".into()
+            } else {
+                format!("fixture-judge-{role}")
+            },
             effort: Some("high".into()),
         });
     }
@@ -968,6 +976,8 @@ fn revised_failure_waits_for_approval_before_queue_continues() -> Result {
         support::empty_repository(root)?;
         let (id, attempt) = failed_task(root)?;
         let mut writer = service(root)?;
+        writer.start_execution_session(true)?;
+        writer.execution_state("waiting", "Failed task awaiting owner revision")?;
         writer.set_check("proof", "true", 60_000)?;
         let config = root.join("config/ktask-dev");
         let previous = writer.preferences(&config)?;

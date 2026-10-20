@@ -201,6 +201,11 @@ fn content(rect: Rect) -> Rect {
 }
 
 fn active_phase(task: &crate::presentation::Task) -> String {
+    if let Some(line) = task.attempts.last().and_then(|a| a.report.lines().next())
+        && line.starts_with("Workflow ·")
+    {
+        return line.to_owned();
+    }
     if let Some(message) = task.attempts.last().and_then(|attempt| attempt.logs.last())
         && message.starts_with("Provider connection failed")
     {
@@ -219,7 +224,7 @@ fn active_phase(task: &crate::presentation::Task) -> String {
         .map(|(label, _)| label.as_str());
     match role {
         Some("Execution") => "AI implementing the task".into(),
-        Some("Remediation") => "AI diagnosing or repairing a failure".into(),
+        Some("Remediation") => "AI planning or applying fixes".into(),
         Some("Review") => "Independent review of the changes".into(),
         Some("Validation") => "Independent validation of the evidence".into(),
         Some(label) => format!("Checking: {label}"),
@@ -228,6 +233,57 @@ fn active_phase(task: &crate::presentation::Task) -> String {
 }
 
 fn queue_progress(app: &App, width: u16) -> String {
+    if let Some(session) = &app.execution_session {
+        let mode = if session.mode == "queue" {
+            "Queue"
+        } else {
+            "Run one"
+        };
+        let state = match session.state.as_str() {
+            "running" if !app.supervisor_alive => "supervisor absent",
+            "running" => "running",
+            "resume_requested" if !app.supervisor_alive => "supervisor absent",
+            "resume_requested" => "continuing",
+            "waiting" => "waiting",
+            "paused" => "paused",
+            "completed" => "complete",
+            _ => "stopped",
+        };
+        let next = app.queue.get(1).map_or_else(
+            || {
+                if app.queue.is_empty() {
+                    " · no queued work".into()
+                } else {
+                    String::new()
+                }
+            },
+            |task| format!(" · Next #{}", task.id),
+        );
+        let reason = if session
+            .reason
+            .starts_with("Continuation could not be confirmed:")
+        {
+            &session.reason
+        } else if matches!(session.state.as_str(), "running" | "resume_requested")
+            && !app.supervisor_alive
+        {
+            "Supervisor absent; inspect current and Run or Recover"
+        } else if session.reason.starts_with("Waiting for answer:") {
+            "Awaiting answer to current task"
+        } else {
+            &session.reason
+        };
+        let phase = app
+            .queue
+            .first()
+            .filter(|t| t.status() == crate::presentation::Status::Running)
+            .map(|t| format!(" · {}", active_phase(t)))
+            .unwrap_or_default();
+        return shortened(
+            &format!(" Session: {mode} · {state}{phase}{next} · {reason}"),
+            width as usize,
+        );
+    }
     let mode = if app.auto_advance {
         "Queue preference"
     } else {
@@ -340,6 +396,14 @@ fn current_controls(app: &App) -> Vec<(&'static str, Action)> {
             ("n Reject", Action::Reject),
         ],
     };
+    if app.service.is_some()
+        && app.enabled(Action::Pause)
+        && !controls
+            .iter()
+            .any(|(_, action)| matches!(action, Action::Pause))
+    {
+        controls.insert(0, ("p Pause", Action::Pause));
+    }
     if matches!(status, Some(s) if s.failed()) {
         controls.extend([("v Approve", Action::Approve), ("n Reject", Action::Reject)]);
     }
@@ -481,7 +545,20 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
             format!("Budget {} of {} used", task.used(), settings.attempt_limit)
         }),
     ];
-    let model = &settings.models[0];
+    let role = attempt
+        .and_then(|a| a.steps.last())
+        .map(|(label, _)| label.as_str());
+    let phase = attempt
+        .filter(|_| status == Status::Running)
+        .and_then(|a| a.report.strip_prefix("Workflow · "))
+        .and_then(|report| report.split(" · ").next());
+    let model_index = match phase.or(role) {
+        Some("Review") => 1,
+        Some("Validate" | "Critical findings need a decision" | "Validation") => 2,
+        Some("Plan fixes" | "Fix" | "Remediation") => 3,
+        _ => 0,
+    };
+    let model = &settings.models[model_index];
     lines.push(Line::raw(shortened(
         &format!("Model {}", model.name),
         inner,
@@ -496,16 +573,28 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         )));
     }
     match status {
-        Status::Waiting => lines.push(Line::styled(
-            format!(
-                "Resumes in {}s",
-                attempt.and_then(|a| a.resume_at).map_or(0, |at| at
-                    .saturating_duration_since(std::time::Instant::now())
+        Status::Waiting => {
+            let seconds = attempt.and_then(|a| a.resume_at).map_or(0, |at| {
+                at.saturating_duration_since(std::time::Instant::now())
                     .as_secs()
-                    + 1)
-            ),
-            Style::new().fg(WARN),
-        )),
+                    + 1
+            });
+            let automatic = app.supervisor_alive
+                && app.execution_session.as_ref().is_none_or(|session| {
+                    matches!(
+                        session.state.as_str(),
+                        "running" | "waiting" | "resume_requested"
+                    )
+                });
+            lines.push(Line::styled(
+                if automatic {
+                    format!("Resumes in {seconds}s")
+                } else {
+                    format!("Eligible in {seconds}s · manual resume")
+                },
+                Style::new().fg(WARN),
+            ));
+        }
         Status::Question if app.enabled(Action::Run) => {
             lines.push(Line::styled("Answer saved · r Resume", Style::new().fg(OK)))
         }
@@ -517,17 +606,28 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
     }
     if let Some(attempt) = attempt.filter(|a| !a.steps.is_empty()) {
         lines.push(Line::raw(""));
-        for (label, state) in &attempt.steps {
+        for (label, state) in attempt.steps.iter().rev().take(5).rev() {
             let (glyph, color) = match state.as_str() {
                 "succeeded" => ("✓", OK),
                 "failed" => ("✗", BAD),
+                "changes_requested" => ("↻", WARN),
                 "running" => ("…", ACCENT),
                 "skipped" => ("–", MUTED),
                 _ => ("!", WARN),
             };
             lines.push(Line::from(vec![
                 Span::styled(format!("{label:<12}"), Style::new().fg(MUTED)),
-                Span::styled(format!("{glyph} {state}"), Style::new().fg(color)),
+                Span::styled(
+                    format!(
+                        "{glyph} {}",
+                        if state == "changes_requested" {
+                            "fixes"
+                        } else {
+                            state
+                        }
+                    ),
+                    Style::new().fg(color),
+                ),
             ]));
         }
     }
@@ -624,10 +724,22 @@ fn situation(app: &App, task: &crate::presentation::Task) -> (String, Color) {
             format!("The worker needs your answer · w Answer{abandon}"),
             WARN,
         ),
-        Status::Waiting => (
+        Status::Waiting
+            if app
+                .execution_session
+                .as_ref()
+                .is_some_and(|s| s.state == "paused") =>
+        {
+            (
+                format!("Provider rate limit · paused · r Resume{abandon}"),
+                WARN,
+            )
+        }
+        Status::Waiting if app.supervisor_alive => (
             format!("Provider rate limit · resumes by itself{abandon}"),
             WARN,
         ),
+        Status::Waiting => (format!("Provider rate limit · r Resume{abandon}"), WARN),
         Status::Running if app.service.is_some() => {
             (format!("{} · p Pause", active_phase(task)), ACCENT)
         }
@@ -638,6 +750,10 @@ fn situation(app: &App, task: &crate::presentation::Task) -> (String, Color) {
             BAD,
         ),
         Status::Pending if human => ("Human task · y Acknowledge when it is done".into(), MUTED),
+        Status::Pending if app.service.is_some() && app.supervisor_alive => (
+            "Supervisor preparing the next task · p Pause stops the queue".into(),
+            ACCENT,
+        ),
         Status::Pending if app.service.is_some() => (
             if app.auto_advance {
                 "Ready · r Run queue; checks and repair run automatically".into()

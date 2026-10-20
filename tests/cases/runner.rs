@@ -2,7 +2,7 @@ use crate::support::{self, Result, Terminal};
 use ktask_rs_mk3::{scratch::Scratch, storage::Database};
 use serde_json::Value;
 use std::{
-    fs,
+    fs::{self, OpenOptions},
     os::unix::fs::PermissionsExt,
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -132,6 +132,10 @@ case "$prompt" in *"Interactive Remediate action"*)
 esac
 case "$prompt" in *"You are the failure judge"*)
  printf '%s' "$prompt" > "$HOME/prompt-judge"
+ if [ '{mode}' = judge-error-once ] && [ ! -f "$HOME/judge-error" ]; then
+  touch "$HOME/judge-error"
+  printf '{{"type":"turn.completed","usage":{{}}}}\n'; exit 0
+ fi
  judge_mode='{mode}'
  case "$prompt" in *"Human answer"*) judge_mode=normal;; esac
  case "$judge_mode" in
@@ -142,6 +146,23 @@ case "$prompt" in *"You are the failure judge"*)
  esac;;
 esac
 case '{mode}' in
+ minor-required|validation-critical)
+  if [ '{mode}' = validation-critical ] && [ "$model" = validation ]; then printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Mandatory proof is missing\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": false, \"evidence\": \"Required boundary behavior is not verified\"}}], \"findings\": [{{\"severity\": \"critical\", \"description\": \"result.txt:1: boundary case needs correction\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{}}}}'; exit 0; fi
+  if [ '{mode}' = minor-required ]; then
+   case "$prompt" in *"Final decision after"*) printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Mandatory proof is missing\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": false, \"evidence\": \"Required boundary behavior is not verified\"}}], \"findings\": [{{\"severity\": \"minor\", \"description\": \"result.txt:1: boundary case needs correction\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{}}}}'; exit 0;; esac
+   if [ "$model" = review ]; then printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Mandatory proof is missing\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": false, \"evidence\": \"Required boundary behavior is not verified\"}}], \"findings\": [{{\"severity\": \"minor\", \"description\": \"result.txt:1: boundary case needs correction\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{}}}}'; exit 0; fi
+  fi;;
+ review-critical|review-minor|pause-tenth|review-nine)
+  case "$prompt" in *"Final decision after"*) printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Review findings to address\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": false, \"evidence\": \"Critical boundary case remains unhandled\"}}], \"findings\": [{{\"severity\": \"critical\", \"description\": \"result.txt:1: missing boundary handling produces incorrect results; implement the boundary case\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{"input_tokens": 100, "cached_input_tokens": 40, "output_tokens": 10}}}}'; exit 0;; esac
+  if [ "$model" = review ]; then
+   count=0; [ ! -f "$HOME/review-count" ] || count=$(cat "$HOME/review-count")
+   count=$((count + 1)); printf '%s' "$count" > "$HOME/review-count"
+   if [ '{mode}' = pause-tenth ] && [ "$count" = 11 ]; then touch "$HOME/tenth-review-started"; sleep 30; fi
+   if [ '{mode}' = review-nine ] && [ "$count" -gt 9 ]; then :
+   elif [ '{mode}' = review-minor ]; then printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Review findings to address\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": true, \"evidence\": \"Optional naming polish\"}}], \"findings\": [{{\"severity\": \"minor\", \"description\": \"result.txt:1: optional naming polish\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{"input_tokens": 100, "cached_input_tokens": 40, "output_tokens": 10}}}}'; exit 0
+   else printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Review findings to address\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": false, \"evidence\": \"Critical boundary case remains unhandled\"}}], \"findings\": [{{\"severity\": \"critical\", \"description\": \"result.txt:1: missing boundary handling produces incorrect results; implement the boundary case\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{"input_tokens": 100, "cached_input_tokens": 40, "output_tokens": 10}}}}'; exit 0
+   fi
+  fi;;
  large-evidence) case "$model" in
   execution|remediation)
    printf '{{"type":"item.completed","item":{{"type":"command_execution","command":"large check transcript","aggregated_output":"START'
@@ -157,9 +178,11 @@ case '{mode}' in
  review-once) if [ "$model" = review ] && [ ! -f "$HOME/review-failed" ]; then touch "$HOME/review-failed"; printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"failed\",\"summary\":\"result.txt:1: missing edge-case handling; repair and prove the boundary.\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":false,\"evidence\":\"Boundary case fails\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0; fi;;
  transient) if [ ! -f "$HOME/transport-retried" ]; then touch "$HOME/transport-retried"; printf '{{"type":"turn.failed","error":{{"message":"connection reset"}}}}\n'; exit 2; fi;;
  slow-repair) if [ "$model" = remediation ]; then touch "$HOME/repair-started"; sleep 30; fi;;
+ slow-review) if [ "$model" = review ]; then touch "$HOME/review-started"; sleep 30; fi;;
  slow) sleep 3;;
  descendants) setsid sleep 30 & printf '%s' "$!" > descendant.pid; sleep 30;;
  rate) printf '{{"type":"turn.failed","error":{{"message":"rate_limit reached"}}}}\n'; exit 2;;
+ malformed-work) printf 'verified\n' > result.txt; printf '{{"type":"turn.completed","usage":{{}}}}\n'; exit 0;;
  malformed) printf '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}\n'; exit 0;;
  fail) printf '{{"type":"turn.failed","error":{{"message":"transport lost"}}}}\n'; exit 2;;
  question) case "$prompt" in *"Human answer"*) :;; *) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"blocked\",\"summary\":\"Need direction\",\"question\":\"Which content?\",\"criteria\":[]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;; esac;;
@@ -173,6 +196,13 @@ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":
         let path = self.scratch.path().join("bin/codex");
         fs::write(&path, script)?;
         fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+        Ok(())
+    }
+    fn fail_provider(&self) -> Result {
+        self.provider("malformed-work")?;
+        let output = self.process().args(["run", "--one"]).output()?;
+        assert_eq!(output.status.code(), Some(4));
+        self.provider("normal")?;
         Ok(())
     }
     /// A project check that fails exactly once, so the next attempt goes through the judge.
@@ -206,6 +236,449 @@ impl Drop for Running {
 }
 
 #[test]
+fn review_cycles_accept_only_minor_findings_after_ten_repairs_in_real_tui() -> Result {
+    for (mouse, cols, rows) in [(false, 70, 22), (true, 120, 30)] {
+        for critical in [false, true] {
+            let f = Fixture::new()?;
+            f.provider(if critical {
+                "review-critical"
+            } else {
+                "review-minor"
+            })?;
+            f.add("Normal review and fix cycle")?;
+            f.add("Next task")?;
+            f.ok(&["edit", "1", "--attempt-limit", "1"])?;
+            let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
+            println!(
+                "REVIEW LOOP READY mouse={mouse} critical={critical}\n{}",
+                t.screen("ready", |s| s.contains("r Run queue"))?
+            );
+            if mouse {
+                t.click("r Run queue")?;
+            } else {
+                t.send("r")?;
+            }
+            f.state(if critical { "waiting" } else { "succeeded" })?;
+            println!(
+                "REVIEW LOOP DECISION mouse={mouse} critical={critical}\n{}",
+                t.screen("decision", |s| {
+                    if critical {
+                        s.contains("Critical findings remain")
+                    } else {
+                        s.contains("Queue complete.")
+                    }
+                })?
+            );
+            let task = f.ok(&["show", "1"])?;
+            assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+            assert_eq!(task["attempts_used"], if critical { 0 } else { 1 });
+            let db = f.db()?;
+            let round: i64 = db.connection().query_row(
+                "SELECT repair_round FROM attempt_progress WHERE attempt_id=1",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(round, 10);
+            assert_eq!(
+                db.connection().query_row(
+                    "SELECT count(*) FROM attempts WHERE state='failed'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )?,
+                0
+            );
+            assert_eq!(
+                db.connection().query_row(
+                    "SELECT count(*) FROM attempt_steps WHERE state='failed'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )?,
+                0
+            );
+            assert_eq!(
+                db.connection().query_row(
+                    "SELECT count(*) FROM model_calls WHERE state='failed'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )?,
+                0
+            );
+            assert_eq!(
+                db.connection().query_row(
+                    "SELECT count(*) FROM attempt_steps WHERE attempt_id=1 AND role='remediation'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )?,
+                20
+            );
+            assert!(
+                task["attempts"][0]["steps"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|s| s["role"] == "review" && s["state"] == "changes_requested")
+            );
+            if critical {
+                assert!(
+                    task["attempts"][0]["question"]
+                        .as_str()
+                        .unwrap()
+                        .contains("10 repair rounds")
+                );
+                assert!(
+                    f.ok(&["show", "2"])?["attempts"]
+                        .as_array()
+                        .unwrap()
+                        .is_empty()
+                );
+            } else {
+                assert_eq!(f.ok(&["show", "2"])?["lifecycle"], "succeeded");
+                let prompt = fs::read_to_string(f.scratch.path().join("prompt-validation"))?;
+                // The second task also receives the retained advisory findings.
+                assert!(prompt.contains("minor") && prompt.contains("optional naming polish"));
+            }
+            t.send("q")?;
+            t.finish()?;
+            f.no_scratch()?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn pause_at_tenth_review_resumes_the_phase_without_an_eleventh_repair() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("pause-tenth")?;
+        f.add("Preserve tenth round across resume")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
+        t.screen("ready", |s| s.contains("r Run queue"))?;
+        t.send("r")?;
+        let until = Instant::now() + Duration::from_secs(20);
+        while !f.scratch.path().join("tenth-review-started").exists() {
+            assert!(Instant::now() < until, "tenth review never started");
+            thread::sleep(Duration::from_millis(20));
+        }
+        println!(
+            "TENTH REVIEW ACTIVE mouse={mouse}\n{}",
+            t.screen("tenth review", |s| s
+                .contains("Workflow · Review · repair round 10/10"))?
+        );
+        if mouse {
+            t.click("p Pause")?;
+        } else {
+            t.send("p")?;
+        }
+        println!(
+            "TENTH REVIEW PAUSED mouse={mouse}\n{}",
+            t.screen("paused", |s| s.contains("PAUSED") && s.contains("r Resume"))?
+        );
+        f.provider("review-critical")?;
+        if mouse {
+            t.click("r Resume")?;
+        } else {
+            t.send("r")?;
+        }
+        f.state("waiting")?;
+        println!(
+            "TENTH REVIEW RESUMED mouse={mouse}\n{}",
+            t.screen("critical decision", |s| s
+                .contains("Critical findings remain"))?
+        );
+        let db = f.db()?;
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT count(*) FROM attempts", [], |r| r.get::<_, i64>(0))?,
+            1
+        );
+        assert_eq!(
+            db.connection().query_row(
+                "SELECT count(*) FROM attempt_steps WHERE role='execution'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )?,
+            1
+        );
+        assert_eq!(
+            db.connection().query_row(
+                "SELECT count(*) FROM attempt_steps WHERE role='remediation'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )?,
+            20
+        );
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT repair_round FROM attempt_progress", [], |r| r
+                    .get::<_, i64>(0))?,
+            10
+        );
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn implementation_model_cannot_review_repair_or_validate_itself() -> Result {
+    for role in ["review", "remediation", "validation"] {
+        let f = Fixture::new()?;
+        f.add("Require stronger judge model")?;
+        f.ok(&["edit", "1", "--model", &format!("{role}=codex/execution")])?;
+        let output = f.process().args(["run", "--json"]).output()?;
+        assert_eq!(output.status.code(), Some(4));
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains(&format!("stronger {role} model distinct"))
+        );
+        assert!(!f.scratch.path().join("provider-invocations").exists());
+        assert!(
+            f.ok(&["show", "1"])?["attempts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        for mouse in [false, true] {
+            let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
+            t.screen("ready", |s| s.contains("r Run queue"))?;
+            if mouse {
+                t.click("r Run queue")?;
+            } else {
+                t.send("r")?;
+            }
+            println!(
+                "MODEL SEPARATION {role} mouse={mouse}\n{}",
+                t.screen("model configuration required", |s| s
+                    .contains("Configure a stronger"))?
+            );
+            assert!(!f.scratch.path().join("provider-invocations").exists());
+            t.send("q")?;
+            t.finish()?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn mandatory_criteria_and_validation_findings_still_block_after_ten_rounds() -> Result {
+    for (mode, mouse) in [("minor-required", false), ("validation-critical", true)] {
+        let f = Fixture::new()?;
+        f.provider(mode)?;
+        f.add("Mandatory evidence cannot be waived")?;
+        f.ok(&["run", "--one"])?;
+        f.state("waiting")?;
+        let task = f.ok(&["show", "1"])?;
+        assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+        let question = task["attempts"][0]["question"].as_str().unwrap();
+        assert!(question.contains("Critical findings remain after 10 repair rounds"));
+        assert!(question.contains("Required boundary behavior is not verified"));
+        assert!(!question.contains("\"assessment\""));
+        let db = f.db()?;
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT repair_round FROM attempt_progress", [], |r| r
+                    .get::<_, i64>(0))?,
+            10
+        );
+        if mode == "validation-critical" {
+            assert_eq!(
+                db.connection().query_row(
+                    "SELECT count(*) FROM attempt_steps WHERE role='review' AND state='succeeded'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )?,
+                11
+            );
+        }
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
+        println!(
+            "MANDATORY DECISION {mode}\n{}",
+            t.screen("question", |s| s.contains("Critical findings remain"))?
+        );
+        if mouse {
+            t.click("w Answer")?;
+        } else {
+            t.send("w")?;
+        }
+        println!(
+            "MANDATORY DECISION DETAILS {mode}\n{}",
+            t.screen("full decision", |s| s.contains("Which scope change")
+                || s.contains("Required boundary behavior"))?
+        );
+        t.send("\x1b")?;
+        t.screen("question closed", |s| !s.contains("Answer AI question"))?;
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn changing_source_while_review_is_paused_invalidates_saved_proof() -> Result {
+    let f = Fixture::new()?;
+    f.provider("slow-review")?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        "test \"$(cat result.txt)\" = verified",
+    ])?;
+    f.add("Recheck source edited while paused")?;
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
+    t.screen("ready", |s| s.contains("r Run queue"))?;
+    t.send("r")?;
+    let until = Instant::now() + Duration::from_secs(10);
+    while !f.scratch.path().join("review-started").exists() {
+        assert!(Instant::now() < until, "review never started");
+        thread::sleep(Duration::from_millis(20));
+    }
+    println!(
+        "PROVEN SOURCE BEFORE PAUSE\n{}",
+        t.screen("review", |s| s.contains("Workflow · Review"))?
+    );
+    assert!(
+        f.git(&["diff", "--cached", "--name-only"])?.is_empty(),
+        "fingerprinting must preserve the user's index"
+    );
+    t.click("p Pause")?;
+    t.screen("paused", |s| s.contains("PAUSED") && s.contains("r Resume"))?;
+    fs::write(f.root.join("result.txt"), "unverified change\n")?;
+    fs::write(f.root.join(".gitignore"), "included.secret\n")?;
+    fs::write(f.root.join("included.secret"), "deliberately staged\n")?;
+    f.git(&["add", "-f", "included.secret"])?;
+    f.provider("normal")?;
+    t.send("r")?;
+    f.state("succeeded")?;
+    println!(
+        "CHANGED SOURCE RECHECKED\n{}",
+        t.screen("verified after repair", |s| s.contains("Queue complete."))?
+    );
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+    assert!(
+        task["attempts"][0]["logs"]
+            .to_string()
+            .contains("Worktree changed since verification")
+    );
+    let db = f.db()?;
+    let checks = db
+        .connection()
+        .prepare("SELECT state FROM attempt_steps WHERE role='check' ORDER BY id")?
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    assert_eq!(checks, ["succeeded", "failed", "succeeded"]);
+    assert_eq!(
+        db.connection()
+            .query_row("SELECT repair_round FROM attempt_progress", [], |r| r
+                .get::<_, i64>(0))?,
+        1
+    );
+    assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
+    assert!(f.git(&["status", "--porcelain"])?.is_empty());
+    assert_eq!(
+        f.git(&["show", "HEAD:included.secret"])?,
+        "deliberately staged\n"
+    );
+    t.send("q")?;
+    t.finish()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn failed_repair_judge_is_repeated_before_a_retry_worker_runs() -> Result {
+    let f = Fixture::new()?;
+    f.provider("judge-error-once")?;
+    f.fail_first_check()?;
+    f.add("Retry the failed judge before repairing")?;
+    let output = f.process().args(["run", "--one"]).output()?;
+    assert_eq!(output.status.code(), Some(4));
+    let db = f.db()?;
+    assert_eq!(
+        db.connection().query_row(
+            "SELECT phase FROM attempt_progress ORDER BY attempt_id LIMIT 1",
+            [],
+            |r| r.get::<_, String>(0)
+        )?,
+        "judge"
+    );
+    f.ok(&["run", "--one"])?;
+    f.state("succeeded")?;
+    let roles = fs::read_to_string(f.scratch.path().join("provider-invocations"))?;
+    assert_eq!(
+        roles.lines().collect::<Vec<_>>(),
+        [
+            "execution",
+            "remediation",
+            "remediation",
+            "remediation",
+            "review",
+            "validation"
+        ]
+    );
+    assert_eq!(
+        db.connection().query_row(
+            "SELECT repair_round FROM attempt_progress ORDER BY attempt_id DESC LIMIT 1",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        1
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn automatic_revisions_cannot_reset_the_ten_round_budget() -> Result {
+    let f = Fixture::new()?;
+    f.provider("judge-revise")?;
+    f.add("Repeated revisions still have one repair budget")?;
+    f.ok(&["check-set", "build", "--command", "exit 7"])?;
+    f.ok(&["run"])?;
+    f.state("waiting")?;
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["selected_revision"], 11);
+    assert_eq!(task["attempts_used"], 0);
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 11);
+    let db = f.db()?;
+    assert_eq!(
+        db.connection()
+            .query_row("SELECT max(repair_round) FROM attempt_progress", [], |r| {
+                r.get::<_, i64>(0)
+            })?,
+        10
+    );
+    assert_eq!(
+        db.connection().query_row(
+            "SELECT count(*) FROM attempt_steps WHERE role='execution'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        1
+    );
+    assert_eq!(
+        db.connection().query_row(
+            "SELECT count(*) FROM attempt_steps WHERE role='remediation'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        20
+    );
+    assert_eq!(
+        db.connection().query_row(
+            "SELECT count(*) FROM attempts WHERE state='failed'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        0
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
 fn check_evidence_preserves_unicode_split_across_pipe_reads() -> Result {
     for exit_code in [0, 7] {
         let f = Fixture::new()?;
@@ -215,17 +688,14 @@ fn check_evidence_preserves_unicode_split_across_pipe_reads() -> Result {
         f.ok(&["check-set", "build", "--command", &command])?;
         f.add("Unicode evidence")?;
         let result = f.process().args(["run", "--json"]).output()?;
-        assert_eq!(
-            result.status.code(),
-            Some(if exit_code == 0 { 0 } else { 4 })
-        );
+        assert_eq!(result.status.code(), Some(0));
         let db = f.db()?;
         let artifacts = db
             .connection()
             .prepare("SELECT relative_path,size_bytes FROM artifacts ORDER BY attempt_id")?
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        assert_eq!(artifacts.len(), if exit_code == 0 { 1 } else { 3 });
+        assert_eq!(artifacts.len(), if exit_code == 0 { 1 } else { 11 });
         for (relative, size) in artifacts {
             let text =
                 fs::read_to_string(f.scratch.path().join("state/ktask-dev").join(&relative))?;
@@ -257,7 +727,7 @@ fn reviewers_receive_current_proof_and_authorized_repair_context() -> Result {
     f.ok(&["run"])?;
     let db = f.db()?;
     let (relative, size): (String, i64) = db.connection().query_row(
-        "SELECT relative_path,size_bytes FROM artifacts WHERE attempt_id=2",
+        "SELECT relative_path,size_bytes FROM artifacts WHERE attempt_id=1 ORDER BY id DESC LIMIT 1",
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
@@ -269,7 +739,7 @@ fn reviewers_receive_current_proof_and_authorized_repair_context() -> Result {
     assert!(!text.contains("previous failed check"));
     assert_eq!(size as usize, text.len());
     let failed_relative: String = db.connection().query_row(
-        "SELECT relative_path FROM artifacts WHERE attempt_id=1",
+        "SELECT relative_path FROM artifacts WHERE attempt_id=1 ORDER BY id LIMIT 1",
         [],
         |r| r.get(0),
     )?;
@@ -318,11 +788,11 @@ fn failed_check_transcript_is_retained_for_remediation() -> Result {
     ])?;
     f.add("Preserve failure evidence")?;
     let result = f.process().args(["run", "--json"]).output()?;
-    assert_eq!(result.status.code(), Some(4));
+    assert_eq!(result.status.code(), Some(0));
     let prompt = fs::read_to_string(f.scratch.path().join("prompt-remediation"))?;
     let db = f.db()?;
     let relative: String = db.connection().query_row(
-        "SELECT relative_path FROM artifacts ORDER BY attempt_id DESC LIMIT 1",
+        "SELECT relative_path FROM artifacts ORDER BY id DESC LIMIT 1 OFFSET 1",
         [],
         |r| r.get(0),
     )?;
@@ -391,10 +861,10 @@ fn check_failure_is_real_and_remediation_stays_with_current() -> Result {
     f.add("Failure")?;
     f.add("Must not start")?;
     let failed = f.process().args(["run", "--queue"]).output()?;
-    assert_eq!(failed.status.code(), Some(4));
+    assert_eq!(failed.status.code(), Some(0));
     let task = f.ok(&["show", "1"])?;
-    assert_eq!(task["status"], "failed");
-    assert_eq!(task["attempts"].as_array().unwrap().len(), 3);
+    assert_eq!(task["status"], "waiting");
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
     assert!(
         f.ok(&["show", "2"])?["attempts"]
             .as_array()
@@ -408,9 +878,8 @@ fn check_failure_is_real_and_remediation_stays_with_current() -> Result {
             [],
             |r| r.get::<_, i64>(0)
         )?,
-        // Two repair attempts open with a judge and worker; the final failure
-        // also gets read-only diagnosis without another coding attempt.
-        5
+        // Ten repair rounds, each with a read-only judge and one worker.
+        20
     );
     let worker_prompt = fs::read_to_string(f.scratch.path().join("prompt-repair-worker"))?;
     assert!(
@@ -424,9 +893,9 @@ fn check_failure_is_real_and_remediation_stays_with_current() -> Result {
 #[test]
 fn failure_judge_can_rewrite_the_task_without_spending_budget() -> Result {
     let f = Fixture::new()?;
-    f.provider("judge-revise")?;
     f.fail_first_check()?;
     f.add("Contradictory task")?;
+    f.provider("judge-revise")?;
     let output = f.process().args(["run"]).output()?;
     assert!(
         output.status.success(),
@@ -443,9 +912,17 @@ fn failure_judge_can_rewrite_the_task_without_spending_budget() -> Result {
         .iter()
         .map(|a| a["state"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(states, ["failed", "interrupted", "succeeded"]);
-    assert_eq!(task["attempts_used"], 2);
+    assert_eq!(states, ["interrupted", "succeeded"]);
+    assert_eq!(task["attempts_used"], 1);
     let db = f.db()?;
+    assert_eq!(
+        db.connection().query_row(
+            "SELECT repair_round FROM attempt_progress ORDER BY attempt_id DESC LIMIT 1",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        1
+    );
     let (actor_kind, actor, reason): (String, String, String) = db.connection().query_row(
         "SELECT created_by_kind, created_by, change_reason FROM task_revisions WHERE task_id=1 AND revision=2",
         [],
@@ -488,18 +965,18 @@ fn judge_evidence_stays_within_the_provider_input_limit() -> Result {
 #[test]
 fn failure_judge_asks_the_owner_only_as_a_product_question() -> Result {
     let f = Fixture::new()?;
-    f.provider("judge-ask")?;
     f.fail_first_check()?;
     f.add("Ambiguous task")?;
+    f.fail_provider()?;
+    f.provider("judge-ask")?;
     f.ok(&["run"])?;
     f.state("waiting")?;
     let task = f.ok(&["show", "1"])?;
     let attempts = task["attempts"].as_array().unwrap();
     assert_eq!(attempts.len(), 2);
     assert_eq!(attempts[1]["question"], "Keep or drop the legacy export?");
-    assert_eq!(task["attempts_used"], 1);
+    assert_eq!(task["attempts_used"], 0);
     f.ok(&["answer", "1", "--text", "Human answer: keep it"])?;
-    f.ok(&["resume"])?;
     f.state("succeeded")?;
     assert_eq!(
         f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
@@ -542,7 +1019,7 @@ fn pause_resume_keeps_attempt_session_and_cleans_worker_tmp() -> Result {
 }
 
 #[test]
-fn paused_repair_resumes_with_a_fresh_judge_and_the_same_attempt() -> Result {
+fn paused_repair_resumes_its_reserved_round_and_same_attempt() -> Result {
     for mouse in [false, true] {
         let f = Fixture::new()?;
         f.provider("slow-repair")?;
@@ -557,7 +1034,7 @@ fn paused_repair_resumes_with_a_fresh_judge_and_the_same_attempt() -> Result {
             thread::sleep(Duration::from_millis(10));
         }
         t.screen("repair running", |s| {
-            s.contains("p Pause") && s.contains("Attempt 2") && s.contains("Remediation … running")
+            s.contains("p Pause") && s.contains("Attempt 1") && s.contains("Remediation … running")
         })?;
         if mouse {
             t.click("p Pause")?;
@@ -570,7 +1047,7 @@ fn paused_repair_resumes_with_a_fresh_judge_and_the_same_attempt() -> Result {
                 && s.contains("PAUSED"))?
         );
         let before = f.ok(&["show", "1"])?;
-        let attempt = before["attempts"][1]["id"].clone();
+        let attempt = before["attempts"][0]["id"].clone();
         f.provider("normal")?;
         if mouse {
             t.click("r Resume")?;
@@ -582,12 +1059,12 @@ fn paused_repair_resumes_with_a_fresh_judge_and_the_same_attempt() -> Result {
             t.screen("repair complete", |s| s.contains("Queue complete."))?
         );
         let after = f.ok(&["show", "1"])?;
-        assert_eq!(after["attempts"].as_array().unwrap().len(), 2);
-        assert_eq!(after["attempts"][1]["id"], attempt);
+        assert_eq!(after["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(after["attempts"][0]["id"], attempt);
         assert_eq!(after["lifecycle"], "succeeded");
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-            "execution\nremediation\nremediation\nremediation\nremediation\nreview\nvalidation\n"
+            "execution\nremediation\nremediation\nremediation\nreview\nvalidation\n"
         );
         t.send("q")?;
         t.finish()?;
@@ -1403,30 +1880,40 @@ fn queue_rate_wait_auto_resumes_without_counting_waiting_time() -> Result {
     Ok(())
 }
 #[test]
-fn real_tui_rate_wait_and_mouse_pause_stop_automatic_retry() -> Result {
-    let f = Fixture::new()?;
-    f.provider("rate")?;
-    f.add("Rate limited")?;
-    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
-    t.screen("current", |s| s.contains("Rate limited"))?;
-    t.send("4")?;
-    t.screen("queue continuation is the default", |s| {
-        s.contains("Run mode: Continue queue")
-    })?;
-    t.send("1")?;
-    t.send("r")?;
-    println!(
-        "RATE WAIT\n{}",
-        t.screen("waiting", |s| s.contains("WAITING")
-            && s.contains("Resumes in"))?
-    );
-    t.click("p Pause")?;
-    t.screen("scheduler stopped", |s| {
-        s.contains("Automatic continuation stopped")
-    })?;
-    t.send("q")?;
-    t.finish()?;
-    f.no_scratch()?;
+fn real_tui_rate_wait_pause_with_mouse_and_keyboard_stops_automatic_retry() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("rate")?;
+        f.add("Rate limited")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+        t.screen("current", |s| s.contains("Rate limited"))?;
+        t.send("4")?;
+        t.screen("queue continuation is the default", |s| {
+            s.contains("Run mode: Continue queue")
+        })?;
+        t.send("1")?;
+        t.send("r")?;
+        println!(
+            "RATE WAIT mouse={mouse}\n{}",
+            t.screen("waiting", |s| s.contains("WAITING")
+                && s.contains("Resumes in"))?
+        );
+        if mouse {
+            t.click("p Pause")?;
+        } else {
+            t.send("p")?;
+        }
+        println!(
+            "RATE WAIT PAUSED mouse={mouse}\n{}",
+            t.screen("scheduler stopped", |s| {
+                s.contains("Automatic continuation stopped")
+                    && s.contains("Session: Queue · paused")
+            })?
+        );
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
     Ok(())
 }
 
@@ -1618,8 +2105,8 @@ fn real_tui_recovers_connection_and_checks_then_continues_queue() -> Result {
         assert!(complete.contains("no queued work"));
         let first = f.ok(&["show", "1"])?;
         assert_eq!(first["status"], "succeeded");
-        assert_eq!(first["attempts"].as_array().unwrap().len(), 2);
-        assert_eq!(first["attempts_used"], 2);
+        assert_eq!(first["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(first["attempts_used"], 1);
         assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
@@ -1638,6 +2125,7 @@ fn real_tui_approval_and_human_ack_continue_with_mouse_and_keyboard() -> Result 
     for mouse in [false, true] {
         for human in [false, true] {
             let f = Fixture::new()?;
+            f.add("Completed before owner gate")?;
             f.ok(&[
                 "add",
                 "--title",
@@ -1653,9 +2141,16 @@ fn real_tui_approval_and_human_ack_continue_with_mouse_and_keyboard() -> Result 
             ])?;
             f.add("Continue after owner gate")?;
             let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
+            t.screen("first current", |s| s.contains("r Run queue"))?;
+            if mouse {
+                t.click("r Run queue")?;
+            } else {
+                t.send("r")?;
+            }
             println!(
                 "OWNER GATE mouse={mouse} human={human}\n{}",
-                t.screen("owner gate", |s| s.contains("Owner gate"))?
+                t.screen("owner gate", |s| s.contains("Current #2")
+                    && s.contains("Owner gate"))?
             );
             if mouse {
                 t.click(if human { "y Acknowledge" } else { "v Approve" })?;
@@ -1665,14 +2160,455 @@ fn real_tui_approval_and_human_ack_continue_with_mouse_and_keyboard() -> Result 
             println!(
                 "GATE CLEARED mouse={mouse} human={human}\n{}",
                 t.screen("automatic continuation", |s| s.contains("Queue complete.")
-                    && s.contains("History 2"))?
+                    && s.contains("History 3"))?
             );
-            assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
+            assert_eq!(f.ok(&["show", "3"])?["status"], "succeeded");
             t.send("q")?;
             t.finish()?;
             f.no_scratch()?;
         }
     }
+    Ok(())
+}
+
+#[test]
+fn durable_session_survives_closed_tui_and_cli_intervention() -> Result {
+    for (queue, human, mouse) in [
+        (true, true, true),
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ] {
+        let f = Fixture::new()?;
+        f.add("First verified task")?;
+        f.ok(&[
+            "add",
+            "--title",
+            "Owner gate",
+            "--goal",
+            "Confirm direction",
+            "--criterion",
+            "Direction confirmed",
+            "--kind",
+            if human { "human" } else { "ai" },
+            "--approval",
+            if human { "ready" } else { "draft" },
+        ])?;
+        f.add("Work after gate")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+        if !queue {
+            // The saved preference controls the next explicit Run, not a prior session.
+            let service = ktask_rs_mk3::application::Service::open(f.db()?, &f.root, None)?;
+            let config = f.scratch.path().join("config/ktask-dev");
+            let old = service.preferences(&config)?;
+            let mut single = old.clone();
+            single.continuation = ktask_rs_mk3::application::preferences::Continuation::Single;
+            service.save_preferences(&config, &old, &single)?;
+            drop(service);
+            t.send("q")?;
+            t.finish()?;
+            t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+        }
+        let label = if queue { "r Run queue" } else { "r Run one" };
+        t.screen("start", |s| s.contains(label))?;
+        if mouse {
+            t.click(label)?;
+        } else {
+            t.send("r")?;
+        }
+        let gate = t.screen("durable gate", |s| {
+            s.contains("Current #2")
+                && s.contains("Owner gate")
+                && s.contains(if queue {
+                    "Session: Queue · waiting"
+                } else {
+                    "Session: Run one · stopped"
+                })
+        })?;
+        println!("DURABLE GATE queue={queue} human={human} mouse={mouse}\n{gate}");
+        t.send("q")?;
+        t.finish()?;
+        f.ok(&[if human { "ack" } else { "approve" }, "2"])?;
+        let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+        let after = reopened.screen("restored session", |s| {
+            if queue {
+                s.contains("History 3") && s.contains("Session: Queue · complete")
+            } else {
+                s.contains("Session: Run one · stopped")
+                    && s.contains(if human { "Current #3" } else { "Current #2" })
+            }
+        })?;
+        println!("RESTORED SESSION queue={queue} human={human} mouse={mouse}\n{after}");
+        assert_eq!(
+            f.ok(&["show", "3"])?["attempts"].as_array().unwrap().len(),
+            usize::from(queue)
+        );
+        reopened.send("q")?;
+        reopened.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn two_windows_share_one_session_and_pause_blocks_handoff() -> Result {
+    let f = Fixture::new()?;
+    f.provider("slow")?;
+    f.add("Slow current")?;
+    f.add("Must not start after pause")?;
+    let mut first = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+    let mut second = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+    first.screen("ready", |s| s.contains("r Run queue"))?;
+    first.send("r")?;
+    let live = second.screen("shared live session", |s| {
+        s.contains("Current #1 · RUNNING") && s.contains("Session: Queue · running")
+    })?;
+    println!("SECOND WINDOW LIVE\n{live}");
+    let duplicate = f.process().args(["run", "--background"]).output()?;
+    assert_eq!(duplicate.status.code(), Some(4));
+    second.click("p Pause")?;
+    let paused = first.screen("cross window pause", |s| {
+        s.contains("Current #1 · PAUSED") && s.contains("Session: Queue · paused")
+    })?;
+    println!("FIRST WINDOW PAUSED\n{paused}");
+    assert!(
+        f.ok(&["show", "2"])?["attempts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    first.send("q")?;
+    first.finish()?;
+    second.send("q")?;
+    second.finish()?;
+    let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+    let restored = reopened.screen("pause retained", |s| s.contains("Session: Queue · paused"))?;
+    println!("REOPENED PAUSE\n{restored}");
+    reopened.send("q")?;
+    reopened.finish()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn pause_at_ready_task_handoff_never_starts_the_next_attempt() -> Result {
+    let f = Fixture::new()?;
+    f.add("Complete before handoff")?;
+    f.add("Do not start across pause")?;
+    // The fourth rev-parse HEAD is the next task's preflight, after the
+    // first checkpoint. Delay Git itself to expose the real handoff boundary.
+    let marker = f.scratch.path().join("handoff-open");
+    let counter = f.scratch.path().join("head-count");
+    let git = f.scratch.path().join("bin/git");
+    fs::write(
+        &git,
+        format!(
+            "#!/bin/sh\nif [ \"$3\" = rev-parse ] && [ \"$4\" = HEAD ]; then\n count=$(cat '{}' 2>/dev/null || printf 0)\n count=$((count+1))\n printf '%s' \"$count\" > '{}'\n if [ \"$count\" = 4 ]; then touch '{}'; sleep 3; fi\nfi\nexec /usr/bin/git \"$@\"\n",
+            counter.display(),
+            counter.display(),
+            marker.display()
+        ),
+    )?;
+    fs::set_permissions(&git, fs::Permissions::from_mode(0o755))?;
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+    t.send("r")?;
+    let handoff = t.screen("ready handoff", |s| {
+        marker.exists()
+            && s.contains("Current #2 · PENDING")
+            && s.contains("Session: Queue · running")
+            && s.contains("p Pause")
+    })?;
+    println!("READY HANDOFF\n{handoff}");
+    t.click("p Pause")?;
+    let paused = t.screen("handoff paused", |s| s.contains("Session: Queue · paused"))?;
+    println!("PAUSED AT HANDOFF\n{paused}");
+    thread::sleep(Duration::from_millis(3200));
+    assert!(
+        f.ok(&["show", "2"])?["attempts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    t.send("q")?;
+    t.finish()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn cli_answer_after_tui_exit_resumes_the_same_queue_attempt() -> Result {
+    let f = Fixture::new()?;
+    f.provider("question")?;
+    f.add("Question before exit")?;
+    f.add("Continue after answer")?;
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+    t.send("r")?;
+    let question = t.screen("question waiting", |s| {
+        s.contains("QUESTION · supervisor absent") && s.contains("Session: Queue · waiting")
+    })?;
+    println!("QUESTION BEFORE EXIT\n{question}");
+    let attempt = f.ok(&["show", "1"])?["attempts"][0]["id"].clone();
+    t.send("q")?;
+    t.finish()?;
+    f.provider("normal")?;
+    f.ok(&["answer", "1", "--text", "Human answer: verified"])?;
+    let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+    let done = reopened.screen("automatic answer continuation", |s| {
+        s.contains("History 2") && s.contains("Session: Queue · complete")
+    })?;
+    println!("ANSWER AFTER EXIT\n{done}");
+    let first = f.ok(&["show", "1"])?;
+    assert_eq!(first["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(first["attempts"][0]["id"], attempt);
+    assert_eq!(
+        f.ok(&["show", "2"])?["attempts"].as_array().unwrap().len(),
+        1
+    );
+    reopened.send("q")?;
+    reopened.finish()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn intervention_marker_survives_supervisor_handoff_and_is_claimed_once() -> Result {
+    use ktask_rs_mk3::application::Service;
+
+    let f = Fixture::new()?;
+    f.ok(&[
+        "add",
+        "--title",
+        "Owner gate",
+        "--goal",
+        "Acknowledge before work",
+        "--criterion",
+        "Owner acknowledged",
+        "--kind",
+        "human",
+    ])?;
+    f.add("Work after gate")?;
+    let mut first = Service::open(f.db()?, &f.root, None)?;
+    first.start_execution_session(true)?;
+    let lease = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(f.root.join(".git/ktask-runner.lock"))?;
+    lease.lock()?;
+    let receipt = f.ok(&["ack", "1"])?;
+    assert!(receipt.get("continuation_error").is_none());
+    assert_eq!(
+        first.execution_session()?.unwrap().state,
+        "resume_requested"
+    );
+    assert!(first.settle_execution_session("waiting", "Old supervisor stopped")?);
+    assert_eq!(
+        first.execution_session()?.unwrap().state,
+        "resume_requested"
+    );
+    lease.unlock()?;
+
+    let mut second = Service::open(f.db()?, &f.root, None)?;
+    assert!(first.resume_execution_session()?);
+    assert!(!second.resume_execution_session()?);
+    f.ok(&["run", "--queue", "--continue-session"])?;
+    assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn live_supervisor_consumes_intervention_marker_before_next_attempt() -> Result {
+    use ktask_rs_mk3::application::Service;
+
+    let f = Fixture::new()?;
+    f.ok(&[
+        "add",
+        "--title",
+        "Owner gate",
+        "--goal",
+        "Acknowledge before work",
+        "--criterion",
+        "Owner acknowledged",
+        "--kind",
+        "human",
+    ])?;
+    f.add("Work after gate")?;
+    let mut service = Service::open(f.db()?, &f.root, None)?;
+    service.start_execution_session(true)?;
+    let lease = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(f.root.join(".git/ktask-runner.lock"))?;
+    lease.lock()?;
+    f.ok(&["ack", "1"])?;
+    assert_eq!(
+        service.execution_session()?.unwrap().state,
+        "resume_requested"
+    );
+    service.supervisor_continuing_queue()?;
+    assert_eq!(service.execution_session()?.unwrap().state, "running");
+    assert!(!service.settle_execution_session("waiting", "Waiting for next answer")?);
+    assert_eq!(service.execution_session()?.unwrap().state, "waiting");
+    lease.unlock()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn final_human_ack_completes_queue_session_with_mouse_and_keyboard() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.add("Complete before final gate")?;
+        f.ok(&[
+            "add",
+            "--title",
+            "Final owner gate",
+            "--goal",
+            "Acknowledge completion",
+            "--criterion",
+            "Owner acknowledged",
+            "--kind",
+            "human",
+        ])?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+        t.screen("ready before final owner gate", |s| {
+            s.contains("r Run queue")
+        })?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        t.screen("final owner gate", |s| {
+            s.contains("Current #2") && s.contains("Session: Queue · waiting")
+        })?;
+        if mouse {
+            t.click("y Acknowledge")?;
+        } else {
+            t.send("y")?;
+        }
+        let complete = t.screen("final human ack", |s| {
+            s.contains("Queue complete.") && s.contains("Session: Queue · complete")
+        })?;
+        println!("FINAL HUMAN ACK mouse={mouse}\n{complete}");
+        t.send("q")?;
+        t.finish()?;
+        let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+        let restored = reopened.screen("final ack retained", |s| {
+            s.contains("Session: Queue · complete")
+                && s.contains("Queue complete after intervention")
+        })?;
+        println!("FINAL HUMAN ACK REOPENED mouse={mouse}\n{restored}");
+        reopened.send("q")?;
+        reopened.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn run_one_answer_updates_stop_reason_and_waits_for_explicit_resume() -> Result {
+    use ktask_rs_mk3::application::{Service, preferences::Continuation};
+
+    let f = Fixture::new()?;
+    f.provider("question")?;
+    f.add("Question in Run one")?;
+    f.add("Must wait for another Run")?;
+    let service = Service::open(f.db()?, &f.root, None)?;
+    let config = f.scratch.path().join("config/ktask-dev");
+    let old = service.preferences(&config)?;
+    let mut single = old.clone();
+    single.continuation = Continuation::Single;
+    service.save_preferences(&config, &old, &single)?;
+    drop(service);
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
+    t.send("r")?;
+    t.screen("run one question", |s| {
+        s.contains("Current #1 · QUESTION") && s.contains("Session: Run one · waiting")
+    })?;
+    t.send("q")?;
+    t.finish()?;
+    f.provider("normal")?;
+    f.ok(&["answer", "1", "--text", "Human answer: verified"])?;
+    let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
+    let stopped = reopened.screen("answered Run one waits", |s| {
+        s.contains("Session: Run one · stopped")
+            && s.contains("Run one awaits explicit Run or Resume")
+    })?;
+    println!("RUN ONE ANSWER STOPPED\n{stopped}");
+    assert!(
+        f.ok(&["show", "2"])?["attempts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    reopened.send("r")?;
+    let next = reopened.screen("Run one resumed only current", |s| {
+        s.contains("Current #2 · PENDING") && s.contains("Session: Run one · stopped")
+    })?;
+    println!("RUN ONE ANSWER RESUMED\n{next}");
+    reopened.send("q")?;
+    reopened.finish()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn cli_intervention_records_lease_inspection_failure_on_reopened_screen() -> Result {
+    let f = Fixture::new()?;
+    f.add("Complete before gate")?;
+    f.ok(&[
+        "add",
+        "--title",
+        "Owner gate",
+        "--goal",
+        "Acknowledge before work",
+        "--criterion",
+        "Owner acknowledged",
+        "--kind",
+        "human",
+    ])?;
+    f.add("Work after gate")?;
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
+    t.send("r")?;
+    t.screen("gate before CLI error", |s| {
+        s.contains("Current #2") && s.contains("Session: Queue · waiting")
+    })?;
+    t.send("q")?;
+    t.finish()?;
+
+    let lease = f.root.join(".git/ktask-runner.lock");
+    fs::set_permissions(&lease, fs::Permissions::from_mode(0o000))?;
+    let receipt = f.ok(&["ack", "2"])?;
+    assert!(
+        receipt["continuation_error"]
+            .as_str()
+            .is_some_and(|s| s.contains("Permission denied"))
+    );
+    let service = ktask_rs_mk3::application::Service::open(f.db()?, &f.root, None)?;
+    let session = service.execution_session()?.unwrap();
+    assert_eq!(session.state, "resume_requested");
+    assert!(session.reason.contains("Permission denied"));
+    fs::set_permissions(&lease, fs::Permissions::from_mode(0o644))?;
+
+    let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
+    let screen = reopened.screen("retained continuation error", |s| {
+        s.contains("Session: Queue · supervisor absent")
+            && s.contains("Continuation could not be confirmed")
+    })?;
+    println!("CONTINUATION ERROR AFTER REOPEN\n{screen}");
+    reopened.send("r")?;
+    let complete = reopened.screen("explicit recovery after inspection error", |s| {
+        s.contains("Queue complete.") && s.contains("Session: Queue · complete")
+    })?;
+    println!("CONTINUATION ERROR RECOVERED\n{complete}");
+    reopened.send("q")?;
+    reopened.finish()?;
+    f.no_scratch()?;
     Ok(())
 }
 
@@ -1799,27 +2735,28 @@ fn real_tui_current_run_mode_control_changes_saved_single_preference() -> Result
 }
 
 #[test]
-fn remediation_insert_preserves_failed_work_before_running_prerequisite() -> Result {
+fn automatic_prerequisite_preserves_work_and_original_repair_round() -> Result {
     let f = Fixture::new()?;
-    f.provider("judge-insert")?;
     f.fail_first_check()?;
     f.add("Original with useful unfinished work")?;
     f.ok(&["edit", "1", "--timeout-ms", "unlimited"])?;
+    f.provider("judge-insert")?;
     f.ok(&["run", "--queue"])?;
     let original = f.ok(&["show", "1"])?;
     let repair = f.ok(&["show", "2"])?;
     assert_eq!(original["lifecycle"], "succeeded");
-    assert_eq!(original["attempts"][0]["state"], "failed");
-    assert_eq!(original["attempts"][1]["state"], "interrupted");
+    assert_eq!(original["attempts"][0]["state"], "interrupted");
+    assert_eq!(original["attempts"][1]["state"], "succeeded");
     assert_eq!(repair["lifecycle"], "succeeded");
     let preservation = f.git(&["log", "--format=%H %s"])?;
     assert!(
-        preservation.contains("preserve unfinished task #1, attempt #2"),
+        preservation.contains("preserve unfinished task #1, attempt #1"),
         "{preservation}"
     );
     assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
     assert!(f.git(&["status", "--porcelain"])?.trim().is_empty());
     let db = f.db()?;
+    assert_eq!(db.connection().query_row("SELECT repair_round FROM attempt_progress p JOIN attempts a ON a.id=p.attempt_id WHERE a.task_id=1 ORDER BY a.id DESC LIMIT 1", [], |r| r.get::<_,i64>(0))?, 1);
     let limit: Option<i64> = db.connection().query_row(
         "SELECT attempt_timeout_ms FROM task_revisions WHERE task_id=2",
         [],
@@ -1897,11 +2834,11 @@ fn tui_remediation_handoff_preserves_dirty_work_and_failed_attempt() -> Result {
             "unlimited",
         ])?;
         f.ok(&["check-set", "build", "--command", "false"])?;
-        let failed = f.process().args(["run"]).output()?;
+        f.provider("malformed-work")?;
+        let failed = f.process().args(["run", "--one"]).output()?;
         assert_eq!(failed.status.code(), Some(4));
-        assert!(
-            String::from_utf8(failed.stderr)?.contains("automatic repair budget exhausted (1/1)")
-        );
+        assert!(String::from_utf8(failed.stderr)?.contains("protocol"));
+        f.provider("normal")?;
         let before = f.ok(&["show", "1"])?;
         assert!(!f.git(&["status", "--porcelain"])?.trim().is_empty());
         let service = Service::open(f.db()?, &f.root, None)?;
@@ -1993,7 +2930,7 @@ fn manual_handoff_rejects_stale_target_and_changed_baseline_without_committing()
     f.add("Failed original")?;
     f.ok(&["edit", "1", "--attempt-limit", "1"])?;
     f.ok(&["check-set", "build", "--command", "false"])?;
-    assert!(!f.process().args(["run"]).output()?.status.success());
+    f.fail_provider()?;
     let mut service = Service::open(f.db()?, &f.root, None)?;
     let original = service.current_task()?.unwrap();
     let target = VersionedTask {
@@ -2134,9 +3071,9 @@ fn review_failure_is_judged_repaired_and_queue_continues_automatically() -> Resu
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|step| step["role"] == "review" && step["state"] == "failed")
+                .any(|step| step["role"] == "review" && step["state"] == "changes_requested")
         );
-        assert_eq!(first["attempts"].as_array().unwrap().len(), 2);
+        assert_eq!(first["attempts"].as_array().unwrap().len(), 1);
         assert_eq!(first["lifecycle"], "succeeded");
         assert_eq!(f.ok(&["show", "2"])?["lifecycle"], "succeeded");
         assert_eq!(
@@ -2149,43 +3086,43 @@ fn review_failure_is_judged_repaired_and_queue_continues_automatically() -> Resu
 }
 
 #[test]
-fn final_review_failure_gets_diagnosis_without_exceeding_worker_budget() -> Result {
+fn review_converges_after_nine_repairs_with_a_single_attempt_budget() -> Result {
     let f = Fixture::new()?;
-    f.provider("review-once")?;
-    f.add("Last allowed attempt")?;
-    f.add("Must remain pending")?;
+    f.provider("review-nine")?;
+    f.add("One attempt includes normal repair rounds")?;
+    f.add("Following task")?;
     f.ok(&["edit", "1", "--attempt-limit", "1"])?;
-    let result = f.process().args(["run", "--queue"]).output()?;
-    assert_eq!(result.status.code(), Some(4));
+    f.ok(&["run", "--queue"])?;
     let first = f.ok(&["show", "1"])?;
     assert_eq!(first["attempts"].as_array().unwrap().len(), 1);
     assert_eq!(first["attempts_used"], 1);
-    assert!(
-        first["attempts"][0]["steps"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|step| step["role"] == "review" && step["state"] == "failed")
-    );
-    assert!(
-        first["attempts"][0]["report"]
-            .as_str()
-            .unwrap()
-            .contains("Next repair plan:")
-    );
-    assert!(
-        f.ok(&["show", "2"])?["attempts"]
-            .as_array()
-            .unwrap()
-            .is_empty()
+    assert_eq!(first["lifecycle"], "succeeded");
+    assert_eq!(f.ok(&["show", "2"])?["lifecycle"], "succeeded");
+    let db = f.db()?;
+    assert_eq!(
+        db.connection().query_row(
+            "SELECT repair_round FROM attempt_progress WHERE attempt_id=1",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        9
     );
     assert_eq!(
-        fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-        "execution\nreview\nremediation\n"
+        db.connection().query_row(
+            "SELECT count(*) FROM attempt_steps WHERE attempt_id=1 AND role='remediation'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        18
     );
-    assert!(
-        fs::read_to_string(f.scratch.path().join("prompt-judge"))?
-            .contains("missing edge-case handling")
+    assert_eq!(db.connection().query_row("SELECT count(*) FROM attempt_steps WHERE attempt_id=1 AND role='review' AND state='changes_requested'", [], |r| r.get::<_,i64>(0))?, 9);
+    assert_eq!(
+        db.connection().query_row(
+            "SELECT count(*) FROM attempts WHERE state='failed'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        0
     );
     f.no_scratch()?;
     Ok(())
@@ -2204,7 +3141,7 @@ fn executable_busy_recheck_retains_both_outcomes_without_a_second_coding_attempt
         };
         f.ok(&["check-set", "build", "--command", command])?;
         let result = f.process().args(["run"]).output()?;
-        assert_eq!(result.status.success(), !persistent);
+        assert!(result.status.success());
         let task = f.ok(&["show", "1"])?;
         assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
         let db = f.db()?;
@@ -2214,20 +3151,16 @@ fn executable_busy_recheck_retains_both_outcomes_without_a_second_coding_attempt
         let checks = query
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i32>(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        assert_eq!(
-            checks,
-            vec![
-                ("failed".into(), 1),
-                (
-                    if persistent { "failed" } else { "succeeded" }.into(),
-                    if persistent { 1 } else { 0 }
-                )
-            ]
-        );
+        if persistent {
+            assert_eq!(checks, vec![("failed".into(), 1); 22]);
+            assert_eq!(task["status"], "waiting");
+        } else {
+            assert_eq!(checks, vec![("failed".into(), 1), ("succeeded".into(), 0)]);
+        }
         assert_eq!(
             db.connection()
                 .query_row("SELECT count(*) FROM artifacts", [], |r| r.get::<_, i64>(0))?,
-            2
+            if persistent { 22 } else { 2 }
         );
         if !persistent {
             assert_eq!(
@@ -2243,7 +3176,7 @@ fn executable_busy_recheck_retains_both_outcomes_without_a_second_coding_attempt
                 assert_eq!(prompt.matches("step-").count(), 2);
             }
         } else {
-            assert_eq!(task["attempts_used"], 1);
+            assert_eq!(task["attempts_used"], 0);
         }
         f.no_scratch()?;
     }

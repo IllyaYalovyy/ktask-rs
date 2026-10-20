@@ -68,6 +68,7 @@ impl Database {
                 "task is stale, not current, not ready, or its attempt budget is exhausted".into(),
             )
         })?;
+        require(!tx.query_row("SELECT EXISTS(SELECT 1 FROM execution_sessions WHERE project_id=?1 AND state='paused')", [project], |r| r.get::<_,bool>(0))?, "Queue was paused before this attempt started")?;
         require(
             kind == "ai",
             "Human tasks require acknowledgment, not AI execution",
@@ -138,6 +139,7 @@ impl Database {
         let tx = self
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require(!tx.query_row("SELECT EXISTS(SELECT 1 FROM execution_sessions WHERE project_id=(SELECT project_id FROM tasks WHERE id=?1) AND state='paused')", [command.task_id], |r| r.get::<_,bool>(0))?, "Queue was paused before this attempt resumed")?;
         let changed_rows = tx.execute(
             "UPDATE attempts SET state = 'running', wait_reason = NULL, waiting_since_ms = NULL, resume_at_ms = NULL
              WHERE task_id = ?1 AND execution_token = ?3 AND state IN ('waiting', 'paused')

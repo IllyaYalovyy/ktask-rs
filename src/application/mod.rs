@@ -3,7 +3,9 @@ mod commands;
 pub mod configuration;
 pub mod execution;
 pub mod preferences;
+pub mod progress;
 mod queries;
+pub mod session;
 pub use queries::Event;
 pub mod transfer;
 
