@@ -1,6 +1,9 @@
-use crate::support::{self, Result, Terminal, copy, drag, location, mouse_copy};
+use crate::support::{self, Result, Terminal, copy, copy_key, drag, location, mouse_copy};
 use ktask_rs_mk3::{
-    application::{Definition, Kind, ModelConfig, Service, VersionedTask, transfer},
+    application::{
+        Actor, ActorKind, Definition, EvidenceCursor, EvidenceSearch, Kind, ModelConfig,
+        Resolution, Service, VersionedTask, transfer,
+    },
     storage::Database,
 };
 use std::path::Path;
@@ -94,6 +97,708 @@ fn persistent_report_and_log_support_mouse_text_copy() -> Result {
     })?;
     assert!(copy(&mut t)?.starts_with("Check failed: transc"));
     quit(&mut t)
+}
+
+#[test]
+fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (id, first) = failed_task(root)?;
+    let mut writer = service(root)?;
+    let retry_target = target(&mut writer, id)?;
+    let second = writer.begin_run(retry_target, "retry-token", "retry-base")?;
+    writer.output(&second, "stdout", "SECOND ATTEMPT ONLY")?;
+    writer.finish_run(&second, "failed", Some("check"), "Second failure", None)?;
+    drop(writer);
+    let artifact = root.join("state/ktask-dev/evidence/first-check.txt");
+    fs::create_dir_all(artifact.parent().unwrap())?;
+    let prefix = "FIRST ATTEMPT CHECK TRANSCRIPT\n";
+    let transcript = format!(
+        "{}{}éCHECK_END\n{}",
+        prefix,
+        "x".repeat(8191 - prefix.len()),
+        numbered_transcript("FIRST", 1_048_576)
+    );
+    fs::write(&artifact, &transcript)?;
+    let other_transcript = format!(
+        "SECOND CHECK TRANSCRIPT\n{}SECOND_DEEP_POSITION\n{}",
+        "y".repeat(8192 * 3),
+        numbered_transcript("SECOND", 8192 * 2)
+    );
+    fs::write(
+        artifact.with_file_name("second-check.txt"),
+        &other_transcript,
+    )?;
+    let mut db = Database::open_in(&root.join("state/ktask-dev"))?;
+    let tx = db.connection_mut().transaction()?;
+    tx.execute("WITH RECURSIVE n(x) AS (SELECT 2 UNION ALL SELECT x+1 FROM n WHERE x<2205) INSERT INTO attempt_output(attempt_id,sequence,stream,recorded_at_ms,content) SELECT ?1,x,'stdout',1,CASE WHEN x=30 THEN 'EARLY_MARKER_COPY request/check?' ELSE printf('line %d',x) END FROM n", [first])?;
+    tx.execute(
+        "UPDATE attempt_output SET content=?3 WHERE attempt_id=?1 AND sequence=?2",
+        rusqlite::params![
+            first,
+            29,
+            format!("begin\n{}LATE/QUERY MATCH", "many lines\n".repeat(40))
+        ],
+    )?;
+    tx.execute(
+        "UPDATE attempt_output SET content=?3 WHERE attempt_id=?1 AND sequence=?2",
+        rusqlite::params![
+            first,
+            28,
+            format!("HUGE_START{}HUGE_END", "q".repeat(1_048_576))
+        ],
+    )?;
+    tx.execute(
+        "UPDATE attempt_output SET content=?3 WHERE attempt_id=?1 AND sequence=?2",
+        rusqlite::params![first, 27, format!("{}BOUNDARY_TARGET", "x".repeat(510))],
+    )?;
+    for (sequence, stream, content) in [
+        (20, "stdout", "INTERLEAVED_"),
+        (21, "stderr", "unrelated warning"),
+        (22, "stdout", "MATCH"),
+        (23, "stdout", "SAME_ROW_"),
+        (24, "stdout", "JOIN_TARGET"),
+        (25, "stderr", "CROSS_STREAM_"),
+        (26, "stdout", "FALSE_MATCH"),
+    ] {
+        tx.execute(
+            "UPDATE attempt_output SET stream=?3,content=?4 WHERE attempt_id=?1 AND sequence=?2",
+            rusqlite::params![first, sequence, stream, content],
+        )?;
+    }
+    tx.execute("INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms) VALUES (?1,'first check','text/plain','evidence/first-check.txt',?2,1)", rusqlite::params![first, transcript.len() as i64])?;
+    tx.execute("INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms) VALUES (?1,'second check','text/plain','evidence/second-check.txt',?2,1)", rusqlite::params![first,other_transcript.len() as i64])?;
+    tx.execute("INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms,pruned_at_ms) VALUES (?1,'old pruned check','text/plain','evidence/pruned.txt',10,1,2)", [first])?;
+    tx.execute("INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms) VALUES (?1,'missing check','text/plain','evidence/missing.txt',10,1)", [first])?;
+    tx.commit()?;
+    drop(db);
+    let before_browsing = evidence_contents(root)?;
+    let mut t = terminal(root)?;
+    t.screen("current attempt ready", |s| s.contains("Current #1"))?;
+    println!(
+        "CURRENT BROWSER START\n{}",
+        key(&mut t, "\r", "Task details / attempts")?
+    );
+    let latest = t.screen("latest attempt", |s| s.contains("SECOND ATTEMPT ONLY"))?;
+    assert!(latest.contains("Attempt 2 / 2"));
+    let first_screen = key(&mut t, "[", "Attempt 1 / 2")?;
+    println!("EARLIER ATTEMPT\n{first_screen}");
+    assert!(!first_screen.contains("SECOND ATTEMPT ONLY"));
+    t.click("Next")?;
+    t.screen("mouse next attempt", |s| s.contains("Attempt 2 / 2"))?;
+    t.click("Prev")?;
+    t.screen("mouse previous attempt", |s| s.contains("Attempt 1 / 2"))?;
+    t.send(">")?;
+    let older = t.screen("keyboard output paging", |s| {
+        s.contains("Output page 2 / 28")
+    })?;
+    println!("KEYBOARD OLDER PAGE\n{older}");
+    t.click("Newer")?;
+    t.screen("mouse output paging", |s| s.contains("Output page 1 / 28"))?;
+    let found = find_evidence(
+        &mut t,
+        "",
+        "EARLY_MARKER_COPY",
+        "EARLY_MARKER_COPY request/check?",
+    )?;
+    println!("OLD OUTPUT SEARCH RESULT\n{found}");
+    assert!(found.contains("Output page 28 / 28"));
+    assert!(found.contains("Match:"));
+    let marker = location(&found, "EARLY_MARKER_COPY")?;
+    drag(&mut t, marker, (marker.0 + 11, marker.1))?;
+    let mouse_selected = t.screen("old evidence selected", |_| {
+        t.selected_at(marker.0, marker.1)
+    })?;
+    println!("MOUSE EVIDENCE SELECTION\n{mouse_selected}");
+    let mouse_payload = mouse_copy(&mut t)?;
+    println!("MOUSE EVIDENCE COPY {mouse_payload:?}");
+    assert!(
+        mouse_payload.starts_with("EARLY_MARKER"),
+        "{mouse_payload:?}"
+    );
+    key(&mut t, "\x1b", "Task details / attempts")?;
+    let selected = keyboard_select(&mut t, &found, "EARLY_MARKER_COPY", 12)?;
+    println!("KEYBOARD EVIDENCE SELECTION\n{selected}");
+    assert!(copy_key(&mut t, "\r")?.starts_with("EARLY_MARKER"));
+    key(&mut t, "\x1b", "Task details / attempts")?;
+    let mouse_search = find_evidence(&mut t, "Find output", "request/check?", "request/check?")?;
+    println!("MOUSE FOCUSED SEARCH\n{mouse_search}");
+    let multiline = find_evidence(&mut t, "Find output", "LATE/QUERY", "LATE/QUERY MATCH")?;
+    println!("MULTILINE SEARCH MATCH\n{multiline}");
+    let joined = find_evidence(
+        &mut t,
+        "Find output",
+        "SAME_ROW_JOIN_TARGET",
+        "SAME_ROW_JOIN_TARGET",
+    )?;
+    println!("SEARCH ACROSS SAME STREAM RECORDS\n{joined}");
+    let interleaved = find_evidence(
+        &mut t,
+        "Find output",
+        "INTERLEAVED_MATCH",
+        "INTERLEAVED_MATCH",
+    )?;
+    println!("SEARCH ACROSS INTERLEAVED SAME STREAM RECORDS\n{interleaved}");
+    let unrelated = find_evidence(
+        &mut t,
+        "Find output",
+        "CROSS_STREAM_FALSE_MATCH",
+        "No matching evidence recorded",
+    )?;
+    println!("SEARCH KEEPS STREAMS SEPARATE\n{unrelated}");
+    let boundary = find_evidence(&mut t, "Find output", "BOUNDARY_TARGET", "BOUNDARY_TARGET")?;
+    assert!(boundary.contains("Match:"));
+    assert!(boundary.contains("Output page 28 / 28"));
+    println!("BOUNDARY SEARCH MATCH\n{boundary}");
+    let large = find_evidence(&mut t, "Find output", "HUGE_END", "HUGE_END")?;
+    assert!(large.contains("chunk 2049 / 2049"));
+    println!("HUGE OUTPUT MATCH\n{large}");
+    t.click("Chunk -")?;
+    t.screen("mouse previous output chunk", |s| {
+        s.contains("chunk 2048 / 2049") && !s.contains("qqqqqqqqqqHUGE_END")
+    })?;
+    t.send("}")?;
+    t.screen("keyboard next output chunk", |s| {
+        s.contains("qqqqqqqqqqHUGE_END")
+    })?;
+    t.click("Section +")?;
+    let results = t.screen("first attempt results", |s| {
+        s.contains("review structured finding")
+    })?;
+    println!("STRUCTURED RESULTS\n{results}");
+    assert!(results.contains("Role steps, findings"));
+    let judge = find_evidence(
+        &mut t,
+        "Find results",
+        "validation structured finding",
+        "validation structured finding",
+    )?;
+    println!("RESULTS ONLY SEARCH\n{judge}");
+    assert!(judge.contains("validation structured finding"));
+    t.send("\x1b[D")?;
+    t.screen("keyboard previous section", |s| s.contains("HUGE_END"))?;
+    t.send("\x1b[C")?;
+    t.screen("keyboard next section", |s| {
+        s.contains("Role steps, findings")
+    })?;
+    t.click("Section -")?;
+    let restored = t.screen("old output position restored", |s| s.contains("HUGE_END"))?;
+    println!("RESTORED OUTPUT POSITION\n{restored}");
+    t.click("Section +")?;
+    t.screen("results position restored", |s| {
+        s.contains("Role steps, findings")
+    })?;
+    t.click("Section +")?;
+    let check = t.screen("first attempt transcript", |s| {
+        s.contains("FIRST ATTEMPT CHECK TRANSCRIPT")
+    })?;
+    println!("SUPERVISOR CHECK\n{check}");
+    t.click("Older")?;
+    let unicode = t.screen("unicode across transcript chunk", |s| {
+        s.contains("éCHECK_END")
+    })?;
+    println!("UNICODE CHECK CHUNK\n{unicode}");
+    assert!(unicode.contains("Chunk 2 / "));
+    let transcript_match = find_evidence(&mut t, "", "éCHECK_END", "éCHECK_END")?;
+    println!("TRANSCRIPT ONLY SEARCH ACROSS UTF8 CHUNK\n{transcript_match}");
+    assert!(transcript_match.contains("éCHECK_END"));
+    t.send(">")?;
+    t.screen("keyboard transcript paging", |s| s.contains("Chunk 2 / "))?;
+    t.click("Older")?;
+    let first_deep = t.screen("first artifact deep position", |s| s.contains("Chunk 3 / "))?;
+    println!("FIRST TRANSCRIPT DEEP POSITION\n{first_deep}");
+    let first_scrolled = scroll_transcript(&mut t, &first_deep, 6, false)?;
+    println!("FIRST TRANSCRIPT KEYBOARD SCROLL SIX ROWS\n{first_scrolled}");
+    let first_body = transcript_body(&first_scrolled)?;
+    t.send(".")?;
+    t.screen("second transcript", |s| {
+        s.contains("SECOND CHECK TRANSCRIPT")
+    })?;
+    t.send(">>>")?;
+    let second_deep = t.screen("second artifact deep position", |s| {
+        s.contains("Chunk 4 / ")
+    })?;
+    println!("SECOND TRANSCRIPT DEEP POSITION\n{second_deep}");
+    let second_scrolled = scroll_transcript(&mut t, &second_deep, 8, true)?;
+    println!("SECOND TRANSCRIPT MOUSE SCROLL EIGHT ROWS\n{second_scrolled}");
+    let second_body = transcript_body(&second_scrolled)?;
+    assert_ne!(first_body, second_body);
+    let first_restored = restore_transcript(&mut t, &first_body, |t| t.send(","))?;
+    println!("FIRST TRANSCRIPT POSITION RESTORED\n{first_restored}");
+    let second_restored = restore_transcript(&mut t, &second_body, |t| t.click("Check +"))?;
+    println!("SECOND TRANSCRIPT POSITION RESTORED\n{second_restored}");
+    key(&mut t, "]", "Attempt 2 / 2")?;
+    let attempt_restored = restore_transcript(&mut t, &second_body, |t| t.send("["))?;
+    println!("TRANSCRIPT SCROLL AND ARTIFACT RESTORED AFTER ATTEMPT CHANGE\n{attempt_restored}");
+    key(&mut t, "\x1b", "Current #1")?;
+    key(&mut t, "2", "Queue")?;
+    key(&mut t, "1", "Current #1")?;
+    let reopened = restore_transcript(&mut t, &second_body, |t| t.send("\r"))?;
+    println!("CURRENT TRANSCRIPT SCROLL AND ARTIFACT RESTORED AFTER REOPEN\n{reopened}");
+    restore_transcript(&mut t, &first_body, |t| t.send(","))?;
+    key(&mut t, "\x1b[H", "Chunk 3 / ")?;
+    t.click("Newer")?;
+    t.click("Newer")?;
+    t.screen("first transcript chunk restored", |s| {
+        s.contains("Chunk 1 / ")
+    })?;
+    restore_transcript(&mut t, &second_body, |t| t.send("."))?;
+    t.send(",")?;
+    t.screen("keyboard previous artifact", |s| {
+        s.contains("FIRST ATTEMPT CHECK TRANSCRIPT")
+    })?;
+    restore_transcript(&mut t, &second_body, |t| t.click("Check +"))?;
+    t.click("Check +")?;
+    let pruned = t.screen("pruned transcript marker", |s| s.contains("PRUNED:"))?;
+    println!("PRUNED EVIDENCE\n{pruned}");
+    t.click("Check +")?;
+    let missing = t.screen("missing transcript marker", |s| s.contains("MISSING:"))?;
+    println!("MISSING EVIDENCE\n{missing}");
+    key(&mut t, "\x1b", "Current #1")?;
+    key(&mut t, "2", "Queue")?;
+    key(&mut t, "1", "Current #1")?;
+    let restored_attempt = key(&mut t, "\r", "Attempt 1 / 2")?;
+    println!("CURRENT EARLIER ATTEMPT RESTORED AFTER SCREEN SWITCH\n{restored_attempt}");
+    assert!(restored_attempt.contains("MISSING:"));
+    quit(&mut t)?;
+    assert_eq!(evidence_contents(root)?, before_browsing);
+    let mut writer = service(root)?;
+    let resolve_target = target(&mut writer, id)?;
+    writer.resolve(resolve_target, Resolution::FailedSkipped, "Reviewed")?;
+    drop(writer);
+    let before_history = evidence_contents(root)?;
+    let mut history = terminal(root)?;
+    key(&mut history, "3", "History")?;
+    let details = key(&mut history, "\r", "Task details / attempts")?;
+    println!("HISTORY BROWSER\n{details}");
+    assert!(details.contains("Attempt 2 / 2"));
+    let earlier = key(&mut history, "[", "Attempt 1 / 2")?;
+    assert!(earlier.contains("Output page"));
+    key(
+        &mut history,
+        "\x1b[C\x1b[C",
+        "FIRST ATTEMPT CHECK TRANSCRIPT",
+    )?;
+    key(&mut history, ".", "SECOND CHECK TRANSCRIPT")?;
+    let history_deep = key(&mut history, ">>>", "Chunk 4 / ")?;
+    let history_scrolled = scroll_transcript(&mut history, &history_deep, 8, true)?;
+    println!("HISTORY TRANSCRIPT MOUSE SCROLL EIGHT ROWS\n{history_scrolled}");
+    let history_body = transcript_body(&history_scrolled)?;
+    key(&mut history, "\x1b", "History")?;
+    key(&mut history, "2", "Queue")?;
+    key(&mut history, "3", "History")?;
+    let restored_history = restore_transcript(&mut history, &history_body, |t| t.send("\r"))?;
+    println!(
+        "HISTORY EARLIER ATTEMPT ARTIFACT AND SCROLL RESTORED AFTER SCREEN SWITCH\n{restored_history}"
+    );
+    quit(&mut history)?;
+    assert_eq!(evidence_contents(root)?, before_history);
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    let count: i64 = db.connection().query_row(
+        "SELECT count(*) FROM attempt_output WHERE attempt_id=?1",
+        [first],
+        |r| r.get(0),
+    )?;
+    assert_eq!(count, 2205);
+    Ok(())
+}
+
+fn verify_utf8_chunk_ownership(root: &Path, attempt: i64) -> Result {
+    let boundary_only = format!("{}é", "b".repeat(511));
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    db.connection().execute(
+        "INSERT INTO attempt_output(attempt_id,sequence,stream,recorded_at_ms,content) VALUES (?1,2,'stdout',1,?2)",
+        rusqlite::params![attempt, boundary_only],
+    )?;
+    drop(db);
+    let reader = service(root)?;
+    let watermark = reader.output_watermark(attempt)?;
+    assert_eq!(reader.output_chunk_count_at(attempt, 0, watermark)?, 1);
+    let boundary_page = reader.browse_output_at(attempt, 0, 0, None, watermark)?;
+    assert!(boundary_page.contains(&boundary_only));
+    assert_eq!(boundary_page.matches('é').count(), 1);
+    assert!(!boundary_page.contains("[continues in next chunk]"));
+    match reader.search_output(attempt, watermark, "é", EvidenceCursor::default())? {
+        EvidenceSearch::Found(found, _) => assert_eq!(found.chunk, 0),
+        _ => panic!("final UTF8 codepoint was not found in its owning chunk"),
+    }
+    drop(reader);
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    for (sequence, text) in [(3, "c".repeat(514)), (4, format!("{}🦀", "d".repeat(511)))] {
+        db.connection().execute(
+            "INSERT INTO attempt_output(attempt_id,sequence,stream,recorded_at_ms,content) VALUES (?1,?2,'stdout',1,?3)",
+            rusqlite::params![attempt, sequence, text],
+        )?;
+    }
+    drop(db);
+    let reader = service(root)?;
+    let watermark = reader.output_watermark(attempt)?;
+    assert_eq!(reader.output_chunk_count_at(attempt, 0, watermark)?, 2);
+    let mixed_final = reader.browse_output_at(attempt, 0, 1, None, watermark)?;
+    assert!(mixed_final.contains("#3 [stdout] [continued] cc"));
+    assert!(!mixed_final.contains("#4 [stdout]"));
+    Ok(())
+}
+
+fn seed_nul_output(root: &Path, attempt: i64) -> Result<String> {
+    let mut content = "BEFORE_NUL\0\0".to_owned();
+    content.push_str(&"p".repeat(511 - content.len()));
+    content.push_str("éàAFTER_NUL_COPY\0\0");
+    content.push_str(&"q".repeat(8191 - content.len()));
+    content.push_str("界éSCAN_END\0\0TAIL_AFTER_NUL");
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    for (sequence, stream, text) in [
+        (197, "stdout", "LEFT\0\0é界CROSS_"),
+        (198, "stderr", "unrelated\0\0warning"),
+        (199, "stdout", "RECORD_AFTER"),
+        (200, "stdout", content.as_str()),
+    ] {
+        db.connection().execute(
+            "INSERT INTO attempt_output(attempt_id,sequence,stream,recorded_at_ms,content) VALUES (?1,?2,?3,1,?4)",
+            rusqlite::params![attempt, sequence, stream, text],
+        )?;
+    }
+    Ok(content)
+}
+
+fn verify_nul_chunk_continuity(reader: &Service, attempt: i64, content: &str) -> Result {
+    let watermark = reader.output_watermark(attempt)?;
+    let chunks = reader.output_chunk_count_at(attempt, 0, watermark)?;
+    assert_eq!(chunks, content.len().div_ceil(512));
+    let mut reconstructed = String::new();
+    for chunk in 0..chunks {
+        let page = reader.browse_output_at(attempt, 0, chunk, None, watermark)?;
+        assert!(!page.contains('\u{fffd}'), "invalid UTF8 in chunk {chunk}");
+        let prefix = if chunk == 0 {
+            "\n#200 [stdout] "
+        } else {
+            "\n#200 [stdout] [continued] "
+        };
+        let record = page.split_once(prefix).ok_or("missing NUL output row")?.1;
+        let record = record.split("\n#").next().unwrap();
+        let record = record
+            .strip_suffix("\n[continues in next chunk]")
+            .unwrap_or(record);
+        if chunk == 0 {
+            assert!(record.ends_with('é'));
+        }
+        if chunk == 1 {
+            assert!(record.starts_with("àAFTER_NUL_COPY␀␀"));
+        }
+        reconstructed.push_str(record);
+    }
+    assert_eq!(reconstructed, content.replace('\0', "␀"));
+    Ok(())
+}
+
+fn verify_nul_search(reader: &Service, attempt: i64) -> Result {
+    let watermark = reader.output_watermark(attempt)?;
+    for needle in [
+        "AFTER_NUL_COPY",
+        "éàAFTER_NUL_COPY",
+        "界éSCAN_END",
+        "é界CROSS_RECORD_AFTER",
+    ] {
+        let mut cursor = EvidenceCursor::default();
+        let found = loop {
+            match reader.search_output(attempt, watermark, needle, cursor)? {
+                EvidenceSearch::Found(found, _) => break found,
+                EvidenceSearch::Continue(next) => cursor = next,
+                EvidenceSearch::Exhausted => panic!("missing NUL suffix {needle:?}"),
+            }
+        };
+        assert!(found.excerpt.contains(needle), "{found:?}");
+        assert!(!found.excerpt.contains('\0'));
+        assert!(!found.excerpt.contains('\u{fffd}'));
+        if needle == "AFTER_NUL_COPY" {
+            assert_eq!(found.chunk, 1);
+        }
+        if needle == "éàAFTER_NUL_COPY" {
+            assert_eq!(found.chunk, 0);
+        }
+        if needle == "界éSCAN_END" {
+            assert_eq!(found.chunk, 15);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn attempt_browser_preserves_nul_suffixes_and_utf8_across_byte_chunks() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (id, attempt) = failed_task(root)?;
+    verify_utf8_chunk_ownership(root, attempt)?;
+    let content = seed_nul_output(root, attempt)?;
+    let reader = service(root)?;
+    verify_nul_chunk_continuity(&reader, attempt, &content)?;
+    verify_nul_search(&reader, attempt)?;
+    drop(reader);
+    let before_current = evidence_contents(root)?;
+    let mut current = terminal(root)?;
+    current.screen("NUL current task ready", |s| s.contains("Current #1"))?;
+    key(&mut current, "\r", "Task details / attempts")?;
+    exercise_nul_browser(&mut current, "CURRENT")?;
+    quit(&mut current)?;
+    assert_eq!(evidence_contents(root)?, before_current);
+    let mut writer = service(root)?;
+    let resolve_target = target(&mut writer, id)?;
+    writer.resolve(
+        resolve_target,
+        Resolution::FailedSkipped,
+        "Reviewed NUL evidence",
+    )?;
+    drop(writer);
+    let before_history = evidence_contents(root)?;
+    let mut history = terminal(root)?;
+    history.screen("NUL history startup ready", |s| {
+        s.contains("No current task") && s.contains("Queue complete.")
+    })?;
+    key(&mut history, "3", "History")?;
+    key(&mut history, "\r", "Task details / attempts")?;
+    exercise_nul_browser(&mut history, "HISTORY")?;
+    quit(&mut history)?;
+    assert_eq!(evidence_contents(root)?, before_history);
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    let retained: String = db.connection().query_row(
+        "SELECT content FROM attempt_output WHERE attempt_id=?1 AND sequence=200",
+        [attempt],
+        |row| row.get(0),
+    )?;
+    assert_eq!(retained.as_bytes(), content.as_bytes());
+    Ok(())
+}
+
+fn exercise_nul_browser(t: &mut Terminal, view: &str) -> Result {
+    let first = t.screen("NUL evidence visible before suffix", |s| {
+        evidence_visible(s, "BEFORE_NUL␀␀") && s.contains("chunk 1 / 17")
+    })?;
+    println!("{view} NUL OUTPUT FIRST BYTE CHUNK\n{first}");
+    assert!(!evidence_visible(&first, "AFTER_NUL_COPY"));
+    let keyboard_page = key(t, "}", "àAFTER_NUL_COPY")?;
+    println!("{view} KEYBOARD BROWSE AFTER NUL\n{keyboard_page}");
+    let selected = keyboard_select(t, &keyboard_page, "AFTER_NUL_COPY", 14)?;
+    println!("{view} KEYBOARD SELECT AFTER NUL\n{selected}");
+    let copied = copy_key(t, "\r")?;
+    println!("{view} KEYBOARD BROWSE COPY {copied:?}");
+    assert_eq!(copied, "AFTER_NUL_COPY");
+    key(t, "\x1b", "Task details / attempts")?;
+    t.click("Chunk -")?;
+    t.screen("mouse returns to first NUL byte chunk", |s| {
+        evidence_visible(s, "BEFORE_NUL␀␀")
+    })?;
+    t.click("Chunk +")?;
+    let mouse_page = t.screen("mouse browses beyond NUL", |s| {
+        evidence_visible(s, "àAFTER_NUL_COPY") && s.contains("chunk 2 / 17")
+    })?;
+    println!("{view} MOUSE BROWSE AFTER NUL\n{mouse_page}");
+    copy_nul_suffix_with_mouse(t, &mouse_page, view, "BROWSE")?;
+    let before_keyboard_search = key(t, "{", "chunk 1 / 17")?;
+    assert!(!evidence_visible(&before_keyboard_search, "AFTER_NUL_COPY"));
+    let keyboard_match = find_evidence(t, "", "AFTER_NUL_COPY", "AFTER_NUL_COPY")?;
+    println!("{view} KEYBOARD SEARCH AFTER NUL\n{keyboard_match}");
+    assert!(keyboard_match.contains("chunk 2 / 17"));
+    assert!(evidence_visible(&keyboard_match, "AFTER_NUL_COPY"));
+    let selected = keyboard_select(t, &keyboard_match, "AFTER_NUL_COPY", 14)?;
+    println!("{view} KEYBOARD SEARCH SELECTION\n{selected}");
+    let copied = copy_key(t, "\r")?;
+    println!("{view} KEYBOARD SEARCH COPY {copied:?}");
+    assert_eq!(copied, "AFTER_NUL_COPY");
+    key(t, "\x1b", "Task details / attempts")?;
+    t.click("Chunk -")?;
+    t.screen("mouse search starts without the suffix visible", |s| {
+        s.contains("chunk 1 / 17") && !evidence_visible(s, "AFTER_NUL_COPY")
+    })?;
+    let mouse_match = find_evidence(t, "Find output", "AFTER_NUL_COPY", "AFTER_NUL_COPY")?;
+    println!("{view} MOUSE SEARCH AFTER NUL\n{mouse_match}");
+    assert!(mouse_match.contains("chunk 2 / 17"));
+    assert!(evidence_visible(&mouse_match, "AFTER_NUL_COPY"));
+    copy_nul_suffix_with_mouse(t, &mouse_match, view, "SEARCH")?;
+    let chunk_boundary = find_evidence(t, "Find output", "éàAFTER_NUL_COPY", "éàAFTER_NUL_COPY")?;
+    assert!(chunk_boundary.contains("chunk 1 / 17"));
+    println!("{view} UTF8 MATCH LANDS IN CHUNK OWNING FIRST BYTE\n{chunk_boundary}");
+    let scan_boundary = find_evidence(t, "Find output", "界éSCAN_END", "界éSCAN_END")?;
+    println!("{view} UTF8 SEARCH ACROSS BYTE READ BOUNDARY\n{scan_boundary}");
+    let joined = find_evidence(
+        t,
+        "Find output",
+        "é界CROSS_RECORD_AFTER",
+        "é界CROSS_RECORD_AFTER",
+    )?;
+    println!("{view} NUL AND UTF8 SEARCH ACROSS INTERLEAVED RECORDS\n{joined}");
+    Ok(())
+}
+
+fn copy_nul_suffix_with_mouse(t: &mut Terminal, screen: &str, view: &str, path: &str) -> Result {
+    let start = screen
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.contains('▏'))
+        .find_map(|(row, line)| {
+            line.find("AFTER_NUL_COPY")
+                .map(|offset| (line[..offset].chars().count(), row))
+        })
+        .ok_or("NUL suffix only appeared in search field")?;
+    drag(t, start, (start.0 + 13, start.1))?;
+    let selected = t.screen("mouse selects NUL suffix", |_| {
+        t.selected_at(start.0, start.1)
+    })?;
+    println!("{view} MOUSE {path} SELECTION\n{selected}");
+    let copied = mouse_copy(t)?;
+    println!("{view} MOUSE {path} COPY {copied:?}");
+    assert_eq!(copied, "AFTER_NUL_COPY");
+    key(t, "\x1b", "Task details / attempts")?;
+    Ok(())
+}
+
+#[test]
+fn attempt_browser_keeps_output_pages_stable_until_keyboard_or_mouse_refresh() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (writer, run) = running_fixture(root, "Stable historical pages")?;
+    for sequence in 1..=161 {
+        writer.output(&run, "stdout", &format!("ORIGINAL OUTPUT {sequence:03}"))?;
+    }
+    let mut t = terminal(root)?;
+    t.screen("stable pages current task ready", |s| {
+        s.contains("Current #1")
+    })?;
+    key(&mut t, "\r", "Output page 1 / 3")?;
+    let old_page = key(&mut t, ">", "Output page 2 / 3")?;
+    assert!(old_page.contains("#81 [stdout] ORIGINAL OUTPUT 081"));
+    println!("BROWSER PAGE BEFORE 80 APPENDS\n{old_page}");
+    for sequence in 162..=241 {
+        writer.output(&run, "stdout", &format!("APPENDED OUTPUT {sequence:03}"))?;
+    }
+    let after_append = evidence_contents(root)?;
+    let stable_page = key(&mut t, "\x1b[H", "#81 [stdout] ORIGINAL OUTPUT 081")?;
+    println!("BROWSER PAGE AFTER 80 APPENDS\n{stable_page}");
+    assert!(stable_page.contains("Output page 2 / 3"));
+    assert!(!stable_page.contains("APPENDED OUTPUT"));
+    let older = key(&mut t, ">", "Output page 3 / 3")?;
+    assert!(older.contains("#1 [stdout] ORIGINAL OUTPUT 001"));
+    let newer = key(&mut t, "<", "Output page 2 / 3")?;
+    assert!(newer.contains("#81 [stdout] ORIGINAL OUTPUT 081"));
+    let refreshed = key(&mut t, "r", "#241 [stdout] APPENDED OUTPUT 241")?;
+    println!("KEYBOARD REFRESH ADOPTS NEW OUTPUT\n{refreshed}");
+    assert!(refreshed.contains("Output page 1 / 4"));
+    assert_eq!(evidence_contents(root)?, after_append);
+    for sequence in 242..=321 {
+        writer.output(&run, "stdout", &format!("MOUSE APPENDED {sequence:03}"))?;
+    }
+    let after_second_append = evidence_contents(root)?;
+    t.click("Refresh")?;
+    let mouse_refreshed = t.screen("mouse refresh adopts newest records", |s| {
+        s.contains("#321 [stdout] MOUSE APPENDED 321")
+    })?;
+    println!("MOUSE REFRESH ADOPTS NEW OUTPUT\n{mouse_refreshed}");
+    assert!(mouse_refreshed.contains("Output page 1 / 5"));
+    quit(&mut t)?;
+    assert_eq!(evidence_contents(root)?, after_second_append);
+    Ok(())
+}
+
+#[test]
+fn attempt_browser_shows_pinned_inputs_after_defaults_and_new_revisions_change() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let mut writer = service(root)?;
+    let mut original = definition("Historical intent");
+    original.goal = "Original pinned goal".into();
+    original.criteria = vec!["Original pinned criterion".into()];
+    original.attempt_limit = Some(7);
+    original.timeout_ms = Some(123_000);
+    for (index, model) in original.models.iter_mut().enumerate() {
+        *model = Some(ModelConfig {
+            provider: "codex".into(),
+            model: format!("old-role-{index}"),
+            effort: [Some("high"), Some("low"), None, Some("medium")][index].map(str::to_owned),
+        });
+    }
+    let id = writer.create(std::slice::from_ref(&original), None, false)?[0];
+    writer.set_actor(Actor {
+        kind: ActorKind::Ai,
+        name: "Evidence AI".into(),
+    })?;
+    let approval = target(&mut writer, id)?;
+    writer.decide(approval, true, "Explicit AI approval")?;
+    let expected = target(&mut writer, id)?;
+    let run = writer.begin_run(expected, "history-input-token", "history-input-base")?;
+    let step = writer.start_ai_step(
+        &run,
+        "execution",
+        original.models[0].as_ref().unwrap(),
+        "pinned-inputs",
+        false,
+    )?;
+    let session = step.session.unwrap();
+    writer.record_session(&step, "original-provider-session")?;
+    writer.finish_step(&step, true, "Historical execution result", None)?;
+    writer.finish_run(
+        &run,
+        "failed",
+        Some("check"),
+        "Historical failed outcome",
+        None,
+    )?;
+    let previous_defaults = writer.project_defaults()?;
+    let changed_defaults = std::array::from_fn(|index| {
+        Some(ModelConfig {
+            provider: "codex".into(),
+            model: format!("new-default-{index}"),
+            effort: Some("xhigh".into()),
+        })
+    });
+    writer.save_defaults(&previous_defaults, &changed_defaults)?;
+    let mut revised = definition("New ready intent");
+    revised.goal = "New ready goal".into();
+    revised.models = std::array::from_fn(|index| changed_defaults[index + 1].clone());
+    revised.attempt_limit = Some(9);
+    revised.timeout_ms = Some(999_000);
+    let expected = target(&mut writer, id)?;
+    writer.revise(expected, &revised, true)?;
+    revised.title = "New draft intent".into();
+    revised.goal = "New draft goal".into();
+    let expected = target(&mut writer, id)?;
+    writer.revise(expected, &revised, false)?;
+    drop(writer);
+    let before = evidence_contents(root)?;
+    let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, 110, 38)?;
+    t.screen("current ready revision", |s| s.contains("New ready intent"))?;
+    let mut observed = key(&mut t, "\r", "Task details / attempts")?;
+    println!("HISTORICAL INPUTS FIRST PAGE\n{observed}");
+    for page in 1..=8 {
+        let screen = key(&mut t, "\x1b[6~", "Task details / attempts")?;
+        println!("HISTORICAL INPUTS PAGE {page}\n{screen}");
+        observed.push_str(&screen);
+    }
+    for expected in [
+        "Attempt inputs: revision 1",
+        &format!("session {session}"),
+        "Approval: ready · ai: Evidence AI",
+        "Original pinned goal",
+        "Original pinned criterion",
+        "old-role-0",
+        "old-role-1",
+        "old-role-2",
+        "old-role-3",
+        "high",
+        "low",
+        "none",
+        "medium",
+        "Attempt limit: 7",
+        "123000",
+        "New ready intent",
+        "New draft intent",
+    ] {
+        assert!(
+            observed.contains(expected),
+            "historical inputs missing {expected:?}:\n{observed}"
+        );
+    }
+    quit(&mut t)?;
+    assert_eq!(evidence_contents(root)?, before);
+    Ok(())
 }
 
 fn running_fixture(
@@ -209,6 +914,152 @@ fn key(t: &mut Terminal, keys: &str, text: &str) -> Result<String> {
 fn quit(t: &mut Terminal) -> Result {
     t.send("\x03")?;
     t.finish()
+}
+
+fn find_evidence(t: &mut Terminal, field: &str, query: &str, expected: &str) -> Result<String> {
+    if field.is_empty() {
+        t.send("/")?;
+    } else {
+        t.click(field)?;
+    }
+    let before_typing_frame = t.redraw_count();
+    t.send(&format!("\x01{query}"))?;
+    let rendered_query = format!("{query}▏");
+    t.screen("evidence query rendered before submitting search", |s| {
+        t.redraw_count() > before_typing_frame && s.contains(&rendered_query)
+    })?;
+    let mut before_search_frame = t.redraw_count();
+    t.send("\r")?;
+    for _ in 0..128 {
+        let screen = t.screen("evidence search result or bounded continuation", |s| {
+            t.redraw_count() > before_search_frame
+                && s.contains(&rendered_query)
+                && (evidence_visible(s, expected)
+                    || evidence_visible(s, "Search continues")
+                    || evidence_visible(s, "No matching evidence recorded"))
+        })?;
+        if evidence_visible(&screen, expected) {
+            return Ok(screen);
+        }
+        if !screen.contains("Search continues") {
+            return Err(format!("search {query:?} did not find {expected:?}:\n{screen}").into());
+        }
+        before_search_frame = t.redraw_count();
+        t.send("\r")?;
+    }
+    Err(format!("search {query:?} did not finish its bounded scan").into())
+}
+
+fn evidence_visible(screen: &str, text: &str) -> bool {
+    // The query field itself is not proof of a search result.
+    screen
+        .lines()
+        .filter(|line| !line.contains('▏'))
+        .any(|line| line.contains(text))
+}
+
+fn numbered_transcript(label: &str, minimum_bytes: usize) -> String {
+    let mut text = String::new();
+    let mut line = 0;
+    while text.len() < minimum_bytes {
+        text.push_str(&format!(
+            "{label} TRANSCRIPT LINE {line:06} retained evidence\n"
+        ));
+        line += 1;
+    }
+    text
+}
+
+fn transcript_body(screen: &str) -> Result<String> {
+    let title = location(screen, "Task details / attempts")?;
+    let field = location(screen, "Find transcript")?;
+    Ok(screen
+        .lines()
+        .skip(title.1 + 1)
+        .take(field.1 - title.1 - 1)
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+fn scroll_transcript(t: &mut Terminal, baseline: &str, rows: usize, mouse: bool) -> Result<String> {
+    let baseline_body = transcript_body(baseline)?;
+    let expected_top = baseline_body
+        .lines()
+        .nth(rows)
+        .ok_or("scroll baseline too short")?;
+    let before_frame = t.redraw_count();
+    if mouse {
+        assert_eq!(rows, 8);
+        t.click("Down")?;
+    } else {
+        t.send(&"j".repeat(rows))?;
+    }
+    let scrolled = t.screen("transcript scroll changes the exact visible top row", |s| {
+        t.redraw_count() > before_frame
+            && transcript_body(s).is_ok_and(|body| body.lines().next() == Some(expected_top))
+    })?;
+    let scrolled_body = transcript_body(&scrolled)?;
+    assert_ne!(scrolled_body, baseline_body);
+    assert!(
+        scrolled_body
+            .lines()
+            .next()
+            .unwrap()
+            .contains("TRANSCRIPT LINE")
+    );
+    Ok(scrolled)
+}
+
+fn restore_transcript(
+    t: &mut Terminal,
+    expected_body: &str,
+    action: impl FnOnce(&mut Terminal) -> Result,
+) -> Result<String> {
+    let before_frame = t.redraw_count();
+    action(t)?;
+    t.screen("exact transcript body and nonzero scroll restored", |s| {
+        t.redraw_count() > before_frame
+            && transcript_body(s).is_ok_and(|body| body == expected_body)
+    })
+}
+
+fn keyboard_select(t: &mut Terminal, screen: &str, needle: &str, length: usize) -> Result<String> {
+    let start = location(screen, needle)?;
+    let title = location(screen, "Task details / attempts")?;
+    let body = (title.0 - 1, title.1 + 1);
+    t.send(&format!(
+        "\x1bOQ{}{}{}",
+        "\x1b[B".repeat(start.1 - body.1),
+        "\x1b[C".repeat(start.0 - body.0),
+        "\x1b[1;2C".repeat(length - 1)
+    ))?;
+    t.screen("keyboard selected evidence without mouse selection", |_| {
+        t.selected_at(start.0, start.1)
+    })
+}
+
+fn evidence_contents(root: &Path) -> Result<Vec<Vec<String>>> {
+    [
+        "tasks",
+        "task_revisions",
+        "revision_models",
+        "acceptance_criteria",
+        "task_links",
+        "attempts",
+        "attempt_progress",
+        "attempt_steps",
+        "criterion_results",
+        "model_calls",
+        "ai_sessions",
+        "questions",
+        "attempt_output",
+        "artifacts",
+        "events",
+        "execution_sessions",
+    ]
+    .iter()
+    .map(|table| table_contents(root, table))
+    .collect()
 }
 
 fn table_contents(root: &Path, table: &str) -> Result<Vec<String>> {

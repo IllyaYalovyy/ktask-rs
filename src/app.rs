@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum View {
     Current,
     Queue,
@@ -84,6 +84,12 @@ pub enum Action {
     Select(usize),
     PreviousAttempt,
     NextAttempt,
+    EvidenceSection(i32),
+    EvidencePage(i32),
+    EvidenceChunk(i32),
+    EvidenceArtifact(i32),
+    FindEvidence,
+    RefreshEvidence,
     Configure,
     ProjectModels,
     ProjectChecks,
@@ -98,6 +104,58 @@ pub struct Catalog {
     pub query: String,
     pub filter: usize,
     pub selected: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum EvidenceSection {
+    #[default]
+    Output,
+    Results,
+    Transcripts,
+}
+impl EvidenceSection {
+    pub fn from_index(index: usize) -> Self {
+        match index {
+            0 => Self::Output,
+            1 => Self::Results,
+            _ => Self::Transcripts,
+        }
+    }
+    pub fn index(self) -> usize {
+        match self {
+            Self::Output => 0,
+            Self::Results => 1,
+            Self::Transcripts => 2,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EvidenceAttemptKey {
+    pub view: View,
+    pub task: usize,
+    pub attempt: i64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EvidenceSourceKey {
+    pub attempt: EvidenceAttemptKey,
+    pub section: EvidenceSection,
+    pub artifact: Option<i64>,
+}
+#[derive(Clone, Default)]
+pub struct EvidencePosition {
+    pub page: usize,
+    pub chunk: usize,
+    pub scroll: usize,
+    pub match_sequence: Option<i64>,
+    pub query: String,
+    pub search: crate::application::EvidenceCursor,
+    pub excerpt: String,
+}
+#[derive(Clone, Default)]
+pub struct EvidenceAttemptState {
+    pub section: EvidenceSection,
+    pub artifact: usize,
+    pub watermark: i64,
 }
 
 pub struct App {
@@ -138,6 +196,9 @@ pub struct App {
     pub log_rect: Rect,
     pub selection: crate::selection::Selection,
     pub output_cache: crate::ui::OutputCache,
+    pub evidence_positions: BTreeMap<EvidenceSourceKey, EvidencePosition>,
+    pub evidence_attempts: BTreeMap<EvidenceAttemptKey, EvidenceAttemptState>,
+    pub inspected_attempts: BTreeMap<(View, usize), i64>,
     pub copy_pending: Option<String>,
     copy_pressed: bool,
     pub page_size: usize,
@@ -224,6 +285,9 @@ impl App {
             log_rect: Rect::default(),
             selection: crate::selection::Selection::default(),
             output_cache: crate::ui::OutputCache::default(),
+            evidence_positions: BTreeMap::new(),
+            evidence_attempts: BTreeMap::new(),
+            inspected_attempts: BTreeMap::new(),
             copy_pending: None,
             copy_pressed: false,
             page_size: 1,
@@ -484,6 +548,12 @@ impl App {
             }
         }
         let readonly = self.dialog.as_ref().is_some_and(Dialog::read_only);
+        if self.inspect_search_key(key) {
+            return;
+        }
+        if self.inspect_key(key) {
+            return;
+        }
         if key.code == KeyCode::Esc || (readonly && matches!(key.code, KeyCode::Char('q' | '?'))) {
             self.act(Action::Cancel);
         } else if key.code == KeyCode::Enter
@@ -504,6 +574,74 @@ impl App {
             self.act(Action::NextAttempt);
         } else if let Some(dialog) = &mut self.dialog {
             dialog.key(key);
+        }
+    }
+    fn inspect_search_key(&mut self, key: KeyEvent) -> bool {
+        if !matches!(
+            self.dialog.as_ref().map(|d| &d.kind),
+            Some(crate::dialog::DialogKind::Inspect {
+                search_active: true,
+                ..
+            })
+        ) {
+            return false;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                if let Some(crate::dialog::Dialog {
+                    kind: crate::dialog::DialogKind::Inspect { search_active, .. },
+                    ..
+                }) = &mut self.dialog
+                {
+                    *search_active = false;
+                }
+            }
+            KeyCode::Enter => self.act(Action::FindEvidence),
+            _ => {
+                if let Some(dialog) = &mut self.dialog {
+                    dialog.key(key);
+                }
+            }
+        }
+        true
+    }
+    fn inspect_key(&mut self, key: KeyEvent) -> bool {
+        if !matches!(
+            self.dialog.as_ref().map(|d| &d.kind),
+            Some(crate::dialog::DialogKind::Inspect { .. })
+        ) {
+            return false;
+        }
+        let action = match key.code {
+            KeyCode::Enter => Some(Action::FindEvidence),
+            KeyCode::Char('[') => Some(Action::PreviousAttempt),
+            KeyCode::Char(']') => Some(Action::NextAttempt),
+            KeyCode::Left => Some(Action::EvidenceSection(-1)),
+            KeyCode::Right => Some(Action::EvidenceSection(1)),
+            KeyCode::Char('>') => Some(Action::EvidencePage(1)),
+            KeyCode::Char('<') => Some(Action::EvidencePage(-1)),
+            KeyCode::Char('}') => Some(Action::EvidenceChunk(1)),
+            KeyCode::Char('{') => Some(Action::EvidenceChunk(-1)),
+            KeyCode::Char('.') => Some(Action::EvidenceArtifact(1)),
+            KeyCode::Char(',') => Some(Action::EvidenceArtifact(-1)),
+            KeyCode::Char('r') => Some(Action::RefreshEvidence),
+            KeyCode::Char('/') => {
+                if let Some(crate::dialog::Dialog {
+                    kind: crate::dialog::DialogKind::Inspect { search_active, .. },
+                    ..
+                }) = &mut self.dialog
+                {
+                    *search_active = true;
+                }
+                return true;
+            }
+            _ => None,
+        };
+        if let Some(action) = action {
+            self.act(action);
+            true
+        } else {
+            false
         }
     }
     fn search_key(&mut self, key: KeyEvent) {

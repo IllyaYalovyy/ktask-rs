@@ -1,3 +1,4 @@
+use super::output_text::{CHUNK_BYTES, read_output_range, visible_controls};
 use super::*;
 use rusqlite::Connection;
 use std::io::{Read, Seek};
@@ -42,7 +43,7 @@ fn complete_task(db: &Connection, mut task: Task) -> Result<Task> {
         !task.revisions.is_empty(),
         "Stored task has no revision; database needs repair",
     )?;
-    task.attempts = attempts(db, task.id)?;
+    task.attempts = attempts(db, task.id, true, true)?;
     task.follow_ups = follow_ups(db, task.id)?;
     Ok(task)
 }
@@ -54,6 +55,307 @@ fn follow_ups(db: &Connection, task: i64) -> Result<Vec<(i64, String)>> {
 }
 
 impl Service {
+    const OUTPUT_ROWS: usize = 80;
+
+    pub fn output_watermark(&self, attempt: i64) -> Result<i64> {
+        Ok(self.db.connection().query_row(
+            "SELECT coalesce(max(sequence),0) FROM attempt_output WHERE attempt_id=?1",
+            [attempt],
+            |r| r.get(0),
+        )?)
+    }
+
+    pub fn output_page_count_at(&self, attempt: i64, watermark: i64) -> Result<usize> {
+        let count: i64 = self.db.connection().query_row(
+            "SELECT count(*) FROM attempt_output WHERE attempt_id=?1 AND sequence<=?2",
+            params![attempt, watermark],
+            |r| r.get(0),
+        )?;
+        Ok((count.max(1) as usize).div_ceil(Self::OUTPUT_ROWS))
+    }
+
+    pub fn output_chunk_count_at(
+        &self,
+        attempt: i64,
+        page: usize,
+        watermark: i64,
+    ) -> Result<usize> {
+        let mut statement = self.db.connection().prepare(
+            "SELECT length(CAST(content AS BLOB)),substr(CAST(content AS BLOB),-4) FROM attempt_output WHERE attempt_id=?1 AND sequence<=?4 ORDER BY sequence DESC LIMIT ?2 OFFSET ?3",
+        )?;
+        let rows = statement.query_map(
+            params![
+                attempt,
+                Self::OUTPUT_ROWS as i64,
+                page.saturating_mul(Self::OUTPUT_ROWS) as i64,
+                watermark
+            ],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )?;
+        let mut chunks = 1;
+        for row in rows {
+            let (length, tail) = row?;
+            // A final codepoint may extend past the byte boundary while still
+            // belonging to the preceding chunk. Only its first byte counts.
+            if let Some(last_start) = tail.iter().rposition(|byte| byte & 0xc0 != 0x80) {
+                let position = length as usize - tail.len() + last_start;
+                chunks = chunks.max(position / CHUNK_BYTES + 1);
+            }
+        }
+        Ok(chunks)
+    }
+
+    pub fn artifact_count(&self, attempt: i64) -> Result<usize> {
+        let count: i64 = self.db.connection().query_row(
+            "SELECT count(*) FROM artifacts WHERE attempt_id=?1",
+            [attempt],
+            |r| r.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    pub fn transcript_page_count(
+        &self,
+        attempt: i64,
+        artifact: usize,
+        root: &std::path::Path,
+    ) -> Result<usize> {
+        let path: Option<String> = self.db.connection().query_row("SELECT relative_path FROM artifacts WHERE attempt_id=?1 ORDER BY id LIMIT 1 OFFSET ?2", params![attempt,artifact as i64], |r| r.get(0)).optional()?;
+        let Some(path) = path else {
+            return Ok(1);
+        };
+        let Some(path) = retained_artifact_path(root, &path) else {
+            return Ok(1);
+        };
+        let Ok(metadata) = std::fs::metadata(path) else {
+            return Ok(1);
+        };
+        Ok(metadata.len().max(1).div_ceil(8192) as usize)
+    }
+    /// Read one bounded page for the TUI. This path never changes attempt state.
+    pub fn browse_output_at(
+        &self,
+        attempt: i64,
+        page: usize,
+        chunk: usize,
+        selected_match: Option<(i64, &str)>,
+        watermark: i64,
+    ) -> Result<String> {
+        let db = self.db.connection();
+        let total: i64 = db.query_row(
+            "SELECT count(*) FROM attempt_output WHERE attempt_id=?1 AND sequence<=?2",
+            params![attempt, watermark],
+            |r| r.get(0),
+        )?;
+        let offset = page.saturating_mul(Self::OUTPUT_ROWS);
+        let mut stmt = db.prepare(
+            "SELECT sequence,stream,length(CAST(content AS BLOB)) FROM attempt_output WHERE attempt_id=?1 AND sequence<=?4 ORDER BY sequence DESC LIMIT ?3 OFFSET ?2"
+        )?;
+        let rows = stmt
+            .query_map(
+                params![attempt, offset as i64, Self::OUTPUT_ROWS as i64, watermark],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let chunks = self.output_chunk_count_at(attempt, page, watermark)?;
+        let mut text = format!(
+            "Output page {} / {} · chunk {} / {} · {} records · newest first · snapshot #{watermark}\n",
+            page + 1,
+            (total.max(1) as usize).div_ceil(Self::OUTPUT_ROWS),
+            chunk + 1,
+            chunks,
+            total
+        );
+        if rows.is_empty() {
+            text.push_str("No output records on this page.\n");
+        }
+        let byte_offset = chunk.saturating_mul(CHUNK_BYTES);
+        // A match can straddle a chunk boundary. Only inspect bounded context at
+        // its landing chunk; never scan or load the entire output record here.
+        if let Some((sequence, needle)) = selected_match.filter(|(sequence, needle)| {
+            !needle.is_empty() && rows.iter().any(|row| row.0 == *sequence)
+        }) {
+            let context = read_output_range(
+                db,
+                attempt,
+                sequence,
+                byte_offset,
+                CHUNK_BYTES.saturating_add(needle.len().min(4096)),
+            )?;
+            if let Some(at) = context
+                .content
+                .to_ascii_lowercase()
+                .find(&needle.to_ascii_lowercase())
+                && context.start + at < byte_offset.saturating_add(CHUNK_BYTES)
+                && context.start + at + needle.len() > byte_offset.saturating_add(CHUNK_BYTES)
+            {
+                let excerpt = visible_controls(&context.content[at..at + needle.len()]);
+                text.push_str(&format!("\nMatch in #{sequence}: {excerpt}\n"));
+            }
+        }
+        for (sequence, stream, length) in rows {
+            let slice = read_output_range(db, attempt, sequence, byte_offset, CHUNK_BYTES)?;
+            let content = visible_controls(&slice.content);
+            if chunk > 0 && content.is_empty() {
+                continue;
+            }
+            let continuation = if chunk > 0 { "[continued] " } else { "" };
+            text.push_str(&format!("\n#{sequence} [{stream}] {continuation}{content}"));
+            if length as usize > slice.start.saturating_add(slice.content.len()) {
+                text.push_str("\n[continues in next chunk]");
+            }
+        }
+        Ok(text)
+    }
+
+    /// Structured results are kept independent of the raw output tail.
+    pub fn browse_results(&self, attempt: i64) -> Result<String> {
+        let db = self.db.connection();
+        let mut text = String::from("Role steps, findings and acceptance results\n");
+        let mut stmt = db.prepare("SELECT s.id,s.ordinal,s.role,s.state,coalesce(c.name,''),coalesce(s.report,''),s.command,s.exit_code,s.passed_count,s.failed_count,s.ignored_count FROM attempt_steps s LEFT JOIN project_checks c ON c.id=s.project_check_id WHERE s.attempt_id=?1 ORDER BY s.ordinal")?;
+        let steps = stmt
+            .query_map([attempt], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, Option<String>>(6)?,
+                    r.get::<_, Option<i64>>(7)?,
+                    r.get::<_, Option<i64>>(8)?,
+                    r.get::<_, Option<i64>>(9)?,
+                    r.get::<_, Option<i64>>(10)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if steps.is_empty() {
+            text.push_str("No role steps recorded.\n");
+        }
+        for (id, ordinal, role, state, check, report, command, exit, passed, failed, ignored) in
+            steps
+        {
+            text.push_str(&format!(
+                "\nStep {ordinal} · {role}{} · {state}\n",
+                if check.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {check}")
+                }
+            ));
+            if !report.is_empty() {
+                text.push_str(&format!("{report}\n"));
+            }
+            if let Some(command) = command {
+                text.push_str(&format!("Command: {command}\n"));
+            }
+            if let Some(exit) = exit {
+                text.push_str(&format!("Exit code: {exit}\n"));
+            }
+            if let (Some(passed), Some(failed), Some(ignored)) = (passed, failed, ignored) {
+                text.push_str(&format!(
+                    "Check counts: {passed} passed, {failed} failed, {ignored} ignored\n"
+                ));
+            }
+            let mut criteria = db.prepare("SELECT criterion_ordinal,state,evidence FROM criterion_results WHERE step_id=?1 ORDER BY criterion_ordinal")?;
+            for row in criteria.query_map([id], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })? {
+                let (number, state, evidence) = row?;
+                text.push_str(&format!(
+                    "Criterion {number} · {state}: {}\n",
+                    evidence.unwrap_or_else(|| "No evidence recorded".into())
+                ));
+            }
+        }
+        Ok(text)
+    }
+
+    pub fn browse_transcript(
+        &self,
+        attempt: i64,
+        artifact: usize,
+        page: usize,
+        root: &std::path::Path,
+    ) -> Result<String> {
+        let db = self.db.connection();
+        let mut stmt = db.prepare("SELECT name,relative_path,size_bytes,pruned_at_ms FROM artifacts WHERE attempt_id=?1 ORDER BY id")?;
+        let artifacts = stmt
+            .query_map([attempt], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, Option<i64>>(3)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut text = format!(
+            "Supervisor check transcripts · {} artifact(s)\n",
+            artifacts.len()
+        );
+        if artifacts.is_empty() {
+            text.push_str("No transcript artifact recorded.\n");
+            return Ok(text);
+        }
+        let index = artifact.min(artifacts.len() - 1);
+        let (name, relative, size, pruned) = &artifacts[index];
+        text.push_str(&format!(
+            "Artifact {} / {} · {name} · {size} bytes\n",
+            index + 1,
+            artifacts.len()
+        ));
+        if pruned.is_some() {
+            text.push_str("PRUNED: transcript content is no longer retained.\n");
+            return Ok(text);
+        }
+        let Some(path) = retained_artifact_path(root, relative) else {
+            text.push_str("MISSING: transcript file or safe path is absent.\n");
+            return Ok(text);
+        };
+        let Ok(mut file) = std::fs::File::open(&path) else {
+            text.push_str("MISSING: transcript file is absent.\n");
+            return Ok(text);
+        };
+        let actual = file.metadata()?.len();
+        let start = utf8_boundary(&mut file, (page as u64).saturating_mul(8192).min(actual))?;
+        let end = utf8_boundary(
+            &mut file,
+            ((page as u64).saturating_add(1))
+                .saturating_mul(8192)
+                .min(actual),
+        )?;
+        text.push_str(&format!(
+            "Chunk {} / {}{}\n",
+            page + 1,
+            actual.max(1).div_ceil(8192),
+            if actual != *size as u64 {
+                " · SIZE MISMATCH"
+            } else {
+                ""
+            }
+        ));
+        file.seek(std::io::SeekFrom::Start(start))?;
+        let mut bytes = Vec::new();
+        file.take(end.saturating_sub(start))
+            .read_to_end(&mut bytes)?;
+        if bytes.is_empty() {
+            text.push_str("No content in this chunk.\n");
+        }
+        text.push_str(&String::from_utf8_lossy(&bytes));
+        Ok(text)
+    }
     /// Persisted waiting-attempt timing, read without changing the attempt or its guards.
     pub fn waiting_resume(&self, task: i64) -> Result<Option<WaitingResume>> {
         self.db
@@ -271,6 +573,15 @@ impl Service {
     }
     /// A single read transaction keeps queue, revisions, history and events consistent.
     pub fn snapshot(&mut self) -> Result<Snapshot> {
+        self.snapshot_with_logs(true)
+    }
+
+    /// The TUI keeps only the live pane's tail; its evidence browser loads older output on demand.
+    pub fn snapshot_brief(&mut self) -> Result<Snapshot> {
+        self.snapshot_with_logs(false)
+    }
+
+    fn snapshot_with_logs(&mut self, historical_logs: bool) -> Result<Snapshot> {
         // Read BEFORE the snapshot: a concurrent commit may cause an extra refresh, never a missed one.
         let version: i64 = self
             .db
@@ -308,7 +619,8 @@ impl Service {
                     !task.revisions.is_empty(),
                     "Stored task has no revision; database needs repair",
                 )?;
-                task.attempts = attempts(&tx, task.id)?;
+                let live_logs = closed.is_none() && queue.is_empty();
+                task.attempts = attempts(&tx, task.id, historical_logs, live_logs)?;
                 task.follow_ups = follow_ups(&tx, task.id)?;
                 if closed.is_some() {
                     history.push(task);
@@ -332,6 +644,41 @@ impl Service {
             events,
         })
     }
+}
+
+/// Move a nominal byte boundary backward to the start of a UTF-8 codepoint.
+/// Adjacent chunks then meet without replacement characters or duplicated bytes.
+fn utf8_boundary(file: &mut std::fs::File, mut position: u64) -> std::io::Result<u64> {
+    let length = file.metadata()?.len();
+    if position >= length {
+        return Ok(length);
+    }
+    for _ in 0..3 {
+        file.seek(std::io::SeekFrom::Start(position))?;
+        let mut byte = [0];
+        file.read_exact(&mut byte)?;
+        if byte[0] & 0b1100_0000 != 0b1000_0000 {
+            break;
+        }
+        position = position.saturating_sub(1);
+    }
+    Ok(position)
+}
+
+pub(super) fn retained_artifact_path(
+    root: &std::path::Path,
+    relative: &str,
+) -> Option<std::path::PathBuf> {
+    let relative = std::path::Path::new(relative);
+    if relative
+        .components()
+        .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    let root = root.canonicalize().ok()?;
+    let path = root.join(relative).canonicalize().ok()?;
+    path.starts_with(&root).then_some(path)
 }
 
 fn revisions(db: &Connection, task: i64) -> Result<Vec<Revision>> {
@@ -383,7 +730,12 @@ fn revisions(db: &Connection, task: i64) -> Result<Vec<Revision>> {
     Ok(revisions)
 }
 
-fn attempts(db: &Connection, task: i64) -> Result<Vec<Attempt>> {
+fn attempts(
+    db: &Connection,
+    task: i64,
+    historical_logs: bool,
+    live_logs: bool,
+) -> Result<Vec<Attempt>> {
     let mut stmt = db.prepare_cached("SELECT a.id, a.revision, a.state, a.outcome, a.active_ms, a.wait_reason, a.resume_at_ms, (SELECT session_id FROM attempt_steps WHERE attempt_id = a.id AND role = 'execution' ORDER BY ordinal DESC LIMIT 1), (SELECT sum(cost_microusd) FROM model_calls WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id = a.id)), a.report, (SELECT prompt FROM questions WHERE attempt_id = a.id AND state = 'open' ORDER BY id DESC LIMIT 1) FROM attempts a WHERE task_id = ?1 ORDER BY number")?;
     let mut attempts = stmt
         .query_map([task], |r| {
@@ -404,11 +756,16 @@ fn attempts(db: &Connection, task: i64) -> Result<Vec<Attempt>> {
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    let latest = attempts.last().map(|attempt| attempt.id);
     for attempt in &mut attempts {
-        let mut output = db.prepare_cached("SELECT content FROM (SELECT sequence, content FROM attempt_output WHERE attempt_id = ?1 ORDER BY sequence DESC LIMIT 2000) ORDER BY sequence")?;
-        attempt.logs = output
-            .query_map([attempt.id], |r| r.get(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        // The live pane only follows the current attempt. Historical output is
+        // fetched in bounded pages when its evidence browser is opened.
+        if historical_logs || (live_logs && Some(attempt.id) == latest) {
+            let mut output = db.prepare_cached("SELECT content FROM (SELECT sequence, content FROM attempt_output WHERE attempt_id = ?1 ORDER BY sequence DESC LIMIT 2000) ORDER BY sequence")?;
+            attempt.logs = output
+                .query_map([attempt.id], |r| r.get(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+        }
         let mut steps = db.prepare_cached(
             "SELECT s.role, s.state, s.report, c.name, s.passed_count, s.failed_count, s.ignored_count
              FROM attempt_steps s LEFT JOIN project_checks c ON c.id=s.project_check_id

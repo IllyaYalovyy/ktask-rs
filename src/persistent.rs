@@ -118,7 +118,7 @@ impl App {
             .service
             .as_mut()
             .expect("SQLite mode")
-            .snapshot()
+            .snapshot_brief()
             .map_err(|e| e.to_string())?;
         let mut queue = snapshot
             .queue
@@ -786,29 +786,76 @@ impl App {
                 dialog.body = "Versioned TSV includes criteria, provider/model/effort and limits.\nThis is a definition export, not a history backup.".into();
                 dialog.fields[0] = Field::text("Destination", "tasks.tsv");
             }
-            DialogKind::Inspect { id, .. } => {
-                // The real read record has no simulated usage or answers.
+            DialogKind::Inspect {
+                id,
+                attempt,
+                section,
+                page,
+                chunk,
+                artifact,
+                match_sequence,
+                watermark,
+                ref excerpt,
+                ..
+            } => {
                 let task = &self.stored[&id];
-                dialog.body = dialog.body.replace(" (simulated)", "");
-                if let Some(start) = dialog.body.find("Total cost:")
-                    && let Some(end) = dialog.body[start..].find('\n')
-                {
-                    dialog.body.replace_range(
-                        start..start + end,
-                        &format!(
-                            "Recorded cost: {}",
-                            cost_label(
-                                task.attempts
-                                    .iter()
-                                    .filter_map(|a| a.cost_microusd)
-                                    .reduce(|a, b| a + b)
-                            )
+                let overview = task_overview(task);
+                if let Some(record) = task.attempts.get(attempt) {
+                    let service = self.service.as_ref().unwrap();
+                    let evidence = match section {
+                        0 => service.browse_output_at(
+                            record.id,
+                            page,
+                            chunk,
+                            match_sequence.and_then(|sequence| {
+                                dialog
+                                    .fields
+                                    .first()
+                                    .map(|field| (sequence, field.value.as_str()))
+                            }),
+                            watermark,
                         ),
+                        1 => service.browse_results(record.id),
+                        _ => self.instance.paths().map_err(Into::into).and_then(|paths| {
+                            service.browse_transcript(record.id, artifact, page, &paths.state)
+                        }),
+                    };
+                    dialog.body = format!(
+                        "Attempt {} / {} · #{} · revision {} · {}\nOutcome: {}\n{}{}{}",
+                        attempt + 1,
+                        task.attempts.len(),
+                        record.id,
+                        record.revision,
+                        record.state,
+                        record.outcome.as_deref().unwrap_or("No outcome recorded"),
+                        record
+                            .report
+                            .as_deref()
+                            .filter(|report| Some(*report) != record.outcome.as_deref())
+                            .map_or(String::new(), |report| format!("{report}\n")),
+                        if excerpt.is_empty() {
+                            String::new()
+                        } else {
+                            format!("Match: {excerpt}\n")
+                        },
+                        evidence.unwrap_or_else(|error| format!("Evidence unavailable: {error}"))
                     );
+                    let revision = task
+                        .revisions
+                        .iter()
+                        .find(|revision| revision.number == record.revision)
+                        .unwrap_or_else(|| task.definition());
+                    dialog.body.push_str(&format!(
+                        "\n\nAttempt inputs: revision {} · session {}\n{}\n\n{overview}",
+                        record.revision,
+                        record
+                            .session
+                            .map_or("not recorded".into(), |id| id.to_string()),
+                        revision_overview(revision),
+                    ));
+                } else {
+                    dialog.body = format!("{overview}\nNo attempt evidence recorded.");
                 }
-                dialog
-                    .body
-                    .push_str("\nOutput is recorded execution evidence, not simulation.");
             }
             DialogKind::Help => {
                 dialog.body = dialog.body.replace("All tasks, models, runs, and files are simulated.", "Changes save immediately. Run starts Codex in a background supervisor; Pause stops it.\nChecks, review and validation gate success. Review findings enter the normal fix loop, with up to ten repair rounds before critical findings need a decision.\nx abandons a waiting attempt without spending budget. Break down uses the planning model.");
@@ -1373,4 +1420,87 @@ fn project_task(task: &domain::Task) -> Result<model::Task, String> {
         needs_rate_limit: false,
         repairs: None,
     })
+}
+
+fn revision_overview(revision: &domain::Revision) -> String {
+    let definition = &revision.definition;
+    let models = domain::ROLES
+        .iter()
+        .zip(&definition.models)
+        .map(|(role, model)| {
+            model.as_ref().map_or_else(
+                || format!("{role}: unconfigured"),
+                |model| {
+                    format!(
+                        "{role}: {}/{} · effort {}",
+                        model.provider,
+                        model.model,
+                        model.effort.as_deref().unwrap_or("none")
+                    )
+                },
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "Revision {} · {}\nApproval: {} · {}\nGoal: {}\nAcceptance: {}\n{models}\nAttempt limit: {} · Time limit: {}",
+        revision.number,
+        definition.title,
+        revision.lifecycle,
+        revision.actor.as_deref().unwrap_or("not recorded"),
+        definition.goal,
+        definition
+            .criteria
+            .iter()
+            .enumerate()
+            .map(|(i, criterion)| format!("{}: {criterion}", i + 1))
+            .collect::<Vec<_>>()
+            .join("; "),
+        definition
+            .attempt_limit
+            .map_or("unlimited".into(), |limit| limit.to_string()),
+        definition
+            .timeout_ms
+            .map_or("unlimited".into(), |limit| format!("{limit} ms")),
+    )
+}
+
+fn task_overview(task: &domain::Task) -> String {
+    let mut body = format!(
+        "Task #{} · {} · {}\nCurrent task definition\n{}\nTask cost: {}",
+        task.id,
+        task.definition().definition.title,
+        task.status,
+        revision_overview(task.definition()),
+        cost_label(
+            task.attempts
+                .iter()
+                .filter_map(|a| a.cost_microusd)
+                .reduce(|a, b| a + b)
+        )
+    );
+    for revision in task.revisions.iter().filter(|revision| {
+        revision.lifecycle == "draft" && revision.number > task.definition().number
+    }) {
+        body.push_str(&format!(
+            "\nNewer draft revision {} (needs approval)\n{}",
+            revision.number,
+            revision_overview(revision)
+        ));
+    }
+    if let Some(reason) = &task.resolution_reason {
+        body.push_str(&format!(
+            "\nResolution: {} · {reason}",
+            task.resolved_by.as_deref().unwrap_or("unknown actor")
+        ));
+    }
+    for (id, title) in &task.follow_ups {
+        body.push_str(&format!("\nFollow-up #{id}: {title}"));
+    }
+    if let (Some(origin), Some(attempt)) = (task.origin_task_id, task.origin_attempt_id) {
+        body.push_str(&format!(
+            "\nFollow-up from task #{origin}, attempt #{attempt}"
+        ));
+    }
+    body
 }

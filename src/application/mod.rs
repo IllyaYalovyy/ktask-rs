@@ -1,5 +1,8 @@
 //! Shared application commands. Neither terminal state nor demo fixtures enter this layer.
 mod commands;
+mod evidence;
+mod output_text;
+pub use evidence::{EvidenceCursor, EvidenceMatch, EvidenceSearch};
 pub mod configuration;
 pub mod execution;
 pub mod preferences;

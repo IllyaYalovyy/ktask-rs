@@ -55,6 +55,16 @@ pub enum DialogKind {
     Inspect {
         id: usize,
         attempt: usize,
+        section: usize,
+        page: usize,
+        chunk: usize,
+        artifact: usize,
+        match_sequence: Option<i64>,
+        search_active: bool,
+        jump_to_match: bool,
+        watermark: i64,
+        search: crate::application::EvidenceCursor,
+        excerpt: String,
     },
 }
 
@@ -166,6 +176,33 @@ impl Dialog {
         self.fields[index].value.trim()
     }
     pub fn key(&mut self, key: KeyEvent) {
+        if matches!(
+            self.kind,
+            DialogKind::Inspect {
+                search_active: false,
+                ..
+            }
+        ) {
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.scroll = self.scroll.saturating_sub(1);
+                    return;
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.scroll = (self.scroll + 1).min(self.max_scroll);
+                    return;
+                }
+                KeyCode::Home => {
+                    self.scroll = 0;
+                    return;
+                }
+                KeyCode::End => {
+                    self.scroll = self.max_scroll;
+                    return;
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Tab | KeyCode::Down if !self.fields.is_empty() => {
                 self.focus = (self.focus + 1) % self.fields.len()
@@ -190,6 +227,17 @@ impl Dialog {
                     if field.value != before {
                         self.error.clear();
                         self.scroll = 0;
+                        if let DialogKind::Inspect {
+                            match_sequence,
+                            search,
+                            excerpt,
+                            ..
+                        } = &mut self.kind
+                        {
+                            *match_sequence = None;
+                            *search = Default::default();
+                            excerpt.clear();
+                        }
                     }
                 }
             }
@@ -221,6 +269,17 @@ impl Dialog {
         if !text.is_empty() {
             self.error.clear();
             self.scroll = 0;
+            if let DialogKind::Inspect {
+                match_sequence,
+                search,
+                excerpt,
+                ..
+            } = &mut self.kind
+            {
+                *match_sequence = None;
+                *search = Default::default();
+                excerpt.clear();
+            }
         }
         if let Some(field) = self
             .fields

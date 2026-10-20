@@ -1194,16 +1194,30 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     let [body, fields, error, actions] = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(dialog.fields.len().min(dialog.field_capacity) as u16 * 2),
-        Constraint::Length(2),
-        Constraint::Length(if matches!(dialog.kind, DialogKind::Readiness) {
-            3
+        Constraint::Length(if matches!(dialog.kind, DialogKind::Inspect { .. }) {
+            1
         } else {
             2
         }),
+        Constraint::Length(
+            if matches!(
+                dialog.kind,
+                DialogKind::Inspect { .. } | DialogKind::Readiness
+            ) {
+                3
+            } else {
+                2
+            },
+        ),
     ])
     .areas(inner);
-    dialog.max_scroll = lines.len().saturating_sub(body.height as usize);
-    dialog.scroll = dialog.scroll.min(dialog.max_scroll);
+    position_dialog(
+        &mut dialog,
+        &body_text,
+        &lines,
+        body.height as usize,
+        popup.width.saturating_sub(2) as usize,
+    );
     frame.render_widget(
         Paragraph::new(
             lines
@@ -1220,7 +1234,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     let hint = if dialog.error.is_empty() && position.is_some() {
         "Alt-Up/Down: position · Ctrl-S: apply · Esc: cancel"
     } else if dialog.error.is_empty() && matches!(dialog.kind, DialogKind::Inspect { .. }) {
-        "Wheel / PgUp / PgDn: scroll · Esc: close · [ / ]: attempts"
+        "[ ] attempt · ← → section · < > page · { } chunk · / find · r refresh"
     } else if dialog.error.is_empty() && dialog.read_only() {
         "Wheel / PgUp / PgDn: scroll · Esc: close"
     } else if dialog.error.is_empty() {
@@ -1262,6 +1276,16 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         controls.extend([
             ("Prev", Action::PreviousAttempt),
             ("Next", Action::NextAttempt),
+            ("Section -", Action::EvidenceSection(-1)),
+            ("Section +", Action::EvidenceSection(1)),
+            ("Older", Action::EvidencePage(1)),
+            ("Newer", Action::EvidencePage(-1)),
+            ("Chunk -", Action::EvidenceChunk(-1)),
+            ("Chunk +", Action::EvidenceChunk(1)),
+            ("Check -", Action::EvidenceArtifact(-1)),
+            ("Check +", Action::EvidenceArtifact(1)),
+            ("Find", Action::FindEvidence),
+            ("Refresh", Action::RefreshEvidence),
         ]);
     }
     if matches!(dialog.kind, DialogKind::Readiness) {
@@ -1269,6 +1293,60 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     buttons(frame, app, actions, &controls, true);
     app.dialog = Some(dialog);
+}
+
+fn position_dialog(
+    dialog: &mut crate::dialog::Dialog,
+    text: &str,
+    lines: &[String],
+    height: usize,
+    width: usize,
+) {
+    dialog.max_scroll = lines.len().saturating_sub(height);
+    if let DialogKind::Inspect {
+        match_sequence: Some(sequence),
+        jump_to_match: true,
+        ..
+    } = &mut dialog.kind
+    {
+        let marker = format!("#{sequence} [");
+        let excerpt = format!("Match in #{sequence}: ");
+        let content = text
+            .find("Match: ")
+            .map(|start| start + "Match: ".len())
+            .or_else(|| text.find(&excerpt).map(|start| start + excerpt.len()))
+            .or_else(|| {
+                text.find(&marker)
+                    .and_then(|start| text[start..].find("] ").map(|end| start + end + 2))
+            });
+        let query = dialog
+            .fields
+            .first()
+            .map(|field| field.value.trim())
+            .unwrap_or("");
+        let found = content.and_then(|start| {
+            text[start..]
+                .to_ascii_lowercase()
+                .find(&query.to_ascii_lowercase())
+                .map(|offset| start + offset)
+        });
+        let index = found
+            .and_then(|at| {
+                let mut marked = text.to_owned();
+                marked.insert(at, '\u{0001}');
+                wrapped(&marked, width)
+                    .iter()
+                    .position(|line| line.contains('\u{0001}'))
+            })
+            .or_else(|| lines.iter().position(|line| line.contains(&marker)));
+        if let Some(index) = index {
+            dialog.scroll = index.min(dialog.max_scroll);
+        }
+        if let DialogKind::Inspect { jump_to_match, .. } = &mut dialog.kind {
+            *jump_to_match = false;
+        }
+    }
+    dialog.scroll = dialog.scroll.min(dialog.max_scroll);
 }
 
 fn readiness_controls(app: &App) -> Vec<(&'static str, Action)> {
