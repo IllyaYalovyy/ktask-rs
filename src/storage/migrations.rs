@@ -131,7 +131,23 @@ fn schema_objects(connection: &Connection) -> rusqlite::Result<Vec<Object>> {
          ORDER BY type, name",
     )?;
     statement
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .query_map([], |row| {
+            let kind: String = row.get(0)?;
+            let name: String = row.get(1)?;
+            let mut sql: String = row.get(2)?;
+            // SQLite can quote the table name when rewriting CREATE TABLE.
+            // Normalize only that declaration; constraints, literals and all
+            // other schema text must still match the recorded definition.
+            if kind == "table" {
+                let prefix = format!("CREATE TABLE {name}");
+                if let Some(tail) = sql.strip_prefix(&prefix)
+                    && tail.starts_with(|c: char| c.is_whitespace() || c == '(')
+                {
+                    sql = format!("CREATE TABLE {}{tail}", quote(&name));
+                }
+            }
+            Ok((kind, name, sql))
+        })?
         .collect()
 }
 

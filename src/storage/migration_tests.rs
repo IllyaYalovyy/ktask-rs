@@ -420,3 +420,63 @@ fn table_rebuild_keeps_referenced_data_and_invalid_rebuild_rolls_back() -> Resul
     assert!(db.execute("DELETE FROM projects", []).is_err());
     Ok(())
 }
+
+#[test]
+fn v1_accepts_sqlite_quoted_table_declaration_but_rejects_changed_constraints() -> Result {
+    for changed_constraint in [false, true] {
+        let scratch = sandbox()?;
+        let recorded = ALL[0].sql.replace(
+            "CREATE INDEX ix_revisions_ready ON task_revisions(task_id, lifecycle, revision DESC);\n",
+            "",
+        );
+        let mut live = recorded.replace(
+            "CREATE TABLE task_revisions (",
+            "CREATE TABLE \"task_revisions\" (",
+        );
+        if changed_constraint {
+            live = live.replace("CHECK (revision > 0)", "CHECK (revision > 1)");
+        }
+        let mut db = Connection::open(scratch.path().join("ktask.sqlite3"))?;
+        apply(
+            &mut db,
+            &[Migration {
+                name: ALL[0].name,
+                sql: Box::leak(live.into_boxed_str()),
+            }],
+        )?;
+        // The original ledger is unquoted; SQLite's rebuilt table declaration is quoted.
+        db.execute("UPDATE schema_migrations SET sql = ?1", [&recorded])?;
+        db.execute("INSERT INTO projects(name, root_path, created_at_ms) VALUES ('retained', x'2f776f726b', 1)", [])?;
+        let result = apply(&mut db, ALL);
+        if changed_constraint {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("live schema does not match")
+            );
+            assert_eq!(
+                db.query_row("SELECT sql FROM schema_migrations", [], |r| r
+                    .get::<_, String>(0))?,
+                recorded
+            );
+        } else {
+            result?;
+            assert_eq!(
+                db.query_row("SELECT sql FROM schema_migrations", [], |r| r
+                    .get::<_, String>(0))?,
+                ALL[0].sql
+            );
+            assert!(
+                db.prepare("SELECT 1 FROM sqlite_schema WHERE name='ix_revisions_ready'")?
+                    .exists([])?
+            );
+        }
+        assert_eq!(count(&db, "projects"), 1);
+        assert_eq!(
+            db.query_row("SELECT name FROM projects", [], |r| r.get::<_, String>(0))?,
+            "retained"
+        );
+    }
+    Ok(())
+}
