@@ -765,7 +765,11 @@ impl App {
                     &["Ready", "Needs review"],
                     if ready { "Ready" } else { "Needs review" },
                 ));
-                dialog.body = "Save commits a new revision to SQLite. Earlier attempts remain unchanged.\nNeeds review creates a draft; any previous ready revision stays usable.".into();
+                dialog.body = if id.is_none() {
+                    "Save creates a task in SQLite. Blank execution fields use project defaults; with a new model, blank effort means none.\nNeeds review creates a draft."
+                } else {
+                    "Save commits a new revision to SQLite. Earlier attempts remain unchanged.\nNeeds review creates a draft; any previous ready revision stays usable."
+                }.into();
             }
             DialogKind::Models(id) => {
                 let task = &self.stored[&id];
@@ -1043,7 +1047,17 @@ impl App {
                 } else {
                     domain::Kind::Ai
                 };
-                let ready = dialog.value(if *insert { 5 } else { 4 }) == "Ready";
+                let ready = if id.is_some() {
+                    dialog.value(if *insert { 5 } else { 4 }) == "Ready"
+                } else {
+                    let model_field = if *insert { 5 } else { 4 };
+                    set_new_task_execution_model(
+                        &mut definition,
+                        dialog.value(model_field),
+                        dialog.value(model_field + 1),
+                    )?;
+                    dialog.value(model_field + 2) == "Ready"
+                };
                 let selected = if let Some(id) = id {
                     self.service
                         .as_mut()
@@ -1199,6 +1213,24 @@ impl App {
         }
         Ok(true)
     }
+}
+
+fn set_new_task_execution_model(
+    definition: &mut Definition,
+    identifier: &str,
+    effort: &str,
+) -> Result<(), String> {
+    let identifier = identifier.trim();
+    let effort = effort.trim();
+    if !identifier.is_empty() {
+        definition.models[0] = ModelConfig::from_fields(identifier, effort)?;
+    } else if !effort.is_empty() {
+        let model = definition.models[0]
+            .as_mut()
+            .ok_or("Set an execution provider/model before setting effort")?;
+        model.effort = Some(effort.to_owned());
+    }
+    Ok(())
 }
 
 fn before_id(text: &str) -> Result<Option<i64>, String> {
@@ -1551,4 +1583,68 @@ fn task_overview(task: &domain::Task) -> String {
         ));
     }
     body
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_task_execution_override_keeps_other_role_defaults() {
+        let default = Some(ModelConfig {
+            provider: "codex".into(),
+            model: "default".into(),
+            effort: Some("medium".into()),
+        });
+        let mut definition = Definition {
+            title: "Dummy task".into(),
+            goal: "Exercise model selection".into(),
+            kind: domain::Kind::Ai,
+            criteria: vec!["Saved".into()],
+            models: std::array::from_fn(|_| default.clone()),
+            attempt_limit: Some(3),
+            timeout_ms: None,
+            stage_timeout_ms: None,
+        };
+        set_new_task_execution_model(&mut definition, "dummy/worker", "high").unwrap();
+        assert_eq!(
+            definition.models[0],
+            Some(ModelConfig {
+                provider: "dummy".into(),
+                model: "worker".into(),
+                effort: Some("high".into()),
+            })
+        );
+        assert_eq!(
+            definition.models[1..],
+            [default.clone(), default.clone(), default]
+        );
+        assert!(set_new_task_execution_model(&mut definition, "worker", "high").is_err());
+    }
+
+    #[test]
+    fn whitespace_execution_fields_keep_configured_default_and_trim_effort() {
+        let default = Some(ModelConfig {
+            provider: "dummy".into(),
+            model: "default".into(),
+            effort: Some("medium".into()),
+        });
+        let mut definition = Definition {
+            title: "Dummy task".into(),
+            goal: "Use configured model".into(),
+            kind: domain::Kind::Ai,
+            criteria: vec!["Saved".into()],
+            models: std::array::from_fn(|_| default.clone()),
+            attempt_limit: Some(3),
+            timeout_ms: None,
+            stage_timeout_ms: None,
+        };
+        set_new_task_execution_model(&mut definition, "  \t ", " \t ").unwrap();
+        assert_eq!(definition.models[0], default);
+        set_new_task_execution_model(&mut definition, " \t ", "  high \t").unwrap();
+        assert_eq!(
+            definition.models[0].as_ref().unwrap().effort.as_deref(),
+            Some("high")
+        );
+    }
 }

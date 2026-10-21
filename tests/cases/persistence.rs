@@ -3107,6 +3107,166 @@ fn real_tui_saves_across_kill_restart_and_never_simulates_real_tasks() -> Result
 }
 
 #[test]
+fn queue_add_sets_execution_model_by_keyboard_and_mouse() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, 100, 30)?;
+    t.screen("empty current", |s| s.contains("No current task."))?;
+
+    let form = key(&mut t, "a", "Execution provider/model")?;
+    println!("KEYBOARD NEW TASK FORM\n{form}");
+    let saved = key(
+        &mut t,
+        "Keyboard model task\tGoal\tCriterion\t\tdummy/worker\thigh\x13",
+        "Keyboard model task",
+    )?;
+    println!("KEYBOARD MODEL SAVED\n{saved}");
+
+    t.click("2 Queue")?;
+    t.screen("queue", |s| s.contains("Keyboard model task"))?;
+    t.click("a Add")?;
+    let form = t.screen("mouse new task form", |s| {
+        s.contains("Execution provider/model")
+    })?;
+    println!("MOUSE NEW TASK FORM\n{form}");
+    t.click("Title")?;
+    key(&mut t, "Mouse model task", "Mouse model task")?;
+    t.click("Goal")?;
+    key(&mut t, "Goal", "Goal")?;
+    t.click("Acceptance check")?;
+    key(&mut t, "Criterion", "Criterion")?;
+    t.click("Execution provider/model")?;
+    key(&mut t, "dummy/mouse", "dummy/mouse")?;
+    t.click("Execution effort")?;
+    key(&mut t, "low", "low")?;
+    t.click("Apply")?;
+    let saved = t.screen("mouse model saved", |s| s.contains("Mouse model task"))?;
+    println!("MOUSE MODEL SAVED\n{saved}");
+    let inserted = key(
+        &mut t,
+        "iInserted model task\tGoal\tCriterion\t\t1\tdummy/insert\tmax\x13",
+        "Inserted model task",
+    )?;
+    println!("INSERTED MODEL SAVED\n{inserted}");
+    t.click("i Insert")?;
+    let form = t.screen("mouse insert task form", |s| {
+        s.contains("Before task ID") && s.contains("Execution provider/model")
+    })?;
+    println!("MOUSE INSERT TASK FORM\n{form}");
+    t.click("Title")?;
+    key(&mut t, "Mouse inserted task", "Mouse inserted task")?;
+    t.click("Goal")?;
+    key(&mut t, "Goal", "Goal")?;
+    t.click("Acceptance check")?;
+    key(&mut t, "Criterion", "Criterion")?;
+    t.click("Before task ID")?;
+    key(&mut t, "2", "2")?;
+    t.click("Execution provider/model")?;
+    key(&mut t, "dummy/mouse-insert", "dummy/mouse-insert")?;
+    t.click("Execution effort")?;
+    key(&mut t, "medium", "medium")?;
+    t.click("Apply")?;
+    let inserted = t.screen("mouse inserted model saved", |s| {
+        s.contains("Mouse inserted task") && s.contains("dummy/mouse-insert")
+    })?;
+    println!("MOUSE INSERTED MODEL SAVED\n{inserted}");
+    quit(&mut t)?;
+
+    let snapshot = service(root)?.snapshot()?;
+    assert_eq!(snapshot.queue.len(), 4);
+    for (task, model, effort) in [
+        (&snapshot.queue[0], "insert", "max"),
+        (&snapshot.queue[1], "worker", "high"),
+        (&snapshot.queue[2], "mouse-insert", "medium"),
+        (&snapshot.queue[3], "mouse", "low"),
+    ] {
+        assert_eq!(task.revisions.len(), 1);
+        assert_eq!(
+            task.definition().definition.models[0]
+                .as_ref()
+                .unwrap()
+                .provider,
+            "dummy"
+        );
+        assert_eq!(
+            task.definition().definition.models[0]
+                .as_ref()
+                .unwrap()
+                .model,
+            model
+        );
+        assert_eq!(
+            task.definition().definition.models[0]
+                .as_ref()
+                .unwrap()
+                .effort
+                .as_deref(),
+            Some(effort)
+        );
+        assert!(
+            task.definition().definition.models[1..]
+                .iter()
+                .all(Option::is_none)
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn queue_add_whitespace_fields_keep_project_model_default() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let mut writer = service(root)?;
+    let old = writer.project_defaults()?;
+    let mut defaults = old.clone();
+    defaults[1] = Some(ModelConfig {
+        provider: "dummy".into(),
+        model: "default".into(),
+        effort: Some("medium".into()),
+    });
+    writer.save_defaults(&old, &defaults)?;
+    drop(writer);
+
+    let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, 100, 30)?;
+    let form = key(&mut t, "a", "Execution provider/model")?;
+    println!("WHITESPACE DEFAULT FORM\n{form}");
+    let saved = key(
+        &mut t,
+        "Default whitespace task\tGoal\tCriterion\t\t  \t  \x13",
+        "Default whitespace task",
+    )?;
+    println!("WHITESPACE DEFAULT SAVED\n{saved}");
+    let models = key(&mut t, "c", "dummy/default")?;
+    println!("WHITESPACE DEFAULT MODELS\n{models}");
+    key(&mut t, "\x1b", "Default whitespace task")?;
+    let form = key(&mut t, "a", "Execution provider/model")?;
+    println!("WHITESPACE EFFORT FORM\n{form}");
+    let saved = key(
+        &mut t,
+        "Trimmed effort task\tGoal\tCriterion\t\t  \t  high  \x13",
+        "Trimmed effort task",
+    )?;
+    println!("TRIMMED EFFORT SAVED\n{saved}");
+    quit(&mut t)?;
+
+    let snapshot = service(root)?.snapshot()?;
+    assert_eq!(snapshot.queue.len(), 2);
+    assert_eq!(
+        snapshot.queue[0].definition().definition.models[0],
+        defaults[1]
+    );
+    assert_eq!(
+        snapshot.queue[1].definition().definition.models[0]
+            .as_ref()
+            .unwrap()
+            .effort
+            .as_deref(),
+        Some("high")
+    );
+    Ok(())
+}
+
+#[test]
 fn real_tui_mouse_approval_history_delete_undo_and_all_views() -> Result {
     let scratch = support::sandbox()?;
     let mut s = service(scratch.path())?;

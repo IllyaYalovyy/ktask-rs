@@ -533,6 +533,13 @@ impl App {
         if insert {
             fields.push(Field::text("Before task ID", ""));
         }
+        if !edit {
+            fields.push(Field::text(
+                "Execution provider/model (blank = default)",
+                "",
+            ));
+            fields.push(Field::text("Execution effort (optional)", ""));
+        }
         self.dialog = Some(Dialog::new(
             DialogKind::Task {
                 id: task.map(|t| t.id),
@@ -545,7 +552,7 @@ impl App {
             } else {
                 "Add task"
             },
-            "Title, goal, and acceptance check are required.\nSave applies changes; cancel keeps the original.",
+            "Title, goal, and acceptance check are required.\nBlank execution fields use defaults; with a new model, blank effort means none.",
             fields,
         ));
     }
@@ -1453,12 +1460,22 @@ impl App {
             } else {
                 self.queue.len()
             };
+            let model_field = if insert { 5 } else { 4 };
             let id = self.next_id;
             self.next_id += 1;
             let mut task = Task::pending(id, dialog.value(0));
             task.revisions[0].goal = dialog.value(1).into();
             task.revisions[0].check = dialog.value(2).into();
             task.revisions[0].kind = kind;
+            if !dialog.value(model_field).is_empty() {
+                task.revisions[0].settings.models[0].name = dialog.value(model_field).into();
+                task.revisions[0].settings.models[0].effort =
+                    (!dialog.value(model_field + 1).is_empty())
+                        .then(|| dialog.value(model_field + 1).into());
+            } else if !dialog.value(model_field + 1).is_empty() {
+                task.revisions[0].settings.models[0].effort =
+                    Some(dialog.value(model_field + 1).into());
+            }
             self.queue.insert(position, task);
             id
         };
