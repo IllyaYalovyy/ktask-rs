@@ -962,6 +962,7 @@ impl App {
                 | DialogKind::ProjectCheck { .. }
                 | DialogKind::Preferences(_)
                 | DialogKind::Storage(_)
+                | DialogKind::StorageConfirm(_)
         ) {
             return self.save_project_config(dialog);
         }

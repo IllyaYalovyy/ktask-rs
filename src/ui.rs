@@ -1455,6 +1455,22 @@ fn draw_search(frame: &mut Frame, app: &mut App, toolbar: Rect, actions: Rect) {
     );
 }
 
+fn dialog_hint(dialog: &crate::dialog::Dialog, has_position: bool) -> &str {
+    if !dialog.error.is_empty() {
+        &dialog.error
+    } else if has_position {
+        "Alt-Up/Down: position · Ctrl-S: apply · Esc: cancel"
+    } else if matches!(dialog.kind, DialogKind::Inspect { .. }) {
+        "[ ] attempt · s summary · v reviews · f failures · n/p step · o output"
+    } else if dialog.read_only() {
+        "Wheel / PgUp / PgDn: scroll · Esc: close"
+    } else if matches!(dialog.kind, DialogKind::StorageConfirm(_)) {
+        "Enter / Ctrl-S: delete evidence · Esc: cancel"
+    } else {
+        "Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply"
+    }
+}
+
 fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     app.hits.clear();
     app.selection.begin_frame();
@@ -1536,17 +1552,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     );
     app.selection.zone(body);
     draw_fields(frame, app, &dialog, fields);
-    let hint = if dialog.error.is_empty() && position.is_some() {
-        "Alt-Up/Down: position · Ctrl-S: apply · Esc: cancel"
-    } else if dialog.error.is_empty() && matches!(dialog.kind, DialogKind::Inspect { .. }) {
-        "[ ] attempt · s summary · v reviews · f failures · n/p step · o output"
-    } else if dialog.error.is_empty() && dialog.read_only() {
-        "Wheel / PgUp / PgDn: scroll · Esc: close"
-    } else if dialog.error.is_empty() {
-        "Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply"
-    } else {
-        &dialog.error
-    };
+    let hint = dialog_hint(&dialog, position.is_some());
     frame.render_widget(
         Paragraph::new(hint)
             .wrap(Wrap { trim: false })
@@ -1560,6 +1566,11 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         vec![("Cancel", Action::Cancel)]
     } else if dialog.read_only() {
         vec![("Close", Action::Cancel)]
+    } else if matches!(dialog.kind, DialogKind::StorageConfirm(_)) {
+        vec![
+            ("Delete evidence", Action::Submit),
+            ("Cancel", Action::Cancel),
+        ]
     } else {
         vec![("Apply", Action::Submit), ("Cancel", Action::Cancel)]
     };

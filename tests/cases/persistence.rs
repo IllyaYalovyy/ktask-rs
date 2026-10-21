@@ -1729,6 +1729,70 @@ fn failed_task(root: &Path) -> Result<(i64, i64)> {
     Ok((id, run.attempt))
 }
 
+fn confirm_storage_cleanup_mouse(
+    terminal: &mut Terminal,
+    root: &Path,
+    task_id: i64,
+    attempt_id: i64,
+    artifact: &Path,
+) -> Result {
+    terminal.click("Apply")?;
+    let confirmation = terminal.screen("mouse irreversible cleanup confirmation", |s| {
+        s.contains("Delete stored evidence?")
+            && s.contains("This cannot be undone")
+            && s.contains("Delete evidence")
+            && s.contains("Enter / Ctrl-S: delete evidence")
+            && s.contains(&format!("Task #{task_id} attempt #{attempt_id}"))
+    })?;
+    println!("RETENTION MOUSE CONFIRMATION SCREEN\n{confirmation}");
+    assert!(artifact.exists());
+    terminal.click("Cancel")?;
+    terminal.screen("mouse cleanup cancelled", |s| s.contains("k Storage"))?;
+    assert!(artifact.exists());
+    assert!(!service(root)?.task(task_id)?.unwrap().attempts[0].output_pruned);
+    terminal.click("k Storage")?;
+    terminal.screen("mouse cleanup preview reopened", |s| {
+        s.contains(&format!("Task #{task_id} attempt #{attempt_id}"))
+    })?;
+    terminal.click("Save policy")?;
+    terminal.click("Apply")?;
+    terminal.screen("mouse cleanup reconfirmed", |s| {
+        s.contains("Delete stored evidence?")
+    })?;
+    terminal.click("Delete evidence")?;
+    Ok(())
+}
+
+fn confirm_storage_cleanup_keyboard(
+    terminal: &mut Terminal,
+    root: &Path,
+    task_id: i64,
+    attempt_id: i64,
+) -> Result {
+    terminal.send("\x13")?;
+    let confirmation = terminal.screen("keyboard cleanup confirmation", |s| {
+        s.contains("Delete stored evidence?")
+            && s.contains("This cannot be undone")
+            && s.contains("Delete evidence")
+            && s.contains("Enter / Ctrl-S: delete evidence")
+    })?;
+    println!("RETENTION KEYBOARD CONFIRMATION SCREEN\n{confirmation}");
+    assert!(!service(root)?.task(task_id)?.unwrap().attempts[0].output_pruned);
+    terminal.send("\x1b")?;
+    terminal.screen("keyboard cleanup cancelled", |s| s.contains("k Storage"))?;
+    assert!(!service(root)?.task(task_id)?.unwrap().attempts[0].output_pruned);
+    terminal.send("k")?;
+    terminal.screen("keyboard cleanup preview reopened", |s| {
+        s.contains(&format!("Task #{task_id} attempt #{attempt_id}"))
+    })?;
+    terminal.send("\t \x13")?;
+    terminal.screen("keyboard cleanup reconfirmed", |s| {
+        s.contains("Delete stored evidence?")
+    })?;
+    terminal.send("\x13")?;
+    Ok(())
+}
+
 #[test]
 fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
     use std::os::unix::fs::symlink;
@@ -1846,7 +1910,13 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
     t.click("Save policy")?;
     let apply_choice = t.screen("Apply preview choice", |s| s.contains("Apply preview"))?;
     println!("RETENTION MOUSE CHOICE SCREEN\n{apply_choice}");
-    t.click("Apply")?;
+    confirm_storage_cleanup_mouse(
+        &mut t,
+        root,
+        closed_id,
+        closed_attempt,
+        &artifact_dir.join("step-777.log"),
+    )?;
     let applied = t.screen("Cleaned one attempt", |s| s.contains("Cleaned 1 attempt"))?;
     println!("RETENTION APPLIED SCREEN\n{applied}");
     t.click("k Storage")?;
@@ -1906,7 +1976,7 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
     let keyboard_choice =
         keyboard.screen("keyboard apply choice", |s| s.contains("< Apply preview >"))?;
     println!("RETENTION KEYBOARD CHOICE SCREEN\n{keyboard_choice}");
-    keyboard.send("\x13")?;
+    confirm_storage_cleanup_keyboard(&mut keyboard, root, unresolved_id, unresolved_attempt)?;
     let keyboard_applied = keyboard.screen("keyboard cleanup applied", |s| {
         s.contains("Cleaned 1 attempt")
     })?;

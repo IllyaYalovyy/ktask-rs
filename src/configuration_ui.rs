@@ -185,24 +185,51 @@ impl App {
                             "Save the changed policy, then reopen Storage to preview it".into()
                         );
                     }
-                    let applied = self
-                        .service
-                        .as_mut()
-                        .unwrap()
-                        .cleanup_storage(preview)
-                        .map_err(|e| e.to_string())?;
-                    self.message(format!(
-                        "Cleaned {} attempt(s), {} bytes",
-                        applied.candidates.len(),
-                        applied.reclaimable_bytes
-                    ));
-                    return Ok(true);
+                    let body = format!(
+                        "Delete {} bytes of output and transcripts from {} completed attempt(s)?\nThis cannot be undone. Task history stays. Cancel keeps the evidence.\n\n{}",
+                        preview.reclaimable_bytes,
+                        preview.candidates.len(),
+                        preview
+                            .candidates
+                            .iter()
+                            .map(|candidate| format!(
+                                "Task #{} attempt #{}: {} output + {} artifact bytes",
+                                candidate.task_id,
+                                candidate.attempt_id,
+                                candidate.output_bytes,
+                                candidate.artifact_bytes
+                            ))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    );
+                    dialog.kind = DialogKind::StorageConfirm(preview.clone());
+                    dialog.title = "Delete stored evidence?".into();
+                    dialog.body = body;
+                    dialog.fields.clear();
+                    dialog.focus = 0;
+                    dialog.scroll = 0;
+                    dialog.error.clear();
+                    return Ok(false);
                 }
                 self.service
                     .as_mut()
                     .unwrap()
                     .set_retention(preview.policy, days)
                     .map_err(|e| e.to_string())?;
+            }
+            DialogKind::StorageConfirm(preview) => {
+                let applied = self
+                    .service
+                    .as_mut()
+                    .unwrap()
+                    .cleanup_storage(preview)
+                    .map_err(|e| e.to_string())?;
+                self.message(format!(
+                    "Cleaned {} attempt(s), {} bytes",
+                    applied.candidates.len(),
+                    applied.reclaimable_bytes
+                ));
+                return Ok(true);
             }
             DialogKind::ProjectModels(expected) => {
                 let mut values: Defaults = std::array::from_fn(|_| None);

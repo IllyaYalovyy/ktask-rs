@@ -1568,6 +1568,7 @@ impl App {
             | DialogKind::ProjectCheck { .. }
             | DialogKind::Preferences(_)
             | DialogKind::Storage(_)
+            | DialogKind::StorageConfirm(_)
             | DialogKind::StoredImport(_)
             | DialogKind::FileOverwrite { .. } => {
                 return Err("Disk operations require SQLite mode".into());
