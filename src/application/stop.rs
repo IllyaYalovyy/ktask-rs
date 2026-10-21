@@ -6,6 +6,8 @@ use super::Task;
 const INFRASTRUCTURE: [&str; 4] = ["transport", "protocol", "environment", "timeout"];
 /// Provider/environment failures in a row before another retry is pointless.
 const INFRASTRUCTURE_STREAK: usize = 3;
+/// How the supervisor reports an agent turn that ran out of stage time.
+pub const STAGE_LIMIT: &str = "Stage time limit reached";
 /// Failed attempts in a row before stopping, even when the attempt budget is unlimited.
 const FAILURE_STREAK: usize = 5;
 
@@ -53,14 +55,10 @@ pub fn unresolvable(task: &Task) -> Option<Stop> {
     } else if let Some(limit) = definition.timeout_ms.filter(|&limit| active_ms >= limit) {
         (
             format!(
-                "The task's active time limit ({}) is used up, so a retry would stop at once.",
-                if limit < 1000 {
-                    format!("{limit} ms")
-                } else {
-                    crate::clock::format_remaining(limit / 1000)
-                }
+                "The task time limit ({}, all attempts) is used up, so a retry would stop at once.",
+                super::limits::label(Some(limit))
             ),
-            "c Models: raise or clear the time limit, then t Retry",
+            "c Models: raise or switch off the task time limit, then t Retry",
         )
     } else if let Some(limit) = definition
         .attempt_limit
@@ -69,6 +67,24 @@ pub fn unresolvable(task: &Task) -> Option<Stop> {
         (
             format!("All {limit} coding attempts are used."),
             "c Models: raise the attempt limit, or d Remediate, then t Retry",
+        )
+    } else if failed_in_a_row(true) >= INFRASTRUCTURE_STREAK
+        && task
+            .attempts
+            .iter()
+            .rev()
+            .take(INFRASTRUCTURE_STREAK)
+            .all(|a| {
+                a.outcome
+                    .as_deref()
+                    .is_some_and(|o| o.starts_with(STAGE_LIMIT))
+            })
+    {
+        (
+            format!(
+                "Agents hit the stage time limit {INFRASTRUCTURE_STREAK} attempts in a row without returning a result."
+            ),
+            "c Models: raise or switch off the stage time limit, then t Retry",
         )
     } else if failed_in_a_row(true) >= INFRASTRUCTURE_STREAK {
         (

@@ -51,7 +51,7 @@ pub fn definition(d: &Definition) -> Value {
         .zip(&d.models)
         .map(|(role, model)| ((*role).into(), json!(model)))
         .collect();
-    json!({"title":d.title, "goal":d.goal, "kind":d.kind, "criteria":d.criteria, "models":models, "attempt_limit":d.attempt_limit, "timeout_ms":d.timeout_ms})
+    json!({"title":d.title, "goal":d.goal, "kind":d.kind, "criteria":d.criteria, "models":models, "attempt_limit":d.attempt_limit, "timeout_ms":d.timeout_ms, "stage_timeout_ms":d.stage_timeout_ms})
 }
 pub fn summary(task: &Task) -> Value {
     let selected = task.definition();
@@ -113,9 +113,10 @@ fn task_text(task: &Task) -> String {
         ));
     }
     text.push_str(&format!(
-        "Attempt limit: {} · task active timeout ms: {}\n",
+        "Attempt limit: {} · task limit: {} · stage limit: {}\n",
         limit(d.attempt_limit),
-        limit(d.timeout_ms)
+        crate::application::limits::label(d.timeout_ms),
+        crate::application::limits::label(d.stage_timeout_ms)
     ));
     for r in &task.revisions {
         text.push_str(&format!(

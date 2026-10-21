@@ -391,7 +391,7 @@ fn task_override_and_revision_escalation_do_not_rewrite_attempt_failure() -> Res
     let p = project(db, "retry")?;
     let id = task(db, p, "5")?;
     db.execute("INSERT INTO attempts(project_id, task_id, revision, number, state, execution_token, started_at_ms, finished_at_ms, outcome, failure_category) VALUES (?1, ?2, 1, 1, 'failed', 'failed-attempt', 100, 110, 'Tests failed', 'check')", params![p, id])?;
-    db.execute("INSERT INTO task_revisions SELECT task_id, 2, 'ready', kind, title, goal, 'Increase execution effort', 'ai', 'remediator', NULL, NULL, 120, 120, 'ai', 'remediator' FROM task_revisions WHERE task_id = ?1", [id])?;
+    db.execute("INSERT INTO task_revisions SELECT task_id, 2, 'ready', kind, title, goal, 'Increase execution effort', 'ai', 'remediator', NULL, NULL, NULL, 120, 120, 'ai', 'remediator' FROM task_revisions WHERE task_id = ?1", [id])?;
     db.execute("INSERT INTO revision_models SELECT task_id, 2, role, provider, 'stronger-model', 'high' FROM revision_models WHERE task_id = ?1 AND revision = 1", [id])?;
     assert_eq!(scalar(db, "SELECT revision FROM current_tasks")?, 2);
     assert_eq!(scalar(db, "SELECT revision FROM attempts")?, 1);

@@ -53,8 +53,10 @@ A rate limit waits until the provider's named reset time plus one minute; withou
 off 1, 2, 4, then every 8 minutes. Limits never fail the task. Provider transport errors before
 the next completed turn count as the same outage; a completed turn resets the streak.
 
-Each revision has attempt_limit and attempt_timeout_ms (positive, NULL = unlimited). New,
-imported, planned and repair tasks default to unlimited active time.
+Each revision has attempt_limit, attempt_timeout_ms (the task limit) and stage_timeout_ms
+(the stage limit), each positive or NULL = unlimited. Both time limits are off by default; when
+switched on they are 6 hours and 30 minutes. New, imported and planned tasks default to no time
+limits; inserted repairs inherit the failed task's limits.
 attempt_limit applies across ALL revisions of the task; escalation does not reset usage.
 attempts_used counts succeeded attempts and failures in check/review/validation/agent/unknown.
 Rate-limit, transport, environment, protocol, timeout, interruption, and cancellation do not
@@ -612,7 +614,8 @@ Versioned definition, limits, and approval decision. Select the newest ready rev
 | `created_by_kind` | TEXT | no | human, ai, or system; creator attribution, including drafts. |
 | `created_by` | TEXT | no | Nonblank creator identifier. |
 | `attempt_limit` | INTEGER | yes | Maximum charged attempts for the task across revisions; positive, NULL = unlimited. |
-| `attempt_timeout_ms` | INTEGER | yes | Cumulative task active-time limit in milliseconds; positive, NULL = unlimited. Waiting/paused time is excluded. |
+| `attempt_timeout_ms` | INTEGER | yes | Task limit: cumulative active time across all attempts in milliseconds; positive, NULL = unlimited. Waiting/paused time is excluded. |
+| `stage_timeout_ms` | INTEGER | yes | Stage limit: longest one agent turn (execution, review, validation, judge or repair) may run without a result, in milliseconds; restarts with every turn; positive, NULL = unlimited. A stalled turn fails as a timeout without spending budget and is repaired automatically. |
 | `created_at_ms` | INTEGER | no | Creation time. |
 | `decided_at_ms` | INTEGER | yes | Decision time, not before creation. |
 | `decided_by_kind` | TEXT | yes | human, ai, system; NULL for draft. |

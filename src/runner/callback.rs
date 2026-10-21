@@ -219,6 +219,7 @@ fn apply(path: &Path, capability: &Capability) -> Result<i64> {
         models: service.defaults()?,
         attempt_limit: Some(3),
         timeout_ms: None,
+        stage_timeout_ms: None,
     };
     service.file_follow_up(
         &request.token,

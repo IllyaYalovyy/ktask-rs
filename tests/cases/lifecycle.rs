@@ -69,10 +69,13 @@ fn model_form_all_fields_mouse_keyboard_validation_and_attempt_snapshot() -> Res
     // Tab reaches all fields even when they don't fit; page buttons support mouse-only access.
     key(&mut t, "\t\t\t\t\t\t\t", "Attempt limit")?;
     key(&mut t, "\x010\r", "Limits must be positive")?;
-    key(&mut t, "\x014\t\x01200", "200")?;
+    // Both time limits are off until chosen; switching on picks 6 h and 30 min.
+    key(&mut t, "\x014\t", "< Off >")?;
+    key(&mut t, " ", "< 6 h >")?;
+    key(&mut t, "\t ", "< 30 min >")?;
     println!(
         "MODEL LIMITS\n{}",
-        t.screen("last model fields", |s| s.contains("Active time limit ms"))?
+        t.screen("last model fields", |s| s.contains("Stage time limit"))?
     );
     click(&mut t, "Fields -", "Validation model")?;
     click(&mut t, "Fields -", "Execution model")?;
@@ -82,10 +85,6 @@ fn model_form_all_fields_mouse_keyboard_validation_and_attempt_snapshot() -> Res
         s.contains("Execution: economy / medium")
     })?;
     key(&mut t, "\x1b", "Model worker-v2")?;
-    key(&mut t, "t", "Current #1 · RUNNING")?;
-    t.screen("new active time limit applies", |s| {
-        s.contains("Active time limit reached")
-    })?;
     key(&mut t, "c", "Execution model")?;
     key(&mut t, "\x01discard-this", "discard-this")?;
     click(&mut t, "Cancel", "Model worker-v2")?;
@@ -93,8 +92,9 @@ fn model_form_all_fields_mouse_keyboard_validation_and_attempt_snapshot() -> Res
     key(&mut t, "o\x01/demo/export.tsv\r\r", "Imported 120 tasks")?;
     key(&mut t, "c", "worker-v2")?;
     t.screen("effort roundtrip", |s| s.contains("< none >"))?;
-    key(&mut t, "\t\t\t\t\t\t\t\t\t", "Active time limit ms")?;
-    t.screen("limits roundtrip", |s| s.contains("200"))?;
+    key(&mut t, "\t\t\t\t\t\t\t\t\t", "Task time limit")?;
+    t.screen("task limit roundtrip", |s| s.contains("< 6 h >"))?;
+    key(&mut t, "\t", "< 30 min >")?;
     quit(&mut t)
 }
 

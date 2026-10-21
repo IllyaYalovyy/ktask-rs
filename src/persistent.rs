@@ -798,7 +798,7 @@ impl App {
             }
             DialogKind::Import => {
                 dialog.title = "Import task definitions · disk".into();
-                dialog.body = "Read a ktask-tasks-v1 TSV export. Preview before committing.\nImports create new tasks, not copied attempt/history records.".into();
+                dialog.body = "Read a ktask-tasks-v2 (or v1) TSV export. Preview before committing.\nImports create new tasks, not copied attempt/history records.".into();
                 dialog.fields[0] = Field::text("Source", "tasks.tsv");
             }
             DialogKind::Export => {
@@ -1030,6 +1030,7 @@ impl App {
                             .map_err(|e| e.to_string())?,
                         attempt_limit: Some(3),
                         timeout_ms: None,
+                        stage_timeout_ms: None,
                     }
                 };
                 definition.title = dialog.value(0).into();
@@ -1082,7 +1083,8 @@ impl App {
                         ModelConfig::from_fields(dialog.value(i * 2), dialog.value(i * 2 + 1))?;
                 }
                 definition.attempt_limit = limit(dialog.value(8))?;
-                definition.timeout_ms = limit(dialog.value(9))?;
+                definition.timeout_ms = crate::application::limits::parse(dialog.value(9))?;
+                definition.stage_timeout_ms = crate::application::limits::parse(dialog.value(10))?;
                 self.service
                     .as_mut()
                     .unwrap()
@@ -1277,6 +1279,7 @@ fn project_revision(revision: &domain::Revision) -> Result<model::Revision, Stri
             }),
             attempt_limit: d.attempt_limit.unwrap_or(0) as usize,
             timeout_ms: d.timeout_ms.unwrap_or(0) as u64,
+            stage_timeout_ms: d.stage_timeout_ms.unwrap_or(0) as u64,
         },
         actor: revision
             .actor
@@ -1466,7 +1469,7 @@ fn revision_overview(revision: &domain::Revision) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Revision {} · {}\nApproval: {} · {}\nGoal: {}\nAcceptance: {}\n{models}\nAttempt limit: {} · Time limit: {}",
+        "Revision {} · {}\nApproval: {} · {}\nGoal: {}\nAcceptance: {}\n{models}\nAttempt limit: {} · Task limit: {} · Stage limit: {}",
         revision.number,
         definition.title,
         revision.lifecycle,
@@ -1482,9 +1485,8 @@ fn revision_overview(revision: &domain::Revision) -> String {
         definition
             .attempt_limit
             .map_or("unlimited".into(), |limit| limit.to_string()),
-        definition
-            .timeout_ms
-            .map_or("unlimited".into(), |limit| format!("{limit} ms")),
+        crate::application::limits::label(definition.timeout_ms),
+        crate::application::limits::label(definition.stage_timeout_ms),
     )
 }
 

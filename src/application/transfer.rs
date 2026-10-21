@@ -6,7 +6,9 @@ use std::{
     path::Path,
 };
 
-const HEADER: &str = "ktask-tasks-v1";
+const HEADER: &str = "ktask-tasks-v2";
+/// v1 rows have no stage limit column; they still import.
+const HEADER_V1: &str = "ktask-tasks-v1";
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 pub fn encode(definitions: &[Definition]) -> Result<String> {
@@ -19,6 +21,7 @@ pub fn encode(definitions: &[Definition]) -> Result<String> {
             d.goal.clone(),
             d.attempt_limit.map_or(String::new(), |n| n.to_string()),
             d.timeout_ms.map_or(String::new(), |n| n.to_string()),
+            d.stage_timeout_ms.map_or(String::new(), |n| n.to_string()),
         ];
         for model in &d.models {
             if let Some(m) = model {
@@ -44,14 +47,19 @@ pub fn encode(definitions: &[Definition]) -> Result<String> {
 }
 pub fn decode(text: &str) -> Result<Vec<Definition>> {
     let mut lines = text.lines();
-    require(
-        lines.next() == Some(HEADER),
-        "Expected a ktask-tasks-v1 TSV export",
-    )?;
+    let stage = match lines.next() {
+        Some(HEADER) => 1,
+        Some(HEADER_V1) => 0,
+        _ => {
+            return Err(Error::Conflict(
+                "Expected a ktask-tasks-v2 TSV export".into(),
+            ));
+        }
+    };
     let mut result = Vec::new();
     for line in lines {
         let f = line.split('\t').map(unescape).collect::<Result<Vec<_>>>()?;
-        require(f.len() >= 18, "Incomplete task definition")?;
+        require(f.len() >= 18 + stage, "Incomplete task definition")?;
         let kind = match f[0].as_str() {
             "ai" => Kind::Ai,
             "human" => Kind::Human,
@@ -59,7 +67,7 @@ pub fn decode(text: &str) -> Result<Vec<Definition>> {
         };
         let mut models = std::array::from_fn(|_| None);
         for (i, model) in models.iter_mut().enumerate() {
-            let offset = 5 + i * 3;
+            let offset = 5 + stage + i * 3;
             if f[offset..offset + 3].iter().any(|s| !s.is_empty()) {
                 *model = Some(ModelConfig {
                     provider: f[offset].clone(),
@@ -72,10 +80,11 @@ pub fn decode(text: &str) -> Result<Vec<Definition>> {
             title: f[1].clone(),
             goal: f[2].clone(),
             kind,
-            criteria: f[17..].to_vec(),
+            criteria: f[17 + stage..].to_vec(),
             models,
             attempt_limit: number(&f[3])?,
             timeout_ms: number(&f[4])?,
+            stage_timeout_ms: if stage == 1 { number(&f[5])? } else { None },
         };
         d.validate()?;
         result.push(d);

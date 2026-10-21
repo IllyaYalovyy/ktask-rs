@@ -105,7 +105,7 @@ In `--demo`, task/settings changes last only for the session. Import/export uses
 files**, not disk: `/demo/import.tsv` is valid and `/demo/invalid.tsv` exercises errors.
 An exported `/demo/*.tsv` file includes model/effort settings and limits and can be imported
 again during the same session. These are definition exports, not history backups.
-Normal import/export reads and writes **real files**. The `ktask-tasks-v1` escaped TSV format
+Normal import/export reads and writes **real files**. The `ktask-tasks-v2` escaped TSV format (v1 still imports)
 preserves all acceptance criteria, provider/model/effort, and limits. Imports preview and commit
 as one batch; exports replace files atomically after confirmation. These are definition exports,
 not history backups. Relative file paths use the invocation working directory. Files are limited to 4 MiB
@@ -190,7 +190,11 @@ automatically. A saved intervention stays saved if starting fails; the footer ex
 **Pause** stops/reaps workers before recording paused state; **Run/resume** retains the attempt
 and compatible session. Closing the TUI does not stop the supervisor. Failed checks/review/
 validation use the remediation model on a new attempt, bounded by the task's attempt limit.
-Inserted repairs inherit the failed task's time limit, including unlimited. Insertion does not
+Two optional time limits, both off by default (Models, or `--task-limit` / `--stage-limit` with
+`off`, `on` or a duration such as `45m`): the **task limit** (6 h when on) caps active time across
+all attempts; the **stage limit** (30 min when on) caps one agent turn and restarts with every
+result, so an agent cannot run long without returning anything. Inserted repairs inherit the
+failed task's limits. Insertion does not
 reset the original coding budget; Models/limits can grant additional attempts while keeping all
 failure evidence. Startup failures show the runner's error directly in the TUI and CLI.
 A failed attempt is repaired automatically: the next attempt opens with the read-only failure
@@ -270,7 +274,7 @@ cargo run --locked -- approve 1 --if-version 1
   work can be acknowledged; only failed current can be resolved.
 - Models/limits: add/edit accept repeated `--model ROLE=PROVIDER/MODEL`, `--effort ROLE=VALUE`
   (`none` clears effort), `--clear-model ROLE`, `--attempt-limit N`, `--timeout-ms N` (`unlimited`
-  removes either limit). Edit preserves omitted fields; `--criterion` replaces the entire list.
+  removes either limit), `--task-limit off|on|6h`, `--stage-limit off|on|30m`. Edit preserves omitted fields; `--criterion` replaces the entire list.
   `--pending` edits the newest draft; `--approval ready|draft` controls the new revision.
 - Files: `import tasks.tsv --preview` validates without touching storage. Import commits a batch;
   `--before ID` controls placement. `export tasks.tsv --scope all` refuses replacement unless

@@ -91,6 +91,7 @@ fn cli_remediate_json_returns_judgment_receipts_and_exit_four_for_noncurrent() -
             models: std::array::from_fn(|_| None),
             attempt_limit: Some(2),
             timeout_ms: Some(600_000),
+            stage_timeout_ms: None,
         };
         for model in &mut definition.models {
             *model = Some(ModelConfig {
@@ -119,6 +120,7 @@ fn cli_remediate_json_returns_judgment_receipts_and_exit_four_for_noncurrent() -
                 models: std::array::from_fn(|_| None),
                 attempt_limit: Some(1),
                 timeout_ms: Some(1000),
+                stage_timeout_ms: None,
             }],
             None,
             true,

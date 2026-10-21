@@ -21,6 +21,7 @@ fn definition(title: &str) -> Definition {
         models: std::array::from_fn(|_| None),
         attempt_limit: Some(3),
         timeout_ms: Some(600_000),
+        stage_timeout_ms: None,
     }
 }
 fn service(root: &Path) -> Result<Service> {
@@ -1187,7 +1188,7 @@ fn attempt_browser_shows_pinned_inputs_after_defaults_and_new_revisions_change()
         "none",
         "medium",
         "Attempt limit: 7",
-        "123000",
+        "Task limit: 2 min 3 s",
         "New ready intent",
         "New draft intent",
     ] {
@@ -3016,7 +3017,7 @@ fn project_identity_and_definition_transfer_are_lossless_and_safe() -> Result {
         effort: Some("custom".into()),
     });
     let text = transfer::encode(&[d.clone()])?;
-    assert_eq!(transfer::decode(&text)?, vec![d]);
+    assert_eq!(transfer::decode(&text)?, vec![d.clone()]);
     let file = scratch.path().join("tasks.tsv");
     transfer::export(&file, &text, None)?;
     assert!(transfer::export(&file, "overwrite", None).is_err());
@@ -3025,6 +3026,26 @@ fn project_identity_and_definition_transfer_are_lossless_and_safe() -> Result {
     transfer::export(&file, &text, Some(text.as_bytes()))?;
     assert_eq!(transfer::import(&file)?, transfer::decode(&text)?);
     assert!(transfer::decode("ktask-tasks-v1\nbad").is_err());
+    // Stage limits round-trip in v2; v1 rows (no stage column) still import without one.
+    let mut staged = d.clone();
+    staged.stage_timeout_ms = Some(ktask_rs_mk3::application::limits::STAGE_LIMIT_MS);
+    let v2 = transfer::encode(&[staged.clone()])?;
+    assert!(v2.starts_with("ktask-tasks-v2\n"));
+    assert_eq!(transfer::decode(&v2)?, vec![staged]);
+    let v1: Vec<String> = text
+        .lines()
+        .enumerate()
+        .map(|(i, line)| {
+            if i == 0 {
+                "ktask-tasks-v1".into()
+            } else {
+                let mut fields: Vec<&str> = line.split('\t').collect();
+                fields.remove(5);
+                fields.join("\t")
+            }
+        })
+        .collect();
+    assert_eq!(transfer::decode(&v1.join("\n"))?, vec![d]);
     Ok(())
 }
 
@@ -3302,9 +3323,10 @@ fn real_forms_save_drafts_all_model_roles_limits_and_reject_without_blocking() -
     key(&mut t, "malformed\r", "Use provider/model")?;
     key(
         &mut t,
-        "\x01test/executor\tlow\ttest/reviewer\tmedium\ttest/validator\thigh\ttest/remediator\tmax\t\x017\t\x012000",
-        "2000",
+        "\x01test/executor\tlow\ttest/reviewer\tmedium\ttest/validator\thigh\ttest/remediator\tmax\t\x017\t  ",
+        "< 6 h >",
     )?;
+    key(&mut t, "\t ", "< 30 min >")?;
     println!(
         "STORED MODEL LIMITS\n{}",
         t.screen("limits", |s| s.contains("Attempt limit"))?
@@ -3320,7 +3342,14 @@ fn real_forms_save_drafts_all_model_roles_limits_and_reject_without_blocking() -
     let d = &snapshot.queue[1].definition().definition;
     assert_eq!(d.title, "Keep ready");
     assert_eq!(d.attempt_limit, Some(7));
-    assert_eq!(d.timeout_ms, Some(2000));
+    assert_eq!(
+        d.timeout_ms,
+        Some(ktask_rs_mk3::application::limits::TASK_LIMIT_MS)
+    );
+    assert_eq!(
+        d.stage_timeout_ms,
+        Some(ktask_rs_mk3::application::limits::STAGE_LIMIT_MS)
+    );
     for (i, role) in ["executor", "reviewer", "validator", "remediator"]
         .iter()
         .enumerate()

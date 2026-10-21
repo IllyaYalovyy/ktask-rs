@@ -86,6 +86,7 @@ CREATE TABLE task_revisions (
     created_by TEXT NOT NULL CHECK (length(trim(created_by)) > 0),
     attempt_limit INTEGER CHECK (attempt_limit > 0),
     attempt_timeout_ms INTEGER CHECK (attempt_timeout_ms > 0),
+    stage_timeout_ms INTEGER CHECK (stage_timeout_ms > 0),
     created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
     decided_at_ms INTEGER CHECK (decided_at_ms >= created_at_ms),
     decided_by_kind TEXT CHECK (decided_by_kind IN ('human', 'ai', 'system')),

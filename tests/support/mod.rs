@@ -334,6 +334,28 @@ impl Terminal {
         ))
     }
 
+    /// Click the first `label` below the line holding `anchor`, such as one field's choice.
+    pub fn click_after(&mut self, anchor: &str, label: &str) -> Result {
+        let screen = self.parser.lock().unwrap().screen().contents();
+        let (row, col) = screen
+            .lines()
+            .enumerate()
+            .skip_while(|(_, line)| !line.contains(anchor))
+            .skip(1)
+            .find_map(|(row, line)| {
+                line.find(label)
+                    .map(|byte| (row, line[..byte].chars().count()))
+            })
+            .ok_or_else(|| format!("click target {label:?} after {anchor:?} missing:\n{screen}"))?;
+        self.send(&format!(
+            "\x1b[<0;{};{}M\x1b[<0;{};{}m",
+            col + 1,
+            row + 1,
+            col + 1,
+            row + 1
+        ))
+    }
+
     pub fn wheel(&mut self, down: bool, col: u16, row: u16) -> Result {
         self.send(&format!(
             "\x1b[<{};{};{}M",

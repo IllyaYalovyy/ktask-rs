@@ -1,5 +1,6 @@
 use crate::{
     app::{App, View},
+    application::limits,
     dialog::{Dialog, DialogKind, Field},
     presentation::{ROLES, RevisionState, Status, Task},
 };
@@ -27,18 +28,30 @@ impl App {
                 revision.settings.attempt_limit.to_string()
             },
         ));
-        fields.push(Field::text(
-            "Active time limit ms (task-wide; blank = unlimited)",
-            &if revision.settings.timeout_ms == 0 {
-                String::new()
-            } else {
-                revision.settings.timeout_ms.to_string()
-            },
-        ));
+        for (label, current, standard) in [
+            (
+                "Task time limit (all attempts)",
+                revision.settings.timeout_ms,
+                limits::TASK_LIMIT_MS,
+            ),
+            (
+                "Stage time limit (one agent turn)",
+                revision.settings.stage_timeout_ms,
+                limits::STAGE_LIMIT_MS,
+            ),
+        ] {
+            let current = (current > 0).then_some(current as i64);
+            let choices = limits::choices(current, standard);
+            fields.push(Field::choice(
+                label,
+                &choices.iter().map(String::as_str).collect::<Vec<_>>(),
+                &limits::label(current),
+            ));
+        }
         self.dialog = Some(Dialog::new(
             DialogKind::Models(task.id),
             "Task models and limits",
-            "Save creates a Human-approved revision. Earlier attempts keep their inputs.\nTab or Fields +/- reaches every setting; none means no effort setting.",
+            "Save creates a Human-approved revision. Earlier attempts keep their inputs.\nTab or Fields +/- reaches every setting; none means no effort setting.\nTime limits are off unless chosen; the stage limit restarts with every agent result.",
             fields,
         ));
     }
@@ -48,7 +61,8 @@ impl App {
             return Err("Every role needs a model".into());
         }
         let attempt_limit = limit(dialog.value(8))?;
-        let timeout_ms = limit(dialog.value(9))?;
+        let ms = |index| limits::parse(dialog.value(index)).map(|ms| ms.unwrap_or(0) as u64);
+        let (timeout_ms, stage_timeout_ms) = (ms(9)?, ms(10)?);
         let task = self
             .queue
             .iter_mut()
@@ -65,6 +79,7 @@ impl App {
         revision.settings.attempt_limit =
             usize::try_from(attempt_limit).map_err(|_| "Attempt limit is too large")?;
         revision.settings.timeout_ms = timeout_ms;
+        revision.settings.stage_timeout_ms = stage_timeout_ms;
         revision.state = RevisionState::Ready;
         revision.actor = "Human: owner".into();
         task.revise(revision);

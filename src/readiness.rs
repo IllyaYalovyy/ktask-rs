@@ -190,16 +190,6 @@ pub(crate) fn inspect(app: &App) -> Readiness {
                 model.provider,
                 crate::runner::provider::SUPPORTED
             )),
-            Some(model)
-                if index > 0
-                    && definition.definition.models[0]
-                        .as_ref()
-                        .is_some_and(|execution| {
-                            execution.provider == model.provider && execution.model == model.model
-                        }) =>
-            {
-                Err("Must differ from execution model".into())
-            }
             _ => Ok(()),
         };
         report.check(&format!("{role} model"), valid, "m Models");

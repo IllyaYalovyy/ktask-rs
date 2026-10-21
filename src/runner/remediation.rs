@@ -68,6 +68,7 @@ pub fn apply_judgment(
                     models: defaults.clone(),
                     attempt_limit: Some(3),
                     timeout_ms: current.definition().definition.timeout_ms,
+                    stage_timeout_ms: current.definition().definition.stage_timeout_ms,
                 })
                 .collect::<Vec<_>>();
             apply(service, target, None, &repairs, reason, ready)

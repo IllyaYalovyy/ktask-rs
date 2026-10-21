@@ -6,6 +6,7 @@ mod output_text;
 pub use evidence::{EvidenceCursor, EvidenceMatch, EvidenceSearch};
 pub mod configuration;
 pub mod execution;
+pub mod limits;
 pub mod preferences;
 pub mod progress;
 mod queries;
@@ -100,7 +101,10 @@ pub struct Definition {
     pub criteria: Vec<String>,
     pub models: [Option<ModelConfig>; 4],
     pub attempt_limit: Option<i64>,
+    /// Task limit: active time across all attempts.
     pub timeout_ms: Option<i64>,
+    /// Stage limit: one agent turn; restarts with every result.
+    pub stage_timeout_ms: Option<i64>,
 }
 impl Definition {
     pub fn validate(&self) -> Result<()> {
@@ -113,7 +117,9 @@ impl Definition {
             "At least one nonempty acceptance criterion is required",
         )?;
         require(
-            self.attempt_limit.is_none_or(|n| n > 0) && self.timeout_ms.is_none_or(|n| n > 0),
+            self.attempt_limit.is_none_or(|n| n > 0)
+                && self.timeout_ms.is_none_or(|n| n > 0)
+                && self.stage_timeout_ms.is_none_or(|n| n > 0),
             "Limits must be positive or unlimited",
         )?;
         for model in self.models.iter().flatten() {

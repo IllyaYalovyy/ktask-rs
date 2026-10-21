@@ -73,7 +73,10 @@ pub struct Model {
 pub struct Settings {
     pub models: [Model; 4],
     pub attempt_limit: usize,
+    /// Task limit: active time across all attempts. 0 = off.
     pub timeout_ms: u64,
+    /// Stage limit: one agent turn without a result. 0 = off.
+    pub stage_timeout_ms: u64,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -84,6 +87,7 @@ impl Default for Settings {
             }),
             attempt_limit: 3,
             timeout_ms: 0,
+            stage_timeout_ms: 0,
         }
     }
 }
@@ -122,7 +126,7 @@ impl Revision {
             .collect::<Vec<_>>()
             .join("\n");
         format!(
-            "Revision {} · {}\n{models}\nAttempt limit: {} · task active time limit: {}",
+            "Revision {} · {}\n{models}\nAttempt limit: {} · task limit: {} · stage limit: {}",
             self.number,
             if self.state == RevisionState::Draft {
                 "Needs approval"
@@ -134,11 +138,8 @@ impl Revision {
             } else {
                 self.settings.attempt_limit.to_string()
             },
-            if self.settings.timeout_ms == 0 {
-                "unlimited".into()
-            } else {
-                format!("{} ms", self.settings.timeout_ms)
-            }
+            limit_label(self.settings.timeout_ms),
+            limit_label(self.settings.stage_timeout_ms)
         )
     }
 }
@@ -288,4 +289,9 @@ impl Task {
     pub fn cost(&self) -> usize {
         self.attempts.iter().map(|a| a.cost_cents).sum()
     }
+}
+
+/// A limit in milliseconds, 0 meaning off, as the owner reads it.
+pub fn limit_label(ms: u64) -> String {
+    crate::application::limits::label((ms > 0).then_some(ms as i64))
 }

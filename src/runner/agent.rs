@@ -171,6 +171,7 @@ pub fn breakdown_definitions(
             models: defaults.clone(),
             attempt_limit: Some(3),
             timeout_ms: None,
+            stage_timeout_ms: None,
         })
         .collect()
 }

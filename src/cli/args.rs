@@ -238,7 +238,7 @@ pub enum Command {
         #[command(flatten)]
         target: Target,
     },
-    /// Preview or atomically import a ktask-tasks-v1 TSV file.
+    /// Preview or atomically import a ktask-tasks-v2 (or v1) TSV file.
     Import {
         file: PathBuf,
         #[arg(long)]
@@ -327,6 +327,12 @@ pub struct Settings {
     /// Positive task-wide active milliseconds or unlimited. New tasks default to unlimited.
     #[arg(long, value_parser = limit)]
     pub timeout_ms: Option<Limit>,
+    /// Task limit, active time across all attempts: off, on (6 h) or a duration such as 8h.
+    #[arg(long, value_parser = task_limit, conflicts_with = "timeout_ms")]
+    pub task_limit: Option<Limit>,
+    /// Stage limit, one agent turn without a result: off, on (30 min) or a duration such as 45m.
+    #[arg(long, value_parser = stage_limit)]
+    pub stage_limit: Option<Limit>,
 }
 #[derive(Clone)]
 pub struct ModelSetting {
@@ -353,6 +359,18 @@ fn nonempty(s: &str) -> Result<String, String> {
     } else {
         Ok(s.into())
     }
+}
+fn duration_limit(s: &str, standard: i64) -> Result<Limit, String> {
+    if s.eq_ignore_ascii_case("on") {
+        return Ok(Limit(Some(standard)));
+    }
+    crate::application::limits::parse(s).map(Limit)
+}
+fn task_limit(s: &str) -> Result<Limit, String> {
+    duration_limit(s, crate::application::limits::TASK_LIMIT_MS)
+}
+fn stage_limit(s: &str) -> Result<Limit, String> {
+    duration_limit(s, crate::application::limits::STAGE_LIMIT_MS)
 }
 fn limit(s: &str) -> Result<Limit, String> {
     if s == "unlimited" {

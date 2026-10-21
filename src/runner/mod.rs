@@ -246,21 +246,6 @@ fn run_inner(
             "Current task requires human acknowledgment",
         )?;
         connected(&task.definition().definition)?;
-        let models = &task.definition().definition.models;
-        let implementation = models[0].as_ref().expect("models checked");
-        for (role, model) in crate::application::ROLES.iter().zip(models).skip(1) {
-            let model = model.as_ref().expect("models checked");
-            require(
-                (model.provider.as_str(), model.model.as_str())
-                    != (
-                        implementation.provider.as_str(),
-                        implementation.model.as_str(),
-                    ),
-                &format!(
-                    "Configure a stronger {role} model distinct from the implementation model; changing effort alone is insufficient"
-                ),
-            )?;
-        }
         let base = workspace.head()?;
         require(
             workspace.clean()? || service.attempt_base(task.id)?.as_deref() == Some(&base),
@@ -694,7 +679,7 @@ fn ai_turn(
         &step,
         ctx,
         &invocation,
-        None,
+        run.definition.stage_timeout_ms,
         true,
         &mut stream,
     )? {
@@ -894,7 +879,7 @@ fn judge_once(
         &step,
         ctx,
         &invocation,
-        None,
+        run.definition.stage_timeout_ms,
         true,
         &mut stream,
     )? {
@@ -1020,6 +1005,7 @@ fn apply_judgment(
                     models: defaults.clone(),
                     attempt_limit: Some(3),
                     timeout_ms: run.definition.timeout_ms,
+                    stage_timeout_ms: run.definition.stage_timeout_ms,
                 })
                 .collect();
             remediation::preserve(service, workspace, target)?;
@@ -1066,11 +1052,21 @@ fn execute(
             if ctx.stop.load(Ordering::Relaxed) || service.control_cursor(run)? > ctx.cursor {
                 interrupted = Some(Outcome::Paused);
                 worker.stop();
-            } else if timeout.is_some_and(|n| started.elapsed().as_millis() >= n as u128) {
+            } else if let Some(limit) =
+                timeout.filter(|&n| started.elapsed().as_millis() >= n as u128)
+            {
                 interrupted = Some(Outcome::Failed(
                     "timeout",
-                    "Individual supervisor check timeout reached; work and transcript retained"
-                        .into(),
+                    if ai {
+                        format!(
+                            "{}: the agent ran {} without returning a result; work and transcript retained",
+                            crate::application::stop::STAGE_LIMIT,
+                            crate::application::limits::label(Some(limit))
+                        )
+                    } else {
+                        "Individual supervisor check timeout reached; work and transcript retained"
+                            .into()
+                    },
                 ));
                 worker.stop();
             } else if let Some(outcome) = ctx.deadline_outcome(run) {

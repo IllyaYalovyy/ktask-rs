@@ -1511,7 +1511,7 @@ fn parse_tasks(data: &str) -> Result<Vec<Task>, String> {
     let mut tasks = Vec::new();
     for (n, line) in data.lines().enumerate() {
         let parts: Vec<_> = line.split('\t').map(str::trim).collect();
-        if !matches!(parts.len(), 4 | 14)
+        if !matches!(parts.len(), 4 | 14 | 15)
             || parts.iter().take(4).any(|s| s.is_empty())
             || !matches!(parts[0], "AI" | "Human")
         {
@@ -1528,7 +1528,7 @@ fn parse_tasks(data: &str) -> Result<Vec<Task>, String> {
         } else {
             Kind::Ai
         };
-        if parts.len() == 14 {
+        if parts.len() >= 14 {
             import_settings(&parts, &mut task)?;
         }
         tasks.push(task);
@@ -1553,6 +1553,7 @@ fn export_task(task: &Task) -> String {
     }
     fields.push(revision.settings.attempt_limit.to_string());
     fields.push(revision.settings.timeout_ms.to_string());
+    fields.push(revision.settings.stage_timeout_ms.to_string());
     fields.join("\t")
 }
 
@@ -1572,6 +1573,10 @@ fn import_settings(parts: &[&str], task: &mut Task) -> Result<(), String> {
     task.revisions[0].settings.timeout_ms = parts[13]
         .parse()
         .map_err(|_| "Invalid imported active time limit")?;
+    task.revisions[0].settings.stage_timeout_ms = parts
+        .get(14)
+        .map_or(Ok(0), |stage| stage.parse())
+        .map_err(|_| "Invalid imported stage time limit")?;
     Ok(())
 }
 

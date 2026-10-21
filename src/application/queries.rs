@@ -723,7 +723,7 @@ pub(super) fn retained_artifact_path(
 }
 
 fn revisions(db: &Connection, task: i64) -> Result<Vec<Revision>> {
-    let mut stmt = db.prepare_cached("SELECT revision, lifecycle, title, goal, kind, attempt_limit, attempt_timeout_ms, coalesce(decided_by_kind, created_by_kind) || ': ' || coalesce(decided_by, created_by) FROM task_revisions WHERE task_id = ?1 ORDER BY revision")?;
+    let mut stmt = db.prepare_cached("SELECT revision, lifecycle, title, goal, kind, attempt_limit, attempt_timeout_ms, coalesce(decided_by_kind, created_by_kind) || ': ' || coalesce(decided_by, created_by), stage_timeout_ms FROM task_revisions WHERE task_id = ?1 ORDER BY revision")?;
     let mut revisions = stmt
         .query_map([task], |r| {
             Ok(Revision {
@@ -740,6 +740,7 @@ fn revisions(db: &Connection, task: i64) -> Result<Vec<Revision>> {
                     },
                     attempt_limit: r.get(5)?,
                     timeout_ms: r.get(6)?,
+                    stage_timeout_ms: r.get(8)?,
                     criteria: Vec::new(),
                     models: std::array::from_fn(|_| None),
                 },

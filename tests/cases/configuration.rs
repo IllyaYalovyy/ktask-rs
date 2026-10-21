@@ -211,6 +211,7 @@ fn configuration_stale_writes_pinned_revisions_and_scope() -> Result {
         models: a.defaults()?,
         attempt_limit: Some(3),
         timeout_ms: Some(1000),
+        stage_timeout_ms: None,
     };
     let id = a.create(std::slice::from_ref(&d), None, true)?[0];
     let mut updated = configured.clone();

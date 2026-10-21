@@ -15,6 +15,8 @@ impl Settings {
             && self.clear_model.is_empty()
             && self.attempt_limit.is_none()
             && self.timeout_ms.is_none()
+            && self.task_limit.is_none()
+            && self.stage_limit.is_none()
     }
     pub(super) fn validate(&self) -> Result<()> {
         for role in 0..4 {
@@ -58,8 +60,11 @@ impl Settings {
         if let Some(limit) = self.attempt_limit {
             d.attempt_limit = limit.0;
         }
-        if let Some(limit) = self.timeout_ms {
+        if let Some(limit) = self.timeout_ms.or(self.task_limit) {
             d.timeout_ms = limit.0;
+        }
+        if let Some(limit) = self.stage_limit {
+            d.stage_timeout_ms = limit.0;
         }
         d.validate()?;
         Ok(())
@@ -254,6 +259,7 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
                 models: service.defaults()?,
                 attempt_limit: Some(3),
                 timeout_ms: None,
+                stage_timeout_ms: None,
             };
             add.settings.apply(&mut d)?;
             Ok(created(service.create(

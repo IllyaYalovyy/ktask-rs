@@ -683,41 +683,32 @@ fn pause_at_tenth_review_resumes_the_phase_without_an_eleventh_repair() -> Resul
 }
 
 #[test]
-fn implementation_model_cannot_review_repair_or_validate_itself() -> Result {
-    for role in ["review", "remediation", "validation"] {
+fn one_model_can_fill_every_role_with_read_only_review() -> Result {
+    for mouse in [false, true] {
         let f = Fixture::new()?;
-        f.add("Require stronger judge model")?;
-        f.ok(&["edit", "1", "--model", &format!("{role}=codex/execution")])?;
-        let output = f.process().args(["run", "--json"]).output()?;
-        assert_eq!(output.status.code(), Some(4));
-        assert!(
-            String::from_utf8_lossy(&output.stderr)
-                .contains(&format!("stronger {role} model distinct"))
-        );
-        assert!(!f.scratch.path().join("provider-invocations").exists());
-        assert!(
-            f.ok(&["show", "1"])?["attempts"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
-        for mouse in [false, true] {
-            let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
-            t.screen("ready", |s| s.contains("r Run queue"))?;
-            if mouse {
-                t.click("r Run queue")?;
-            } else {
-                t.send("r")?;
-            }
-            println!(
-                "MODEL SEPARATION {role} mouse={mouse}\n{}",
-                t.screen("model configuration required", |s| s
-                    .contains("Configure a stronger"))?
-            );
-            assert!(!f.scratch.path().join("provider-invocations").exists());
-            t.send("q")?;
-            t.finish()?;
+        f.add("Same model everywhere")?;
+        for role in ["review", "remediation", "validation"] {
+            f.ok(&["edit", "1", "--model", &format!("{role}=codex/execution")])?;
         }
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
+        t.screen("ready", |s| s.contains("r Run queue"))?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        println!(
+            "ONE MODEL mouse={mouse}\n{}",
+            t.screen("one model complete", |s| s.contains("Queue complete."))?
+        );
+        assert_eq!(f.ok(&["show", "1"])?["lifecycle"], "succeeded");
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+            "execution\nexecution\nexecution\n"
+        );
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
     }
     Ok(())
 }
@@ -2246,7 +2237,7 @@ fn protocol_errors_timeouts_and_transport_never_fake_success_or_spend_coding_bud
         let stopped = String::from_utf8_lossy(&o.stderr);
         assert!(
             stopped.contains(if mode == "slow" {
-                "active time limit"
+                "task time limit"
             } else {
                 "failed 3 attempts in a row"
             }),
@@ -2306,7 +2297,7 @@ fn failed_attempts_are_repaired_automatically_and_real_stops_show_a_red_banner()
         let stopped = t.screen_within("time limit banner", Duration::from_secs(30), |s| {
             s.contains("EXECUTION STOPPED")
                 && s.contains("Reason: Active time limit reached")
-                && s.contains("Not resolved automatically: The task's active time limit")
+                && s.contains("Not resolved automatically: The task time limit (200 ms")
                 && s.contains("Next: c Models")
         })?;
         println!("STOP BANNER mouse={mouse}\n{stopped}");
@@ -2317,6 +2308,87 @@ fn failed_attempts_are_repaired_automatically_and_real_stops_show_a_red_banner()
         t.send("q")?;
         t.finish()?;
         f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn stage_limit_restarts_with_every_agent_result_and_stops_a_stalled_agent() -> Result {
+    // Every turn takes 3 s; the 5 s stage limit holds although the attempt runs longer.
+    let f = Fixture::new()?;
+    f.provider("slow")?;
+    f.add("Three slow stages")?;
+    assert!(f.ok(&["show", "1"])?["definition"]["stage_timeout_ms"].is_null());
+    f.ok(&["edit", "1", "--stage-limit", "5s"])?;
+    f.ok(&["run", "--one"])?;
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["lifecycle"], "succeeded");
+    assert!(task["attempts"][0]["active_ms"].as_i64().unwrap() > 5000);
+
+    // A reviewer that never answers is cut off at the stage limit and repaired twice.
+    let f = Fixture::new()?;
+    f.provider("slow-review")?;
+    f.add("Stalled reviewer")?;
+    f.ok(&["edit", "1", "--stage-limit", "1s"])?;
+    let output = f.process().args(["run", "--one"]).output()?;
+    assert_eq!(output.status.code(), Some(4));
+    let stopped = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stopped.contains("stage time limit 3 attempts in a row"),
+        "{stopped}"
+    );
+    let task = f.ok(&["show", "1"])?;
+    let attempts = task["attempts"].as_array().unwrap();
+    assert_eq!(attempts.len(), 3);
+    for attempt in attempts {
+        assert!(
+            attempt["outcome"]
+                .as_str()
+                .unwrap()
+                .starts_with("Stage time limit reached: the agent ran 1 s"),
+            "{task}"
+        );
+    }
+    assert_eq!(task["attempts_used"], 0);
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn real_tui_switches_the_stage_limit_on_by_keyboard_and_mouse() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.add("Limit me")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 40)?;
+        t.screen("ready", |s| s.contains("r Run queue"))?;
+        if mouse {
+            t.click("c Models")?;
+        } else {
+            t.send("c")?;
+        }
+        t.screen("models", |s| s.contains("Task models and limits"))?;
+        t.send(&"\t".repeat(10))?;
+        let off = t.screen("stage limit field", |s| {
+            s.contains("Stage time limit") && s.contains("< Off >")
+        })?;
+        println!("STAGE LIMIT OFF mouse={mouse}\n{off}");
+        if mouse {
+            t.click_after("Stage time limit", "< Off >")?;
+        } else {
+            t.send(" ")?;
+        }
+        t.screen("stage limit on", |s| s.contains("< 30 min >"))?;
+        if mouse {
+            t.click("Apply")?;
+        } else {
+            t.send("\x13")?;
+        }
+        t.screen("saved", |s| !s.contains("Task models and limits"))?;
+        let task = f.ok(&["show", "1"])?;
+        assert_eq!(task["definition"]["stage_timeout_ms"], 1_800_000);
+        assert!(task["definition"]["timeout_ms"].is_null());
+        t.send("q")?;
+        t.finish()?;
     }
     Ok(())
 }
