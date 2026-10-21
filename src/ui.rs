@@ -718,7 +718,7 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                 if automatic {
                     format!("Resumes in {seconds}")
                 } else {
-                    format!("Eligible in {seconds} · manual resume")
+                    format!("Limit resets in {seconds} · r Resume tries now")
                 },
                 Style::new().fg(WARN),
             ));

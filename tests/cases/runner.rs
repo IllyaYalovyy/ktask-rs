@@ -2240,7 +2240,15 @@ fn rate_limit_keeps_same_attempt_and_stores_resume_time_without_spending_budget(
     assert_eq!(task["attempts_used"], 0);
     assert_eq!(task["attempts"][0]["wait_reason"], "rate_limit");
     assert!(task["attempts"][0]["resume_at_ms"].is_i64());
-    assert_eq!(f.process().arg("resume").output()?.status.code(), Some(4));
+    // Resume asks the provider again at once; a limit that still holds waits again.
+    f.ok(&["resume"])?;
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "waiting");
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+        "execution\nexecution\n"
+    );
     let db = f.db()?;
     assert_eq!(
         db.connection()
@@ -4077,7 +4085,7 @@ fn provider_errors_right_after_a_usage_limit_wait_keep_waiting_instead_of_failin
 }
 
 #[test]
-fn usage_limit_waits_until_the_provider_reset_time_and_shows_it() -> Result {
+fn usage_limit_waits_for_the_reset_but_owner_resume_asks_the_provider_now() -> Result {
     use chrono::TimeZone;
     for mouse in [false, true] {
         let f = Fixture::new()?;
@@ -4098,29 +4106,46 @@ fn usage_limit_waits_until_the_provider_reset_time_and_shows_it() -> Result {
                 .unwrap()
                 .contains("Provider usage limit; resumes Oct 26 2099 23:33")
         );
-        // Running again before the reset is refused instead of calling the provider.
-        assert_eq!(f.process().arg("resume").output()?.status.code(), Some(4));
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
         let current = t.screen("usage limit current", |s| {
             s.contains("Provider limit until Oct 26 2099 23:33 · r Resume")
+                && s.contains("Limit resets in 2")
         })?;
         println!("USAGE LIMIT CURRENT mouse={mouse}\n{current}");
+        let resets = current.split("Limit resets in ").nth(1).unwrap_or_default();
+        assert!(
+            resets.split(' ').next().is_some_and(|n| n.ends_with('d')),
+            "status shows days, not raw seconds"
+        );
         if mouse {
             t.click("u Readiness")?;
         } else {
             t.send("u")?;
         }
-        let blocked = t.screen("usage limit readiness", |s| {
-            s.contains("Rate-limit wait:") && s.contains("d ") && s.contains("h remaining; then")
+        let ready = t.screen("usage limit readiness", |s| {
+            s.contains("Can run · 0 blocker") && s.contains("[r Run]")
         })?;
-        println!("USAGE LIMIT READINESS mouse={mouse}\n{blocked}");
-        let eligible = blocked.split("Eligible in ").nth(1).unwrap_or_default();
-        assert!(
-            eligible.split(' ').next().is_some_and(|n| n.ends_with('d')),
-            "status shows days, not raw seconds"
+        println!("USAGE LIMIT READINESS mouse={mouse}\n{ready}");
+        // The limit lifted early (credits bought): the owner's Resume asks the provider now.
+        f.provider("normal")?;
+        if mouse {
+            t.click("r Run")?;
+        } else {
+            t.send("r")?;
+        }
+        let complete = t.screen("resumed before reset", |s| s.contains("Queue complete."))?;
+        println!("USAGE LIMIT RESUMED NOW mouse={mouse}\n{complete}");
+        let task = f.ok(&["show", "1"])?;
+        assert_eq!(task["lifecycle"], "succeeded");
+        assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            f.db()?.connection().query_row(
+                "SELECT count(*) FROM events WHERE kind='attempt.wait_ended'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )?,
+            1
         );
-        t.send("\x1b")?;
-        t.screen("readiness closed", |s| !s.contains("Execution readiness"))?;
         t.send("q")?;
         t.finish()?;
         f.no_scratch()?;
@@ -5129,7 +5154,7 @@ fn readiness_refreshes_external_models_and_reports_reload_errors() -> Result {
 }
 
 #[test]
-fn readiness_waits_for_rate_limit_then_resumes_same_attempt() -> Result {
+fn readiness_lets_the_owner_resume_a_rate_limit_wait_at_once() -> Result {
     for mouse in [false, true] {
         let f = Fixture::new()?;
         f.provider("rate")?;
@@ -5149,26 +5174,14 @@ fn readiness_waits_for_rate_limit_then_resumes_same_attempt() -> Result {
         } else {
             t.send("u")?;
         }
-        let blocked = t.screen("rate limit readiness blocked", |s| {
-            s.contains("Rate-limit wait:")
-                && s.contains("remaining; then Refresh")
-                && s.contains("Resume →")
+        // A provider-limit wait never blocks the owner: Run asks the provider again now.
+        let ready = t.screen("rate limit readiness", |s| {
+            s.contains("Can run · 0 blocker")
+                && s.contains("[r Run]")
+                && s.contains("Limit resets in")
         })?;
-        assert!(!blocked.contains("[r Run]"));
-        println!("READINESS RATE BLOCKED mouse={mouse}\n{blocked}");
-        t.send("r")?;
-        assert_eq!(f.ok(&["show", "1"])?["status"], "waiting");
+        println!("READINESS RATE WAIT mouse={mouse}\n{ready}");
         f.provider("normal")?;
-        thread::sleep(Duration::from_millis(6100));
-        if mouse {
-            t.click("u Refresh")?;
-        } else {
-            t.send("u")?;
-        }
-        let ready = t.screen("rate limit expired", |s| {
-            s.contains("Can run · 0 blocker") && s.contains("Eligible in 0s")
-        })?;
-        println!("READINESS RATE EXPIRED mouse={mouse}\n{ready}");
         if mouse {
             t.click("r Run")?;
         } else {

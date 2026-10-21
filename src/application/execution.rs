@@ -402,6 +402,40 @@ impl Service {
         tx.commit()?;
         Ok(())
     }
+    /// The owner chose to run now: a provider-limit wait on the current task ends early so the
+    /// provider is asked again. A limit that still holds records a fresh wait.
+    pub fn end_limit_wait(&mut self) -> Result<()> {
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = now_ms();
+        let ended = tx
+            .query_row(
+                "SELECT a.id,a.task_id FROM attempts a JOIN current_tasks t ON t.latest_attempt_id=a.id
+                 WHERE t.project_id=?1 AND a.state='waiting' AND a.wait_reason='rate_limit' AND a.resume_at_ms>?2",
+                params![self.project_id, now],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        if let Some((attempt, task)) = ended {
+            tx.execute(
+                "UPDATE attempts SET resume_at_ms=?2, waiting_since_ms=min(waiting_since_ms,?2) WHERE id=?1",
+                params![attempt, now],
+            )?;
+            tx.execute(
+                "UPDATE tasks SET row_version=row_version+1,updated_at_ms=?2 WHERE id=?1",
+                params![task, now],
+            )?;
+            tx.execute(
+                "INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message)
+                 VALUES (?1,?2,?3,?4,'attempt.wait_ended','info','Owner resumed before the provider reset; asking the provider again')",
+                params![self.project_id, task, attempt, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
     /// Provider-limit waits since the last completed provider turn (capped at 3).
     pub fn rate_waits(&self, run: &Run) -> Result<i64> {
         Ok(self.db.connection().query_row(

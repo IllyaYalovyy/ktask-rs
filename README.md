@@ -211,7 +211,8 @@ the attempt/session waits until the provider's own reset time when it names one 
 Oct 26th, 2026 11:32 PM", "try again in 20s"), else backs off 1, 2, 4, then every 8 minutes.
 Current Task shows "Provider limit until <time>"; queue mode resumes automatically. Provider
 errors before the next successful turn count as the same outage.
-Pause stops automatic waiting; a later resume cannot bypass its recorded deadline.
+Pause stops automatic waiting. Resume (`r`, or `ktask resume`) never waits: it asks the provider
+again at once, for example after buying credits; a limit that still holds records a fresh wait.
 
 Every provider gets explicit per-role models, schema-checked structured results, session reuse,
 uncached input tokens with disjoint cache counts, and the same failure semantics: limits wait,

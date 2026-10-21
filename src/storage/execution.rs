@@ -134,7 +134,7 @@ impl Database {
         Ok(())
     }
 
-    /// Resumes the existing attempt; a timed wait cannot resume early.
+    /// Resumes the existing attempt once its timed wait is over; an owner ends it first.
     pub fn resume_attempt(&mut self, command: StartAttempt<'_>) -> Result<()> {
         let tx = self
             .connection_mut()

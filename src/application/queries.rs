@@ -17,8 +17,6 @@ pub struct Event {
 const TASK_COLUMNS: &str = "id, row_version, lifecycle, status, order_key, resolution_reason, attempts_used, resolved_by_kind || ': ' || resolved_by, origin_task_id, origin_attempt_id";
 pub struct WaitingResume {
     pub resume_at_ms: Option<i64>,
-    pub eligible: bool,
-    pub remaining_seconds: i64,
 }
 pub struct ProjectTiming {
     pub attempts: i64,
@@ -408,17 +406,13 @@ impl Service {
         self.db
             .connection()
             .query_row(
-                "SELECT a.resume_at_ms, (a.waiting_since_ms IS NULL OR a.waiting_since_ms <= ?3)
-                AND (a.resume_at_ms IS NULL OR a.resume_at_ms <= ?3)
-                , (max(coalesce(a.resume_at_ms,0),coalesce(a.waiting_since_ms,0),?3)-?3+999)/1000
+                "SELECT a.resume_at_ms
              FROM attempts a JOIN current_tasks t ON t.latest_attempt_id=a.id
              WHERE t.project_id=?1 AND t.id=?2 AND a.state='waiting'",
-                params![self.project_id, task, now_ms()],
+                params![self.project_id, task],
                 |row| {
                     Ok(WaitingResume {
                         resume_at_ms: row.get(0)?,
-                        eligible: row.get(1)?,
-                        remaining_seconds: row.get(2)?,
                     })
                 },
             )

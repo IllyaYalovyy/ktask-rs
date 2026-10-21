@@ -213,6 +213,8 @@ fn run_inner(
         "Configure at least one real check: check-set build --command 'make check'",
     )?;
     let mut notified = false;
+    // Only a run the owner started skips a provider-limit wait; continuations honour it.
+    let mut owner_start = !options.continue_session;
     loop {
         if service
             .execution_session()?
@@ -222,6 +224,9 @@ fn run_inner(
         }
         if stop.load(Ordering::Relaxed) {
             return Ok("Runner stopped; no next task started".into());
+        }
+        if std::mem::take(&mut owner_start) {
+            service.end_limit_wait()?;
         }
         let Some(task) = service.current_task()? else {
             return Ok("Queue complete".into());

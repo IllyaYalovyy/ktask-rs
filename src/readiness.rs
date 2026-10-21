@@ -111,10 +111,9 @@ pub(crate) fn inspect(app: &App) -> Readiness {
     let waiting = service
         .waiting_resume(task.id)
         .map_err(|error| error.to_string());
-    report.resume_blocked = state == Status::Waiting
-        && !waiting
-            .as_ref()
-            .is_ok_and(|waiting| waiting.as_ref().is_some_and(|waiting| waiting.eligible));
+    // A provider-limit wait never blocks the owner: Resume asks the provider again now.
+    report.resume_blocked =
+        state == Status::Waiting && !waiting.as_ref().is_ok_and(|waiting| waiting.is_some());
     let open_question = service
         .open_question(task.id)
         .map(|question| question.is_some())
@@ -142,10 +141,6 @@ pub(crate) fn inspect(app: &App) -> Readiness {
                 Err("Supervisor is still stopping this attempt".into())
             }
             Status::Waiting => waiting.and_then(|waiting| match waiting {
-                Some(waiting) if !waiting.eligible => Err(format!(
-                    "Rate-limit wait: {} remaining; then Refresh and Resume",
-                    crate::clock::format_remaining(waiting.remaining_seconds)
-                )),
                 Some(_) => Ok(()),
                 None => Err("Waiting attempt changed; Refresh before resuming".into()),
             }),
