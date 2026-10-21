@@ -28,6 +28,48 @@ impl App {
     }
     pub(crate) fn open_project_config(&mut self, action: Action) -> Result<(), String> {
         let dialog = match action {
+            Action::Storage => {
+                let preview = self
+                    .service
+                    .as_ref()
+                    .unwrap()
+                    .storage_preview()
+                    .map_err(|e| e.to_string())?;
+                let mut body = format!(
+                    "Retained: {} bytes · eligible: {} bytes in {} attempt(s){}\nCleanup keeps task history and all live or unresolved work.\n",
+                    preview.usage_bytes,
+                    preview.reclaimable_bytes,
+                    preview.candidates.len(),
+                    if preview.deferred_for_live_work {
+                        " · deferred while work is live"
+                    } else {
+                        ""
+                    }
+                );
+                for candidate in &preview.candidates {
+                    body.push_str(&format!(
+                        "Task #{} attempt #{}: {} output + {} artifact bytes ({} files; {} pending)\n",
+                        candidate.task_id,
+                        candidate.attempt_id,
+                        candidate.output_bytes,
+                        candidate.artifact_bytes,
+                        candidate.artifacts,
+                        candidate.pending_artifacts
+                    ));
+                }
+                Dialog::new(
+                    DialogKind::Storage(preview.clone()),
+                    "Storage retention",
+                    &body,
+                    vec![
+                        Field::text(
+                            "Retain completed attempts (days)",
+                            &preview.policy.days.to_string(),
+                        ),
+                        Field::choice("Action", &["Save policy", "Apply preview"], "Save policy"),
+                    ],
+                )
+            }
             Action::ProjectModels => {
                 let values = self
                     .service
@@ -132,6 +174,36 @@ impl App {
     }
     pub(crate) fn save_project_config(&mut self, dialog: &mut Dialog) -> Result<bool, String> {
         match &dialog.kind {
+            DialogKind::Storage(preview) => {
+                let days: i64 = dialog
+                    .value(0)
+                    .parse()
+                    .map_err(|_| "Days must be a nonnegative integer")?;
+                if dialog.value(1) == "Apply preview" {
+                    if days != preview.policy.days {
+                        return Err(
+                            "Save the changed policy, then reopen Storage to preview it".into()
+                        );
+                    }
+                    let applied = self
+                        .service
+                        .as_mut()
+                        .unwrap()
+                        .cleanup_storage(preview)
+                        .map_err(|e| e.to_string())?;
+                    self.message(format!(
+                        "Cleaned {} attempt(s), {} bytes",
+                        applied.candidates.len(),
+                        applied.reclaimable_bytes
+                    ));
+                    return Ok(true);
+                }
+                self.service
+                    .as_mut()
+                    .unwrap()
+                    .set_retention(preview.policy, days)
+                    .map_err(|e| e.to_string())?;
+            }
             DialogKind::ProjectModels(expected) => {
                 let mut values: Defaults = std::array::from_fn(|_| None);
                 for (i, value) in values.iter_mut().enumerate() {

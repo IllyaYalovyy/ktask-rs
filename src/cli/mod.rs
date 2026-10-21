@@ -339,6 +339,10 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             code: "conflict",
             message: "Configure a remediation model first".into(),
         })?;
+        let pin = service.begin_remediation_evidence(application::VersionedTask {
+            id: current.id,
+            version: current.version,
+        })?;
         let evidence = service.remediation_evidence(*id, &paths.state)?;
         let judgment = crate::runner::codex::propose_remediation(
             crate::runner::process::stopped()?.as_ref(),
@@ -347,6 +351,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             &evidence,
             &paths.cache.join("workers"),
             &root,
+            pin,
         )?;
         let mut receipts = Vec::new();
         if *apply {
@@ -428,6 +433,55 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             output::Reply {
                 text: format!("{}\n", serde_json::to_string(&data).unwrap()),
                 data,
+            },
+            cli.json,
+        );
+    }
+    if let Command::Retention { days, if_version } = command {
+        let expected = service.retention_policy()?;
+        if if_version.is_some_and(|version| version != expected.version) {
+            return Err(storage::Error::Conflict(
+                "Retention version changed; read it again".into(),
+            )
+            .into());
+        }
+        let saved = service.set_retention(expected, *days)?;
+        return emit(
+            output::Reply {
+                data: json!({"retention":saved}),
+                text: format!("Retention: {} days (v{})\n", saved.days, saved.version),
+            },
+            cli.json,
+        );
+    }
+    if let Command::Storage { apply } = command {
+        let preview = service.storage_preview()?;
+        if *apply {
+            service.cleanup_storage(&preview)?;
+        }
+        let text = format!(
+            "Storage: {} bytes retained; {} bytes eligible across {} attempt(s){}\n{}",
+            preview.usage_bytes,
+            preview.reclaimable_bytes,
+            preview.candidates.len(),
+            if preview.deferred_for_live_work {
+                " (deferred: live work)"
+            } else {
+                ""
+            },
+            preview
+                .candidates
+                .iter()
+                .map(|c| format!(
+                    "task #{} attempt #{}: {} output bytes, {} artifact bytes ({} files; {} pending cleanup)\n",
+                    c.task_id, c.attempt_id, c.output_bytes, c.artifact_bytes, c.artifacts, c.pending_artifacts
+                ))
+                .collect::<String>()
+        );
+        return emit(
+            output::Reply {
+                data: json!({"applied":apply,"preview":preview}),
+                text,
             },
             cli.json,
         );

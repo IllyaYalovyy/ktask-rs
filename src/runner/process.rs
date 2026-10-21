@@ -1,6 +1,7 @@
 //! A small worker guardian: stdin is a lifeline, not a terminal. Losing the supervisor
 //! stops the entire child process group before releasing its workspace/scratch leases.
 use crate::{
+    application::evidence_pin::GUARDIAN_RESERVED as RESERVED,
     runner::callback::{Capability, Server},
     scratch::Scratch,
     storage::{Error, Result},
@@ -34,7 +35,68 @@ pub struct Invocation {
     pub schema: Option<serde_json::Value>,
     pub scratch_root: PathBuf,
     pub worker_lock: PathBuf,
+    #[serde(default)]
+    pub evidence_pin_guardian: Option<PathBuf>,
     pub callback: Option<Capability>,
+}
+
+// A durable reservation closes the gap between spawning a guardian and its first
+// lock acquisition. An abnormal exit after provider launch deliberately stays dirty.
+struct EvidenceGuardian {
+    lease: File,
+    launched: bool,
+}
+// EvidencePin supplies a /proc/<owner>/fd path to the original guard inode.
+// Never manufacture an empty replacement when that descriptor is gone.
+fn evidence_lock(path: &std::path::Path) -> Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(nix::libc::O_NONBLOCK)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(Error::Conflict(
+            "Evidence guard is not a regular file".into(),
+        ));
+    }
+    file.try_lock()
+        .map_err(|e| Error::Conflict(format!("Evidence guardian is already owned: {e}")))?;
+    Ok(file)
+}
+
+impl EvidenceGuardian {
+    fn claim(path: &std::path::Path) -> Result<Self> {
+        let mut lease = evidence_lock(path)?;
+        let mut marker = Vec::new();
+        lease.read_to_end(&mut marker)?;
+        if marker != RESERVED {
+            return Err(Error::Conflict(
+                "Evidence guardian reservation is missing or dirty".into(),
+            ));
+        }
+        lease.set_len(0)?;
+        use std::io::{Seek, SeekFrom};
+        lease.seek(SeekFrom::Start(0))?;
+        lease.write_all(b"guardian running\n")?;
+        lease.sync_all()?;
+        Ok(Self {
+            lease,
+            launched: false,
+        })
+    }
+    fn clear(&self) -> Result<()> {
+        self.lease.set_len(0)?;
+        self.lease.sync_all()?;
+        Ok(())
+    }
+}
+impl Drop for EvidenceGuardian {
+    fn drop(&mut self) {
+        if !self.launched {
+            let _ = self.clear();
+        }
+    }
 }
 
 /// Use the isolated guardian so descendants cannot retain pipes or outlive cancellation.
@@ -188,6 +250,11 @@ pub fn worker() -> Result<()> {
     input.by_ref().take(32 * 1024 * 1024).read_line(&mut line)?;
     let spec: Invocation = serde_json::from_str(&line).map_err(io::Error::other)?;
     drop(input);
+    let mut evidence_guardian = spec
+        .evidence_pin_guardian
+        .as_deref()
+        .map(EvidenceGuardian::claim)
+        .transpose()?;
     let mut lease = lock(&spec.worker_lock)?;
     if lease.metadata()?.len() != 0 {
         return Err(Error::Conflict("Previous worker did not confirm cleanup; inspect processes before clearing its worker-lock marker".into()));
@@ -220,6 +287,9 @@ pub fn worker() -> Result<()> {
         command.arg("--output-schema").arg(path);
     }
     let mut child = Group(command.spawn()?);
+    if let Some(guardian) = &mut evidence_guardian {
+        guardian.launched = true;
+    }
     let mut child_input = child.0.stdin.take().expect("piped stdin");
     let writer = thread::spawn(move || {
         let _ = child_input.write_all(spec.prompt.as_bytes());
@@ -286,6 +356,9 @@ pub fn worker() -> Result<()> {
     scratch.close()?;
     lease.set_len(0)?;
     lease.sync_all()?;
+    if let Some(guardian) = &evidence_guardian {
+        guardian.clear()?;
+    }
     send(&Message::Exit {
         code: code.unwrap_or(130),
     })?;
@@ -299,12 +372,34 @@ pub struct Worker {
 }
 impl Worker {
     pub fn spawn(executable: &std::path::Path, spec: &Invocation) -> Result<Self> {
-        let mut child = Command::new(executable)
+        if let Some(path) = &spec.evidence_pin_guardian {
+            let mut lease = evidence_lock(path)?;
+            if lease.metadata()?.len() != 0 {
+                return Err(Error::Conflict(
+                    "Evidence guardian marker is already in use".into(),
+                ));
+            }
+            lease.write_all(RESERVED)?;
+            lease.sync_all()?;
+        }
+        let spawned = Command::new(executable)
             .arg("__worker")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .spawn()?;
+            .spawn();
+        let mut child = match spawned {
+            Ok(child) => child,
+            Err(error) => {
+                // spawn failed before any guardian/provider existed.
+                if let Some(path) = &spec.evidence_pin_guardian {
+                    let lease = evidence_lock(path)?;
+                    lease.set_len(0)?;
+                    lease.sync_all()?;
+                }
+                return Err(error.into());
+            }
+        };
         let mut input = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");
         let (tx, messages) = mpsc::sync_channel(32);

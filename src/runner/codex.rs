@@ -269,6 +269,7 @@ fn readonly_proposal(
             schema: None,
             scratch_root: scratch.path().join("worker"),
             worker_lock: scratch.path().join("worker.lock"),
+            evidence_pin_guardian: None,
             callback: None,
         },
         cancelled,
@@ -299,6 +300,7 @@ pub fn propose_remediation(
     evidence: &str,
     scratch_root: &std::path::Path,
     cwd: &std::path::Path,
+    pin: crate::application::evidence_pin::EvidencePin,
 ) -> Result<Judgment> {
     use crate::scratch::Scratch;
     let executable = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
@@ -337,6 +339,7 @@ pub fn propose_remediation(
             schema: None,
             scratch_root: scratch.path().join("worker"),
             worker_lock: scratch.path().join("worker.lock"),
+            evidence_pin_guardian: Some(pin.guardian_lock()),
             callback: None,
         },
         cancelled,

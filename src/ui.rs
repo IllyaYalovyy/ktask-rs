@@ -339,6 +339,7 @@ fn controls(app: &App) -> Vec<(&'static str, Action)> {
         View::Config if app.service.is_some() => vec![
             ("m Defaults", Action::ProjectModels),
             ("c Checks", Action::ProjectChecks),
+            ("k Storage", Action::Storage),
             ("e Preferences", Action::Configure),
             ("Esc Back", Action::Back),
         ],
@@ -1165,7 +1166,7 @@ fn draw_information(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect)
     let text = if app.service.is_some() {
         if app.view == View::Config {
             format!(
-                "Project: {}\nStorage: SQLite (defaults and checks).\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\n\nDefaults apply to new tasks; existing revisions stay pinned.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
+                "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\n\nDefaults apply to new tasks; existing revisions stay pinned.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
                 app.project_name,
                 if app.mouse_enabled {
                     "Enabled"

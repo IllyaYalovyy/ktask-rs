@@ -62,6 +62,17 @@ pub enum Outcome {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Show project output usage and cleanup candidates; --apply removes previewed bytes.
+    Storage {
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Set the age of completed attempts eligible for storage cleanup (0 means immediately).
+    Retention {
+        days: i64,
+        #[arg(long)]
+        if_version: Option<i64>,
+    },
     /// Execute/resume current. Failed checks invoke bounded remediation; never skips a failure.
     #[command(visible_aliases = ["resume", "retry"])]
     Run {

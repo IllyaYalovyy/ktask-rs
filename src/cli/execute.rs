@@ -125,7 +125,10 @@ fn tasks(service: &mut Service, scope: Scope) -> Result<Vec<Task>> {
 
 pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply> {
     match command {
-        Command::Run { .. } | Command::Recover { .. } => unreachable!("runner dispatch"),
+        Command::Run { .. }
+        | Command::Recover { .. }
+        | Command::Storage { .. }
+        | Command::Retention { .. } => unreachable!("runner dispatch"),
         Command::Pause { target: input } => {
             let (_, target) = target(service, input)?;
             service.request_pause(target)?;

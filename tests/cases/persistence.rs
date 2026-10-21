@@ -9,6 +9,9 @@ use ktask_rs_mk3::{
 use std::path::Path;
 use std::{fs, os::unix::fs::PermissionsExt};
 
+#[path = "retention_remediation.rs"]
+mod retention_remediation;
+
 fn definition(title: &str) -> Definition {
     Definition {
         title: title.into(),
@@ -1451,6 +1454,328 @@ fn failed_task(root: &Path) -> Result<(i64, i64)> {
         None,
     )?;
     Ok((id, run.attempt))
+}
+
+#[test]
+fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
+    use std::os::unix::fs::symlink;
+    use std::process::Command;
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    support::empty_repository(root)?;
+    let (closed_id, closed_attempt) = failed_task(root)?;
+    let mut service = service(root)?;
+    assert!(service.storage_preview()?.candidates.is_empty()); // unresolved failure
+    let closed_target = target(&mut service, closed_id)?;
+    service.resolve(closed_target, Resolution::FailedSkipped, "Reviewed failure")?;
+    let artifact_dir = root.join(format!("state/ktask-dev/evidence/attempt-{closed_attempt}"));
+    fs::create_dir_all(&artifact_dir)?;
+    fs::write(artifact_dir.join("step-777.log"), "transcript evidence")?;
+    let project_file = root.join("project-secret.txt");
+    fs::write(&project_file, "project files must survive")?;
+    symlink(&project_file, artifact_dir.join("step-778.log"))?;
+    drop(service);
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    for (relative, size) in [
+        (
+            format!("evidence/attempt-{closed_attempt}/step-777.log"),
+            19,
+        ),
+        (
+            format!("evidence/attempt-{closed_attempt}/step-778.log"),
+            26,
+        ),
+    ] {
+        db.connection().execute("INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms) VALUES (?1,'check','text/plain',?2,?3,1)", rusqlite::params![closed_attempt,relative,size])?;
+    }
+    drop(db);
+    let mut service = self::service(root)?;
+    let configured = |title| {
+        let mut d = definition(title);
+        for model in &mut d.models {
+            *model = Some(ModelConfig {
+                provider: "codex".into(),
+                model: "fixture-model".into(),
+                effort: None,
+            });
+        }
+        d
+    };
+    let expected = service.retention_policy()?;
+    service.set_retention(expected, 0)?;
+    let preview = service.storage_preview()?;
+    assert_eq!(preview.candidates.len(), 1);
+    assert_eq!(preview.candidates[0].attempt_id, closed_attempt);
+    assert_eq!(preview.candidates[0].artifacts, 2);
+    assert!(preview.reclaimable_bytes > 0);
+    let live_id = service.create(&[configured("Unresolved failure")], None, true)?[0];
+    let live_target = target(&mut service, live_id)?;
+    let run = service.begin_run(live_target, "retention-live-token", "fixture-base")?;
+    assert!(service.storage_preview()?.deferred_for_live_work);
+    service.output(&run, "stderr", "unresolved evidence")?;
+    service.finish_run(&run, "failed", Some("check"), "Keep live evidence", None)?;
+    let unresolved_id = live_id;
+    let unresolved_attempt = run.attempt;
+    assert_eq!(service.task(unresolved_id)?.unwrap().status, "failed");
+    drop(service);
+
+    let cli = |args: &[&str]| -> Result<serde_json::Value> {
+        let output = Command::new(env!("CARGO_BIN_EXE_ktask-dev"))
+            .env_clear()
+            .env("HOME", root)
+            .env("XDG_STATE_HOME", root.join("state"))
+            .env("XDG_CONFIG_HOME", root.join("config"))
+            .env("XDG_CACHE_HOME", root.join("cache"))
+            .env("XDG_RUNTIME_DIR", root.join("runtime"))
+            .env("TMPDIR", root)
+            .current_dir(root)
+            .arg("--json")
+            .args(args)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(serde_json::from_slice(&output.stdout)?)
+    };
+    let before = cli(&["storage"])?;
+    assert_eq!(
+        before["data"]["preview"]["candidates"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, 110, 42)?;
+    t.screen("mouse Config navigation", |s| s.contains("4 Config"))?;
+    t.click("4 Config")?;
+    let config = t.screen("Config storage button", |s| s.contains("k Storage"))?;
+    println!("RETENTION CONFIG SCREEN\n{config}");
+    t.click("k Storage")?;
+    let modal = t.screen("Storage retention preview", |s| {
+        s.contains("eligible:") && !s.contains("step")
+    })?;
+    println!("RETENTION PREVIEW SCREEN\n{modal}");
+    assert!(modal.contains(&format!("Task #{closed_id} attempt #{closed_attempt}")));
+    t.click("Apply")?;
+    let mouse_saved = t.screen("mouse policy saved", |s| {
+        s.contains("Project configuration saved")
+    })?;
+    println!("RETENTION MOUSE POLICY SAVED SCREEN\n{mouse_saved}");
+    assert_eq!(self::service(root)?.retention_policy()?.days, 0);
+    assert!(artifact_dir.join("step-777.log").exists());
+    t.click("k Storage")?;
+    let mouse_cleanup = t.screen("mouse cleanup preview", |s| {
+        s.contains(&format!("Task #{closed_id} attempt #{closed_attempt}"))
+    })?;
+    println!("RETENTION MOUSE CLEANUP PREVIEW SCREEN\n{mouse_cleanup}");
+    t.click("Save policy")?;
+    let apply_choice = t.screen("Apply preview choice", |s| s.contains("Apply preview"))?;
+    println!("RETENTION MOUSE CHOICE SCREEN\n{apply_choice}");
+    t.click("Apply")?;
+    let applied = t.screen("Cleaned one attempt", |s| s.contains("Cleaned 1 attempt"))?;
+    println!("RETENTION APPLIED SCREEN\n{applied}");
+    t.click("k Storage")?;
+    let repeated = t.screen("Storage retention repeated preview", |s| {
+        s.contains("eligible: 0 bytes")
+    })?;
+    println!("RETENTION REPEAT SCREEN\n{repeated}");
+    t.click("Cancel")?;
+    t.screen("mouse storage cancelled", |s| {
+        !s.contains("Retain completed attempts") && s.contains("k Storage")
+    })?;
+    quit(&mut t)?;
+    let after = cli(&["storage", "--apply"])?;
+    assert!(
+        after["data"]["preview"]["candidates"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        fs::read_to_string(project_file)?,
+        "project files must survive"
+    );
+    assert!(!artifact_dir.join("step-777.log").exists());
+    assert!(!artifact_dir.join("step-778.log").exists());
+    let mut service = self::service(root)?;
+    assert!(service.task(closed_id)?.unwrap().attempts[0].output_pruned);
+    assert!(!service.task(unresolved_id)?.unwrap().attempts[0].output_pruned);
+    assert!(!service.task(live_id)?.unwrap().attempts[0].output_pruned);
+    assert!(
+        service
+            .browse_transcript(closed_attempt, 0, 0, &root.join("state/ktask-dev"))?
+            .contains("PRUNED:")
+    );
+    assert_eq!(
+        unresolved_attempt,
+        service.task(unresolved_id)?.unwrap().attempts[0].id
+    );
+    let unresolved_target = target(&mut service, unresolved_id)?;
+    service.resolve(
+        unresolved_target,
+        Resolution::FailedSkipped,
+        "Resolved after review",
+    )?;
+    drop(service);
+    let mut keyboard = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, 110, 42)?;
+    keyboard.send("4")?;
+    keyboard.screen("keyboard Config", |s| s.contains("k Storage"))?;
+    keyboard.send("k")?;
+    let keyboard_preview = keyboard.screen("keyboard cleanup preview", |s| {
+        s.contains(&format!(
+            "Task #{unresolved_id} attempt #{unresolved_attempt}"
+        ))
+    })?;
+    println!("RETENTION KEYBOARD PREVIEW SCREEN\n{keyboard_preview}");
+    keyboard.send("\t ")?;
+    let keyboard_choice =
+        keyboard.screen("keyboard apply choice", |s| s.contains("< Apply preview >"))?;
+    println!("RETENTION KEYBOARD CHOICE SCREEN\n{keyboard_choice}");
+    keyboard.send("\x13")?;
+    let keyboard_applied = keyboard.screen("keyboard cleanup applied", |s| {
+        s.contains("Cleaned 1 attempt")
+    })?;
+    println!("RETENTION KEYBOARD APPLIED SCREEN\n{keyboard_applied}");
+    keyboard.send("3")?;
+    keyboard.screen("pruned History", |s| s.contains("History"))?;
+    keyboard.send("\r")?;
+    let pruned_history = keyboard.screen("pruned output in History", |s| {
+        s.contains("PRUNED: stored output")
+    })?;
+    println!("RETENTION PRUNED HISTORY SCREEN\n{pruned_history}");
+    keyboard.click("Close")?;
+    keyboard.send("4")?;
+    keyboard.screen("policy Config", |s| s.contains("k Storage"))?;
+    keyboard.send("k")?;
+    keyboard.screen("policy form", |s| s.contains("Retain completed attempts"))?;
+    keyboard.send("\x015")?;
+    let edited_policy = keyboard.screen("policy edited", |s| s.contains("5▏"))?;
+    println!("RETENTION POLICY EDIT SCREEN\n{edited_policy}");
+    keyboard.send("\x13")?;
+    let saved_policy = keyboard.screen("policy saved", |s| {
+        s.contains("Project configuration saved")
+    })?;
+    println!("RETENTION POLICY SAVED SCREEN\n{saved_policy}");
+    quit(&mut keyboard)?;
+    assert!(self::service(root)?.task(unresolved_id)?.unwrap().attempts[0].output_pruned);
+    assert_eq!(self::service(root)?.retention_policy()?.days, 5);
+    let policy = cli(&["retention", "7", "--if-version", "3"])?;
+    assert_eq!(policy["data"]["retention"]["days"], 7);
+    Ok(())
+}
+
+#[test]
+fn retention_rechecks_live_work_and_recovers_partial_artifact_cleanup() -> Result {
+    use std::os::unix::fs::symlink;
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (task_id, attempt) = failed_task(root)?;
+    let mut service = self::service(root)?;
+    let target = target(&mut service, task_id)?;
+    service.resolve(target, Resolution::FailedSkipped, "Closed after review")?;
+    let policy = service.retention_policy()?;
+    service.set_retention(policy, 0)?;
+    drop(service);
+    let state = root.join("state/ktask-dev");
+    let dir = state.join(format!("evidence/attempt-{attempt}"));
+    fs::create_dir_all(&dir)?;
+    let first = dir.join("step-100.log");
+    fs::write(&first, "first transcript")?;
+    let db = Database::open_in(&state)?;
+    db.connection().execute("INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms) VALUES (?1,'first','text/plain',?2,16,1)", rusqlite::params![attempt,format!("evidence/attempt-{attempt}/step-100.log")])?;
+    db.connection().execute("INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms) VALUES (?1,'second','text/plain','unsafe/step-101.log',16,1)", [attempt])?;
+    drop(db);
+    let mut service = self::service(root)?;
+    let stale = service.storage_preview()?;
+    let db = Database::open_in(&state)?;
+    db.connection().execute("INSERT INTO model_calls(project_id,role,provider,model,request_key,state,started_at_ms) VALUES (?1,'review','codex','fixture','retention-live-call','running',1)", [service.project_id])?;
+    assert!(service.storage_preview()?.deferred_for_live_work);
+    assert!(service.cleanup_storage(&stale).is_err());
+    assert!(first.exists());
+    db.connection().execute("UPDATE model_calls SET state='succeeded',finished_at_ms=2 WHERE request_key='retention-live-call'", [])?;
+    drop(db);
+    let preview = service.storage_preview()?;
+    assert_eq!(preview.candidates.len(), 1);
+    assert!(service.cleanup_storage(&preview).is_err());
+    assert!(!first.exists());
+    let db = Database::open_in(&state)?;
+    let first_state: (Option<i64>, Option<i64>) = db.connection().query_row(
+        "SELECT pruning_requested_at_ms,pruned_at_ms FROM artifacts WHERE name='first'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    assert!(first_state.0.is_none() && first_state.1.is_some());
+    let second_state: (Option<i64>, Option<i64>) = db.connection().query_row(
+        "SELECT pruning_requested_at_ms,pruned_at_ms FROM artifacts WHERE name='second'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    assert!(second_state.0.is_some() && second_state.1.is_none());
+    // Simulate an interrupted unlink: the intended file has already vanished.
+    db.connection().execute(
+        "UPDATE artifacts SET relative_path=?1 WHERE name='second'",
+        [format!("evidence/attempt-{attempt}/step-101.log")],
+    )?;
+    drop(db);
+    let pending = service.storage_preview()?;
+    assert_eq!(pending.candidates[0].pending_artifacts, 1);
+    assert!(
+        service
+            .browse_transcript(attempt, 1, 0, &state)?
+            .contains("PENDING CLEANUP")
+    );
+    service.cleanup_storage(&pending)?;
+    assert!(service.storage_preview()?.candidates.is_empty());
+    assert!(
+        service
+            .browse_transcript(attempt, 0, 0, &state)?
+            .contains("PRUNED:")
+    );
+    assert!(
+        service
+            .browse_transcript(attempt, 1, 0, &state)?
+            .contains("PRUNED:")
+    );
+    assert!(service.task(task_id)?.unwrap().attempts[0].output_pruned);
+    // A substituted parent directory must never redirect deletion to the
+    // project or the production instance's state tree.
+    fs::remove_dir(&dir)?;
+    let project_dir = root.join("project-evidence");
+    fs::create_dir_all(&project_dir)?;
+    fs::write(project_dir.join("step-200.log"), "project evidence")?;
+    symlink(&project_dir, &dir)?;
+    let other_instance = root.join(format!("state/ktask/evidence/attempt-{attempt}"));
+    fs::create_dir_all(&other_instance)?;
+    fs::write(
+        other_instance.join("step-200.log"),
+        "other instance evidence",
+    )?;
+    let db = Database::open_in(&state)?;
+    db.connection().execute("INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms) VALUES (?1,'third','text/plain',?2,16,1)", rusqlite::params![attempt,format!("evidence/attempt-{attempt}/step-200.log")])?;
+    drop(db);
+    let preview = service.storage_preview()?;
+    assert!(service.cleanup_storage(&preview).is_err());
+    assert_eq!(
+        fs::read_to_string(project_dir.join("step-200.log"))?,
+        "project evidence"
+    );
+    assert_eq!(
+        fs::read_to_string(other_instance.join("step-200.log"))?,
+        "other instance evidence"
+    );
+    fs::remove_file(&dir)?;
+    fs::create_dir(&dir)?;
+    fs::write(dir.join("step-200.log"), "safe transcript")?;
+    let retry = service.storage_preview()?;
+    service.cleanup_storage(&retry)?;
+    assert!(!dir.join("step-200.log").exists());
+    assert_eq!(
+        fs::read_to_string(other_instance.join("step-200.log"))?,
+        "other instance evidence"
+    );
+    Ok(())
 }
 
 fn provider_fixture(root: &Path, proposal: serde_json::Value, fail: bool) -> Result<()> {

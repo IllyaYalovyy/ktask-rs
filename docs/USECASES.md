@@ -45,6 +45,7 @@
 - Break down pending work or failed current → the capable model inserts ordinary subtasks in execution order → mark the original superseded and retain its attempts in History; require approval only when policy calls for it.
 - Switch screens, open help, or resize → return with selection, filters, and scroll position retained.
 - Change Configuration → apply valid settings or cancel unchanged; invalid settings show an error without replacing saved values.
+- Open Configuration → Storage → inspect retained bytes and the exact eligible attempts → set retention days or apply the preview. Cleanup preserves Queue evidence, unresolved failures and History records; pruned output/transcripts are labeled in History. The same preview, policy and apply commands are available in CLI. Interactive remediation pins its evidence through provider cleanup, including concurrent task resolution; interrupted ownership is recovered only after owner and guardian locks are idle and guardian cleanup is confirmed.
 - Open About → read application identity and version → return to the previous screen unchanged.
 - Use CLI → perform the same nonvisual operations and inspect their results; screen navigation, layout, and mouse preferences are TUI-only.
 

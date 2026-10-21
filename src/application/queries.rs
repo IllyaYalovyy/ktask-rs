@@ -206,7 +206,16 @@ impl Service {
             total
         );
         if rows.is_empty() {
-            text.push_str("No output records on this page.\n");
+            let pruned: bool = db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM output_pruning WHERE attempt_id=?1)",
+                [attempt],
+                |r| r.get(0),
+            )?;
+            text.push_str(if pruned {
+                "PRUNED: stored output was removed by retention.\n"
+            } else {
+                "No output records on this page.\n"
+            });
         }
         let byte_offset = chunk.saturating_mul(CHUNK_BYTES);
         // A match can straddle a chunk boundary. Only inspect bounded context at
@@ -323,7 +332,7 @@ impl Service {
         root: &std::path::Path,
     ) -> Result<String> {
         let db = self.db.connection();
-        let mut stmt = db.prepare("SELECT name,relative_path,size_bytes,pruned_at_ms FROM artifacts WHERE attempt_id=?1 ORDER BY id")?;
+        let mut stmt = db.prepare("SELECT name,relative_path,size_bytes,pruned_at_ms,pruning_requested_at_ms FROM artifacts WHERE attempt_id=?1 ORDER BY id")?;
         let artifacts = stmt
             .query_map([attempt], |r| {
                 Ok((
@@ -331,6 +340,7 @@ impl Service {
                     r.get::<_, String>(1)?,
                     r.get::<_, i64>(2)?,
                     r.get::<_, Option<i64>>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -343,7 +353,7 @@ impl Service {
             return Ok(text);
         }
         let index = artifact.min(artifacts.len() - 1);
-        let (name, relative, size, pruned) = &artifacts[index];
+        let (name, relative, size, pruned, pending) = &artifacts[index];
         text.push_str(&format!(
             "Artifact {} / {} · {name} · {size} bytes\n",
             index + 1,
@@ -354,7 +364,11 @@ impl Service {
             return Ok(text);
         }
         let Some(path) = retained_artifact_path(root, relative) else {
-            text.push_str("MISSING: transcript file or safe path is absent.\n");
+            text.push_str(if pending.is_some() {
+                "PENDING CLEANUP: transcript file is absent; retry Storage cleanup.\n"
+            } else {
+                "MISSING: transcript file or safe path is absent.\n"
+            });
             return Ok(text);
         };
         let Ok(mut file) = std::fs::File::open(&path) else {
@@ -769,7 +783,7 @@ fn attempts(
     historical_logs: bool,
     live_logs: bool,
 ) -> Result<Vec<Attempt>> {
-    let mut stmt = db.prepare_cached("SELECT a.id, a.revision, a.state, a.outcome, a.active_ms, a.wait_reason, a.resume_at_ms, (SELECT session_id FROM attempt_steps WHERE attempt_id = a.id AND role = 'execution' ORDER BY ordinal DESC LIMIT 1), (SELECT sum(cost_microusd) FROM model_calls WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id = a.id)), a.report, (SELECT prompt FROM questions WHERE attempt_id = a.id AND state = 'open' ORDER BY id DESC LIMIT 1) FROM attempts a WHERE task_id = ?1 ORDER BY number")?;
+    let mut stmt = db.prepare_cached("SELECT a.id, a.revision, a.state, a.outcome, a.active_ms, a.wait_reason, a.resume_at_ms, (SELECT session_id FROM attempt_steps WHERE attempt_id = a.id AND role = 'execution' ORDER BY ordinal DESC LIMIT 1), (SELECT sum(cost_microusd) FROM model_calls WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id = a.id)), a.report, (SELECT prompt FROM questions WHERE attempt_id = a.id AND state = 'open' ORDER BY id DESC LIMIT 1), EXISTS(SELECT 1 FROM output_pruning WHERE attempt_id=a.id) FROM attempts a WHERE task_id = ?1 ORDER BY number")?;
     let mut attempts = stmt
         .query_map([task], |r| {
             Ok(Attempt {
@@ -786,6 +800,7 @@ fn attempts(
                 session: r.get(7)?,
                 cost_microusd: r.get(8)?,
                 logs: Vec::new(),
+                output_pruned: r.get(11)?,
                 report: r.get(9)?,
                 question: r.get(10)?,
                 steps: Vec::new(),
@@ -804,6 +819,11 @@ fn attempts(
             attempt.logs = output
                 .query_map([attempt.id], |r| r.get(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
+            if attempt.output_pruned {
+                attempt
+                    .logs
+                    .push("PRUNED: stored output was removed by retention.".into());
+            }
         }
         let mut steps = db.prepare_cached(
             "SELECT s.role, s.state, s.report, c.name, s.passed_count, s.failed_count, s.ignored_count

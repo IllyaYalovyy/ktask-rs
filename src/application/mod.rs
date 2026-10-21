@@ -1,6 +1,7 @@
 //! Shared application commands. Neither terminal state nor demo fixtures enter this layer.
 mod commands;
 mod evidence;
+pub mod evidence_pin;
 mod output_text;
 pub use evidence::{EvidenceCursor, EvidenceMatch, EvidenceSearch};
 pub mod configuration;
@@ -8,6 +9,7 @@ pub mod execution;
 pub mod preferences;
 pub mod progress;
 mod queries;
+pub mod retention;
 pub mod session;
 pub mod usage_report;
 pub use queries::{Event, WaitingResume};
@@ -105,6 +107,7 @@ pub struct Attempt {
     pub resume_at_ms: Option<i64>,
     pub session: Option<i64>,
     pub logs: Vec<String>,
+    pub output_pruned: bool,
     pub cost_microusd: Option<i64>,
     /// Final structured report (worker summary, supervisor verdict, or wait message).
     pub report: Option<String>,

@@ -639,6 +639,7 @@ fn ai_turn(
         schema: Some(codex::schema()),
         scratch_root: ctx.paths.cache.join("workers"),
         worker_lock: ctx.workspace.worker_lock.clone(),
+        evidence_pin_guardian: None,
         callback: matches!(role, "execution" | "remediation").then(|| callback::Capability {
             project: ctx.workspace.root.clone(),
             state: ctx.paths.state.clone(),
@@ -840,6 +841,7 @@ fn judge_once(
         schema: Some(schema),
         scratch_root: ctx.paths.cache.join("workers"),
         worker_lock: ctx.workspace.worker_lock.clone(),
+        evidence_pin_guardian: None,
         callback: None,
     };
     let mut stream = codex::Stream::default();

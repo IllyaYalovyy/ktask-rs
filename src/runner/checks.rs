@@ -99,6 +99,7 @@ fn run_one(
         schema: None,
         scratch_root: ctx.paths.cache.join("workers"),
         worker_lock: ctx.workspace.worker_lock.clone(),
+        evidence_pin_guardian: None,
         callback: None,
     };
     let mut stream = codex::Stream::default();

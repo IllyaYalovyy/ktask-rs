@@ -73,6 +73,9 @@ not the TUI. Concurrent stale edits fail without overwriting data; other windows
 New AI tasks have no invented model defaults. **Models** accepts `provider/model`, optional
 effort, and limits. Saving makes a new approved revision; previous attempts keep their inputs.
 Configuration provides project model defaults, check management, and saved preferences.
+Configuration → Storage previews retained output and check transcript bytes, sets the age
+of completed work eligible for cleanup, and applies cleanup after review. History marks
+pruned content; live work and unresolved failures retain their evidence.
 Mouse, run-one/continue-queue, and planner approval preferences persist per project and instance.
 Break down uses the configured planning model and previews ordinary subtasks before applying them.
 
@@ -227,6 +230,9 @@ cargo run --locked -- approve 1 --if-version 1
 
 - Read: `list`, `show ID`, `current`, `events`, `stats`. List scopes: queue/history/all/deleted;
   filtering never sorts execution order. `current` returns null on an empty registered queue.
+- Storage: `storage` previews logical output and artifact bytes; `storage --apply` removes
+  eligible content. `retention DAYS [--if-version N]` sets the age policy (default 30 days;
+  0 allows immediate cleanup of closed work). Both commands support `--json`.
 - Change: `add`, `edit ID`, `move ID --before ID`, `approve`, `reject --reason`, `resolve
   --outcome --reason`, `ack`, `delete`, `restore`. Delete is recoverable. Only current Human
   work can be acknowledged; only failed current can be resolved.

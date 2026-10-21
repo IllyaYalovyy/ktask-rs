@@ -47,6 +47,7 @@ pub enum DialogKind {
         id: Option<i64>,
     },
     Preferences(crate::application::preferences::Preferences),
+    Storage(crate::application::retention::Preview),
     Config,
     ResetConfig,
     Help,

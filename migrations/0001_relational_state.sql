@@ -315,6 +315,29 @@ CREATE TABLE attempt_output (
     PRIMARY KEY (attempt_id, sequence)
 ) STRICT;
 
+-- The history remains inspectable after output bytes are deliberately removed.
+CREATE TABLE output_pruning (
+    attempt_id INTEGER PRIMARY KEY REFERENCES attempts(id),
+    pruned_at_ms INTEGER NOT NULL CHECK (pruned_at_ms >= 0),
+    size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0)
+) STRICT;
+
+CREATE TABLE project_retention (
+    project_id INTEGER PRIMARY KEY REFERENCES projects(id),
+    days INTEGER NOT NULL CHECK (days BETWEEN 0 AND 365000),
+    version INTEGER NOT NULL CHECK (version > 0)
+) STRICT;
+
+-- Interactive read-only providers retain evidence without creating execution attempts.
+CREATE TABLE evidence_pins (
+    id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 32 AND id NOT GLOB '*[^0-9a-f]*'),
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    directory_identity TEXT NOT NULL,
+    owner_identity TEXT NOT NULL,
+    guardian_identity TEXT NOT NULL
+) STRICT;
+CREATE INDEX ix_evidence_pins_project ON evidence_pins(project_id);
+
 CREATE TABLE artifacts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     attempt_id INTEGER NOT NULL REFERENCES attempts(id),
@@ -323,6 +346,7 @@ CREATE TABLE artifacts (
     relative_path TEXT NOT NULL UNIQUE CHECK (length(relative_path) > 0),
     size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
     created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+    pruning_requested_at_ms INTEGER CHECK (pruning_requested_at_ms >= created_at_ms),
     pruned_at_ms INTEGER CHECK (pruned_at_ms >= created_at_ms)
 ) STRICT;
 

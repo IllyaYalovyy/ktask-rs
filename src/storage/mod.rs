@@ -4,7 +4,15 @@ mod migrations;
 pub mod ordering;
 pub mod usage;
 
-use std::{fmt, fs, path::Path, time::Duration};
+use std::{
+    fmt, fs,
+    os::{
+        fd::AsRawFd,
+        unix::fs::{MetadataExt, OpenOptionsExt},
+    },
+    path::Path,
+    time::Duration,
+};
 
 use rusqlite::{Connection, OpenFlags};
 
@@ -55,19 +63,29 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 pub struct Database {
     connection: Connection,
+    state_dir: fs::File,
+    database_identity: (u64, u64),
 }
 
 impl Database {
     /// CLI inspection must not create an empty application database or state directory.
     pub fn open_existing(paths: &Paths) -> Result<Option<Self>> {
-        let file = paths.state.join("ktask.sqlite3");
-        match fs::metadata(&file) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
-            Ok(_) => {}
-        }
-        let connection = Connection::open_with_flags(file, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
-        Self::configure(connection).map(Some)
+        let state_dir = match Self::open_directory(&paths.state) {
+            Ok(directory) => directory,
+            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        let database_identity = match Self::database_identity(&state_dir, false) {
+            Ok(file) => file,
+            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        let connection = Self::open_connection(&state_dir, database_identity)?;
+        Self::configure(connection, state_dir, database_identity).map(Some)
     }
     /// One database per explicit instance state root; projects are rows, not directories.
     pub fn open(paths: &Paths) -> Result<Self> {
@@ -80,10 +98,80 @@ impl Database {
             return Err(Error::Incompatible("state root must be absolute".into()));
         }
         fs::create_dir_all(state_root)?;
-        Self::configure(Connection::open(state_root.join("ktask.sqlite3"))?)
+        let state_dir = Self::open_directory(state_root)?;
+        let database_identity = Self::database_identity(&state_dir, true)?;
+        let connection = Self::open_connection(&state_dir, database_identity)?;
+        Self::configure(connection, state_dir, database_identity)
     }
 
-    fn configure(mut connection: Connection) -> Result<Self> {
+    fn open_directory(path: &Path) -> Result<fs::File> {
+        Ok(fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(nix::libc::O_DIRECTORY | nix::libc::O_NOFOLLOW)
+            .open(path)?)
+    }
+
+    fn database_identity(directory: &fs::File, create: bool) -> Result<(u64, u64)> {
+        let path = format!(
+            "/proc/{}/fd/{}/ktask.sqlite3",
+            std::process::id(),
+            directory.as_raw_fd()
+        );
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if create && error.kind() == std::io::ErrorKind::NotFound => {
+                // Do not open/close extra descriptors to an existing SQLite database:
+                // doing so could release this process's POSIX database locks.
+                match fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .custom_flags(nix::libc::O_NOFOLLOW)
+                    .open(&path)
+                {
+                    Ok(file) => drop(file),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error.into()),
+                }
+                fs::symlink_metadata(&path)?
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if !metadata.is_file() {
+            return Err(Error::Conflict("Database is not a regular file".into()));
+        }
+        Ok((metadata.dev(), metadata.ino()))
+    }
+
+    fn open_connection(directory: &fs::File, expected: (u64, u64)) -> Result<Connection> {
+        let path = format!(
+            "/proc/{}/fd/{}/ktask.sqlite3",
+            std::process::id(),
+            directory.as_raw_fd()
+        );
+        let connection = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        let actual = fs::metadata(
+            connection
+                .path()
+                .ok_or_else(|| Error::Conflict("Missing database path".into()))?,
+        )?;
+        let current = Self::database_identity(directory, false)?;
+        if (actual.dev(), actual.ino()) != expected || current != expected {
+            return Err(Error::Conflict(
+                "Database identity changed while opening storage".into(),
+            ));
+        }
+        Ok(connection)
+    }
+
+    pub(crate) fn evidence_connection(&self) -> Result<Connection> {
+        Self::open_connection(&self.state_dir, self.database_identity)
+    }
+
+    fn configure(
+        mut connection: Connection,
+        state_dir: fs::File,
+        database_identity: (u64, u64),
+    ) -> Result<Self> {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", true)?;
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -94,7 +182,11 @@ impl Database {
         if mode != "wal" {
             return Err(Error::Incompatible(format!("WAL unavailable: {mode}")));
         }
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            state_dir,
+            database_identity,
+        })
     }
 
     /// Storage-level access, not the task command API. Callers must use transactions for
@@ -105,5 +197,9 @@ impl Database {
 
     pub fn connection_mut(&mut self) -> &mut Connection {
         &mut self.connection
+    }
+
+    pub fn state_dir(&self) -> &fs::File {
+        &self.state_dir
     }
 }

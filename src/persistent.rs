@@ -247,7 +247,7 @@ impl App {
         }
         if matches!(
             action,
-            Action::Configure | Action::ProjectModels | Action::ProjectChecks
+            Action::Configure | Action::ProjectModels | Action::ProjectChecks | Action::Storage
         ) {
             if let Err(error) = self.open_project_config(action) {
                 self.message(error);
@@ -496,6 +496,13 @@ impl App {
             .clone()
             .ok_or("Configure a remediation model first")?;
         let paths = self.instance.paths().map_err(|e| e.to_string())?;
+        let target = self.target(id)?;
+        let pin = self
+            .service
+            .as_mut()
+            .unwrap()
+            .begin_remediation_evidence(target)
+            .map_err(|e| e.to_string())?;
         let evidence = self
             .service
             .as_ref()
@@ -508,7 +515,6 @@ impl App {
             .unwrap()
             .project_root()
             .map_err(|e| e.to_string())?;
-        let target = self.target(id)?;
         let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stop = cancelled.clone();
         self.proposal_job = Some(ProposalJob {
@@ -522,6 +528,7 @@ impl App {
                     &evidence,
                     &paths.cache.join("workers"),
                     &cwd,
+                    pin,
                 )
                 .map(ProposalResult::Remediation)
                 .map_err(|e| e.to_string())
@@ -918,6 +925,7 @@ impl App {
                 | DialogKind::ProjectChecks(_)
                 | DialogKind::ProjectCheck { .. }
                 | DialogKind::Preferences(_)
+                | DialogKind::Storage(_)
         ) {
             return self.save_project_config(dialog);
         }

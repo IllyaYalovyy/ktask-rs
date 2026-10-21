@@ -93,6 +93,7 @@ pub enum Action {
     Configure,
     ProjectModels,
     ProjectChecks,
+    Storage,
     Scroll(i32),
     Position(i32),
     Fields(i32),
@@ -516,6 +517,9 @@ impl App {
             }
             View::Config if self.service.is_some() && code == KeyCode::Char('c') => {
                 Some(Action::ProjectChecks)
+            }
+            View::Config if self.service.is_some() && code == KeyCode::Char('k') => {
+                Some(Action::Storage)
             }
             View::Config if matches!(code, KeyCode::Enter | KeyCode::Char('e')) => {
                 Some(Action::Configure)

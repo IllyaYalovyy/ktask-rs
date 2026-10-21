@@ -102,6 +102,8 @@ erDiagram
     }
     projects ||--o{ project_models : "project_id"
     projects ||--o{ project_checks : "project_id"
+    projects ||--o| project_retention : "project_id"
+    projects ||--o{ evidence_pins : "project_id"
     projects ||--o| execution_sessions : "project_id"
     projects ||--o{ tasks : "project_id"
     tasks ||--o{ tasks : "recovery_root_id"
@@ -147,6 +149,7 @@ erDiagram
     tasks o|--o{ events : "task_id, project_id"
     projects ||--o{ events : "project_id"
     attempts ||--o{ attempt_output : "attempt_id"
+    attempts ||--o| output_pruning : "attempt_id"
     attempts ||--o{ artifacts : "attempt_id"
 ```
 
@@ -206,6 +209,7 @@ Retained files outside SQLite, owned by an attempt. Paths are unique within the 
 | `relative_path` | TEXT | no | Path under the instance artifact root, never the project root. |
 | `size_bytes` | INTEGER | no | Nonnegative retained byte count. |
 | `created_at_ms` | INTEGER | no | Creation time. |
+| `pruning_requested_at_ms` | INTEGER | yes | Durable cleanup intent; NULL until selected. Retry reconciles interrupted deletion. |
 | `pruned_at_ms` | INTEGER | yes | Deletion time; NULL while retained. |
 
 - PK `(id)`.
@@ -366,6 +370,34 @@ Append-only command/runner audit and activity feed. Task and attempt are optiona
 - Index `ix_events_task`: `INDEX ix_events_task ON events(task_id, id)`.
 - Index `ix_events_project`: `INDEX ix_events_project ON events(project_id, id)`.
 
+### evidence_pins
+
+Interactive remediation owns a durable evidence pin before it reads failure evidence.
+Pins defer project cleanup even after the failed task is resolved. Owner and guardian
+locks live under `evidence-pins/` in the database state root. The guardian reservation
+is written before spawn and stays nonempty until descendants have been reaped.
+Preview and both cleanup rechecks recover a pin only when both locks are idle and
+its guardian marker is empty and persisted directory/lock inode identities match.
+Missing or substituted guards fail closed; recovery never recreates a guard as proof
+of idleness. A durable `evidence-pins.identity` file binds orphan cleanup to the
+original directory even when no pin rows remain; unknown directories are not swept. Descriptor-relative, no-follow opens keep recovery in its original state
+root. The provider uses the original guardian descriptor, and release uses a database
+connection opened and checked before launch. Abnormal guardian exits retain evidence
+without PID or timeout inference. Completed pins remove their lock files after commit;
+recovery also removes idle orphan files left by interrupted creation or retirement.
+
+| Column | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `id` | TEXT | no | Random 32-character lowercase hexadecimal ownership key |
+| `project_id` | INTEGER | no | Project whose evidence is protected |
+| `directory_identity` | TEXT | no | Original guard directory device and inode |
+| `owner_identity` | TEXT | no | Original owner lock device and inode |
+| `guardian_identity` | TEXT | no | Original guardian lock device and inode |
+
+- PK `(id)`.
+- FK `(project_id)` → `projects(id)`.
+- Index `ix_evidence_pins_project`: `INDEX ix_evidence_pins_project ON evidence_pins(project_id)`.
+
 ### execution_sessions
 
 One project-scoped execution policy. The mode records the actual started run, separate
@@ -423,6 +455,19 @@ Billable provider requests, including project planning before a task exists. Inp
 - Index `ix_calls_project`: `INDEX ix_calls_project ON model_calls(project_id, id)`.
 - UQ `(request_key)`.
 
+### output_pruning
+
+One marker per attempt whose output content was deliberately removed. Task, attempt, step and judgment records remain intact.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `attempt_id` | INTEGER | no | Owning attempt. |
+| `pruned_at_ms` | INTEGER | no | Cleanup time. |
+| `size_bytes` | INTEGER | no | Original output content bytes. |
+
+- PK `(attempt_id)`.
+- FK `(attempt_id)` → `attempts(id)`.
+
 ### project_checks
 
 Configured tool commands (tests, Clippy, etc.), distinct from AI review and goal validation. A step snapshots the command actually executed.
@@ -471,6 +516,19 @@ Registered checkout. Names and canonical native root paths are independently uni
 - PK `(id)`.
 - UQ `(root_path)`.
 - UQ `(name)`.
+
+### project_retention
+
+Project-specific minimum age for terminal attempts on closed tasks. A missing row means 30 days; version guards concurrent policy edits.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `project_id` | INTEGER | no | Owning project. |
+| `days` | INTEGER | no | Minimum completed attempt age in days; 0 allows immediate cleanup. |
+| `version` | INTEGER | no | Positive policy version. |
+
+- PK `(project_id)`.
+- FK `(project_id)` → `projects(id)`.
 
 ### questions
 
@@ -851,8 +909,13 @@ WHERE id = :call_id AND state = 'running' RETURNING id;
 
 Use cursor indexes rather than OFFSET or timestamps. Batch output writes (target roughly
 250 ms, with immediate terminal flush); FULL synchronization is not a per-line logging strategy.
-Set retention quotas in the runner before enabling unattended execution. Keep summaries,
-failure evidence, and preservation checkpoints; do not delete another live run's data.
+The shared retention command previews logical content bytes and candidates before applying.
+Cleanup runs under a SQLite write transaction and is deferred while any project attempt or
+provider call is live. Only terminal attempts on closed tasks older than the configured age
+are eligible. It removes generated check transcripts beneath the pinned instance state
+directory and stored output rows, leaving task history, reports, verdicts, usage and explicit
+pruning markers. It commits artifact pruning intent before unlinking; interrupted or partly
+failed cleanup remains visible and can reconcile files already removed on the next apply.
 
 ```sql
 -- name: event-tail
@@ -973,7 +1036,7 @@ inspectable/restorable by ID within their project. JSON is an API representation
 `--demo` retains session-only fixtures and never opens SQLite. Real orchestration uses the same
 schema without changes. CLI/TUI request controls; only the supervisor finalizes running attempts
 after worker cleanup. Check commands and defaults are configured through shared application commands.
-Still not connected: other providers and output retention.
+Still not connected: other providers.
 
 Documentation tests check every table/column/PK/FK/index and ERD relationship against SQLite,
 prepare all SQL examples, and execute representative workflows. Run make check.

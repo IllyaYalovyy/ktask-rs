@@ -134,6 +134,9 @@ fn task_text(task: &Task) -> String {
             a.revision,
             safe(a.outcome.as_deref().unwrap_or("in progress"))
         ));
+        if a.output_pruned {
+            text.push_str("  PRUNED: stored output was removed by retention.\n");
+        }
         for step in a.steps.iter().filter(|step| step.role == "check") {
             let counts = step.counts.map_or_else(
                 || "test counts unavailable".into(),

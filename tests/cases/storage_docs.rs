@@ -51,7 +51,7 @@ fn schema_document_covers_every_column_key_index_view_and_erd_relationship() -> 
         .collect();
     let tables = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT GLOB 'sqlite_*' ORDER BY name")?
         .query_map([], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    assert_eq!(tables.len(), 20);
+    assert_eq!(tables.len(), 23);
     assert_eq!(
         sections.keys().copied().collect::<Vec<_>>(),
         tables.iter().map(String::as_str).collect::<Vec<_>>()
