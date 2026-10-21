@@ -298,6 +298,9 @@ fn cli_help_usage_and_read_commands_do_not_create_storage() -> Result {
         let output = run(root, &args)?;
         assert!(output.status.success());
         assert!(output.stderr.is_empty());
+        // The full help is the usage guide for scripts and agents.
+        let guide = String::from_utf8_lossy(&output.stdout).contains("EXIT CODES");
+        assert_eq!(guide, args == ["--help"], "{args:?}");
         println!(
             "HELP {}\n{}",
             args.join(" "),

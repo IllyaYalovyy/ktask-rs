@@ -1,0 +1,98 @@
+GUIDE FOR SCRIPTS AND AI AGENTS
+  Each command above has its own detailed help: ktask <command> --help.
+
+CONCEPTS
+  Project    A Git repository, identified by its directory (--project, default: cwd). add,
+             import, check-set and model-default register it on first use; every other
+             command fails with exit 3 until it is registered.
+  Instance   ktask and ktask-dev keep separate databases; --paths prints them. The working
+             directory never selects the instance.
+  Task       A title, a Goal and acceptance criteria (one --criterion each). State only the
+             outcome and how to verify it; the agent owns design and implementation.
+             Kind ai is run by agents. Kind human is owner work, confirmed with ack.
+  Revision   Each edit appends a revision. Only a ready (approved) revision runs; a newer
+             draft waits for approve or reject while the older ready one stays usable.
+  Attempt    One execution: implement, project checks, independent review and validation,
+             with up to ten repair rounds. Success commits the change as
+             "ktask: task #N, attempt #M". Failed attempts are kept as recorded.
+  Current    The first unfinished task in queue order. Only current runs. A failed current
+             blocks later tasks until it is repaired, retried or resolved.
+  Version    Every task has a version that each change increments. Pass --if-version N,
+             with N from show/list, so a change fails with exit 4 if the task moved on.
+  Roles      execution, review, validation and remediation; every task needs all four.
+             planning (project default only) is used by breakdown. Models are written
+             PROVIDER/MODEL: codex/gpt-6-sol, claude/sonnet, opencode/VENDOR/MODEL. A bare
+             "claude" means claude/sonnet. Providers: codex, claude or opencode.
+
+BEFORE THE FIRST RUN
+  - The project is a Git repository with at least one commit and a clean worktree.
+  - At least one check exists:        ktask check-set build --command 'make check'
+  - Defaults exist for every role:    ktask model-default execution --provider codex \
+                                          --model gpt-6-sol --effort high
+                                      (repeat for review, validation, remediation, planning)
+  - The provider CLI (codex, claude or opencode) is on PATH and logged in.
+  Defaults apply only to tasks added later; change an existing task with edit --model.
+
+TYPICAL SESSION
+  ktask --json add --title 'Export CSV' --goal 'Users can export the report as CSV.' \
+      --criterion 'Export writes a valid CSV' --criterion 'make check passes'
+  ktask --json run --background        # returns once the detached supervisor is up
+  ktask --json current                 # the task the runner is on, with attempts
+  ktask --json events --after 0        # progress feed; pass next_after on the next call
+  ktask --json show 12                 # full record: revisions, attempts, steps, usage
+  ktask --json pause 12                # stop after the worker is cleaned up; run resumes
+  Foreground run (no --background) blocks until the queue is done or something needs
+  the owner, then prints why it stopped. A detached runner logs to
+  <state>/runner-<project id>.log (see --paths).
+
+STATUS VALUES ("status" in list, show and current)
+  new             no approved revision yet: approve it, or edit --approval ready
+  ready           queued
+  running         an attempt is executing
+  paused          paused by the owner; run resumes the same attempt
+  waiting         a provider usage limit (wait_reason "rate_limit", resume_at_ms), or an
+                  agent question (attempt "question"): reply with answer
+  failed          the last attempt failed; a running supervisor starts a repair attempt by
+                  itself unless a stop rule applies (see below)
+  interrupted     the last attempt was stopped without a result; run tries again
+  succeeded  succeeded_override  failed_skipped  superseded  cancelled
+                  finished; listed with --scope history
+  deleted         soft-deleted; list --scope deleted, then restore
+
+WHEN EXECUTION STOPS ON A FAILED TASK
+  Automatic repair stops only when the attempt budget or the task time limit is used up,
+  critical findings remain after ten repair rounds, the failure judge replanned ten times,
+  the provider or environment failed three attempts in a row, or five attempts in a row
+  failed. Then choose one:
+    ktask run                                  retry (after fixing the cause or a limit)
+    ktask edit ID --attempt-limit 6            or --task-limit off, --model ..., then run
+    ktask remediate ID [--apply]               ask the remediation model for a plan
+    ktask breakdown ID [--apply]               split it into ordered subtasks
+    ktask resolve ID --outcome failed-skipped --reason '...'   move on
+    ktask abandon ID --reason '...'            give up; the task goes to History
+
+OUTPUT CONTRACT
+  Without --json, output is human text and may change. With --json, stdout carries one
+  line:  {"schema_version":1,"ok":true,"data":...}
+  and a failure writes to stderr:
+         {"schema_version":1,"ok":false,"error":{"code":"...","message":"..."}}
+  Mutations return a receipt such as {"action":"revised","id":12,"version":8}; version is
+  the task's new version. add and import return {"action":"created","tasks":[{"id","version"}]}.
+
+EXIT CODES
+  0  success
+  1  database, io or incompatible_database error
+  2  usage: invalid arguments
+  3  not_found: no database, unregistered project, or unknown task
+  4  conflict: stale --if-version, wrong task state, a run precondition (no check, a
+     role without a model, dirty worktree, runner already active) or another rule
+  Errors carry a message that says what to do next; read it before retrying.
+
+RULES FOR AI CALLERS
+  - Mark your changes as AI work: --actor-kind ai --actor NAME. Without it, changes are
+    recorded as the human owner.
+  - Read before you write: take version from show or list and pass --if-version.
+  - Do not edit or commit the project's worktree while an attempt is running, paused or
+    waiting; the supervisor owns it. Check with: ktask --json current
+  - Agents working inside an attempt cannot manage tasks. They may only file a follow-up
+    draft (follow-up), using the callback the supervisor provides.
