@@ -1,9 +1,10 @@
+pub(crate) mod agent;
 pub(crate) mod callback;
 mod checks;
-pub(crate) mod codex;
 mod cycle;
 mod output;
 pub(crate) mod process;
+pub(crate) mod provider;
 pub mod remediation;
 mod reset;
 pub(crate) mod workspace;
@@ -18,6 +19,7 @@ use crate::{
     storage::{Error, Result},
 };
 use process::{Invocation, Message, Worker};
+use provider::{Access, Provider};
 use std::{
     io::{BufRead, Read, Seek, SeekFrom, Write},
     os::unix::{fs::PermissionsExt, process::CommandExt},
@@ -53,12 +55,11 @@ enum Outcome {
     RateLimit(Option<i64>),
     /// The failure judge changed the plan (task revised, work inserted, model escalated);
     /// this attempt ends without spending budget, the plan is applied, and the loop goes on.
-    Replanned(codex::Judgment),
+    Replanned(agent::Judgment),
 }
 struct Context<'a> {
     paths: &'a Paths,
     workspace: &'a Workspace,
-    codex: PathBuf,
     stop: Arc<AtomicBool>,
     cursor: i64,
     started: Instant,
@@ -84,6 +85,19 @@ impl Context<'_> {
                 "Active time limit reached (configured task-wide limit); work and evidence retained. Increase the task limit explicitly before retrying".into(),
             ))
     }
+}
+/// Every role names a supported provider whose CLI is installed.
+fn connected(definition: &crate::application::Definition) -> Result<()> {
+    for model in &definition.models {
+        let model = model.as_ref().ok_or_else(|| {
+            Error::Conflict(format!(
+                "Configure all four task roles in Models ({}); defaults only apply to new tasks",
+                provider::SUPPORTED
+            ))
+        })?;
+        Provider::of(model)?.executable()?;
+    }
+    Ok(())
 }
 pub(crate) fn executable(name: &str) -> Result<PathBuf> {
     let path = std::env::split_paths(
@@ -192,7 +206,6 @@ fn run_inner(
         service.start_execution_session(options.queue)?;
     }
     *owns_session = true;
-    let codex = executable("codex")?;
     let stop = process::stopped()?;
     let checks = service.checks()?;
     require(
@@ -227,12 +240,7 @@ fn run_inner(
             task.definition().definition.kind == crate::application::Kind::Ai,
             "Current task requires human acknowledgment",
         )?;
-        for model in &task.definition().definition.models {
-            require(
-                model.as_ref().is_some_and(|m| m.provider == "codex"),
-                "Configure all four roles with provider codex before execution",
-            )?;
-        }
+        connected(&task.definition().definition)?;
         let models = &task.definition().definition.models;
         let implementation = models[0].as_ref().expect("models checked");
         for (role, model) in crate::application::ROLES.iter().zip(models).skip(1) {
@@ -278,7 +286,6 @@ fn run_inner(
         let mut context = Context {
             paths,
             workspace,
-            codex: codex.clone(),
             stop: Arc::clone(&stop),
             cursor,
             started: Instant::now(),
@@ -602,12 +609,8 @@ fn ai_turn(
     let model = run.definition.models[index]
         .as_ref()
         .expect("preflight models");
-    let scope = std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex")))
-        .ok_or_else(|| Error::Conflict("Codex auth home is not configured".into()))?;
-    let step =
-        service.start_ai_step(run, role, model, &scope.to_string_lossy(), nudge.is_some())?;
+    let provider = Provider::of(model)?;
+    let step = service.start_ai_step(run, role, model, &provider.auth_scope()?, nudge.is_some())?;
     service.output(
         run,
         "system",
@@ -624,23 +627,32 @@ fn ai_turn(
             }
         ),
     )?;
+    let prompt = nudge.map_or_else(
+        || {
+            agent::prompt(
+                run,
+                role,
+                evidence,
+                &ctx.paths.executable,
+                &ctx.workspace.root,
+            )
+        },
+        |question| agent::nudge(role, question),
+    );
+    let launch = provider.launch(
+        model,
+        step.provider_session.as_deref(),
+        Access::for_role(role),
+        &agent::schema(),
+        prompt,
+    );
     let invocation = Invocation {
-        executable: ctx.codex.clone(),
-        args: codex::args(model, &step, role)?,
+        executable: provider.executable()?,
+        args: launch.args,
+        env: launch.env,
         cwd: ctx.workspace.root.clone(),
-        prompt: nudge.map_or_else(
-            || {
-                codex::prompt(
-                    run,
-                    role,
-                    evidence,
-                    &ctx.paths.executable,
-                    &ctx.workspace.root,
-                )
-            },
-            |question| codex::nudge(role, question),
-        ),
-        schema: Some(codex::schema()),
+        prompt: launch.prompt,
+        schema: launch.schema_file,
         scratch_root: ctx.paths.cache.join("workers"),
         worker_lock: ctx.workspace.worker_lock.clone(),
         evidence_pin_guardian: None,
@@ -652,7 +664,7 @@ fn ai_turn(
             token: run.token.clone(),
         }),
     };
-    let mut stream = codex::Stream::default();
+    let mut stream = provider::Stream::new(provider);
     match execute(
         service,
         run,
@@ -670,7 +682,7 @@ fn ai_turn(
         }
         other => return Ok(other),
     }
-    let mut assessment = match stream.assessment(run.definition.criteria.len()) {
+    let mut assessment = match agent::assessment(&stream, run.definition.criteria.len()) {
         Ok(a) => a,
         Err(e) => {
             service.finish_step(&step, false, &e.to_string(), None)?;
@@ -679,8 +691,8 @@ fn ai_turn(
     };
     if role == "validation" {
         for reason in service.check_regressions(run)? {
-            assessment.findings.push(codex::Finding {
-                severity: codex::Severity::Critical,
+            assessment.findings.push(agent::Finding {
+                severity: agent::Severity::Critical,
                 description: reason,
             });
         }
@@ -688,7 +700,7 @@ fn ai_turn(
             && assessment
                 .findings
                 .iter()
-                .any(|finding| finding.severity == codex::Severity::Critical)
+                .any(|finding| finding.severity == agent::Severity::Critical)
         {
             assessment.outcome = "changes_requested".into();
         }
@@ -711,7 +723,7 @@ fn ai_turn(
         || assessment
             .findings
             .iter()
-            .any(|f| f.severity == codex::Severity::Critical)
+            .any(|f| f.severity == agent::Severity::Critical)
         || assessment.outcome == "failed";
     let needs_work =
         critical || !assessment.findings.is_empty() || assessment.outcome == "changes_requested";
@@ -726,7 +738,7 @@ fn ai_turn(
     }
     let mut summary = assessment.summary.clone();
     for finding in &assessment.findings {
-        let severity = if finding.severity == codex::Severity::Critical {
+        let severity = if finding.severity == agent::Severity::Critical {
             "Critical"
         } else {
             "Minor"
@@ -793,15 +805,12 @@ fn judge_once(
     failed: i64,
 ) -> Result<Outcome> {
     let model = run.definition.models[3].as_ref().expect("preflight models");
-    let scope = std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex")))
-        .ok_or_else(|| Error::Conflict("Codex auth home is not configured".into()))?;
+    let provider = Provider::of(model)?;
     let step = service.start_ai_step(
         run,
         "remediation",
         model,
-        &format!("{}#read-only-judge", scope.to_string_lossy()),
+        &format!("{}#read-only-judge", provider.auth_scope()?),
         false,
     )?;
     service.output(
@@ -827,8 +836,8 @@ fn judge_once(
             progress.context
         ));
     }
-    let mut prompt = codex::judge_prompt(run, &evidence);
-    let mut schema = codex::judge_schema();
+    let mut prompt = agent::judge_prompt(run, &evidence);
+    let mut schema = agent::judge_schema();
     if normal_cycle {
         prompt.push_str("\nThis is a normal review/fix round within the same active task, not a failed task. Revalidate the current findings; preserve the goal and useful work. Prefer repair. You may revise the task or insert prerequisites only if needed, retaining the full goal and acceptance bar. The repair counter follows the original task across automatic revisions and prerequisite handoffs. Do not ask the owner or escalate models during these rounds; unresolved critical findings are escalated only after ten repair rounds.");
         schema["properties"]["judgment"]["anyOf"]
@@ -836,19 +845,26 @@ fn judge_once(
             .expect("judge alternatives")
             .truncate(3);
     }
-    let invocation = Invocation {
-        executable: ctx.codex.clone(),
-        // Sandbox follows the validation role: read-only by design.
-        args: codex::args(model, &step, "validation")?,
-        cwd: ctx.workspace.root.clone(),
+    let launch = provider.launch(
+        model,
+        step.provider_session.as_deref(),
+        Access::ReadOnly,
+        &schema,
         prompt,
-        schema: Some(schema),
+    );
+    let invocation = Invocation {
+        executable: provider.executable()?,
+        args: launch.args,
+        env: launch.env,
+        cwd: ctx.workspace.root.clone(),
+        prompt: launch.prompt,
+        schema: launch.schema_file,
         scratch_root: ctx.paths.cache.join("workers"),
         worker_lock: ctx.workspace.worker_lock.clone(),
         evidence_pin_guardian: None,
         callback: None,
     };
-    let mut stream = codex::Stream::default();
+    let mut stream = provider::Stream::new(provider);
     match execute(
         service,
         run,
@@ -871,7 +887,7 @@ fn judge_once(
         service.finish_step(&step, false, &message, None)?;
         return Ok(Outcome::Failed("protocol", message));
     }
-    let judgment = match codex::parse_judgment(stream.last_message.as_deref().unwrap_or("")) {
+    let judgment = match agent::parse_judgment(stream.last_message.as_deref().unwrap_or("")) {
         Ok(j) => j,
         Err(e) => {
             service.finish_step(&step, false, &e.to_string(), None)?;
@@ -881,9 +897,9 @@ fn judge_once(
     if normal_cycle
         && !matches!(
             judgment,
-            codex::Judgment::Repair { .. }
-                | codex::Judgment::Revise { .. }
-                | codex::Judgment::Insert { .. }
+            agent::Judgment::Repair { .. }
+                | agent::Judgment::Revise { .. }
+                | agent::Judgment::Insert { .. }
         )
     {
         let message = "Fix planner must repair, revise or insert during the normal ten-round cycle; owner escalation waits for the final critical decision";
@@ -891,11 +907,11 @@ fn judge_once(
         return Ok(Outcome::Failed("protocol", message.into()));
     }
     let (summary, outcome) = match judgment {
-        codex::Judgment::Repair { plan, reason } => (
+        agent::Judgment::Repair { plan, reason } => (
             format!("Repair: {reason}\nAuthorized repair plan:\n{plan}"),
             Outcome::Passed(plan),
         ),
-        codex::Judgment::Ask { question, reason } => {
+        agent::Judgment::Ask { question, reason } => {
             service.finish_step(
                 &step,
                 false,
@@ -910,21 +926,21 @@ fn judge_once(
     Ok(outcome)
 }
 
-fn describe(judgment: &codex::Judgment) -> String {
+fn describe(judgment: &agent::Judgment) -> String {
     match judgment {
-        codex::Judgment::Repair { reason, .. } => format!("Repair: {reason}"),
-        codex::Judgment::Revise { reason, .. } => {
+        agent::Judgment::Repair { reason, .. } => format!("Repair: {reason}"),
+        agent::Judgment::Revise { reason, .. } => {
             format!("Task revised by the failure judge: {reason}")
         }
-        codex::Judgment::Insert { tasks, reason } => format!(
+        agent::Judgment::Insert { tasks, reason } => format!(
             "{} prerequisite task(s) inserted by the failure judge: {reason}",
             tasks.len()
         ),
-        codex::Judgment::Escalate { model, reason } => format!(
+        agent::Judgment::Escalate { model, reason } => format!(
             "Execution escalated to {}/{} by the failure judge: {reason}",
             model.provider, model.model
         ),
-        codex::Judgment::Ask { reason, .. } => format!("Owner decision needed: {reason}"),
+        agent::Judgment::Ask { reason, .. } => format!("Owner decision needed: {reason}"),
     }
 }
 
@@ -934,7 +950,7 @@ fn apply_judgment(
     run: &Run,
     paths: &Paths,
     workspace: &Workspace,
-    judgment: codex::Judgment,
+    judgment: agent::Judgment,
 ) -> Result<()> {
     let task = service
         .task(run.task)?
@@ -951,7 +967,7 @@ fn apply_judgment(
         name: "judge".into(),
     };
     match judgment {
-        codex::Judgment::Revise {
+        agent::Judgment::Revise {
             title,
             goal,
             criteria,
@@ -969,7 +985,7 @@ fn apply_judgment(
             definition.criteria = criteria;
             service.revise_as(target, &definition, ready, &judge, Some(&reason))?;
         }
-        codex::Judgment::Insert { tasks, reason } => {
+        agent::Judgment::Insert { tasks, reason } => {
             let defaults = service.defaults()?;
             let repairs: Vec<_> = tasks
                 .iter()
@@ -986,10 +1002,10 @@ fn apply_judgment(
             remediation::preserve(service, workspace, target)?;
             service.apply_remediation(target, None, &repairs, &reason, ready)?;
         }
-        codex::Judgment::Escalate { model, reason } => {
+        agent::Judgment::Escalate { model, reason } => {
             service.apply_remediation(target, Some(model), &[], &reason, true)?;
         }
-        codex::Judgment::Repair { .. } | codex::Judgment::Ask { .. } => {}
+        agent::Judgment::Repair { .. } | agent::Judgment::Ask { .. } => {}
     }
     Ok(())
 }
@@ -1003,7 +1019,7 @@ fn execute(
     spec: &Invocation,
     timeout: Option<i64>,
     ai: bool,
-    stream: &mut codex::Stream,
+    stream: &mut provider::Stream,
 ) -> Result<Outcome> {
     ctx.persist_active_time(service, run)?;
     if let Some(outcome) = ctx.deadline_outcome(run) {
@@ -1051,9 +1067,14 @@ fn execute(
                 if ai && source == "stdout" {
                     for event in stream.feed(&bytes)? {
                         match event {
-                            codex::Event::Session(id) => service.record_session(step, &id)?,
-                            codex::Event::Usage(usage) => service.record_usage(step, &usage)?,
-                            codex::Event::Text(text) => service.output(run, "stdout", &text)?,
+                            provider::Event::Session(id) => service.record_session(step, &id)?,
+                            provider::Event::Usage(usage, cost) => {
+                                service.record_usage(step, &usage, cost)?
+                            }
+                            provider::Event::Text(text) => service.output(run, "stdout", &text)?,
+                            provider::Event::Message(reply) => {
+                                service.output(run, "stdout", &agent::display(&reply))?
+                            }
                         }
                     }
                 } else {
@@ -1096,7 +1117,7 @@ fn execute(
                             if ai { "transport" } else { "check" },
                             format!(
                                 "{} exited {code}; see stored output",
-                                if ai { "Codex" } else { "Check" }
+                                if ai { stream.provider.label() } else { "Check" }
                             ),
                         )
                     }
@@ -1148,12 +1169,7 @@ pub fn background(
         "Configure an enabled check in Configuration > Checks (or CLI check-set)",
     )?;
     if let Some(task) = service.current_task()? {
-        for model in &task.definition().definition.models {
-            require(
-                model.as_ref().is_some_and(|m| m.provider == "codex"),
-                "Configure all four task roles with provider codex in Models; defaults only apply to new tasks",
-            )?;
-        }
+        connected(&task.definition().definition)?;
     }
     std::fs::create_dir_all(&paths.state)?;
     let log_path = paths

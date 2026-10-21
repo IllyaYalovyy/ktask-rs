@@ -344,7 +344,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             version: current.version,
         })?;
         let evidence = service.remediation_evidence(*id, &paths.state)?;
-        let judgment = crate::runner::codex::propose_remediation(
+        let judgment = crate::runner::agent::propose_remediation(
             crate::runner::process::stopped()?.as_ref(),
             model,
             &definition,
@@ -403,7 +403,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             .clone()
             .ok_or_else(|| storage::Error::Conflict("Configure a planning model first".into()))?;
         let definition = &task.definition().definition;
-        let proposal = crate::runner::codex::propose_breakdown(
+        let proposal = crate::runner::agent::propose_breakdown(
             crate::runner::process::stopped()?.as_ref(),
             &model,
             &definition.title,
@@ -415,7 +415,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         let mut receipts = Vec::new();
         if *apply {
             let definitions =
-                crate::runner::codex::breakdown_definitions(&proposal, service.defaults()?);
+                crate::runner::agent::breakdown_definitions(&proposal, service.defaults()?);
             let ready = service.preferences(&paths.config)?.planner_approval
                 == application::preferences::PlannerApproval::Automatic;
             receipts = service.apply_breakdown(

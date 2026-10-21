@@ -200,6 +200,14 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
             model,
             effort,
         } => {
+            let model = model
+                .clone()
+                .or_else(|| ModelConfig::default_model(provider).map(String::from))
+                .ok_or_else(|| {
+                    crate::storage::Error::Conflict(format!(
+                        "--model is required for provider {provider}"
+                    ))
+                })?;
             service.set_default(
                 role,
                 &ModelConfig {

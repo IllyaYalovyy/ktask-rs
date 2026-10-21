@@ -18,8 +18,8 @@ pub(crate) struct ProposalJob {
     handle: Option<std::thread::JoinHandle<Result<ProposalResult, String>>>,
 }
 pub(crate) enum ProposalResult {
-    Remediation(crate::runner::codex::Judgment),
-    Breakdown(crate::runner::codex::BreakdownProposal),
+    Remediation(crate::runner::agent::Judgment),
+    Breakdown(crate::runner::agent::BreakdownProposal),
 }
 impl Drop for ProposalJob {
     fn drop(&mut self) {
@@ -521,7 +521,7 @@ impl App {
             target,
             cancelled,
             handle: Some(std::thread::spawn(move || {
-                crate::runner::codex::propose_remediation(
+                crate::runner::agent::propose_remediation(
                     &stop,
                     &model,
                     &definition,
@@ -575,7 +575,7 @@ impl App {
             target,
             cancelled,
             handle: Some(std::thread::spawn(move || {
-                crate::runner::codex::propose_breakdown(
+                crate::runner::agent::propose_breakdown(
                     &stop,
                     &model,
                     &definition.title,
@@ -632,7 +632,7 @@ impl App {
     fn show_breakdown(
         &mut self,
         target: VersionedTask,
-        proposal: crate::runner::codex::BreakdownProposal,
+        proposal: crate::runner::agent::BreakdownProposal,
     ) {
         let body = format!(
             "{} subtask(s) before original:\n{}\nReason: {}\n\nApply supersedes the original; attempts stay in History. Approval follows planner preference. Cancel changes nothing.",
@@ -663,17 +663,17 @@ impl App {
     fn show_remediation(
         &mut self,
         target: VersionedTask,
-        judgment: crate::runner::codex::Judgment,
+        judgment: crate::runner::agent::Judgment,
     ) {
         let id = target.id as usize;
         let (title, body) = match &judgment {
-            crate::runner::codex::Judgment::Repair { plan, reason } => (
+            crate::runner::agent::Judgment::Repair { plan, reason } => (
                 "Failure judgment · repair plan".to_owned(),
                 format!(
                     "Plan: {plan}\nReason: {reason}\n\nApply records this plan for the next failure judge. Cancel changes nothing."
                 ),
             ),
-            crate::runner::codex::Judgment::Revise {
+            crate::runner::agent::Judgment::Revise {
                 title,
                 goal,
                 criteria,
@@ -685,7 +685,7 @@ impl App {
                     criteria.join("; ")
                 ),
             ),
-            crate::runner::codex::Judgment::Escalate { model, reason } => (
+            crate::runner::agent::Judgment::Escalate { model, reason } => (
                 "Failure judgment · escalate model".to_owned(),
                 format!(
                     "Execution model: {}/{} · {}\nReason: {reason}\n\nApply creates an approved revision; failed attempts remain unchanged. Cancel changes nothing.",
@@ -694,7 +694,7 @@ impl App {
                     model.effort.as_deref().unwrap_or("no effort")
                 ),
             ),
-            crate::runner::codex::Judgment::Insert { tasks, reason } => (
+            crate::runner::agent::Judgment::Insert { tasks, reason } => (
                 "Failure judgment · insert prerequisites".to_owned(),
                 format!(
                     "{} repair task(s) before current:\n{}\nReason: {reason}\n\nApproval follows planner preference. Cancel changes nothing.",
@@ -711,7 +711,7 @@ impl App {
                         .join("\n")
                 ),
             ),
-            crate::runner::codex::Judgment::Ask { question, reason } => (
+            crate::runner::agent::Judgment::Ask { question, reason } => (
                 "Failure judgment · ask owner".to_owned(),
                 format!(
                     "Question: {question}\nReason: {reason}\n\nApply saves an answerable question on failed current. Cancel changes nothing."
@@ -790,10 +790,10 @@ impl App {
                             .unwrap_or(""),
                     );
                 }
-                dialog.body = "Use provider/model identifiers; blank means unconfigured.\nSave approves a new revision. No provider calls are made.".into();
+                dialog.body = "Use provider/model: codex/…, claude/sonnet, opencode/vendor/model; blank means unconfigured.\nSave approves a new revision. No provider calls are made.".into();
             }
             DialogKind::Config => {
-                dialog.body = "Mouse preference applies to this session.\nTask models and limits are saved per revision. Codex runs in a separate supervisor.".into();
+                dialog.body = "Mouse preference applies to this session.\nTask models and limits are saved per revision. Agents run in a separate supervisor.".into();
                 dialog.fields.truncate(1);
             }
             DialogKind::Import => {
@@ -882,7 +882,7 @@ impl App {
                 }
             }
             DialogKind::Help => {
-                dialog.body = dialog.body.replace("All tasks, models, runs, and files are simulated.", "Changes save immediately. Run starts Codex in a background supervisor; Pause stops it.\nChecks, review and validation gate success. Review findings enter the normal fix loop, with up to ten repair rounds before critical findings need a decision.\nx abandons a waiting attempt without spending budget. Break down uses the planning model.");
+                dialog.body = dialog.body.replace("All tasks, models, runs, and files are simulated.", "Changes save immediately. Run starts the configured agents in a background supervisor; Pause stops it.\nChecks, review and validation gate success. Review findings enter the normal fix loop, with up to ten repair rounds before critical findings need a decision.\nx abandons a waiting attempt without spending budget. Break down uses the planning model.");
             }
             _ => {}
         }
@@ -908,7 +908,7 @@ impl App {
                 .unwrap()
                 .defaults()
                 .map_err(|e| e.to_string())?;
-            let definitions = crate::runner::codex::breakdown_definitions(proposal, defaults);
+            let definitions = crate::runner::agent::breakdown_definitions(proposal, defaults);
             let ids = self
                 .service
                 .as_mut()
@@ -943,11 +943,11 @@ impl App {
             });
             let continue_after_remediation = match &dialog.kind {
                 DialogKind::RemediationReview {
-                    judgment: crate::runner::codex::Judgment::Ask { .. },
+                    judgment: crate::runner::agent::Judgment::Ask { .. },
                     ..
                 } => false,
                 DialogKind::RemediationReview {
-                    judgment: crate::runner::codex::Judgment::Revise { .. },
+                    judgment: crate::runner::agent::Judgment::Revise { .. },
                     ..
                 } => !self.review_required,
                 DialogKind::RemediationReview { .. } => true,
@@ -1078,23 +1078,8 @@ impl App {
                     .unwrap_or_else(|| task.definition());
                 let mut definition = revision.definition.clone();
                 for (i, model) in definition.models.iter_mut().enumerate() {
-                    let value = dialog.value(i * 2);
-                    let effort = dialog.value(i * 2 + 1);
-                    *model = if value.is_empty() {
-                        if !effort.is_empty() {
-                            return Err("Effort requires a provider/model".into());
-                        }
-                        None
-                    } else {
-                        let (provider, model) = value
-                            .split_once('/')
-                            .ok_or("Use provider/model, or leave blank")?;
-                        Some(ModelConfig {
-                            provider: provider.trim().into(),
-                            model: model.trim().into(),
-                            effort: (!effort.is_empty()).then(|| effort.to_owned()),
-                        })
-                    };
+                    *model =
+                        ModelConfig::from_fields(dialog.value(i * 2), dialog.value(i * 2 + 1))?;
                 }
                 definition.attempt_limit = limit(dialog.value(8))?;
                 definition.timeout_ms = limit(dialog.value(9))?;

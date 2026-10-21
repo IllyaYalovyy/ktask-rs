@@ -472,8 +472,14 @@ impl Service {
         )?;
         Ok(())
     }
-    pub fn record_usage(&self, step: &Step, usage: &TokenUsage) -> Result<()> {
-        self.db.connection().execute("UPDATE model_calls SET input_tokens=?2,cache_read_tokens=?3,cache_write_tokens=?4,output_tokens=?5 WHERE step_id=?1", params![step.id,usage.input_tokens,usage.cache_read_tokens,usage.cache_write_tokens,usage.output_tokens])?;
+    /// Totals so far for this step; providers that report per step resend running totals.
+    pub fn record_usage(
+        &self,
+        step: &Step,
+        usage: &TokenUsage,
+        cost_microusd: Option<i64>,
+    ) -> Result<()> {
+        self.db.connection().execute("UPDATE model_calls SET input_tokens=?2,cache_read_tokens=?3,cache_write_tokens=?4,output_tokens=?5,cost_microusd=coalesce(?6,cost_microusd) WHERE step_id=?1", params![step.id,usage.input_tokens,usage.cache_read_tokens,usage.cache_write_tokens,usage.output_tokens,cost_microusd])?;
         Ok(())
     }
     pub fn start_check(&self, run: &Run, check: &Check) -> Result<Step> {

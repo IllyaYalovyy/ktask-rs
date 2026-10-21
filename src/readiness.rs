@@ -3,6 +3,7 @@ use crate::{
     app::App,
     application::{Kind, ROLES, Service},
     presentation::Status,
+    runner::provider::Provider,
 };
 use std::{fs::File, path::Path, process::Command};
 
@@ -189,9 +190,11 @@ pub(crate) fn inspect(app: &App) -> Readiness {
         let model = definition.definition.models[index].as_ref();
         let valid = match model {
             None => Err("No model selected".into()),
-            Some(model) if model.provider != "codex" => {
-                Err(format!("Provider {} is not connected", model.provider))
-            }
+            Some(model) if Provider::of(model).is_err() => Err(format!(
+                "Provider {} is not supported; use {}",
+                model.provider,
+                crate::runner::provider::SUPPORTED
+            )),
             Some(model)
                 if index > 0
                     && definition.definition.models[0]
@@ -206,13 +209,22 @@ pub(crate) fn inspect(app: &App) -> Readiness {
         };
         report.check(&format!("{role} model"), valid, "m Models");
     }
-    report.check(
-        "Provider",
-        crate::runner::executable("codex")
-            .map(|_| ())
-            .map_err(|e| e.to_string()),
-        "install/configure Codex, then Refresh",
-    );
+    let mut providers: Vec<_> = definition
+        .definition
+        .models
+        .iter()
+        .flatten()
+        .filter_map(|model| Provider::of(model).ok())
+        .collect();
+    providers.sort_by_key(|provider| provider.name());
+    providers.dedup();
+    for provider in providers {
+        report.check(
+            &format!("{} CLI", provider.label()),
+            provider.executable().map(|_| ()).map_err(|e| e.to_string()),
+            &format!("install/sign in to {}, then Refresh", provider.label()),
+        );
+    }
     match root {
         Ok(root) => {
             let common = git(

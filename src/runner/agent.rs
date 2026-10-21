@@ -1,9 +1,7 @@
+use super::provider::{Access, Provider, Stream};
 use crate::{
-    application::{
-        ModelConfig,
-        execution::{Run, Step},
-    },
-    storage::{Error, Result, usage::TokenUsage},
+    application::{ModelConfig, execution::Run},
+    storage::{Error, Result},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -87,7 +85,7 @@ pub fn judge_prompt(run: &Run, evidence: &str) -> String {
 
 pub fn judge_prompt_for(definition: &crate::application::Definition, evidence: &str) -> String {
     format!(
-        "You are the failure judge: a read-only senior engineer who decides what happens after a failed attempt. You cannot build, run tests or edit files, and you must not ask to; judge from the repository and the failure evidence. Before choosing, inspect the current working tree and verify each reported defect against current code: historical reports may predate committed or uncommitted repairs. Treat old findings as claims to check, not instructions to repeat. Prior failure-judge plans authorize repair scope; reconcile a scope-creep allegation with those plans before ordering removal of diagnostics. If the reported defect is already fixed, direct verification of the current implementation rather than undoing useful work or inventing another defect. Consider recorded answers before asking an already answered question. Cite current file/line evidence for remaining defects and distinguish unverified claims. Return exactly one judgment:\n- repair: the task is right and the fix is within reach; give the next worker a concrete plan (what was wrong, what to change, where, how to prove it). Prefer this.\n- revise: the task definition itself is wrong, unclear, contradictory or too big; return a replacement title, goal and acceptance criteria that keep the owner's intent and can actually be met.\n- insert: prerequisite work is missing; return ordinary tasks to run before this one, each independently verifiable.\n- escalate: the evidence shows the model, not the task, is the limit; provider codex only, a stronger model or effort than {}.\n- ask: only for a product decision that the owner alone can make. Permissions, sandbox limits, environment and tooling are never questions.\nHigh-level goals are expected: missing implementation detail alone is not a reason to revise, split, or ask. Preserve the full goal and acceptance bar; never weaken them to make a failure pass. Hold the Clean Code bar. Keep the reason specific and cite evidence.\nTask: {}\nGoal: {}\nCriteria:\n{}\nFailure evidence:\n{evidence}",
+        "You are the failure judge: a read-only senior engineer who decides what happens after a failed attempt. You cannot build, run tests or edit files, and you must not ask to; judge from the repository and the failure evidence. Before choosing, inspect the current working tree and verify each reported defect against current code: historical reports may predate committed or uncommitted repairs. Treat old findings as claims to check, not instructions to repeat. Prior failure-judge plans authorize repair scope; reconcile a scope-creep allegation with those plans before ordering removal of diagnostics. If the reported defect is already fixed, direct verification of the current implementation rather than undoing useful work or inventing another defect. Consider recorded answers before asking an already answered question. Cite current file/line evidence for remaining defects and distinguish unverified claims. Return exactly one judgment:\n- repair: the task is right and the fix is within reach; give the next worker a concrete plan (what was wrong, what to change, where, how to prove it). Prefer this.\n- revise: the task definition itself is wrong, unclear, contradictory or too big; return a replacement title, goal and acceptance criteria that keep the owner's intent and can actually be met.\n- insert: prerequisite work is missing; return ordinary tasks to run before this one, each independently verifiable.\n- escalate: the evidence shows the model, not the task, is the limit; a stronger model or effort than {} from a supported provider (codex, claude or opencode).\n- ask: only for a product decision that the owner alone can make. Permissions, sandbox limits, environment and tooling are never questions.\nHigh-level goals are expected: missing implementation detail alone is not a reason to revise, split, or ask. Preserve the full goal and acceptance bar; never weaken them to make a failure pass. Hold the Clean Code bar. Keep the reason specific and cite evidence.\nTask: {}\nGoal: {}\nCriteria:\n{}\nFailure evidence:\n{evidence}",
         definition.models[0]
             .as_ref()
             .map_or("the current model".to_owned(), |m| format!(
@@ -138,7 +136,7 @@ pub fn parse_judgment(text: &str) -> Result<Judgment> {
                 })
         }
         Judgment::Escalate { model, reason } => {
-            model.provider == "codex"
+            Provider::of(model).is_ok()
                 && !blank(&model.model)
                 && model.effort.as_deref().is_none_or(|e| !blank(e))
                 && !blank(reason)
@@ -204,10 +202,13 @@ pub fn propose_breakdown(
     );
     let response = readonly_proposal(
         cancelled,
-        model,
-        &breakdown_schema(),
-        "breakdown",
-        prompt,
+        ReadOnlyTurn {
+            name: "breakdown",
+            model,
+            schema: breakdown_schema(),
+            prompt,
+            evidence_pin_guardian: None,
+        },
         scratch_root,
         cwd,
     )?;
@@ -227,49 +228,43 @@ pub fn propose_breakdown(
     Ok(proposal)
 }
 
+/// One read-only turn outside any attempt: the interactive judge and the task planner.
+struct ReadOnlyTurn<'a> {
+    name: &'a str,
+    model: &'a ModelConfig,
+    schema: Value,
+    prompt: String,
+    evidence_pin_guardian: Option<std::path::PathBuf>,
+}
+
 fn readonly_proposal(
     cancelled: &std::sync::atomic::AtomicBool,
-    model: &ModelConfig,
-    schema_value: &Value,
-    name: &str,
-    prompt: String,
+    turn: ReadOnlyTurn<'_>,
     scratch_root: &std::path::Path,
     cwd: &std::path::Path,
 ) -> Result<String> {
     use crate::scratch::Scratch;
-    let executable = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|p| p.join("codex"))
-        .find(|p| p.is_file())
-        .ok_or_else(|| Error::Conflict("codex executable not found on PATH".into()))?
-        .canonicalize()?;
+    let ReadOnlyTurn {
+        name,
+        model,
+        schema,
+        prompt,
+        evidence_pin_guardian,
+    } = turn;
+    let provider = Provider::of(model)?;
+    let launch = provider.launch(model, None, Access::ReadOnly, &schema, prompt);
     let scratch = Scratch::new(scratch_root)?;
-    let schema = scratch.path().join(format!("{name}-schema.json"));
-    std::fs::write(
-        &schema,
-        serde_json::to_vec(schema_value).map_err(std::io::Error::other)?,
-    )?;
-    let step = Step {
-        id: 0,
-        session: None,
-        provider_session: None,
-    };
-    let mut args = args(model, &step, "validation")?;
-    args.retain(|arg| arg != "-");
-    args.extend([
-        "--output-schema".into(),
-        schema.display().to_string(),
-        "-".into(),
-    ]);
     let (code, stdout, stderr) = super::process::capture_readonly(
         &super::process::Invocation {
-            executable,
-            args,
+            executable: provider.executable()?,
+            args: launch.args,
+            env: launch.env,
             cwd: cwd.to_owned(),
-            prompt,
-            schema: None,
+            prompt: launch.prompt,
+            schema: launch.schema_file,
             scratch_root: scratch.path().join("worker"),
             worker_lock: scratch.path().join("worker.lock"),
-            evidence_pin_guardian: None,
+            evidence_pin_guardian,
             callback: None,
         },
         cancelled,
@@ -281,7 +276,7 @@ fn readonly_proposal(
             String::from_utf8_lossy(&stderr).trim()
         )));
     }
-    let mut stream = Stream::default();
+    let mut stream = Stream::new(provider);
     stream.feed(&stdout)?;
     if !stream.completed || stream.failed {
         return Err(Error::Conflict(format!(
@@ -302,65 +297,24 @@ pub fn propose_remediation(
     cwd: &std::path::Path,
     pin: crate::application::evidence_pin::EvidencePin,
 ) -> Result<Judgment> {
-    use crate::scratch::Scratch;
-    let executable = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|p| p.join("codex"))
-        .find(|p| p.is_file())
-        .ok_or_else(|| Error::Conflict("codex executable not found on PATH".into()))?
-        .canonicalize()?;
-    let scratch = Scratch::new(scratch_root)?;
-    let schema = scratch.path().join("judgment-schema.json");
-    std::fs::write(
-        &schema,
-        serde_json::to_vec(&judge_schema()).map_err(std::io::Error::other)?,
-    )?;
-    let step = Step {
-        id: 0,
-        session: None,
-        provider_session: None,
-    };
-    let mut args = args(model, &step, "validation")?;
-    args.retain(|arg| arg != "-");
-    args.extend([
-        "--output-schema".into(),
-        schema.display().to_string(),
-        "-".into(),
-    ]);
-    let prompt = format!(
-        "Interactive Remediate action.\n{}",
-        judge_prompt_for(definition, evidence)
-    );
-    let (code, stdout, stderr) = super::process::capture_readonly(
-        &super::process::Invocation {
-            executable,
-            args,
-            cwd: cwd.to_owned(),
-            prompt,
-            schema: None,
-            scratch_root: scratch.path().join("worker"),
-            worker_lock: scratch.path().join("worker.lock"),
-            evidence_pin_guardian: Some(pin.guardian_lock()),
-            callback: None,
-        },
+    let response = readonly_proposal(
         cancelled,
-        std::time::Duration::from_secs(120),
+        ReadOnlyTurn {
+            name: "Remediation",
+            model,
+            schema: judge_schema(),
+            prompt: format!(
+                "Interactive Remediate action.\n{}",
+                judge_prompt_for(definition, evidence)
+            ),
+            evidence_pin_guardian: Some(pin.guardian_lock()),
+        },
+        scratch_root,
+        cwd,
     )?;
-    if code != 0 {
-        return Err(Error::Conflict(format!(
-            "Remediation provider failed: {}",
-            String::from_utf8_lossy(&stderr).trim()
-        )));
-    }
-    let mut stream = Stream::default();
-    stream.feed(&stdout)?;
-    if !stream.completed || stream.failed {
-        return Err(Error::Conflict(
-            "Remediation provider returned an incomplete response".into(),
-        ));
-    }
-    let judgment = parse_judgment(stream.last_message.as_deref().unwrap_or(""))?;
-    scratch.close()?;
-    Ok(judgment)
+    // The pin protects the evidence until the provider has finished reading it.
+    drop(pin);
+    parse_judgment(&response)
 }
 
 pub fn schema() -> Value {
@@ -370,53 +324,6 @@ pub fn schema() -> Value {
         "findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["severity","description"],"properties":{"severity":{"type":"string","enum":["critical","minor"]},"description":{"type":"string"}}}},
         "criteria":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["ordinal","passed","evidence"],"properties":{"ordinal":{"type":"integer"},"passed":{"type":"boolean"},"evidence":{"type":"string"}}}}
     }})
-}
-pub fn args(model: &ModelConfig, step: &Step, role: &str) -> Result<Vec<String>> {
-    if model.provider != "codex" {
-        return Err(Error::Conflict(format!(
-            "Provider {:?} has no runner adapter; configure codex explicitly",
-            model.provider
-        )));
-    }
-    let mut args = vec![
-        "exec".into(),
-        "--json".into(),
-        "--ignore-user-config".into(),
-        "--ignore-rules".into(),
-        "-m".into(),
-        model.model.clone(),
-        "-c".into(),
-        "approval_policy=\"never\"".into(),
-        "-c".into(),
-        format!(
-            "sandbox_mode=\"{}\"",
-            if matches!(role, "review" | "validation") {
-                "read-only"
-            } else {
-                "workspace-write"
-            }
-        ),
-        "-c".into(),
-        "features.multi_agent=false".into(),
-        "-c".into(),
-        "sandbox_workspace_write.exclude_slash_tmp=true".into(),
-        "-c".into(),
-        "sandbox_workspace_write.exclude_tmpdir_env_var=false".into(),
-    ];
-    if let Some(effort) = &model.effort {
-        args.extend([
-            "-c".into(),
-            format!(
-                "model_reasoning_effort={}",
-                serde_json::to_string(effort).expect("string JSON")
-            ),
-        ]);
-    }
-    if let Some(session) = &step.provider_session {
-        args.extend(["resume".into(), session.clone()]);
-    }
-    args.push("-".into());
-    Ok(args)
 }
 /// Second turn after a worker returned blocked: permissions and sandbox limits are not questions.
 pub fn nudge(role: &str, question: &str) -> String {
@@ -484,256 +391,79 @@ fn numbered(criteria: &[String]) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
-// Command-completion events contain the entire captured command output.
-const MAX_EVENT_BYTES: usize = 16 * 1024 * 1024;
-
-#[derive(Default)]
-pub struct Stream {
-    pub completed: bool,
-    pub failed: bool,
-    pub rate_limited: bool,
-    /// The provider's own "try again at/in" time, when it names one.
-    pub reset_at_ms: Option<i64>,
-    pub last_message: Option<String>,
-    pending: Vec<u8>,
-}
-pub enum Event {
-    Session(String),
-    Usage(TokenUsage),
-    Text(String),
-}
-impl Stream {
-    pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<Event>> {
-        let mut events = Vec::new();
-        // Scan only new bytes, and bound individual records rather than a batch.
-        for segment in bytes.split_inclusive(|b| *b == b'\n') {
-            if segment.len() > MAX_EVENT_BYTES - self.pending.len() {
-                return Err(Error::Conflict("Codex event exceeds 16 MiB".into()));
-            }
-            self.pending.extend_from_slice(segment);
-            if !segment.ends_with(b"\n") {
-                continue;
-            }
-            let value: Value = serde_json::from_slice(&self.pending)
-                .map_err(|e| Error::Conflict(format!("Invalid Codex event: {e}")))?;
-            self.pending.clear();
-            match value["type"].as_str().unwrap_or("") {
-                "thread.started" => {
-                    if let Some(id) = value["thread_id"].as_str() {
-                        events.push(Event::Session(id.into()));
-                    }
-                }
-                "turn.completed" => {
-                    self.completed = true;
-                    let u = &value["usage"];
-                    events.push(Event::Usage(TokenUsage::from_inclusive(
-                        u["input_tokens"].as_i64(),
-                        u["cached_input_tokens"].as_i64(),
-                        Some(0),
-                        u["output_tokens"].as_i64(),
-                    )?));
-                }
-                "turn.failed" | "error" => {
-                    self.failed = true;
-                    let message = value.to_string().to_lowercase();
-                    self.rate_limited |= [
-                        "rate_limit",
-                        "rate limit",
-                        "usage limit",
-                        "too many requests",
-                    ]
-                    .iter()
-                    .any(|s| message.contains(s));
-                    if self.rate_limited && self.reset_at_ms.is_none() {
-                        self.reset_at_ms = super::reset::reset_at(
-                            &value.to_string(),
-                            crate::application::now_ms(),
-                        );
-                    }
-                    events.push(Event::Text(value.to_string()));
-                }
-                "item.completed" => {
-                    let item = &value["item"];
-                    if item["type"] == "agent_message"
-                        && let Some(text) = item["text"].as_str()
-                    {
-                        self.last_message = Some(text.into());
-                        let display = serde_json::from_str::<Assessment>(text)
-                            .map(|a| {
-                                format!(
-                                    "{}: {}\n{}",
-                                    if matches!(a.outcome.as_str(), "failed" | "changes_requested")
-                                    {
-                                        "Changes requested"
-                                    } else {
-                                        &a.outcome
-                                    },
-                                    a.summary,
-                                    a.criteria
-                                        .iter()
-                                        .map(|c| format!(
-                                            "{} #{}: {}",
-                                            if c.passed { "PASS" } else { "NEEDS WORK" },
-                                            c.ordinal,
-                                            c.evidence
-                                        ))
-                                        .collect::<Vec<_>>()
-                                        .join("\n")
-                                )
-                            })
-                            .unwrap_or_else(|_| text.into());
-                        events.push(Event::Text(display));
-                    } else {
-                        events.push(Event::Text(item_text(item)));
-                    }
-                }
-                "item.started" => events.push(Event::Text(item_text(&value["item"]))),
-                _ => {}
-            }
-        }
-        Ok(events)
+/// The agent's structured assessment, validated against the task's numbered criteria.
+pub fn assessment(stream: &Stream, count: usize) -> Result<Assessment> {
+    if !stream.drained() || !stream.completed || stream.failed {
+        return Err(Error::Conflict(format!(
+            "{} stream ended without a successful complete turn",
+            stream.provider.label()
+        )));
     }
-    pub fn assessment(&self, count: usize) -> Result<Assessment> {
-        if !self.pending.is_empty() || !self.completed || self.failed {
+    let result: Assessment = serde_json::from_str(stream.last_message.as_deref().unwrap_or(""))
+        .map_err(|e| Error::Conflict(format!("Invalid agent assessment: {e}")))?;
+    if result.summary.trim().is_empty()
+        || !matches!(
+            result.outcome.as_str(),
+            "complete" | "changes_requested" | "failed" | "blocked"
+        )
+        || result
+            .findings
+            .iter()
+            .any(|f| f.description.trim().is_empty())
+    {
+        return Err(Error::Conflict("Agent returned an invalid outcome".into()));
+    }
+    if result.outcome == "blocked" {
+        if result.question.as_ref().is_none_or(|s| s.trim().is_empty()) {
+            return Err(Error::Conflict("Blocked agent omitted its question".into()));
+        }
+    } else {
+        let mut ordinals = result
+            .criteria
+            .iter()
+            .map(|c| c.ordinal)
+            .collect::<Vec<_>>();
+        ordinals.sort_unstable();
+        if ordinals != (1..=count as i64).collect::<Vec<_>>()
+            || result.criteria.iter().any(|c| c.evidence.trim().is_empty())
+        {
             return Err(Error::Conflict(
-                "Codex stream ended without a successful complete turn".into(),
+                "Agent must provide evidence for every criterion exactly once".into(),
             ));
         }
-        let result: Assessment =
-            serde_json::from_str(self.last_message.as_deref().unwrap_or(""))
-                .map_err(|e| Error::Conflict(format!("Invalid agent assessment: {e}")))?;
-        if result.summary.trim().is_empty()
-            || !matches!(
-                result.outcome.as_str(),
-                "complete" | "changes_requested" | "failed" | "blocked"
-            )
-            || result
-                .findings
-                .iter()
-                .any(|f| f.description.trim().is_empty())
-        {
-            return Err(Error::Conflict("Agent returned an invalid outcome".into()));
-        }
-        if result.outcome == "blocked" {
-            if result.question.as_ref().is_none_or(|s| s.trim().is_empty()) {
-                return Err(Error::Conflict("Blocked agent omitted its question".into()));
-            }
-        } else {
-            let mut ordinals = result
-                .criteria
-                .iter()
-                .map(|c| c.ordinal)
-                .collect::<Vec<_>>();
-            ordinals.sort_unstable();
-            if ordinals != (1..=count as i64).collect::<Vec<_>>()
-                || result.criteria.iter().any(|c| c.evidence.trim().is_empty())
-            {
-                return Err(Error::Conflict(
-                    "Agent must provide evidence for every criterion exactly once".into(),
-                ));
-            }
-        }
-        Ok(result)
     }
+    Ok(result)
 }
 
-fn item_text(item: &Value) -> String {
-    match item["type"].as_str().unwrap_or("activity") {
-        "command_execution" => format!(
-            "$ {}\n{}{}",
-            item["command"].as_str().unwrap_or("command"),
-            item["aggregated_output"].as_str().unwrap_or(""),
-            item["exit_code"]
-                .as_i64()
-                .map(|n| format!("\nexit {n}"))
-                .unwrap_or_default()
-        ),
-        "file_change" => format!(
-            "Files changed: {}",
-            item["changes"]
-                .as_array()
-                .map(|a| a
-                    .iter()
-                    .filter_map(|c| c["path"].as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "))
-                .unwrap_or_default()
-        ),
-        kind => format!(
-            "{kind}: {}",
-            item["text"]
-                .as_str()
-                .or_else(|| item["status"].as_str())
-                .unwrap_or("updated")
-        ),
-    }
+/// An agent reply as the owner reads it: assessments become outcome, summary and criteria.
+pub fn display(reply: &str) -> String {
+    let Ok(a) = serde_json::from_str::<Assessment>(reply) else {
+        return reply.into();
+    };
+    format!(
+        "{}: {}\n{}",
+        if matches!(a.outcome.as_str(), "failed" | "changes_requested") {
+            "Changes requested"
+        } else {
+            &a.outcome
+        },
+        a.summary,
+        a.criteria
+            .iter()
+            .map(|c| format!(
+                "{} #{}: {}",
+                if c.passed { "PASS" } else { "NEEDS WORK" },
+                c.ordinal,
+                c.evidence
+            ))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn large_command_event_preserves_output_across_pipe_reads() {
-        let output = format!("START\n{}\nEND", "x".repeat(1250000));
-        let record = format!(
-            "{}\n",
-            json!({"type":"item.completed","item":{
-                "type":"command_execution","command":"make check",
-                "aggregated_output":output,"exit_code":0
-            }})
-        );
-        let mut stream = Stream::default();
-        let mut events = Vec::new();
-        for chunk in record.as_bytes().chunks(4096) {
-            events.extend(stream.feed(chunk).unwrap());
-        }
-        assert_eq!(events.len(), 1);
-        assert!(
-            matches!(&events[0], Event::Text(text) if text == &format!("$ make check\n{output}\nexit 0"))
-        );
-        let assessment = json!({"outcome":"complete","summary":"Checked","question":null,
-            "criteria":[{"ordinal":1,"passed":true,"evidence":"Full transcript"}]});
-        stream.feed(format!(
-            "{}\n{}\n",
-            json!({"type":"item.completed","item":{"type":"agent_message","text":assessment.to_string()}}),
-            json!({"type":"turn.completed","usage":{}})
-        ).as_bytes()).unwrap();
-        assert_eq!(
-            stream.assessment(1).unwrap().criteria[0].evidence,
-            "Full transcript"
-        );
-    }
-
-    #[test]
-    fn stream_bounds_records_instead_of_batches() {
-        let record = format!(
-            "{{\"type\":\"ignored\",\"text\":\"{}\"}}\n",
-            "x".repeat(4096)
-        );
-        let batch = record.repeat(MAX_EVENT_BYTES / record.len() + 1);
-        let mut stream = Stream::default();
-        assert!(stream.feed(batch.as_bytes()).unwrap().is_empty());
-        assert!(stream.pending.is_empty());
-        // An exactly bounded event remains valid even when its newline arrives separately.
-        let record = format!("{{\"text\":\"{}\"}}\n", "x".repeat(MAX_EVENT_BYTES - 12));
-        assert_eq!(record.len(), MAX_EVENT_BYTES);
-        stream.feed(&record.as_bytes()[..record.len() - 1]).unwrap();
-        stream.feed(b"\n").unwrap();
-        assert!(stream.pending.is_empty());
-        // Reject oversized complete and unfinished events without growing past the bound.
-        for tail in [b"\n".as_slice(), b"x".as_slice()] {
-            let mut stream = Stream::default();
-            stream.feed(&vec![b' '; MAX_EVENT_BYTES]).unwrap();
-            assert!(stream.feed(tail).is_err());
-            assert_eq!(stream.pending.len(), MAX_EVENT_BYTES);
-        }
-        assert!(
-            Stream::default()
-                .feed(&vec![b' '; MAX_EVENT_BYTES + 1])
-                .is_err()
-        );
-    }
 
     #[test]
     fn nudges_tell_each_role_that_limits_are_not_questions() {
@@ -746,28 +476,15 @@ mod tests {
         assert!(text.contains("never questions for the owner"));
         assert!(text.contains("product decision"));
     }
+
     #[test]
-    fn worker_sandbox_retains_owned_tmp_but_excludes_general_tmp() {
-        let model = ModelConfig {
-            provider: "codex".into(),
-            model: "test".into(),
-            effort: None,
-        };
-        let step = Step {
-            id: 1,
-            session: None,
-            provider_session: None,
-        };
-        for role in ["execution", "remediation", "review", "validation"] {
-            let args = args(&model, &step, role).unwrap();
-            assert!(args.contains(&"sandbox_workspace_write.exclude_slash_tmp=true".into()));
-            assert!(args.contains(&"sandbox_workspace_write.exclude_tmpdir_env_var=false".into()));
-            let mode = if matches!(role, "review" | "validation") {
-                "read-only"
-            } else {
-                "workspace-write"
-            };
-            assert!(args.contains(&format!("sandbox_mode=\"{mode}\"")));
-        }
+    fn assessments_display_outcome_summary_and_criteria() {
+        let reply = json!({"outcome":"changes_requested","summary":"Fix it","question":null,
+            "criteria":[{"ordinal":1,"passed":false,"evidence":"Missing test"}]});
+        assert_eq!(
+            display(&reply.to_string()),
+            "Changes requested: Fix it\nNEEDS WORK #1: Missing test"
+        );
+        assert_eq!(display("plain words"), "plain words");
     }
 }

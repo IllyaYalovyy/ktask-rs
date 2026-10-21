@@ -13,11 +13,11 @@ pub enum DialogKind {
     RemediationPending,
     BreakdownPending,
     BreakdownReview {
-        proposal: crate::runner::codex::BreakdownProposal,
+        proposal: crate::runner::agent::BreakdownProposal,
     },
     RemediationReview {
         id: usize,
-        judgment: crate::runner::codex::Judgment,
+        judgment: crate::runner::agent::Judgment,
     },
     Models(usize),
     Resolve(usize),

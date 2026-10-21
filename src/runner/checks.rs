@@ -1,4 +1,4 @@
-use super::{Context, Outcome, codex, execute, operational_backoff, process::Invocation};
+use super::{Context, Outcome, execute, operational_backoff, process::Invocation, provider};
 use crate::{
     application::{
         CheckCounts, Service,
@@ -94,6 +94,7 @@ fn run_one(
     let invocation = Invocation {
         executable: PathBuf::from("/bin/sh"),
         args: vec!["-c".into(), check.command.clone()],
+        env: Vec::new(),
         cwd,
         prompt: String::new(),
         schema: None,
@@ -102,7 +103,7 @@ fn run_one(
         evidence_pin_guardian: None,
         callback: None,
     };
-    let mut stream = codex::Stream::default();
+    let mut stream = provider::Stream::default();
     let cursor = service.output_cursor(run)?;
     let result = execute(
         service,

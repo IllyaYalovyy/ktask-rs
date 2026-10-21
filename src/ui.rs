@@ -1201,7 +1201,7 @@ fn draw_information(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect)
             )
         } else {
             format!(
-                "{} · {} · {}\nA visual workspace for supervising AI coding tasks.\n\nTasks, revisions, approvals, history and events:\nrelational SQLite. Import/export uses real files.\nCodex execution, checks, review, validation, remediation and task breakdown are real.\nOther providers are not connected yet.\n\nProduction and development use separate data roots.\n--demo never opens SQLite. --paths shows data locations.",
+                "{} · {} · {}\nA visual workspace for supervising AI coding tasks.\n\nTasks, revisions, approvals, history and events:\nrelational SQLite. Import/export uses real files.\nExecution, checks, review, validation, remediation and task breakdown are real,\nrun by Codex, Claude Code or OpenCode per role.\n\nProduction and development use separate data roots.\n--demo never opens SQLite. --paths shows data locations.",
                 crate::PRODUCT,
                 env!("CARGO_PKG_VERSION"),
                 app.instance.name()

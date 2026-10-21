@@ -8,8 +8,9 @@ stronger models for independent review and remediation. Planning stays brief; se
 and task breakdown are optional. Missing implementation details are for the executor to resolve,
 with human questions reserved for consequential product decisions.
 
-Requires Linux, Rust 1.97+, Git and a terminal. AI execution requires an authenticated Codex CLI
-(tested with 0.162.1). Start with `cargo run --locked`; run checks with `make check`.
+Requires Linux, Rust 1.97+, Git and a terminal. AI execution requires at least one authenticated
+agent CLI: Codex (tested with 0.163.0), Claude Code (`claude`, tested with 2.1.305) or OpenCode
+(`opencode`, tested with 1.19.3). Each role may use a different provider. Start with `cargo run --locked`; run checks with `make check`.
 
 | Instance | Start | App directory under each XDG root |
 | --- | --- | --- |
@@ -71,7 +72,8 @@ fractional ordering, delete/undo, Human acknowledgment, failure resolution, hist
 and disk import/export. SQL and validation live in shared transactional application commands,
 not the TUI. Concurrent stale edits fail without overwriting data; other windows refresh.
 New AI tasks have no invented model defaults. **Models** accepts `provider/model`, optional
-effort, and limits. Saving makes a new approved revision; previous attempts keep their inputs.
+effort, and limits: `codex/gpt-6-sol`, `claude/sonnet` (or just `claude`, which means Sonnet),
+`opencode/anthropic/claude-sonnet-5-5` (OpenCode keeps its own `vendor/model`). Saving makes a new approved revision; previous attempts keep their inputs.
 Configuration provides project model defaults, check management, and saved preferences.
 Configuration → Storage previews retained output and check transcript bytes, sets the age
 of completed work eligible for cleanup, and applies cleanup after review. History marks
@@ -79,8 +81,8 @@ pruned content; live work and unresolved failures retain their evidence.
 Mouse, run-one/continue-queue, and planner approval preferences persist per project and instance.
 Break down uses the configured planning model and previews ordinary subtasks before applying them.
 
-Codex execution, shell checks, independent AI review/validation, and bounded remediation are real.
-AI task breakdown uses the planning model; other provider adapters are not connected. Normal mode never simulates
+Agent execution, shell checks, independent AI review/validation, and bounded remediation are real.
+AI task breakdown uses the planning model. Normal mode never simulates
 success or creates fake attempts. Use `cargo run --locked -- --demo` to explore
 the isolated simulator: 120 queued/current and 120 historical tasks, no SQLite access.
 
@@ -122,7 +124,8 @@ The supervisor records sessions, normalized usage, checks and criterion evidence
 - `src/app.rs`: interaction state
 - `src/application/`: typed shared commands, transactional SQL, snapshots, definition transfer
 - `src/cli/`: argument parsing, shared command calls, human/JSON output (no SQL)
-- `src/runner/`: supervisor, Codex adapter, process guardian, Git checkpoints
+- `src/runner/`: supervisor, agent prompts, process guardian, Git checkpoints
+- `src/runner/provider/`: Codex, Claude Code and OpenCode launch arguments and event parsing
 - `src/persistent.rs`: TUI forms → commands → refreshed read projections
 - `src/ui.rs`: terminal layout
 - `src/presentation.rs`: terminal read projections, separate from application command inputs
@@ -172,6 +175,11 @@ ktask model-default remediation --provider codex --model CAPABLE_MODEL --effort 
 ktask
 ```
 
+Claude Code and OpenCode work the same way, for example
+`ktask model-default execution --provider claude --effort high` (Sonnet) with
+`--provider claude --model opus` for the judging roles, or
+`--provider opencode --model anthropic/claude-sonnet-5-5`.
+
 Defaults apply to new tasks only. Use **Models** or `edit --model` for existing tasks.
 In Current, **Run** starts a detached supervisor using the saved run mode. Run one stops after
 current succeeds; Continue queue advances after verified success. The Run button names its mode;
@@ -205,10 +213,23 @@ Current Task shows "Provider limit until <time>"; queue mode resumes automatical
 errors before the next successful turn count as the same outage.
 Pause stops automatic waiting; a later resume cannot bypass its recorded deadline.
 
-Codex uses explicit per-role models, structured results, workspace-write execution/remediation,
-and read-only review/validation. User Codex configuration/rules are not inherited; authentication
-still uses the existing Codex home. No approval/sandbox bypass flags. Provider cost remains unknown
-unless reported. The guardian supplies owned `TMPDIR`, kills/reaps descendants, and cleans scratch
+Every provider gets explicit per-role models, schema-checked structured results, session reuse,
+uncached input tokens with disjoint cache counts, and the same failure semantics: limits wait,
+infrastructure failures retry and never spend the coding budget. Execution and remediation may
+write; review, validation and every failure judge are read-only. Authentication always uses the
+provider's existing home (`~/.codex`, `~/.claude`, `~/.local/share/opencode`).
+- Codex: `codex exec --json`, sandbox `workspace-write` or `read-only`, `--output-schema`; user
+  configuration/rules are not inherited and no approval/sandbox bypass flags are used.
+- Claude Code: `claude -p --output-format stream-json --json-schema`; MCP servers and user settings
+  are not loaded. Workers use `bypassPermissions` (Claude Code has no workspace sandbox, so they can
+  write outside the project like any shell); readers use `dontAsk` with only Read/Grep/Glob and
+  read-only `git`/`ls`/`cat`/`rg` commands. Usage limits wait for the reported reset time.
+- OpenCode: `opencode run --format json --pure`; the schema travels in the prompt because
+  OpenCode has no schema flag. Workers pass `--auto`; readers get an `OPENCODE_PERMISSION` policy
+  that denies edits and all but read-only commands, and `run` rejects anything else. Per-step
+  usage and cost are summed; `retry-after` sets the limit wait.
+
+Provider cost is recorded when reported (Claude Code and OpenCode), otherwise unknown. The guardian supplies owned `TMPDIR`, kills/reaps descendants, and cleans scratch
 before another worker starts. Repository files and provider session history are not scratch.
 Codex execution excludes general `/tmp` writes while allowing the owned `TMPDIR`.
 Supervisor check transcripts are durable artifacts under the instance state directory, with

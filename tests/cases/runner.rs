@@ -10,6 +10,8 @@ use std::{
     time::{Duration, Instant},
 };
 const BIN: &str = env!("CARGO_BIN_EXE_ktask-dev");
+#[path = "providers.rs"]
+mod providers;
 struct Fixture {
     scratch: Scratch,
     root: PathBuf,

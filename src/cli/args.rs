@@ -135,10 +135,12 @@ pub enum Command {
     ModelDefault {
         #[arg(value_parser=nonempty)]
         role: String,
+        /// codex, claude or opencode.
         #[arg(long, value_parser=nonempty)]
         provider: String,
+        /// Optional for claude, which defaults to sonnet.
         #[arg(long, value_parser=nonempty)]
-        model: String,
+        model: Option<String>,
         #[arg(long, value_parser=nonempty)]
         effort: Option<String>,
     },
@@ -367,13 +369,11 @@ fn role(s: &str) -> Result<usize, String> {
 }
 fn model_setting(s: &str) -> Result<ModelSetting, String> {
     let (r, value) = s.split_once('=').ok_or("expected ROLE=PROVIDER/MODEL")?;
-    let (provider, model) = value
-        .split_once('/')
-        .ok_or("expected ROLE=PROVIDER/MODEL")?;
+    let (provider, model) = crate::application::ModelConfig::split_identifier(value)?;
     Ok(ModelSetting {
         role: role(r)?,
-        provider: nonempty(provider)?,
-        model: nonempty(model)?,
+        provider,
+        model,
     })
 }
 fn effort_setting(s: &str) -> Result<EffortSetting, String> {

@@ -102,7 +102,7 @@ impl App {
                 Dialog::new(
                     DialogKind::ProjectModels(Box::new(values)),
                     "Project model defaults",
-                    "New tasks copy these defaults; existing revisions stay pinned.\nBreak down uses the planning model.\nUse provider/model; blank clears the default.",
+                    "New tasks copy these defaults; existing revisions stay pinned.\nBreak down uses the planning model.\nUse provider/model: codex/gpt-6-sol, claude/sonnet, opencode/anthropic/claude-sonnet-5-5.\nBlank clears the default.",
                     fields,
                 )
             }
@@ -207,22 +207,8 @@ impl App {
             DialogKind::ProjectModels(expected) => {
                 let mut values: Defaults = std::array::from_fn(|_| None);
                 for (i, value) in values.iter_mut().enumerate() {
-                    let identifier = dialog.value(i * 2);
-                    let effort = dialog.value(i * 2 + 1);
-                    if identifier.is_empty() {
-                        if !effort.is_empty() {
-                            return Err("Effort requires a provider/model".into());
-                        }
-                    } else {
-                        let (provider, model) = identifier
-                            .split_once('/')
-                            .ok_or("Use provider/model, or leave blank")?;
-                        *value = Some(ModelConfig {
-                            provider: provider.trim().into(),
-                            model: model.trim().into(),
-                            effort: (!effort.is_empty()).then(|| effort.into()),
-                        });
-                    }
+                    *value =
+                        ModelConfig::from_fields(dialog.value(i * 2), dialog.value(i * 2 + 1))?;
                 }
                 self.service
                     .as_mut()

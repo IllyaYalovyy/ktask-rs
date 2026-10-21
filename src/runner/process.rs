@@ -30,6 +30,9 @@ use std::{
 pub struct Invocation {
     pub executable: PathBuf,
     pub args: Vec<String>,
+    /// Provider settings for this turn only, such as a read-only permission policy.
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
     pub cwd: PathBuf,
     pub prompt: String,
     pub schema: Option<serde_json::Value>,
@@ -269,6 +272,7 @@ pub fn worker() -> Result<()> {
     let mut command = Command::new(&spec.executable);
     command
         .args(&spec.args)
+        .envs(spec.env.iter().map(|(key, value)| (key, value)))
         .current_dir(&spec.cwd)
         .env("TMPDIR", scratch.path())
         .env("KTASK_WORKER_CALLBACK", "1")

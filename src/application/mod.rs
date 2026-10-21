@@ -47,6 +47,50 @@ pub struct ModelConfig {
     pub effort: Option<String>,
 }
 
+impl ModelConfig {
+    /// The model a provider uses when only the provider is named: Claude Code runs Sonnet.
+    pub fn default_model(provider: &str) -> Option<&'static str> {
+        (provider == "claude").then_some("sonnet")
+    }
+
+    /// "provider/model" (OpenCode models keep their own "vendor/model" after the first slash),
+    /// or a provider alone when it has a default model.
+    pub fn split_identifier(identifier: &str) -> std::result::Result<(String, String), String> {
+        let identifier = identifier.trim();
+        let (provider, model) = match identifier.split_once('/') {
+            Some((provider, model)) => (provider.trim(), model.trim()),
+            None => (
+                identifier,
+                Self::default_model(identifier).unwrap_or_default(),
+            ),
+        };
+        if provider.is_empty() || model.is_empty() {
+            return Err("Use provider/model (for example claude/sonnet), or leave blank".into());
+        }
+        Ok((provider.into(), model.into()))
+    }
+
+    /// A dialog's identifier and effort fields; both blank means unconfigured.
+    pub fn from_fields(
+        identifier: &str,
+        effort: &str,
+    ) -> std::result::Result<Option<Self>, String> {
+        if identifier.trim().is_empty() {
+            return if effort.trim().is_empty() {
+                Ok(None)
+            } else {
+                Err("Effort requires a provider/model".into())
+            };
+        }
+        let (provider, model) = Self::split_identifier(identifier)?;
+        Ok(Some(Self {
+            provider,
+            model,
+            effort: (!effort.trim().is_empty()).then(|| effort.trim().into()),
+        }))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Definition {
     pub title: String,

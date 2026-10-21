@@ -3,7 +3,7 @@ use crate::{
     application::{
         Actor, ActorKind, Definition, Kind, ModelConfig, Service, VersionedTask, require,
     },
-    runner::codex::Judgment,
+    runner::agent::Judgment,
     storage::{Error, Result},
 };
 
