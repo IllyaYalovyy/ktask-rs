@@ -2757,7 +2757,7 @@ fn unconfirmed_worker_death_blocks_execution_until_explicit_operator_confirmatio
 }
 
 #[test]
-fn real_tui_persisted_single_and_continue_modes_with_two_tasks() -> Result {
+fn real_tui_queue_runs_current_with_keyboard_and_mouse_in_both_modes() -> Result {
     for mouse in [false, true] {
         for queue in [false, true] {
             let f = Fixture::new()?;
@@ -2799,6 +2799,21 @@ fn real_tui_persisted_single_and_continue_modes_with_two_tasks() -> Result {
             let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
             t.screen("restart", |s| s.contains("First configured task"))?;
             if mouse {
+                t.click("2 Queue")?;
+                t.screen("queue run control", |s| {
+                    s.contains(if queue { "r Run queue" } else { "r Run one" })
+                })?;
+                t.click("#2   PENDING  Second configured task")?;
+            } else {
+                t.send("2j")?;
+            }
+            let selected = t.screen("later task selected while current remains first", |s| {
+                s.contains("› #2   PENDING")
+                    && s.contains("Current #1 · PENDING")
+                    && s.contains("#2 · PENDING · AI")
+            })?;
+            println!("QUEUE BEFORE RUN mouse={mouse} queue={queue}\n{selected}");
+            if mouse {
                 t.click(if queue { "r Run queue" } else { "r Run one" })?;
             } else {
                 t.send("r")?;
@@ -2811,6 +2826,7 @@ fn real_tui_persisted_single_and_continue_modes_with_two_tasks() -> Result {
                 }
             })?;
             println!("RUN RESULT mouse={mouse} queue={queue}\n{final_screen}");
+            assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
             let second = f.ok(&["show", "2"])?;
             assert_eq!(second["status"], if queue { "succeeded" } else { "ready" });
             assert_eq!(

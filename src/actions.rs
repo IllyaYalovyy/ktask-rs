@@ -40,7 +40,7 @@ impl App {
                     })
             }
             Action::Run => {
-                self.view == View::Current
+                matches!(self.view, View::Current | View::Queue)
                     && !(self.service.is_some() && self.supervisor_alive)
                     && current.is_some_and(|t| {
                         t.definition().kind == Kind::Ai
@@ -244,7 +244,7 @@ impl App {
             return;
         }
         if !self.enabled(action) {
-            self.message("Unavailable here · only current can execute; running work and History are read-only");
+            self.message("Unavailable here · only the current task can execute; running work and History are read-only");
             return;
         }
         let had_dialog = self.dialog.is_some();

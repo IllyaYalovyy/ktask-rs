@@ -529,6 +529,7 @@ impl App {
             View::History if code == KeyCode::Char('V') => Some(Action::InspectSection(4)),
             View::History if code == KeyCode::Char('F') => Some(Action::InspectSection(5)),
             View::Queue | View::History => match code {
+                KeyCode::Char('r') if self.view == View::Queue => Some(Action::Run),
                 KeyCode::Char('/') => Some(Action::Search),
                 KeyCode::Char('f') => Some(Action::Filter),
                 KeyCode::Char('e') => Some(Action::Edit),

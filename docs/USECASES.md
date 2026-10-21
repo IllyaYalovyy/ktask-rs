@@ -24,6 +24,7 @@
 - Current waits on a question → the question is shown on screen with Answer first; Abandon gives up on the task (History, cancelled) or drops only the waiting or paused attempt without spending budget.
 - Current failed and not worth more attempts → Abandon on Current, or Delete on it in Queue, moves it to History as cancelled with its attempts and evidence; Resolve records it as done or superseded instead.
 - Run current → continue the queue by default, with Run one available explicitly; see the mode, goal, current phase and next task; pause → see it paused with progress retained and no later task started; resume → continue the same task.
+- From Queue, press r or use its Run control to start the current task, regardless of which row is selected; the selected row remains a browsing selection.
 - Retry failed current → start a new attempt on that task, preserving previous attempts and their evidence.
 - Inspect failure → the stronger remediation model judges the evidence and repairs within the task by default → revise, escalate, or insert prerequisites only when the evidence warrants it; ask the owner only for a consequential product decision and require approval only by policy.
 - Review a new task → approve with one action to make it ready, or reject it; show who approved its revision (human or AI).

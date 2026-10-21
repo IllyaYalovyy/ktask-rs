@@ -315,6 +315,7 @@ fn controls(app: &App) -> Vec<(&'static str, Action)> {
     let mut controls = match app.view {
         View::Current => current_controls(app),
         View::Queue => vec![
+            (run_label(app), Action::Run),
             ("a Add", Action::Add),
             ("i Insert", Action::Insert),
             ("e Edit", Action::Edit),
@@ -364,18 +365,7 @@ fn controls(app: &App) -> Vec<(&'static str, Action)> {
 /// The one or two actions the current situation calls for come first; browsing follows.
 fn current_controls(app: &App) -> Vec<(&'static str, Action)> {
     let status = app.current().map(|t| t.status());
-    let run = if matches!(
-        status,
-        Some(Status::Paused | Status::Question | Status::Waiting)
-    ) {
-        "r Resume"
-    } else {
-        if app.auto_advance {
-            "r Run queue"
-        } else {
-            "r Run one"
-        }
-    };
+    let run = run_label(app);
     let mut controls = match status {
         Some(Status::Abandoned) => vec![("R Recover", Action::Recover)],
         Some(Status::Question) => vec![
@@ -438,6 +428,21 @@ fn current_controls(app: &App) -> Vec<(&'static str, Action)> {
         controls.retain(|(label, _)| *label != "End Follow");
     }
     controls
+}
+
+fn run_label(app: &App) -> &'static str {
+    if app.current().is_some_and(|task| {
+        matches!(
+            task.status(),
+            Status::Paused | Status::Question | Status::Waiting
+        )
+    }) {
+        "r Resume"
+    } else if app.auto_advance {
+        "r Run queue"
+    } else {
+        "r Run one"
+    }
 }
 
 fn panel(title: impl Into<Line<'static>>) -> Block<'static> {
