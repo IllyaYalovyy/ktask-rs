@@ -1054,18 +1054,26 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         Rect::new(toolbar.x + 15, toolbar.y + 1, toolbar.width - 15, 1),
         Action::Search,
     ));
-    let [list, detail] =
-        Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
+    let [list, detail] = if app.view == View::History && area.width < 90 {
+        Layout::horizontal([Constraint::Percentage(75), Constraint::Percentage(25)]).areas(area)
+    } else {
+        Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area)
+    };
     let position = visible
         .iter()
         .position(|id| Some(*id) == app.catalog().selected);
     app.page_size = list.height.saturating_sub(2) as usize;
     app.list_rect = list;
     let title = format!(
-        " {} · {} / {} ",
+        " {} · {} / {}{} ",
         app.view.label(),
         position.map_or(0, |n| n + 1),
-        visible.len()
+        visible.len(),
+        if app.view == View::History {
+            " · Attempts Time Cost"
+        } else {
+            ""
+        }
     );
     if visible.is_empty() {
         frame.render_widget(
@@ -1083,14 +1091,36 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
             .filter_map(|id| app.task(*id))
             .map(|task| {
                 let prefix = format!("#{:<3} {:<8} ", task.id, task.status().label());
-                let text = shortened(
-                    &task.definition().title,
-                    list.width.saturating_sub(4) as usize
-                        - prefix.len().min(list.width.saturating_sub(4) as usize),
-                );
+                let available = list.width.saturating_sub(4) as usize;
+                let statistics = if app.view == View::History {
+                    let total_ms = task.attempts.iter().fold(0_u64, |total, attempt| {
+                        total.saturating_add(attempt.elapsed_ms.saturating_add(attempt.waiting_ms))
+                    });
+                    let cost = if app.service.is_some() {
+                        app.stored_cost(task.id)
+                    } else if task.attempts.is_empty() {
+                        "unknown".into()
+                    } else {
+                        format!("${:.2}", task.cost() as f64 / 100.0)
+                    };
+                    format!(
+                        " {:>3} {:>7} {:>9}",
+                        task.attempts.len(),
+                        history_time(total_ms),
+                        cost
+                    )
+                } else {
+                    String::new()
+                };
+                let title_width =
+                    available.saturating_sub(prefix.len() + Line::raw(&statistics).width());
+                let text = shortened(&task.definition().title, title_width);
+                let gap = " ".repeat(title_width.saturating_sub(Line::raw(&text).width()));
                 ListItem::new(Line::from(vec![
                     Span::styled(prefix, Style::new().fg(status_color(task.status()))),
                     Span::raw(text),
+                    Span::raw(gap),
+                    Span::raw(statistics),
                 ]))
             })
             .collect();
@@ -1549,6 +1579,19 @@ fn shortened(text: &str, width: usize) -> String {
         return String::new();
     }
     format!("{}…", clip(text, width - 1))
+}
+
+fn history_time(ms: u64) -> String {
+    let seconds = ms / 1_000;
+    if seconds < 60 {
+        format!("{:.1}s", ms as f64 / 1_000.0)
+    } else if seconds < 3_600 {
+        format!("{}m{:02}s", seconds / 60, seconds % 60)
+    } else if seconds < 86_400 {
+        format!("{}h{:02}m", seconds / 3_600, seconds % 3_600 / 60)
+    } else {
+        format!("{}d{:02}h", seconds / 86_400, seconds % 86_400 / 3_600)
+    }
 }
 
 fn clip(text: &str, width: usize) -> String {

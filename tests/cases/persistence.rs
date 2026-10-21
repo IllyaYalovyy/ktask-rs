@@ -48,6 +48,83 @@ fn terminal(root: &Path) -> Result<Terminal> {
 }
 
 #[test]
+fn history_rows_show_attempts_total_time_and_cost_by_keyboard_and_mouse() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (known_id, known_attempt) = failed_task(root)?;
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    db.connection().execute(
+        "UPDATE attempts SET active_ms=2500 WHERE id=?1",
+        [known_attempt],
+    )?;
+    assert_eq!(db.connection().execute(
+        "UPDATE model_calls SET cost_microusd=150 WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id=?1)",
+        [known_attempt],
+    )?, 2);
+    drop(db);
+    let mut writer = service(root)?;
+    let current = target(&mut writer, known_id)?;
+    writer.resolve(current, Resolution::FailedSkipped, "Recorded")?;
+    drop(writer);
+
+    let (unknown_id, unknown_attempt) = failed_task(root)?;
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    db.connection().execute(
+        "UPDATE attempts SET active_ms=2500 WHERE id=?1",
+        [unknown_attempt],
+    )?;
+    db.connection().execute(
+        "INSERT INTO attempts(project_id,task_id,revision,number,state,execution_token,started_at_ms,finished_at_ms,active_ms,outcome,failure_category) SELECT project_id,task_id,revision,2,'failed',?2,100,3700,3600,'Failed','check' FROM attempts WHERE id=?1",
+        rusqlite::params![unknown_attempt, format!("history-extra-attempt-{unknown_id}")],
+    )?;
+    drop(db);
+    let mut writer = service(root)?;
+    let current = target(&mut writer, unknown_id)?;
+    writer.resolve(current, Resolution::FailedSkipped, "Recorded")?;
+    drop(writer);
+
+    for (cols, mouse) in [(70, false), (70, true), (100, false), (100, true)] {
+        let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, cols, 24)?;
+        t.screen("startup", |s| s.contains("3 History"))?;
+        if mouse {
+            t.click("3 History")?;
+        } else {
+            t.send("3")?;
+        }
+        let screen = t.screen("history statistics", |s| {
+            s.contains("Attempts Time Cost") && s.contains("$0.000300") && s.contains("unknown")
+        })?;
+        println!("HISTORY STATISTICS {cols} mouse={mouse}\n{screen}");
+        let known = screen
+            .lines()
+            .find(|line| line.contains(&format!("#{known_id}")))
+            .unwrap();
+        let unknown = screen
+            .lines()
+            .find(|line| line.contains(&format!("#{unknown_id}")))
+            .unwrap();
+        let known = known.split('│').nth(1).unwrap();
+        let unknown = unknown.split('│').nth(1).unwrap();
+        assert!(
+            known
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .ends_with(&["1", "2.5s", "$0.000300"]),
+            "{known}"
+        );
+        assert!(
+            unknown
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .ends_with(&["2", "6.1s", "unknown"]),
+            "{unknown}"
+        );
+        quit(&mut t)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn recorded_usage_is_visible_in_current_details_history_and_statistics() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();
@@ -1434,7 +1511,7 @@ fn failed_task(root: &Path) -> Result<(i64, i64)> {
     }
     let id = service.create(&[d], None, true)?[0];
     let target = target(&mut service, id)?;
-    let run = service.begin_run(target, "fixture-token", "fixture-base")?;
+    let run = service.begin_run(target, &format!("fixture-token-{id}"), "fixture-base")?;
     service.output(&run, "stderr", "Check failed: transcript evidence")?;
     for role in ["review", "validation"] {
         let model = ModelConfig {
@@ -3278,7 +3355,10 @@ fn sqlite_queue_and_history_handle_240_tasks_in_execution_order() -> Result {
         "LARGE SQLITE QUEUE\n{}",
         t.screen("last page", |s| s.contains("120 / 120"))?
     );
-    key(&mut t, "3\x1b[H", "Durable task 120")?;
+    t.send("3\x1b[H")?;
+    t.screen("first history row", |s| {
+        s.contains("History · 1 / 120") && s.contains("#120") && s.contains("Attempts Time Cost")
+    })?;
     key(&mut t, "/Durable task 1\r", "Search:")?;
     key(&mut t, "2", "Durable task 240")?;
     key(&mut t, "1", "Current #121")?;
