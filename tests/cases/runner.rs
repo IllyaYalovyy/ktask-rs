@@ -2394,6 +2394,55 @@ fn real_tui_switches_the_stage_limit_on_by_keyboard_and_mouse() -> Result {
 }
 
 #[test]
+fn queue_shows_the_model_each_task_will_use_by_keyboard_and_mouse() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.add("Mixed models")?;
+        f.add("Sol everywhere")?;
+        let mut args = vec!["edit".to_owned(), "2".to_owned()];
+        for role in ["execution", "review", "validation", "remediation"] {
+            args.extend([
+                "--model".into(),
+                format!("{role}=codex/gpt-6-sol"),
+                "--effort".into(),
+                format!("{role}=high"),
+            ]);
+        }
+        f.ok(&args.iter().map(String::as_str).collect::<Vec<_>>())?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 36)?;
+        t.screen("ready", |s| s.contains("r Run queue"))?;
+        if mouse {
+            t.click("2 Queue")?;
+        } else {
+            t.send("2")?;
+        }
+        let queue = t.screen("queue models", |s| {
+            s.contains("Queue · 1 / 2 · Model")
+                && s.contains("codex/execution (mixed)")
+                && s.contains("codex/gpt-6-sol high")
+        })?;
+        println!("QUEUE MODELS mouse={mouse}\n{queue}");
+        let row = |id: &str| {
+            queue
+                .lines()
+                .find(|l| l.contains(&format!("#{id}   PENDING")))
+        };
+        let mixed = row("1").unwrap();
+        assert!(mixed.contains("codex/execution (mixed)"), "{mixed}");
+        let sol = row("2").unwrap();
+        assert!(
+            sol.contains("codex/gpt-6-sol high") && !sol.contains("mixed"),
+            "{sol}"
+        );
+        // The details pane lists every role of the selected task.
+        assert!(queue.contains("Review codex/review / default"), "{queue}");
+        t.send("q")?;
+        t.finish()?;
+    }
+    Ok(())
+}
+
+#[test]
 fn rate_limit_keeps_same_attempt_and_stores_resume_time_without_spending_budget() -> Result {
     let f = Fixture::new()?;
     f.provider("rate")?;

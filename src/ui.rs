@@ -1155,10 +1155,10 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         app.view.label(),
         position.map_or(0, |n| n + 1),
         visible.len(),
-        if app.view == View::History {
-            " · Attempts Time Cost"
-        } else {
-            ""
+        match app.view {
+            View::History => " · Attempts Time Cost",
+            View::Queue if list.width >= QUEUE_MODEL_MIN_WIDTH => " · Model",
+            _ => "",
         }
     );
     if visible.is_empty() {
@@ -1195,6 +1195,8 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                         history_time(total_ms),
                         cost
                     )
+                } else if app.view == View::Queue && list.width >= QUEUE_MODEL_MIN_WIDTH {
+                    format!(" {}", model_summary(&task.definition().settings))
                 } else {
                     String::new()
                 };
@@ -1245,7 +1247,7 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                 .collect::<String>()
         );
         format!(
-            "{}\n#{} · {} · {}\n\nGoal: {}\n\nCheck: {}\n\nAttempts: {} · {}{}{}",
+            "{}\n#{} · {} · {}\n\nGoal: {}\n\nCheck: {}\n\nAttempts: {} · {}{}\n\nModels:\n{}{}",
             t.definition().title,
             t.id,
             t.status().label(),
@@ -1259,6 +1261,7 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                 format!("${:.2}", t.cost() as f64 / 100.0)
             },
             links,
+            role_models(&t.definition().settings),
             if app.service.is_some() {
                 t.attempts
                     .iter()
@@ -1665,6 +1668,39 @@ fn shortened(text: &str, width: usize) -> String {
         return String::new();
     }
     format!("{}…", clip(text, width - 1))
+}
+
+/// Below this list width the Queue omits its Model column; details still list every role.
+const QUEUE_MODEL_MIN_WIDTH: u16 = 60;
+
+/// The execution model and effort, marked "(mixed)" when another role uses something else.
+fn model_summary(settings: &crate::presentation::Settings) -> String {
+    let label = |m: &crate::presentation::Model| match &m.effort {
+        Some(effort) => format!("{} {effort}", m.name),
+        None => m.name.clone(),
+    };
+    let execution = label(&settings.models[0]);
+    if settings.models[1..].iter().all(|m| label(m) == execution) {
+        execution
+    } else {
+        format!("{execution} (mixed)")
+    }
+}
+
+/// One line per role: "Execution codex/gpt-6-sol / high".
+fn role_models(settings: &crate::presentation::Settings) -> String {
+    crate::presentation::ROLES
+        .iter()
+        .zip(&settings.models)
+        .map(|(role, m)| {
+            format!(
+                "{role} {} / {}",
+                m.name,
+                m.effort.as_deref().unwrap_or("default")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn history_time(ms: u64) -> String {
