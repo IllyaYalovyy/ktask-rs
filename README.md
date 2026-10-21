@@ -193,7 +193,14 @@ validation use the remediation model on a new attempt, bounded by the task's att
 Inserted repairs inherit the failed task's time limit, including unlimited. Insertion does not
 reset the original coding budget; Models/limits can grant additional attempts while keeping all
 failure evidence. Startup failures show the runner's error directly in the TUI and CLI.
-An unresolved failure never advances the queue. Human work/approval/questions stop automatic work.
+A failed attempt is repaired automatically: the next attempt opens with the read-only failure
+judge, and the queue keeps going. Execution stops only when no repair can change the result:
+the attempt budget or the task's time limit is used up, ten repair rounds left critical findings,
+the judge replanned ten times, or the provider/environment failed three attempts in a row
+(five failures of any kind when the budget is unlimited). Then Current shows a red
+**EXECUTION STOPPED** banner with the reason, why it was not resolved automatically, and what to
+do next. An unresolved failure never advances the queue. Human work/approval/questions stop
+automatic work.
 
 CLI: `run` follows the saved run mode (Continue queue by default); `run --queue`
 forces queue execution, `run --one` stops after current, and `--background` detaches. `resume` and
@@ -205,8 +212,8 @@ attempt interrupted only when repository and worker locks are free. Inspect its 
 If the guardian itself died without confirming cleanup, execution stays blocked; only after
 stopping orphaned processes and preserving work, use `recover --confirm-worker-cleanup`.
 Execution, review, validation and repair-worker connection failures retry twice within the same attempt, with short
-interruptible backoff and preserved work/session. Repeated failures stop with evidence;
-infrastructure failures do not spend the coding budget. Rate and usage limits never fail a task:
+interruptible backoff and preserved work/session; a failed attempt is then repaired
+automatically as above. Infrastructure failures do not spend the coding budget. Rate and usage limits never fail a task:
 the attempt/session waits until the provider's own reset time when it names one ("try again at
 Oct 26th, 2026 11:32 PM", "try again in 20s"), else backs off 1, 2, 4, then every 8 minutes.
 Current Task shows "Provider limit until <time>"; queue mode resumes automatically. Provider

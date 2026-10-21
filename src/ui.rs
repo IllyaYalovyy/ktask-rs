@@ -271,7 +271,7 @@ fn queue_progress(app: &App, width: u16) -> String {
         } else if session.reason.starts_with("Waiting for answer:") {
             "Awaiting answer to current task"
         } else {
-            &session.reason
+            stop_error(&session.reason).unwrap_or(&session.reason)
         };
         let phase = app
             .queue
@@ -629,6 +629,7 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         ]),
         toolbar,
     );
+    let area = draw_stop_banner(frame, app, task, area);
     let [left, right] = Layout::horizontal([
         Constraint::Length(if area.width >= 88 { 46 } else { 30 }),
         Constraint::Min(0),
@@ -819,6 +820,91 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         right
     };
     draw_output(frame, app, output);
+}
+
+/// The banner, when there is one, above the rest of Current; returns the remaining area.
+fn draw_stop_banner(
+    frame: &mut Frame,
+    app: &App,
+    task: &crate::presentation::Task,
+    area: Rect,
+) -> Rect {
+    let Some(body) = stop_banner(app, task) else {
+        return area;
+    };
+    // Every line wraps to the inner width; the banner grows to show all of it.
+    let inner = area.width.saturating_sub(2).max(1) as usize;
+    let rows: usize = body
+        .iter()
+        .map(|line| line.width().div_ceil(inner).max(1))
+        .sum();
+    let height = (rows as u16 + 2).min(area.height / 2);
+    let [banner, rest] =
+        Layout::vertical([Constraint::Length(height), Constraint::Min(0)]).areas(area);
+    frame.render_widget(
+        Paragraph::new(body).wrap(Wrap { trim: true }).block(
+            Block::bordered()
+                .border_type(BorderType::Thick)
+                .border_style(Style::new().fg(BAD))
+                .title(Line::styled(
+                    " ■ EXECUTION STOPPED ",
+                    Style::new().fg(Color::Black).bg(BAD).bold(),
+                )),
+        ),
+        banner,
+    );
+    rest
+}
+
+/// Why execution stopped on this task when nothing is running it: the reason, why the
+/// supervisor did not resolve it, and what the owner can do.
+fn stop_banner(app: &App, task: &crate::presentation::Task) -> Option<Vec<Line<'static>>> {
+    if app.service.is_none() || app.supervisor_alive {
+        return None;
+    }
+    let lines = |reason: String, unresolved: String, next: String| {
+        vec![
+            Line::from(vec![
+                Span::styled("Reason: ", Style::new().bold()),
+                Span::raw(reason),
+            ]),
+            Line::from(vec![
+                Span::styled("Not resolved automatically: ", Style::new().bold()),
+                Span::raw(unresolved),
+            ]),
+            Line::from(vec![
+                Span::styled("Next: ", Style::new().bold()),
+                Span::raw(next),
+            ]),
+        ]
+    };
+    if task.status().failed() {
+        let stored = app.stored.get(&task.id)?;
+        // A repairable failure is the supervisor's job; only a real stop gets the banner.
+        let stop = crate::application::stop::unresolvable(stored)?;
+        return Some(lines(stop.reason, stop.unresolved, stop.next.into()));
+    }
+    let session = app.execution_session.as_ref()?;
+    let error = stop_error(&session.reason)?;
+    matches!(session.state.as_str(), "stopped" | "waiting").then(|| {
+        lines(
+            error.into(),
+            "The supervisor could not start or continue this task.".into(),
+            "Fix the cause, then r Run (u Readiness lists each blocker)".into(),
+        )
+    })
+}
+
+/// The message of a supervisor error recorded as the session's reason.
+fn stop_error(reason: &str) -> Option<&str> {
+    [
+        "command conflict: ",
+        "storage: ",
+        "database: ",
+        "incompatible database: ",
+    ]
+    .iter()
+    .find_map(|prefix| reason.strip_prefix(prefix))
 }
 
 /// " until Oct 26 23:33" for a waiting attempt with a scheduled resume.

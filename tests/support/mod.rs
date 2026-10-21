@@ -348,7 +348,17 @@ impl Terminal {
     }
 
     pub fn screen(&self, description: &str, matches: impl Fn(&str) -> bool) -> Result<String> {
-        let deadline = Instant::now() + TIMEOUT;
+        self.screen_within(description, TIMEOUT, matches)
+    }
+
+    /// For flows that span several attempts with their backoffs.
+    pub fn screen_within(
+        &self,
+        description: &str,
+        timeout: Duration,
+        matches: impl Fn(&str) -> bool,
+    ) -> Result<String> {
+        let deadline = Instant::now() + timeout;
         let mut last = self.parser.lock().unwrap().screen().contents();
         let mut matched = matches(&last);
         loop {

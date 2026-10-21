@@ -11,6 +11,7 @@ pub mod progress;
 mod queries;
 pub mod retention;
 pub mod session;
+pub mod stop;
 pub mod usage_report;
 pub use queries::{Event, WaitingResume};
 pub mod transfer;
@@ -142,6 +143,8 @@ pub struct Attempt {
     pub revision: i64,
     pub state: String,
     pub outcome: Option<String>,
+    /// check, review, validation, agent, transport, protocol, environment, timeout, ...
+    pub failure_category: Option<String>,
     pub active_ms: i64,
     /// Live waits advance until the attempt finishes; closed intervals remain fixed.
     pub waiting_ms: i64,

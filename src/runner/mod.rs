@@ -409,12 +409,30 @@ fn run_inner(
                 }
                 continue;
             }
+            // A failed attempt is repaired automatically: the next attempt opens with the
+            // read-only failure judge. Only a failure no repair can change stops execution.
             Outcome::Failed(category, message) => {
                 service.finish_run(&run, "failed", Some(category), &message, None)?;
-                return Err(Error::Conflict(format!(
-                    "Task #{} stopped ({category}): {message}",
-                    run.task
-                )));
+                let task = service
+                    .task(run.task)?
+                    .ok_or_else(|| Error::Conflict("Current task disappeared".into()))?;
+                if let Some(stop) = crate::application::stop::unresolvable(&task) {
+                    return Err(Error::Conflict(format!(
+                        "Task #{} stopped ({category}): {} {}",
+                        run.task, stop.reason, stop.unresolved
+                    )));
+                }
+                service.output(
+                    &run,
+                    "system",
+                    &format!(
+                        "Attempt failed ({category}); starting a repair attempt automatically"
+                    ),
+                )?;
+                if stop.load(Ordering::Relaxed) {
+                    return Ok("Runner stopped; repair attempt not started".into());
+                }
+                continue;
             }
             Outcome::Passed(_) | Outcome::Changes { .. } => unreachable!(),
         }

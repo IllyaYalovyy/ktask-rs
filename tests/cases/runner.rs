@@ -219,6 +219,7 @@ case '{mode}' in
  esac;;
  review-once|noisy-review-once) if [ "$model" = review ] && [ ! -f "$HOME/review-failed" ]; then touch "$HOME/review-failed"; printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"failed\",\"summary\":\"result.txt:1: missing edge-case handling; repair and prove the boundary.\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":false,\"evidence\":\"Boundary case fails\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0; fi;;
  transient) if [ ! -f "$HOME/transport-retried" ]; then touch "$HOME/transport-retried"; printf '{{"type":"turn.failed","error":{{"message":"connection reset"}}}}\n'; exit 2; fi;;
+ fail-first-attempt) if [ "$(wc -l < "$HOME/provider-invocations")" -le 3 ]; then printf '{{"type":"turn.completed","usage":{{}}}}\n'; exit 0; fi;;
  slow-repair) if [ "$model" = remediation ]; then touch "$HOME/repair-started"; sleep 30; fi;;
  slow-review) if [ "$model" = review ]; then touch "$HOME/review-started"; sleep 30; fi;;
  slow) sleep 3;;
@@ -242,6 +243,8 @@ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":
         fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
         Ok(())
     }
+    /// Three failed attempts: the supervisor repairs automatically and stops only after the
+    /// provider fails three attempts in a row.
     fn fail_provider(&self) -> Result {
         self.provider("malformed-work")?;
         let output = self.process().args(["run", "--one"]).output()?;
@@ -1465,14 +1468,14 @@ fn failure_judge_asks_the_owner_only_as_a_product_question() -> Result {
     f.state("waiting")?;
     let task = f.ok(&["show", "1"])?;
     let attempts = task["attempts"].as_array().unwrap();
-    assert_eq!(attempts.len(), 2);
-    assert_eq!(attempts[1]["question"], "Keep or drop the legacy export?");
+    assert_eq!(attempts.len(), 4);
+    assert_eq!(attempts[3]["question"], "Keep or drop the legacy export?");
     assert_eq!(task["attempts_used"], 0);
     f.ok(&["answer", "1", "--text", "Human answer: keep it"])?;
     f.state("succeeded")?;
     assert_eq!(
         f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
-        2
+        4
     );
     f.no_scratch()?;
     Ok(())
@@ -1651,15 +1654,25 @@ fn reviewer_that_keeps_asking_stops_the_task_without_a_question_or_budget() -> R
     f.state("failed")?;
     let shown = f.ok(&["show", "1"])?;
     assert_eq!(shown["attempts_used"], 0);
-    let outcome = shown["attempts"][0]["outcome"].as_str().unwrap_or_default();
-    assert!(
-        outcome.contains("review asked instead of deciding"),
-        "{shown}"
-    );
+    // Each attempt is repaired automatically (judge, then a repair worker) until the
+    // reviewer has failed three attempts in a row.
+    assert_eq!(shown["attempts"].as_array().unwrap().len(), 3);
+    for attempt in shown["attempts"].as_array().unwrap() {
+        let outcome = attempt["outcome"].as_str().unwrap_or_default();
+        assert!(
+            outcome.contains("review asked instead of deciding"),
+            "{shown}"
+        );
+    }
+    let reviews = "review\n".repeat(6);
     assert_eq!(
         fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-        "execution\nreview\nreview\nreview\nreview\nreview\nreview\n"
+        format!(
+            "execution\n{reviews}remediation\nremediation\n{reviews}remediation\nremediation\n{reviews}"
+        )
     );
+    let stopped = String::from_utf8_lossy(&output.stderr);
+    assert!(stopped.contains("failed 3 attempts in a row"), "{stopped}");
     assert_eq!(
         f.db()?
             .connection()
@@ -2224,11 +2237,90 @@ fn protocol_errors_timeouts_and_transport_never_fake_success_or_spend_coding_bud
         let task = f.ok(&["show", "1"])?;
         assert_eq!(task["status"], "failed");
         assert_eq!(task["attempts_used"], if mode == "slow" { 1 } else { 0 });
-        assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+        // A used-up time limit stops at once; provider failures are repaired automatically
+        // until three attempts in a row have failed.
+        assert_eq!(
+            task["attempts"].as_array().unwrap().len(),
+            if mode == "slow" { 1 } else { 3 }
+        );
+        let stopped = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            stopped.contains(if mode == "slow" {
+                "active time limit"
+            } else {
+                "failed 3 attempts in a row"
+            }),
+            "{stopped}"
+        );
         f.no_scratch()?;
     }
     Ok(())
 }
+#[test]
+fn failed_attempts_are_repaired_automatically_and_real_stops_show_a_red_banner() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("fail-first-attempt")?;
+        f.add("Repaired without the owner")?;
+        f.add("Runs next")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
+        t.screen("ready", |s| s.contains("r Run queue"))?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        let done = t.screen_within("queue complete", Duration::from_secs(30), |s| {
+            s.contains("Queue complete.")
+        })?;
+        println!("AUTOMATIC REPAIR COMPLETE mouse={mouse}\n{done}");
+        let first = f.ok(&["show", "1"])?;
+        assert_eq!(first["lifecycle"], "succeeded");
+        // Only the successful attempt counts; the provider failure spent no budget.
+        assert_eq!(first["attempts_used"], 1);
+        let attempts = first["attempts"].as_array().unwrap();
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(attempts[0]["state"], "failed");
+        assert_eq!(attempts[0]["failure_category"], "protocol");
+        assert_eq!(f.ok(&["show", "2"])?["lifecycle"], "succeeded");
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+            "execution\nexecution\nexecution\nremediation\nremediation\nreview\nvalidation\nexecution\nreview\nvalidation\n"
+        );
+        t.send("q")?;
+        t.finish()?;
+
+        // A used-up time limit cannot be repaired: execution stops with the reason, why it
+        // was not resolved, and what to do.
+        let f = Fixture::new()?;
+        f.provider("slow")?;
+        f.add("Too little time")?;
+        f.ok(&["edit", "1", "--timeout-ms", "200"])?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
+        t.screen("ready", |s| s.contains("r Run queue"))?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        let stopped = t.screen_within("time limit banner", Duration::from_secs(30), |s| {
+            s.contains("EXECUTION STOPPED")
+                && s.contains("Reason: Active time limit reached")
+                && s.contains("Not resolved automatically: The task's active time limit")
+                && s.contains("Next: c Models")
+        })?;
+        println!("STOP BANNER mouse={mouse}\n{stopped}");
+        assert_eq!(
+            f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
+            1
+        );
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
 #[test]
 fn rate_limit_keeps_same_attempt_and_stores_resume_time_without_spending_budget() -> Result {
     let f = Fixture::new()?;
@@ -3886,10 +3978,11 @@ fn exhausted_original_gets_one_retry_after_prerequisite_in_mouse_and_keyboard_tu
         );
         assert_eq!(f.ok(&["show", "1"])?["attempts_used"], 1);
         f.provider("judge-insert")?;
-        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 40)?;
         println!(
             "EXHAUSTED CURRENT mouse={mouse}\n{}",
-            t.screen("failed current", |s| s.contains("FAILED")
+            t.screen("failed current", |s| s.contains("EXECUTION STOPPED")
+                && s.contains("Ten repair rounds left critical findings")
                 && s.contains("Budget 1 of 1 used"))?
         );
         if mouse {
@@ -3934,11 +4027,12 @@ fn configured_task_deadline_counts_earlier_attempt_time_and_identifies_the_limit
     f.provider("malformed-work")?;
     f.add("Deadline across retries")?;
     assert!(f.ok(&["show", "1"])?["definition"]["timeout_ms"].is_null());
-    f.ok(&["edit", "1", "--timeout-ms", "10000"])?;
+    // Three automatic repairs of the provider failure, then the streak stop.
     assert_eq!(
         f.process().args(["run", "--one"]).output()?.status.code(),
         Some(4)
     );
+    f.ok(&["edit", "1", "--timeout-ms", "10000"])?;
     f.db()?
         .connection()
         .execute("UPDATE attempts SET active_ms=9999 WHERE task_id=1", [])?;
@@ -3949,9 +4043,10 @@ fn configured_task_deadline_counts_earlier_attempt_time_and_identifies_the_limit
     );
     let task = f.ok(&["show", "1"])?;
     assert_eq!(task["status"], "failed");
-    assert_eq!(task["attempts"].as_array().unwrap().len(), 2);
+    // Three automatic repairs of the provider failure, then the deadline stop.
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 4);
     assert!(
-        task["attempts"][1]["outcome"]
+        task["attempts"][3]["outcome"]
             .as_str()
             .unwrap()
             .contains("configured task-wide limit")
@@ -3989,8 +4084,10 @@ fn real_tui_individual_check_timeout_remains_separate_from_task_deadline() -> Re
         }
         println!(
             "INDIVIDUAL CHECK TIMEOUT mouse={mouse}\n{}",
-            t.screen("individual check timeout", |s| s.contains("FAILED")
-                && s.contains("Individual supervisor check timeout reached"))?
+            t.screen("individual check timeout", |s| s
+                .contains("EXECUTION STOPPED")
+                && s.contains("Individual supervisor check timeout reached")
+                && s.contains("failed 3 attempts in a row"))?
         );
         f.supervisor_stopped()?;
         let failed = f.ok(&["show", "1"])?;
@@ -4010,9 +4107,11 @@ fn real_tui_individual_check_timeout_remains_separate_from_task_deadline() -> Re
             )?,
             "timeout"
         );
+        // Two automatic repairs (judge, then repair worker) before the stop.
+        assert_eq!(failed["attempts"].as_array().unwrap().len(), 3);
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-            "execution\n"
+            "execution\nremediation\nremediation\nremediation\nremediation\n"
         );
         assert!(
             f.ok(&["show", "2"])?["attempts"]
@@ -4330,7 +4429,7 @@ fn tui_remediation_handoff_preserves_dirty_work_and_failed_attempt() -> Result {
         assert!(f.git(&["status", "--porcelain"])?.trim().is_empty());
         assert!(
             f.git(&["log", "-1", "--format=%s"])?
-                .contains("preserve unfinished task #1, attempt #1")
+                .contains("preserve unfinished task #1, attempt #3")
         );
         assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
         f.ok(&["check-set", "build", "--command", "test -f result.txt"])?;
@@ -4756,14 +4855,17 @@ fn real_tui_check_launch_failure_exhausts_three_launches_and_blocks_queue() -> R
         }
         println!(
             "CHECK LAUNCH EXHAUSTED mouse={mouse}\n{}",
-            t.screen("launch retries exhausted", |s| s.contains("FAILED")
-                && s.contains("Permission denied"))?
+            t.screen_within("launch retries exhausted", Duration::from_secs(30), |s| s
+                .contains("EXECUTION STOPPED")
+                && s.contains("Permission denied")
+                && s.contains("failed 3 attempts in a row"))?
         );
         let first = f.ok(&["show", "1"])?;
         println!("CHECK LAUNCH EXHAUSTED TASK {first}");
         assert_eq!(first["status"], "failed");
         assert_eq!(first["attempts_used"], 0);
-        assert_eq!(first["attempts"].as_array().unwrap().len(), 1);
+        // The repair attempts cannot even launch their judge, so three in a row stop.
+        assert_eq!(first["attempts"].as_array().unwrap().len(), 3);
         assert_eq!(
             f.db()?.connection().query_row(
                 "SELECT failure_category FROM attempts WHERE task_id=1",
@@ -4795,7 +4897,8 @@ fn real_tui_check_launch_failure_exhausts_three_launches_and_blocks_queue() -> R
         let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 34)?;
         println!(
             "CHECK LAUNCH FAILURE RETAINED mouse={mouse}\n{}",
-            reopened.screen("retained environment failure", |s| s.contains("FAILED")
+            reopened.screen("retained environment failure", |s| s
+                .contains("EXECUTION STOPPED")
                 && s.contains("Permission denied"))?
         );
         assert_check_launch_records(&f, 3, false)?;

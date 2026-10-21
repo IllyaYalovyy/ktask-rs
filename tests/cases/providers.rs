@@ -272,7 +272,9 @@ fn claude_limits_wait_for_the_reset_and_failures_spend_no_budget() -> Result {
             .contains("Claude Code exited 1"),
         "{task}"
     );
-    assert_eq!(f.calls("claude")?.len(), 3, "two automatic retries");
+    // Two in-turn retries per attempt; three failed attempts in a row stop the task.
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 3);
+    assert_eq!(f.calls("claude")?.len(), 9);
     f.no_scratch()?;
     Ok(())
 }

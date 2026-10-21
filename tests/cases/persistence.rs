@@ -2610,12 +2610,16 @@ fn revised_failure_waits_for_approval_before_queue_continues() -> Result {
         } else {
             terminal.send("v")?;
         }
-        let after = terminal.screen("approved revision attempted", |s| {
-            s.contains("Attempt 2") && s.contains("FAILED")
-        })?;
+        // The replacement provider always exits 9: the revised task is repaired automatically
+        // until three attempts in a row have failed, then the stop banner says so.
+        let after = terminal.screen_within(
+            "approved revision attempted",
+            std::time::Duration::from_secs(30),
+            |s| s.contains("EXECUTION STOPPED"),
+        )?;
         println!("REVISE AFTER APPROVAL mouse={mouse}\n{after}");
         let task = writer.task(id)?.unwrap();
-        assert_eq!(task.attempts.len(), 2);
+        assert_eq!(task.attempts.len(), 4);
         assert_eq!(task.attempts[0].id, attempt);
         assert_eq!(task.attempts[1].revision, 2);
         assert_eq!(task.definition().number, 2);
