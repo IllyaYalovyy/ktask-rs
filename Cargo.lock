@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "ktask-rs-mk3"
-version = "0.17.7"
+version = "0.17.8"
 dependencies = [
  "chrono",
  "clap",

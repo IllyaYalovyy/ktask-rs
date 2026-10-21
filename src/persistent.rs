@@ -88,9 +88,13 @@ impl App {
         if task.attempts.is_empty() {
             return "unknown".into();
         }
-        cost_label(task.attempts.iter().try_fold(0_i64, |sum, attempt| {
-            sum.checked_add(attempt.usage.cost_microusd?)
-        }))
+        // Sum what was reported; a provider that reports no cost (Codex) leaves it unknown.
+        cost_label(
+            task.attempts
+                .iter()
+                .filter_map(|attempt| attempt.usage.cost_microusd)
+                .reduce(i64::saturating_add),
+        )
     }
     pub fn persistent(instance: Instance, service: Service) -> Result<Self, String> {
         let mut app = Self::empty(instance);
@@ -1294,8 +1298,16 @@ fn cost_label(cost: Option<i64>) -> String {
         format!("${:.6}", n as f64 / 1_000_000.0)
     })
 }
-fn number(value: Option<i64>) -> String {
-    value.map_or("?".into(), |n| n.to_string())
+/// "?" when nothing was reported, otherwise "980", "99k" or "4.8M".
+fn compact(value: Option<i64>) -> String {
+    match value {
+        None => "?".into(),
+        Some(n) if n < 1_000 => n.to_string(),
+        Some(n) if n < 1_000_000 => format!("{}k", n / 1_000),
+        Some(n) if n < 10_000_000 => format!("{:.1}M", n as f64 / 1_000_000.0),
+        Some(n) if n < 1_000_000_000 => format!("{}M", n / 1_000_000),
+        Some(n) => format!("{}G", n / 1_000_000_000),
+    }
 }
 
 fn status(value: &str) -> Result<Status, String> {
@@ -1463,12 +1475,12 @@ fn project_task(task: &domain::Task) -> Result<model::Task, String> {
                 usage: a.usage.label(),
                 usage_tokens: format!(
                     "I {} R {} W {} O {}",
-                    number(a.usage.input),
-                    number(a.usage.cache_read),
-                    number(a.usage.cache_write),
-                    number(a.usage.output)
+                    compact(a.usage.input),
+                    compact(a.usage.cache_read),
+                    compact(a.usage.cache_write),
+                    compact(a.usage.output)
                 ),
-                usage_cost: format!("Cost {}", cost_label(a.usage.cost_microusd)),
+                usage_cost: format!("Cost {}", a.usage.cost_label()),
             })
         })
         .collect::<Result<Vec<_>, String>>()?;

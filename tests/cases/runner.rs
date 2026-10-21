@@ -2642,7 +2642,7 @@ fn live_usage_keeps_step_and_pause_visible_at_minimum_size() -> Result {
         let screen = t.screen("live usage and execution control", |s| {
             s.contains("RUNNING · supervisor alive")
                 && s.contains("Step: Execution")
-                && s.contains("Tokens · Enter: details")
+                && s.contains("I 123G R 98G W 87G O 76G")
                 && s.contains("p Pause")
         })?;
         println!("LIVE USAGE 70x22 mouse={mouse}\n{screen}");

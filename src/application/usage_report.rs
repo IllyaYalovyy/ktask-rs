@@ -2,6 +2,9 @@
 use crate::storage::Result;
 use rusqlite::{Connection, params};
 
+/// Sums of what providers reported. A call that reported nothing (it failed before the
+/// provider sent usage, or the provider never reports cost) is counted, not guessed as zero,
+/// and does not hide what the other calls reported.
 #[derive(Clone, Debug, Default, serde::Serialize)]
 pub struct UsageTotals {
     pub calls: i64,
@@ -10,18 +13,17 @@ pub struct UsageTotals {
     pub cache_write: Option<i64>,
     pub output: Option<i64>,
     pub cost_microusd: Option<i64>,
+    /// Calls without token counts.
+    pub unreported_calls: i64,
+    /// Calls without a cost.
+    pub uncosted_calls: i64,
 }
 
 impl UsageTotals {
     fn add(&mut self, fields: [Option<i64>; 5]) {
-        if self.calls == 0 {
-            self.input = Some(0);
-            self.cache_read = Some(0);
-            self.cache_write = Some(0);
-            self.output = Some(0);
-            self.cost_microusd = Some(0);
-        }
         self.calls += 1;
+        self.unreported_calls += i64::from(fields[0].is_none());
+        self.uncosted_calls += i64::from(fields[4].is_none());
         for (target, value) in [
             &mut self.input,
             &mut self.cache_read,
@@ -32,7 +34,23 @@ impl UsageTotals {
         .into_iter()
         .zip(fields)
         {
-            *target = target.and_then(|sum| value.and_then(|n| sum.checked_add(n)));
+            if let Some(value) = value {
+                *target = Some(target.unwrap_or(0).saturating_add(value));
+            }
+        }
+    }
+
+    /// "$0.123456", or why there is no cost.
+    pub fn cost_label(&self) -> String {
+        match self.cost_microusd {
+            Some(n) if self.uncosted_calls == 0 => format!("${:.6}", n as f64 / 1_000_000.0),
+            Some(n) => format!(
+                "${:.6} + {} call(s) without cost",
+                n as f64 / 1_000_000.0,
+                self.uncosted_calls
+            ),
+            None if self.calls == 0 => "none yet".into(),
+            None => "not reported by the provider".into(),
         }
     }
 
@@ -40,17 +58,19 @@ impl UsageTotals {
         fn number(value: Option<i64>) -> String {
             value.map_or("unknown".into(), |n| n.to_string())
         }
-        let cost = self.cost_microusd.map_or("unknown".into(), |n| {
-            format!("${:.6}", n as f64 / 1_000_000.0)
-        });
+        let unreported = if self.unreported_calls > 0 && self.input.is_some() {
+            format!(" (+{} call(s) unreported)", self.unreported_calls)
+        } else {
+            String::new()
+        };
         format!(
-            "{} calls · uncached {} · cache read {} · cache write {} · output {} · cost {}",
+            "{} calls · uncached {} · cache read {} · cache write {} · output {}{unreported} · cost {}",
             self.calls,
             number(self.input),
             number(self.cache_read),
             number(self.cache_write),
             number(self.output),
-            cost
+            self.cost_label()
         )
     }
 }

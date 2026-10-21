@@ -577,7 +577,7 @@ fn normalized_provider_usage_has_identical_meaning_and_safe_aggregate_totals() -
 }
 
 #[test]
-fn usage_projection_groups_roles_and_keeps_missing_cost_unknown() -> Result {
+fn usage_projection_groups_roles_and_counts_unreported_calls() -> Result {
     use ktask_rs_mk3::application::usage_report;
     let scratch = support::sandbox()?;
     let store = Database::open_in(scratch.path())?;
@@ -599,14 +599,21 @@ fn usage_projection_groups_roles_and_keeps_missing_cost_unknown() -> Result {
     assert_eq!(attempt.input, Some(20));
     assert_eq!(attempt.cache_read, Some(10));
     assert_eq!(attempt.output, Some(6));
-    assert_eq!(attempt.cost_microusd, None);
+    // One call reported a cost, one did not: the known cost stays visible and the other counts.
+    assert_eq!(attempt.cost_microusd, Some(100));
+    assert_eq!(attempt.uncosted_calls, 1);
+    assert_eq!(attempt.unreported_calls, 0);
     assert_eq!(roles.len(), 2);
     assert_eq!(roles[0].provider_elapsed_ms, 50);
     let project = usage_report::project(db, project_id)?;
     assert_eq!(project.calls, 3);
     assert_eq!(project.input, Some(27));
-    assert_eq!(project.cache_read, None);
-    assert_eq!(project.cost_microusd, None);
+    assert_eq!(project.cache_read, Some(10));
+    assert_eq!(project.cost_microusd, Some(100));
+    assert_eq!(project.uncosted_calls, 2);
+    assert_eq!(project.cost_label(), "$0.000100 + 2 call(s) without cost");
+    let none = usage_report::UsageTotals::default();
+    assert_eq!(none.cost_label(), "none yet");
     Ok(())
 }
 
