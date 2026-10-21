@@ -817,6 +817,7 @@ impl App {
                 page,
                 chunk,
                 artifact,
+                step,
                 match_sequence,
                 watermark,
                 ref excerpt,
@@ -840,10 +841,41 @@ impl App {
                             watermark,
                         ),
                         1 => service.browse_results(record.id),
-                        _ => self.instance.paths().map_err(Into::into).and_then(|paths| {
+                        2 => self.instance.paths().map_err(Into::into).and_then(|paths| {
                             service.browse_transcript(record.id, artifact, page, &paths.state)
                         }),
+                        3 => service.browse_step_outline(record.id),
+                        4 => service.browse_step_group(record.id, true, step),
+                        _ => service.browse_step_group(record.id, false, step),
                     };
+                    if section >= 3 {
+                        let reason = if section == 5 {
+                            format!(
+                                "Failure category: {}\nReason: {}\n",
+                                record.failure_category.as_deref().unwrap_or("not recorded"),
+                                record
+                                    .report
+                                    .as_deref()
+                                    .unwrap_or("No attempt report recorded")
+                            )
+                        } else {
+                            String::new()
+                        };
+                        dialog.body = format!(
+                            "#{} {}\nAttempt {} / {} · #{} · revision {} · {}\nOutcome: {}\n{reason}\n{}",
+                            task.id,
+                            task.definition().definition.title,
+                            attempt + 1,
+                            task.attempts.len(),
+                            record.id,
+                            record.revision,
+                            record.state,
+                            record.outcome.as_deref().unwrap_or("No outcome recorded"),
+                            evidence
+                                .unwrap_or_else(|error| format!("Evidence unavailable: {error}"))
+                        );
+                        return;
+                    }
                     dialog.body = format!(
                         "Attempt {} / {} · #{} · revision {} · {}\nOutcome: {}\n{}{}{}",
                         attempt + 1,

@@ -182,7 +182,7 @@ impl App {
             Action::Undo => {
                 self.view == View::Queue && (self.undo.is_some() || self.durable_undo.is_some())
             }
-            Action::Inspect => selected.is_some(),
+            Action::Inspect | Action::InspectSection(_) => selected.is_some(),
             Action::Filter | Action::Search | Action::Clear | Action::Export => {
                 matches!(self.view, View::Queue | View::History)
             }
@@ -302,6 +302,8 @@ impl App {
             Action::EvidencePage(delta) => self.change_evidence(0, delta, 0, false),
             Action::EvidenceChunk(delta) => self.change_evidence_chunk(delta),
             Action::EvidenceArtifact(delta) => self.change_evidence(0, 0, delta, false),
+            Action::EvidenceStep(delta) => self.change_evidence_step(delta),
+            Action::EvidenceOpen(section) => self.open_evidence_section(section),
             Action::FindEvidence => self.change_evidence(0, 0, 0, true),
             Action::RefreshEvidence => self.refresh_evidence(),
             Action::Search => self.search_before = Some(self.catalog().clone()),
@@ -413,7 +415,7 @@ impl App {
             Action::Abandon => {
                 self.message("Abandon applies to stored tasks only");
             }
-            Action::Inspect => {
+            Action::Inspect | Action::InspectSection(_) => {
                 if let Some(task) = self.selected_task() {
                     let index = self
                         .inspected_attempts
@@ -427,6 +429,9 @@ impl App {
                         })
                         .unwrap_or_else(|| task.attempts.len().saturating_sub(1));
                     self.open_inspect(task.id, index);
+                    if let Action::InspectSection(section) = action {
+                        self.open_evidence_section(section);
+                    }
                 }
             }
             Action::Configure => self.open_config(),
@@ -718,7 +723,7 @@ impl App {
         self.dialog = Some(Dialog::new(
             DialogKind::Help,
             "Keyboard help",
-            "1 Current  2 Queue  3 History  4 Config  5 About\nTab / Shift-Tab: next / previous screen\nClick tabs, rows, buttons, and fields; wheel scrolls.\nDrag body text to select; click Copy or press F6 for OSC 52.\nF2 selects a text pane; F2 again moves to the next pane.\nShift-arrows extend selection; Enter copies; Esc clears.\nF7 releases mouse capture for native terminal selection.\nCurrent: r run/resume, p pause, t retry, d remediate\nCurrent: R recover abandoned, x abandon task, z resolve failed\nCurrent: c models/limits; v approve; n reject\nCurrent: y acknowledge Human, w answer AI\nCurrent: o toggles report / raw log; l all events\nQueue: a add, i insert, e edit, d delete/abandon, u undo\nQueue: m move, b break down, o import, x export\nQueue: c models/limits; v approve; n reject\nQueue/History: / search, f filter, Esc clear\nj/k or arrows: move/scroll; PgUp/PgDn: page\nHome/End: first/last; End follows current output\nEnter: inspect selected task; [ / ]: inspect attempts\ns: project statistics; ?: help; q: quit\nForms: Tab/arrows focus; Space cycles choices\nForms: Ctrl-A clears field; Ctrl-S/Enter applies\nEsc cancels dialogs/search; Ctrl-C always quits\nSearch: Enter applies; Esc restores previous query\nAll tasks, models, runs, and files are simulated.",
+            "1 Current  2 Queue  3 History  4 Config  5 About\nTab / Shift-Tab: next / previous screen\nClick tabs, rows, buttons, and fields; wheel scrolls.\nDrag body text to select; click Copy or press F6 for OSC 52.\nF2 selects a text pane; F2 again moves to the next pane.\nShift-arrows extend selection; Enter copies; Esc clears.\nF7 releases mouse capture for native terminal selection.\nCurrent: r run/resume, p pause, t retry, d remediate\nCurrent: R recover abandoned, x abandon task, z resolve failed\nCurrent: c models/limits; v approve; n reject\nCurrent: y acknowledge Human, w answer AI\nCurrent: o toggles report / raw log; l all events\nQueue: a add, i insert, e edit, d delete/abandon, u undo\nQueue: m move, b break down, o import, x export\nQueue: c models/limits; v approve; n reject\nQueue/History: / search, f filter, Esc clear\nHistory: V reviews, F failures for selected task\nj/k or arrows: move/scroll; PgUp/PgDn: page\nHome/End: first/last; End follows current output\nEnter: inspect selected task; [ / ]: inspect attempts\nDetails: s summary, v reviews, f failures, g results, o output, t transcripts\nDetails: n/p step, Left/Right section, < / > evidence page\ns: project statistics; ?: help; q: quit\nForms: Tab/arrows focus; Space cycles choices\nForms: Ctrl-A clears field; Ctrl-S/Enter applies\nEsc cancels dialogs/search; Ctrl-C always quits\nSearch: Enter applies; Esc restores previous query\nAll tasks, models, runs, and files are simulated.",
             vec![],
         ));
     }
@@ -769,7 +774,7 @@ impl App {
     }
 
     fn open_inspect(&mut self, id: usize, attempt: usize) {
-        let Some(task) = self.task(id) else {
+        let Some(task) = self.task(id).cloned() else {
             return;
         };
         let selected = task.attempts.get(attempt);
@@ -838,12 +843,67 @@ impl App {
                 key,
                 crate::app::EvidenceAttemptState {
                     watermark,
+                    section: crate::app::EvidenceSection::Output,
                     ..Default::default()
                 },
             );
         }
         let state = self.evidence_attempts[&key].clone();
-        let source = self.evidence_source_key(key, state.section, state.artifact);
+        let body = if self.service.is_none() && matches!(state.section.index(), 1 | 2 | 4 | 5) {
+            let label = match state.section {
+                crate::app::EvidenceSection::Results => "Results",
+                crate::app::EvidenceSection::Transcripts => "Transcripts",
+                crate::app::EvidenceSection::Reviews => "Reviews",
+                _ => "Failures",
+            };
+            let lines = selected.map_or(Vec::new(), |record| {
+                record
+                    .logs
+                    .iter()
+                    .filter(|line| match state.section {
+                        crate::app::EvidenceSection::Reviews => {
+                            line.to_ascii_lowercase().contains("review")
+                        }
+                        crate::app::EvidenceSection::Failures => {
+                            let lower = line.to_ascii_lowercase();
+                            lower.contains("fail")
+                                || lower.contains("error")
+                                || lower.contains("expected")
+                        }
+                        _ => true,
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let detail = if state.section == crate::app::EvidenceSection::Transcripts {
+                "No transcripts in this demo fixture".to_owned()
+            } else if lines.is_empty() {
+                "No matching evidence recorded".to_owned()
+            } else if matches!(
+                state.section,
+                crate::app::EvidenceSection::Reviews | crate::app::EvidenceSection::Failures
+            ) {
+                format!(
+                    "{} / {}\n{}",
+                    state.step.min(lines.len() - 1) + 1,
+                    lines.len(),
+                    lines[state.step.min(lines.len() - 1)]
+                )
+            } else {
+                lines.into_iter().cloned().collect::<Vec<_>>().join("\n")
+            };
+            format!(
+                "#{} {} · demo\nAttempt {} / {} · {}\nOutcome: {}\n\n{label}\n{detail}",
+                task.id,
+                task.definition().title,
+                attempt + 1,
+                task.attempts.len(),
+                selected.map_or("none", |a| a.state.label()),
+                selected.map_or("No attempt", |a| a.outcome.as_str())
+            )
+        } else {
+            body
+        };
+        let source = self.evidence_source_key(key, state.section, state.artifact, state.step);
         let position = self
             .evidence_positions
             .get(&source)
@@ -853,6 +913,7 @@ impl App {
             crate::app::EvidenceSection::Output => "Find output",
             crate::app::EvidenceSection::Results => "Find results",
             crate::app::EvidenceSection::Transcripts => "Find transcript",
+            _ => "Find results",
         };
         let mut dialog = Dialog::new(
             DialogKind::Inspect {
@@ -862,6 +923,7 @@ impl App {
                 page: position.page,
                 chunk: position.chunk,
                 artifact: state.artifact,
+                step: state.step,
                 match_sequence: position.match_sequence,
                 search_active: false,
                 jump_to_match: false,
@@ -871,7 +933,7 @@ impl App {
             },
             "Task details / attempts",
             &body,
-            if self.service.is_some() {
+            if self.service.is_some() && state.section.index() <= 2 {
                 vec![Field::text(label, &position.query)]
             } else {
                 vec![]
@@ -898,6 +960,7 @@ impl App {
         attempt: crate::app::EvidenceAttemptKey,
         section: crate::app::EvidenceSection,
         artifact: usize,
+        step: usize,
     ) -> crate::app::EvidenceSourceKey {
         crate::app::EvidenceSourceKey {
             attempt,
@@ -912,6 +975,11 @@ impl App {
             } else {
                 None
             },
+            step: matches!(
+                section,
+                crate::app::EvidenceSection::Reviews | crate::app::EvidenceSection::Failures
+            )
+            .then_some(step),
         }
     }
 
@@ -926,6 +994,7 @@ impl App {
             page,
             chunk,
             artifact,
+            step,
             match_sequence,
             watermark,
             ref search,
@@ -937,15 +1006,17 @@ impl App {
         };
         let section = crate::app::EvidenceSection::from_index(section);
         let key = self.evidence_attempt_key(id, attempt);
-        let source = self.evidence_source_key(key, section, artifact);
-        self.evidence_attempts.insert(
-            key,
-            crate::app::EvidenceAttemptState {
-                section,
-                artifact,
-                watermark,
-            },
-        );
+        let source = self.evidence_source_key(key, section, artifact, step);
+        let mut state = self
+            .evidence_attempts
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
+        state.select_section(section);
+        state.select_step(step);
+        state.artifact = artifact;
+        state.watermark = watermark;
+        self.evidence_attempts.insert(key, state);
         self.inspected_attempts.insert((self.view, id), key.attempt);
         self.evidence_positions.insert(
             source,
@@ -991,6 +1062,90 @@ impl App {
         }
     }
 
+    fn open_evidence_section(&mut self, section: usize) {
+        let Some(Dialog {
+            kind: DialogKind::Inspect { id, attempt, .. },
+            ..
+        }) = &self.dialog
+        else {
+            return;
+        };
+        let (id, attempt) = (*id, *attempt);
+        self.save_evidence_position();
+        let key = self.evidence_attempt_key(id, attempt);
+        if let Some(state) = self.evidence_attempts.get_mut(&key) {
+            state.select_section(crate::app::EvidenceSection::from_index(section));
+        }
+        self.open_inspect(id, attempt);
+        if self.service.is_some() {
+            self.prepare_persistent_dialog();
+        }
+    }
+
+    fn change_evidence_step(&mut self, delta: i32) {
+        let Some(Dialog {
+            kind:
+                DialogKind::Inspect {
+                    id,
+                    attempt,
+                    section,
+                    step,
+                    ..
+                },
+            ..
+        }) = &self.dialog
+        else {
+            return;
+        };
+        if !matches!(section, 4 | 5) {
+            return;
+        }
+        let (id, attempt, section, step) = (*id, *attempt, *section, *step);
+        let key = self.evidence_attempt_key(id, attempt);
+        let count = if let Some(service) = &self.service {
+            match service.step_group_count(key.attempt, section == 4) {
+                Ok(count) => count,
+                Err(error) => {
+                    self.message(error.to_string());
+                    return;
+                }
+            }
+        } else {
+            self.task(id)
+                .and_then(|task| task.attempts.get(attempt))
+                .map_or(0, |record| {
+                    record
+                        .logs
+                        .iter()
+                        .filter(|line| {
+                            let lower = line.to_ascii_lowercase();
+                            if section == 4 {
+                                lower.contains("review")
+                            } else {
+                                lower.contains("fail")
+                                    || lower.contains("error")
+                                    || lower.contains("expected")
+                            }
+                        })
+                        .count()
+                })
+        };
+        let next = step
+            .saturating_add_signed(delta as isize)
+            .min(count.saturating_sub(1));
+        if next == step {
+            return;
+        }
+        self.save_evidence_position();
+        if let Some(state) = self.evidence_attempts.get_mut(&key) {
+            state.select_step(next);
+        }
+        self.open_inspect(id, attempt);
+        if self.service.is_some() {
+            self.prepare_persistent_dialog();
+        }
+    }
+
     fn refresh_evidence(&mut self) {
         let Some(Dialog {
             kind: DialogKind::Inspect { id, attempt, .. },
@@ -1015,7 +1170,7 @@ impl App {
         if let Some(state) = self.evidence_attempts.get_mut(&key) {
             state.watermark = watermark;
         }
-        let output = self.evidence_source_key(key, crate::app::EvidenceSection::Output, 0);
+        let output = self.evidence_source_key(key, crate::app::EvidenceSection::Output, 0, 0);
         self.evidence_positions.remove(&output);
         self.open_inspect(id, attempt);
         self.prepare_persistent_dialog();
@@ -1056,6 +1211,10 @@ impl App {
         };
         if find {
             if query.is_empty() {
+                return;
+            }
+            if section >= 3 {
+                self.message("Find is available in Results, Output and Transcripts");
                 return;
             }
             let result = match section {
@@ -1114,10 +1273,12 @@ impl App {
         }
         if section_delta != 0 {
             self.save_evidence_position();
-            self.evidence_attempts.get_mut(&key).unwrap().section =
-                crate::app::EvidenceSection::from_index(
-                    section.saturating_add_signed(section_delta as isize).min(2),
-                );
+            self.evidence_attempts
+                .get_mut(&key)
+                .unwrap()
+                .select_section(crate::app::EvidenceSection::from_index(
+                    section.saturating_add_signed(section_delta as isize).min(5),
+                ));
             self.open_inspect(id, attempt);
             self.prepare_persistent_dialog();
             return;
@@ -1138,7 +1299,7 @@ impl App {
             self.prepare_persistent_dialog();
             return;
         }
-        if page_delta == 0 || section == 1 {
+        if page_delta == 0 || !matches!(section, 0 | 2) {
             return;
         }
         let limit = if section == 0 {

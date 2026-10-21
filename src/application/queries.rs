@@ -322,6 +322,138 @@ impl Service {
         Ok(text)
     }
 
+    /// Short index for History. Reports stay in their individual step views.
+    pub fn browse_step_outline(&self, attempt: i64) -> Result<String> {
+        let db = self.db.connection();
+        let mut text = String::from("Recorded steps (select Reviews or Failures for findings)\n");
+        let mut stmt = db.prepare("SELECT ordinal,role,state,coalesce(failed_count,0) FROM attempt_steps WHERE attempt_id=?1 ORDER BY ordinal")?;
+        let mut count = 0;
+        for row in stmt.query_map([attempt], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })? {
+            let (ordinal, role, state, failed) = row?;
+            text.push_str(&format!(
+                "Step {ordinal} · {role} · {state}{}\n",
+                if failed > 0 {
+                    format!(" · {failed} failed")
+                } else {
+                    String::new()
+                }
+            ));
+            count += 1;
+        }
+        if count == 0 {
+            text.push_str("No steps recorded.\n");
+        }
+        Ok(text)
+    }
+
+    pub fn step_group_count(&self, attempt: i64, reviews: bool) -> Result<usize> {
+        let filter = if reviews {
+            "role='review'"
+        } else {
+            "(state IN ('failed','interrupted','changes_requested') OR coalesce(failed_count,0)>0)"
+        };
+        let sql = format!("SELECT count(*) FROM attempt_steps WHERE attempt_id=?1 AND {filter}");
+        let count: i64 = self
+            .db
+            .connection()
+            .query_row(&sql, [attempt], |r| r.get(0))?;
+        Ok(count as usize)
+    }
+
+    pub fn browse_step_group(&self, attempt: i64, reviews: bool, index: usize) -> Result<String> {
+        let db = self.db.connection();
+        let filter = if reviews {
+            "role='review'"
+        } else {
+            "(state IN ('failed','interrupted','changes_requested') OR coalesce(failed_count,0)>0)"
+        };
+        let sql = format!(
+            "SELECT id,ordinal,role,state,coalesce(report,''),coalesce(command,''),exit_code,coalesce(failed_count,0) FROM attempt_steps WHERE attempt_id=?1 AND {filter} ORDER BY ordinal"
+        );
+        let mut stmt = db.prepare(&sql)?;
+        let rows = stmt
+            .query_map([attempt], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, Option<i64>>(6)?,
+                    r.get::<_, i64>(7)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let label = if reviews {
+            "Reviews"
+        } else {
+            "Failures and requested fixes"
+        };
+        if rows.is_empty() {
+            return Ok(format!("{label}\nNo matching steps recorded."));
+        }
+        let selected = index.min(rows.len() - 1);
+        let (id, ordinal, role, state, report, command, exit, failed) = &rows[selected];
+        let mut text = format!(
+            "{label} · {} / {}\nStep {ordinal} · {role} · {state}\n",
+            selected + 1,
+            rows.len()
+        );
+        if !command.is_empty() {
+            text.push_str(&format!("Command: {command}\n"));
+        }
+        if let Some(exit) = exit {
+            text.push_str(&format!("Exit code: {exit}\n"));
+        }
+        if *failed > 0 {
+            text.push_str(&format!("Failed checks: {failed}\n"));
+        }
+        text.push_str(if report.trim().is_empty() {
+            "No report recorded.\n"
+        } else {
+            report
+        });
+        text.push('\n');
+        let mut criteria = db.prepare("SELECT criterion_ordinal,state,evidence FROM criterion_results WHERE step_id=?1 ORDER BY criterion_ordinal")?;
+        for row in criteria.query_map([id], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        })? {
+            let (number, state, evidence) = row?;
+            text.push_str(&format!(
+                "Criterion {number} · {state}: {}\n",
+                evidence.unwrap_or_else(|| "No evidence recorded".into())
+            ));
+        }
+        text.push_str("\nOther steps: ");
+        text.push_str(
+            &rows
+                .iter()
+                .enumerate()
+                .map(|(i, (_, ordinal, role, state, ..))| {
+                    format!(
+                        "{}{} {role} {state}",
+                        if i == selected { "*" } else { "" },
+                        ordinal
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" · "),
+        );
+        Ok(text)
+    }
+
     pub fn browse_transcript(
         &self,
         attempt: i64,

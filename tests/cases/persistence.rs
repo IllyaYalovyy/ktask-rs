@@ -662,7 +662,7 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     t.screen("keyboard next output chunk", |s| {
         s.contains("qqqqqqqqqqHUGE_END")
     })?;
-    t.click("Section +")?;
+    t.click("Results")?;
     let results = t.screen("first attempt results", |s| {
         s.contains("review structured finding")
     })?;
@@ -682,14 +682,14 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     t.screen("keyboard next section", |s| {
         s.contains("Role steps, findings")
     })?;
-    t.click("Section -")?;
+    t.click("Output")?;
     let restored = t.screen("old output position restored", |s| s.contains("HUGE_END"))?;
     println!("RESTORED OUTPUT POSITION\n{restored}");
-    t.click("Section +")?;
+    t.click("Results")?;
     t.screen("results position restored", |s| {
         s.contains("Role steps, findings")
     })?;
-    t.click("Section +")?;
+    t.click("Transcripts")?;
     let check = t.screen("first attempt transcript", |s| {
         s.contains("FIRST ATTEMPT CHECK TRANSCRIPT")
     })?;
@@ -775,11 +775,10 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     assert!(details.contains("Attempt 2 / 2"));
     let earlier = key(&mut history, "[", "Attempt 1 / 2")?;
     assert!(earlier.contains("Output page"));
-    key(
-        &mut history,
-        "\x1b[C\x1b[C",
-        "FIRST ATTEMPT CHECK TRANSCRIPT",
-    )?;
+    history.click("Transcripts")?;
+    history.screen("first attempt transcript direct", |s| {
+        s.contains("FIRST ATTEMPT CHECK TRANSCRIPT")
+    })?;
     key(&mut history, ".", "SECOND CHECK TRANSCRIPT")?;
     let history_deep = key(&mut history, ">>>", "Chunk 4 / ")?;
     let history_scrolled = scroll_transcript(&mut history, &history_deep, 8, true)?;
@@ -802,6 +801,100 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     )?;
     assert_eq!(count, 2205);
     Ok(())
+}
+
+#[test]
+fn history_opens_each_attempt_review_and_failure_without_log_scrolling() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (id, _) = failed_task(root)?;
+    let mut writer = service(root)?;
+    let retry = target(&mut writer, id)?;
+    let run = writer.begin_run(retry, "review-navigation", "fixture-base")?;
+    let model = ModelConfig {
+        provider: "codex".into(),
+        model: "fixture-judge".into(),
+        effort: None,
+    };
+    for finding in [
+        format!("First review finding\n{}", "review detail\n".repeat(60)),
+        "Second review finding".to_owned(),
+    ] {
+        let step = writer.start_ai_step(&run, "review", &model, "fixture", false)?;
+        writer.finish_step(&step, false, &finding, None)?;
+    }
+    writer.finish_run(
+        &run,
+        "failed",
+        Some("review"),
+        "Retry failed after review",
+        None,
+    )?;
+    let resolution = target(&mut writer, id)?;
+    writer.resolve(resolution, Resolution::FailedSkipped, "Reviewed")?;
+    drop(writer);
+
+    let mut t = terminal(root)?;
+    let history = key(&mut t, "3", "History")?;
+    println!("HISTORY NAVIGATION START\n{history}");
+    t.click("V Reviews")?;
+    let direct = t.screen("review from History toolbar", |s| {
+        s.contains("First review finding")
+    })?;
+    println!("HISTORY DIRECT REVIEW\n{direct}");
+    key(&mut t, "\x1b", "History")?;
+    t.click("F Failures")?;
+    t.screen("failure from History toolbar", |s| {
+        s.contains("Failure category: review")
+    })?;
+    key(&mut t, "\x1b", "History")?;
+    key(&mut t, "V", "First review finding")?;
+    key(&mut t, "\x1b", "History")?;
+    key(&mut t, "F", "Failure category: review")?;
+    key(&mut t, "\x1b", "History")?;
+    key(&mut t, "\r", "Task details / attempts")?;
+    t.click("Summary")?;
+    let summary = t.screen("attempt step summary directly", |s| {
+        s.contains("Recorded steps")
+    })?;
+    println!("HISTORY ATTEMPT SUMMARY\n{summary}");
+    assert!(summary.contains("Attempt 2 / 2"));
+    t.click("Reviews")?;
+    let first = t.screen("first review directly", |s| {
+        s.contains("First review finding")
+    })?;
+    println!("HISTORY FIRST REVIEW\n{first}");
+    assert!(first.contains("Reviews · 1 / 2"));
+    assert!(!first.contains("Second review finding"));
+    t.send("\x1b[F")?;
+    t.screen("first review scrolled", |s| {
+        s.contains("Other steps") && !s.contains("First review finding")
+    })?;
+    t.click("Next step")?;
+    let second = t.screen("second review directly", |s| {
+        s.contains("Second review finding")
+    })?;
+    println!("HISTORY SECOND REVIEW\n{second}");
+    assert!(second.contains("Reviews · 2 / 2"));
+    t.click("Prev step")?;
+    t.screen("first review position restored", |s| {
+        s.contains("Other steps") && !s.contains("First review finding")
+    })?;
+    let again = key(&mut t, "n", "Second review finding")?;
+    assert!(again.contains("Reviews · 2 / 2"));
+    key(&mut t, "p", "Other steps")?;
+    key(&mut t, "s", "Recorded steps")?;
+    key(&mut t, "v", "Other steps")?;
+    let failures = key(&mut t, "f", "Failures and requested fixes")?;
+    println!("HISTORY FAILURE REASON\n{failures}");
+    assert!(failures.contains("Failure category: review"));
+    assert!(failures.contains("Reason: Retry failed after review"));
+    assert!(failures.contains("Failures and requested fixes · 1 / 2"));
+    key(&mut t, "[", "Attempt 1 / 2")?;
+    let earlier = key(&mut t, "v", "review structured finding")?;
+    println!("HISTORY EARLIER REVIEW\n{earlier}");
+    assert!(earlier.contains("Reviews · 1 / 1"));
+    quit(&mut t)
 }
 
 fn verify_utf8_chunk_ownership(root: &Path, attempt: i64) -> Result {

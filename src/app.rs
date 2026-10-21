@@ -74,6 +74,7 @@ pub enum Action {
     Import,
     Export,
     Inspect,
+    InspectSection(usize),
     Filter,
     Search,
     Clear,
@@ -88,6 +89,8 @@ pub enum Action {
     EvidencePage(i32),
     EvidenceChunk(i32),
     EvidenceArtifact(i32),
+    EvidenceStep(i32),
+    EvidenceOpen(usize),
     FindEvidence,
     RefreshEvidence,
     Configure,
@@ -113,13 +116,19 @@ pub enum EvidenceSection {
     Output,
     Results,
     Transcripts,
+    Summary,
+    Reviews,
+    Failures,
 }
 impl EvidenceSection {
     pub fn from_index(index: usize) -> Self {
         match index {
             0 => Self::Output,
             1 => Self::Results,
-            _ => Self::Transcripts,
+            2 => Self::Transcripts,
+            3 => Self::Summary,
+            4 => Self::Reviews,
+            _ => Self::Failures,
         }
     }
     pub fn index(self) -> usize {
@@ -127,6 +136,9 @@ impl EvidenceSection {
             Self::Output => 0,
             Self::Results => 1,
             Self::Transcripts => 2,
+            Self::Summary => 3,
+            Self::Reviews => 4,
+            Self::Failures => 5,
         }
     }
 }
@@ -141,6 +153,7 @@ pub struct EvidenceSourceKey {
     pub attempt: EvidenceAttemptKey,
     pub section: EvidenceSection,
     pub artifact: Option<i64>,
+    pub step: Option<usize>,
 }
 #[derive(Clone, Default)]
 pub struct EvidencePosition {
@@ -156,7 +169,28 @@ pub struct EvidencePosition {
 pub struct EvidenceAttemptState {
     pub section: EvidenceSection,
     pub artifact: usize,
+    pub step: usize,
+    pub review_step: usize,
+    pub failure_step: usize,
     pub watermark: i64,
+}
+impl EvidenceAttemptState {
+    pub fn select_section(&mut self, section: EvidenceSection) {
+        self.section = section;
+        self.step = match section {
+            EvidenceSection::Reviews => self.review_step,
+            EvidenceSection::Failures => self.failure_step,
+            _ => self.step,
+        };
+    }
+    pub fn select_step(&mut self, step: usize) {
+        self.step = step;
+        match self.section {
+            EvidenceSection::Reviews => self.review_step = step,
+            EvidenceSection::Failures => self.failure_step = step,
+            _ => {}
+        }
+    }
 }
 
 pub struct App {
@@ -492,6 +526,8 @@ impl App {
                     None
                 }
             },
+            View::History if code == KeyCode::Char('V') => Some(Action::InspectSection(4)),
+            View::History if code == KeyCode::Char('F') => Some(Action::InspectSection(5)),
             View::Queue | View::History => match code {
                 KeyCode::Char('/') => Some(Action::Search),
                 KeyCode::Char('f') => Some(Action::Filter),
@@ -628,6 +664,14 @@ impl App {
             KeyCode::Char('{') => Some(Action::EvidenceChunk(-1)),
             KeyCode::Char('.') => Some(Action::EvidenceArtifact(1)),
             KeyCode::Char(',') => Some(Action::EvidenceArtifact(-1)),
+            KeyCode::Char('n') => Some(Action::EvidenceStep(1)),
+            KeyCode::Char('p') => Some(Action::EvidenceStep(-1)),
+            KeyCode::Char('s') => Some(Action::EvidenceOpen(3)),
+            KeyCode::Char('v') => Some(Action::EvidenceOpen(4)),
+            KeyCode::Char('f') => Some(Action::EvidenceOpen(5)),
+            KeyCode::Char('g') => Some(Action::EvidenceOpen(1)),
+            KeyCode::Char('o') => Some(Action::EvidenceOpen(0)),
+            KeyCode::Char('t') => Some(Action::EvidenceOpen(2)),
             KeyCode::Char('r') => Some(Action::RefreshEvidence),
             KeyCode::Char('/') => {
                 if let Some(crate::dialog::Dialog {

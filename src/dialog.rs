@@ -60,6 +60,7 @@ pub enum DialogKind {
         page: usize,
         chunk: usize,
         artifact: usize,
+        step: usize,
         match_sequence: Option<i64>,
         search_active: bool,
         jump_to_match: bool,

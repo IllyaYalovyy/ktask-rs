@@ -330,6 +330,8 @@ fn controls(app: &App) -> Vec<(&'static str, Action)> {
         ],
         View::History => vec![
             ("Enter Details", Action::Inspect),
+            ("V Reviews", Action::InspectSection(4)),
+            ("F Failures", Action::InspectSection(5)),
             ("f Filter", Action::Filter),
             ("/ Search", Action::Search),
             ("Esc Clear", Action::Clear),
@@ -1480,7 +1482,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     let hint = if dialog.error.is_empty() && position.is_some() {
         "Alt-Up/Down: position · Ctrl-S: apply · Esc: cancel"
     } else if dialog.error.is_empty() && matches!(dialog.kind, DialogKind::Inspect { .. }) {
-        "[ ] attempt · ← → section · < > page · { } chunk · / find · r refresh"
+        "[ ] attempt · s summary · v reviews · f failures · n/p step · o output"
     } else if dialog.error.is_empty() && dialog.read_only() {
         "Wheel / PgUp / PgDn: scroll · Esc: close"
     } else if dialog.error.is_empty() {
@@ -1518,20 +1520,45 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
             ("Later", Action::Position(1)),
         ]);
     }
-    if matches!(dialog.kind, DialogKind::Inspect { .. }) {
+    if let DialogKind::Inspect { section, .. } = dialog.kind {
+        controls = vec![
+            ("Summary", Action::EvidenceOpen(3)),
+            ("Reviews", Action::EvidenceOpen(4)),
+            ("Failures", Action::EvidenceOpen(5)),
+            ("Results", Action::EvidenceOpen(1)),
+            ("Output", Action::EvidenceOpen(0)),
+            ("Transcripts", Action::EvidenceOpen(2)),
+            ("Prev attempt", Action::PreviousAttempt),
+            ("Next attempt", Action::NextAttempt),
+        ];
+        match section {
+            0 => controls.extend([
+                ("Older", Action::EvidencePage(1)),
+                ("Newer", Action::EvidencePage(-1)),
+                ("Chunk -", Action::EvidenceChunk(-1)),
+                ("Chunk +", Action::EvidenceChunk(1)),
+                ("Find", Action::FindEvidence),
+                ("Refresh", Action::RefreshEvidence),
+            ]),
+            2 => controls.extend([
+                ("Check -", Action::EvidenceArtifact(-1)),
+                ("Check +", Action::EvidenceArtifact(1)),
+                ("Older", Action::EvidencePage(1)),
+                ("Newer", Action::EvidencePage(-1)),
+                ("Find", Action::FindEvidence),
+            ]),
+            4 | 5 => controls.extend([
+                ("Prev step", Action::EvidenceStep(-1)),
+                ("Next step", Action::EvidenceStep(1)),
+            ]),
+            1 => controls.push(("Find", Action::FindEvidence)),
+            _ => {}
+        }
         controls.extend([
-            ("Prev", Action::PreviousAttempt),
-            ("Next", Action::NextAttempt),
-            ("Section -", Action::EvidenceSection(-1)),
-            ("Section +", Action::EvidenceSection(1)),
-            ("Older", Action::EvidencePage(1)),
-            ("Newer", Action::EvidencePage(-1)),
-            ("Chunk -", Action::EvidenceChunk(-1)),
-            ("Chunk +", Action::EvidenceChunk(1)),
-            ("Check -", Action::EvidenceArtifact(-1)),
-            ("Check +", Action::EvidenceArtifact(1)),
-            ("Find", Action::FindEvidence),
-            ("Refresh", Action::RefreshEvidence),
+            ("Up", Action::Scroll(-8)),
+            ("Down", Action::Scroll(8)),
+            ("Close", Action::Cancel),
+            ("Copy", Action::Copy),
         ]);
     }
     if matches!(dialog.kind, DialogKind::Readiness) {

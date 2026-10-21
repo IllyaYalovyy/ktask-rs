@@ -39,7 +39,7 @@
 - Acknowledge a current Human task → record completion and advance; until acknowledged, execution waits.
 - Answer current AI questions → submit valid answers → record them and automatically continue in queue mode; incomplete answers leave the task waiting.
 - View project statistics → see task counts, completed work, failures, elapsed execution time, and cost.
-- Inspect History → find a task → read its result, changes, cost, and attempts without altering execution.
+- Inspect History → find a task → open Reviews or Failures directly for the selected task, or open its attempt details and select Summary, Results, Output, or Transcripts. Read each recorded review and failure step without scrolling through output; switch attempts and steps with mouse or keyboard without altering execution.
 - Export tasks → choose scope and destination → see success or an actionable error; confirm before overwriting a file.
 - Import tasks → preview and validate → choose insertion position (default: end of Queue) → confirm; cancel or invalid input leaves Queue unchanged.
 - Break down pending work or failed current → the capable model inserts ordinary subtasks in execution order → mark the original superseded and retain its attempts in History; require approval only when policy calls for it.
