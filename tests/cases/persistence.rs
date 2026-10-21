@@ -49,6 +49,107 @@ fn terminal(root: &Path) -> Result<Terminal> {
 }
 
 #[test]
+fn current_activity_shows_multiple_readable_events_at_small_and_large_sizes() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let mut writer = service(root)?;
+    let mut task = definition("Activity visibility");
+    task.attempt_limit = Some(1);
+    for role in 0..4 {
+        task.models[role] = Some(ModelConfig {
+            provider: "codex".into(),
+            model: format!("activity-fixture-{role}"),
+            effort: None,
+        });
+    }
+    let task_id = writer.create(&[task], None, true)?[0];
+    drop(writer);
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    let project_id: i64 =
+        db.connection()
+            .query_row("SELECT project_id FROM tasks WHERE id=?1", [task_id], |r| {
+                r.get(0)
+            })?;
+    for number in 1..=8 {
+        db.connection().execute(
+            "INSERT INTO events(project_id,task_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,'test.activity','info',?4)",
+            rusqlite::params![project_id, task_id, number, format!("Event {number}")],
+        )?;
+    }
+    db.connection().execute(
+        "INSERT INTO events(project_id,task_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,9,'test.activity','info','Latest event detailed context continues here')",
+        rusqlite::params![project_id, task_id],
+    )?;
+    drop(db);
+
+    for (cols, rows) in [(70, 22), (100, 30)] {
+        let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, cols, rows)?;
+        let current = t.screen("multiple activity events", |screen| {
+            screen.contains("Latest event detailed")
+                && screen.contains("context continues")
+                && screen.contains("Event 8")
+        })?;
+        if rows == 30 {
+            assert!(current.contains("Event 7"), "{current}");
+            assert!(current.contains("Event 6"), "{current}");
+        }
+        println!("CURRENT ACTIVITY {cols}x{rows}\n{current}");
+        t.send("l")?;
+        t.screen("keyboard opens all events", |screen| {
+            screen.contains("Project events") && screen.contains("Event 1")
+        })?;
+        t.send("\x1b")?;
+        t.screen("current after keyboard events", |screen| {
+            screen.contains("Activity · #1")
+        })?;
+        t.click("Activity · #1")?;
+        t.screen("mouse opens all events", |screen| {
+            screen.contains("Project events") && screen.contains("Event 1")
+        })?;
+        quit(&mut t)?;
+    }
+
+    let mut writer = service(root)?;
+    let current = target(&mut writer, task_id)?;
+    let run = writer.begin_run(current, "activity-stop", "fixture-base")?;
+    writer.finish_run(&run, "failed", Some("check"), "Recorded failure", None)?;
+    drop(writer);
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    let latest: i64 = db.connection().query_row(
+        "SELECT MAX(occurred_at_ms) FROM events WHERE task_id=?1",
+        [task_id],
+        |row| row.get(0),
+    )?;
+    db.connection().execute(
+        "INSERT INTO events(project_id,task_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,'test.activity','info','Stop event visible')",
+        rusqlite::params![project_id, task_id, latest + 1],
+    )?;
+    drop(db);
+
+    let mut t = terminal(root)?;
+    let stopped = t.screen("stopped current keeps activity visible", |screen| {
+        screen.contains("EXECUTION STOPPED")
+            && screen.contains("Activity · #1")
+            && screen.contains("Stop event visible")
+    })?;
+    println!("STOPPED CURRENT ACTIVITY 70x22\n{stopped}");
+    t.send("l")?;
+    t.screen("stopped keyboard opens all events", |screen| {
+        screen.contains("Project events") && screen.contains("Event 1")
+    })?;
+    t.send("\x1b")?;
+    t.screen("stopped current after keyboard events", |screen| {
+        screen.contains("Activity · #1") && screen.contains("Stop event visible")
+    })?;
+    t.click("Activity · #1")?;
+    t.screen("stopped mouse opens all events", |screen| {
+        screen.contains("Project events") && screen.contains("Event 1")
+    })?;
+    quit(&mut t)?;
+    Ok(())
+}
+
+#[test]
 fn history_rows_show_attempts_total_time_and_cost_by_keyboard_and_mouse() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();

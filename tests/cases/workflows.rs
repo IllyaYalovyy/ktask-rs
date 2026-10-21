@@ -227,20 +227,39 @@ fn full_following_log_freezes_on_mouse_down_before_drag() -> Result {
     key(&mut t, "\t\x012000\x13", "Configuration applied")?;
     key(&mut t, "1t", "RUNNING")?;
     t.screen("log approaches capacity", |s| s.contains("step 2/6"))?;
-    let full = t.screen("full following log", |s| {
-        s.contains("Checks: running") && s.contains("Log · following")
-    })?;
+    let full = t.screen_within(
+        "full following log",
+        std::time::Duration::from_secs(10),
+        |s| {
+            s.contains("step 4/6")
+                && s.contains("Review: checking the result")
+                && s.contains("Log · following")
+        },
+    )?;
     let start = location(&full, "Executor:")?;
+    let review = location(&full, "Review: checking the result")?;
+    let log_title = location(&full, "Log · following")?;
+    assert_eq!(
+        full.lines()
+            .nth(review.1 + 1)
+            .and_then(|line| line.chars().nth(log_title.0 - 2)),
+        Some('╰'),
+        "log has an empty row below review output:\n{full}"
+    );
     println!("FULL LOG BEFORE MOUSE DOWN\n{full}");
     t.send(&format!("\x1b[<0;{};{}M", start.0 + 1, start.1 + 1))?;
     let frozen = t.screen("mouse down freezes log", |s| s.contains("Log · scrolled"))?;
     assert_eq!(location(&frozen, "Executor:")?, start);
     println!("FULL LOG FROZEN ON MOUSE DOWN\n{frozen}");
     let updated = t.screen("new output before drag", |s| {
-        s.contains("step 4/6") && s.contains("Log · scrolled")
+        s.contains("step 5/6") && s.contains("Log · scrolled")
     })?;
     assert_eq!(location(&updated, "Executor:")?, start);
-    assert!(!updated.contains("Review: checking the result"));
+    assert_eq!(location(&updated, "Review: checking the result")?, review);
+    assert!(
+        !updated.contains("Validation: checking the goal"),
+        "{updated}"
+    );
     println!("FULL LOG UPDATED BEFORE DRAG\n{updated}");
     t.send(&format!(
         "\x1b[<32;{};{}M\x1b[<0;{};{}m",

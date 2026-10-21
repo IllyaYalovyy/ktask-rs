@@ -1753,7 +1753,7 @@ fn real_tui_shows_the_open_question_and_abandons_by_keyboard_and_mouse() -> Resu
         println!("QUESTION SCREEN (mouse={mouse})\n{waiting}");
         assert!(waiting.contains("The worker needs your answer"));
         assert!(waiting.contains("Attempt 1"));
-        assert!(waiting.contains("Execution   ! waiting"));
+        assert!(waiting.contains("Execution   ✓ succeeded"));
         assert!(waiting.contains("Activity · #1"));
         assert!(!waiting.contains("Execution controls always target current"));
         assert!(waiting.contains("[w Answer]") && waiting.contains("[x Abandon]"));

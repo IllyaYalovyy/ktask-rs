@@ -78,6 +78,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         );
         return;
     }
+    let compact_current = app.view == View::Current && area.height <= 24;
     let [header, tabs, status, toolbar, body, actions, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -85,7 +86,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Constraint::Length(2),
         Constraint::Min(0),
         Constraint::Length(3),
-        Constraint::Length(2),
+        Constraint::Length(if compact_current { 1 } else { 2 }),
     ])
     .areas(area);
     frame.render_widget(
@@ -173,13 +174,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     controls.extend([("? Help", Action::Help), ("q Quit", Action::Quit)]);
     buttons(frame, app, actions, &controls, false);
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::raw(shortened(&app.notice, footer.width as usize)),
-            Line::styled(
-                "Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native",
-                Style::new().fg(MUTED),
-            ),
-        ]),
+        Paragraph::new(if compact_current {
+            vec![Line::raw(shortened(&app.notice, footer.width as usize))]
+        } else {
+            vec![
+                Line::raw(shortened(&app.notice, footer.width as usize)),
+                Line::styled(
+                    "Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native",
+                    Style::new().fg(MUTED),
+                ),
+            ]
+        }),
         footer,
     );
     if app.search_before.is_some() {
@@ -573,7 +578,7 @@ fn initial_status_lines(
             task.attempts.last().map_or(0, |a| a.step)
         )
     }));
-    if !persistent || task.attempts.is_empty() {
+    if !persistent {
         lines.push(Line::raw(if limit == 0 {
             format!("Budget {} used · no limit", task.used())
         } else {
@@ -600,6 +605,18 @@ fn current_step_line(
         shortened(&format!("Step: {step}"), width),
         Style::new().fg(ACCENT),
     ))
+}
+
+fn current_summary_height(height: u16) -> u16 {
+    if height >= 25 {
+        15
+    } else if height >= 18 {
+        12
+    } else if height >= 14 {
+        8
+    } else {
+        7
+    }
 }
 
 fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
@@ -638,8 +655,8 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
     ])
     .areas(area);
     let [summary, events] = Layout::vertical([
+        Constraint::Length(current_summary_height(left.height).min(left.height.saturating_sub(3))),
         Constraint::Min(0),
-        Constraint::Length(if left.height >= 17 { 5 } else { 3 }),
     ])
     .areas(left);
     let [purpose, right] = Layout::vertical([
@@ -677,31 +694,6 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
     };
     let model = &settings.models[model_index];
     lines.extend(current_step_line(task, app.service.is_some(), inner));
-    lines.extend(current_model_lines(model, app.service.is_some(), inner));
-    lines.extend(current_usage_lines(app.service.is_some(), attempt, inner));
-    if app.service.is_some() && !task.attempts.is_empty() {
-        lines.push(Line::raw(if settings.attempt_limit == 0 {
-            format!("Budget {} used · no limit", task.used())
-        } else {
-            format!("Budget {} of {} used", task.used(), settings.attempt_limit)
-        }));
-    }
-    if let Some(readiness) = &app.readiness {
-        lines.push(Line::styled(
-            if readiness.blockers == 0 {
-                "Can run · u Readiness".to_owned()
-            } else {
-                format!("Run blocked ({}) · u Readiness", readiness.blockers)
-            },
-            Style::new().fg(if readiness.blockers == 0 { OK } else { WARN }),
-        ));
-    }
-    if app.service.is_none() {
-        lines.push(Line::raw(format!(
-            "Cost ${:.2} (mock)",
-            task.cost() as f64 / 100.0
-        )));
-    }
     match status {
         Status::Waiting => {
             let seconds = attempt.and_then(|a| a.resume_at).map_or(0, |at| {
@@ -734,6 +726,41 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
             Style::new().fg(WARN),
         )),
         _ => {}
+    }
+    let readiness = app.readiness.as_ref().map(|readiness| {
+        Line::styled(
+            if readiness.blockers == 0 {
+                "Can run · u Readiness".to_owned()
+            } else {
+                format!("Run blocked ({}) · u Readiness", readiness.blockers)
+            },
+            Style::new().fg(if readiness.blockers == 0 { OK } else { WARN }),
+        )
+    });
+    if attempt.is_none() {
+        lines.extend(readiness.clone());
+    }
+    let mut usage = current_usage_lines(app.service.is_some(), attempt, inner);
+    if summary.height <= 7 && usage.len() == 3 {
+        lines.push(usage.remove(1));
+    }
+    lines.extend(current_model_lines(model, app.service.is_some(), inner));
+    lines.extend(usage);
+    if app.service.is_some() {
+        lines.push(Line::raw(if settings.attempt_limit == 0 {
+            format!("Budget {} used · no limit", task.used())
+        } else {
+            format!("Budget {} of {} used", task.used(), settings.attempt_limit)
+        }));
+    }
+    if attempt.is_some() {
+        lines.extend(readiness);
+    }
+    if app.service.is_none() {
+        lines.push(Line::raw(format!(
+            "Cost ${:.2} (mock)",
+            task.cost() as f64 / 100.0
+        )));
     }
     if let Some(attempt) = attempt.filter(|a| !a.steps.is_empty()) {
         for (label, state) in attempt.steps.iter().rev().take(5).rev() {
@@ -773,18 +800,17 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
     );
     app.hits.push((summary, Action::Inspect));
     app.selection.zone(content(summary));
-    let activity: Vec<_> = app.task_events.iter().take(3).collect();
+    let activity = activity_lines(
+        &app.task_events,
+        events.width.saturating_sub(2) as usize,
+        events.height.saturating_sub(2) as usize,
+    );
     frame.render_widget(
         Paragraph::new(if activity.is_empty() {
-            "Nothing recorded yet".to_owned()
+            vec![Line::styled("Nothing recorded yet", Style::new().fg(MUTED))]
         } else {
             activity
-                .iter()
-                .map(|s| shortened(s, events.width.saturating_sub(2) as usize))
-                .collect::<Vec<_>>()
-                .join("\n")
         })
-        .style(Style::new().fg(if activity.is_empty() { MUTED } else { TEXT }))
         .block(panel(if app.service.is_some() {
             format!(" Activity · #{task_id} · l: all ")
         } else {
@@ -822,6 +848,32 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         right
     };
     draw_output(frame, app, output);
+}
+
+fn activity_lines(messages: &[String], width: usize, height: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if width < 3 {
+        return lines;
+    }
+    for message in messages {
+        if lines.len() >= height {
+            break;
+        }
+        let rows = wrapped(message, width - 2);
+        let visible = rows.len().min(2).min(height - lines.len());
+        for (index, row) in rows.iter().take(visible).enumerate() {
+            let text = if index == 1 && rows.len() > 2 {
+                shortened(&format!("{row}…"), width - 2)
+            } else {
+                row.clone()
+            };
+            lines.push(Line::styled(
+                format!("{}{}", if index == 0 { "• " } else { "  " }, text),
+                Style::new().fg(TEXT),
+            ));
+        }
+    }
+    lines
 }
 
 /// The banner, when there is one, above the rest of Current; returns the remaining area.
