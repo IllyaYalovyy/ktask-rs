@@ -429,8 +429,17 @@ impl App {
         self.task_events.truncate(30);
     }
     pub fn key(&mut self, key: KeyEvent, fits: bool) {
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.quit = true;
+        if matches!(key.code, KeyCode::Char('c' | 'C'))
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            if key.modifiers.contains(KeyModifiers::SHIFT)
+                || key.code == KeyCode::Char('C')
+                || (fits && self.selection.text().is_some())
+            {
+                self.copy_selection();
+            } else {
+                self.quit = true;
+            }
             return;
         }
         if !fits {

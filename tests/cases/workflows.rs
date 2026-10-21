@@ -20,6 +20,33 @@ fn quit(t: &mut Terminal) -> Result {
 }
 
 #[test]
+fn ctrl_shift_c_copies_selected_add_task_text_without_closing_form() -> Result {
+    let mut t = Terminal::open(100, 28)?;
+    ready(&t)?;
+    key(&mut t, "2a", "Add task")?;
+    let form = key(&mut t, "Copy this title", "Copy this title")?;
+    let start = location(&form, "Copy this title")?;
+    drag(&mut t, start, (start.0 + 8, start.1))?;
+    t.screen("selected title in Add task", |_| {
+        t.selected_at(start.0, start.1)
+    })?;
+
+    let copied = copy_key(&mut t, "\x1b[99;6u")?;
+    assert!(copied.starts_with("Copy this"), "copied {copied:?}");
+    let alternate_code = copy_key(&mut t, "\x1b[99:67;6u")?;
+    assert_eq!(alternate_code, copied);
+    let plain_code = copy_key(&mut t, "\x03")?;
+    assert_eq!(plain_code, copied);
+    let still_open = t.screen("Add task remains open after plain Ctrl+C", |s| {
+        s.contains("Add task") && s.contains("Copy this title")
+    })?;
+    println!("ADD TASK AFTER PLAIN CTRL-C\n{still_open}");
+    key(&mut t, "\x1b", "Add task")?;
+    assert!(!t.selected_at(start.0, start.1));
+    quit(&mut t)
+}
+
+#[test]
 fn text_selection_copy_and_native_fallback_in_real_terminals() -> Result {
     for (cols, rows) in [(70, 22), (120, 30)] {
         let mut t = Terminal::open(cols, rows)?;
@@ -142,6 +169,7 @@ fn live_log_selection_stays_put_as_output_arrives() -> Result {
     let text = copy(&mut t)?;
     assert!(text.contains("Executor:"), "log copy: {text:?}");
     assert!(!text.contains('│'));
+    key(&mut t, "\x1b", "Current #1")?;
     quit(&mut t)
 }
 
@@ -274,6 +302,7 @@ fn full_following_log_freezes_on_mouse_down_before_drag() -> Result {
     assert!(copied.starts_with("Executor:"), "copied {copied:?}");
     assert!(!copied.contains('│'));
     println!("FULL LOG COPIED AFTER UPDATE: {copied:?}");
+    key(&mut t, "\x1b", "Current #1")?;
     quit(&mut t)
 }
 fn guided(t: &mut Terminal) -> Result {

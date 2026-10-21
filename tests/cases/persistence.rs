@@ -598,6 +598,7 @@ fn persistent_report_and_log_support_mouse_text_copy() -> Result {
         t.selected_at(dialog_at.0, dialog_at.1)
     })?;
     assert!(copy(&mut t)?.starts_with("Check failed: transc"));
+    key(&mut t, "\x1b", "Task details / attempts")?;
     quit(&mut t)
 }
 
@@ -3342,6 +3343,9 @@ fn queue_add_sets_execution_model_by_keyboard_and_mouse() -> Result {
         "Inserted model task",
     )?;
     println!("INSERTED MODEL SAVED\n{inserted}");
+    t.screen("keyboard insert committed", |s| {
+        s.contains("Saved to SQLite") && !s.contains("╭ Insert task")
+    })?;
     t.click("i Insert")?;
     let form = t.screen("mouse insert task form", |s| {
         s.contains("Before task ID") && s.contains("Execution provider/model")

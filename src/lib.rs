@@ -24,7 +24,8 @@ use std::io;
 use ratatui::crossterm::{
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyEventKind,
+        Event, KeyEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate},
@@ -70,23 +71,44 @@ pub(crate) fn launch_tui(
 
 fn terminal_session(app: app::App) -> io::Result<()> {
     let mut terminal = ratatui::try_init()?;
-    let _input_restore = RestoreInput;
-    let result = execute!(terminal.backend_mut(), EnableBracketedPaste)
-        .and_then(|_| run(&mut terminal, app));
+    let mut input_restore = RestoreInput {
+        keyboard_pushed: false,
+    };
+    let setup = execute!(
+        terminal.backend_mut(),
+        EnableBracketedPaste,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    );
+    input_restore.keyboard_pushed = setup.is_ok();
+    let result = setup.and_then(|_| run(&mut terminal, app));
     let mouse_restored = execute!(
         terminal.backend_mut(),
         DisableMouseCapture,
         DisableBracketedPaste
     );
+    let keyboard_restored = if input_restore.keyboard_pushed {
+        let restored = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+        if restored.is_ok() {
+            input_restore.keyboard_pushed = false;
+        }
+        restored
+    } else {
+        Ok(())
+    };
     ratatui::restore();
-    result.and(mouse_restored)
+    result.and(mouse_restored).and(keyboard_restored)
 }
 
-struct RestoreInput;
+struct RestoreInput {
+    keyboard_pushed: bool,
+}
 impl Drop for RestoreInput {
     fn drop(&mut self) {
         // Also runs during unwinding; ratatui's panic hook restores raw/alternate mode.
         let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
+        if self.keyboard_pushed {
+            let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+        }
     }
 }
 
