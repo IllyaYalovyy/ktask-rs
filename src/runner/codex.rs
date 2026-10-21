@@ -492,6 +492,8 @@ pub struct Stream {
     pub completed: bool,
     pub failed: bool,
     pub rate_limited: bool,
+    /// The provider's own "try again at/in" time, when it names one.
+    pub reset_at_ms: Option<i64>,
     pub last_message: Option<String>,
     pending: Vec<u8>,
 }
@@ -542,6 +544,12 @@ impl Stream {
                     ]
                     .iter()
                     .any(|s| message.contains(s));
+                    if self.rate_limited && self.reset_at_ms.is_none() {
+                        self.reset_at_ms = super::reset::reset_at(
+                            &value.to_string(),
+                            crate::application::now_ms(),
+                        );
+                    }
                     events.push(Event::Text(value.to_string()));
                 }
                 "item.completed" => {

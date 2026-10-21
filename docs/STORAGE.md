@@ -49,8 +49,9 @@ CLI `show` exposes `waiting_ms` on each attempt and `provider_elapsed_ms` on eac
 record. Open wait and provider intervals advance on fresh reads; completed intervals stay fixed.
 Recovery caps an open interval at the attempt's recorded finish time. Current Task refreshes
 live timing, while an open details or statistics dialog shows the snapshot taken when opened.
-Three rate-limit waits per attempt use visible 60, 120 and 240 second backoffs; exhaustion
-stops automatic execution and retains work for an explicit retry.
+A rate limit waits until the provider's named reset time plus one minute; without one it backs
+off 1, 2, 4, then every 8 minutes. Limits never fail the task. Provider transport errors before
+the next completed turn count as the same outage; a completed turn resets the streak.
 
 Each revision has attempt_limit and attempt_timeout_ms (positive, NULL = unlimited). New,
 imported, planned and repair tasks default to unlimited active time.
@@ -307,7 +308,7 @@ One execution against an exact revision; retry creates another row. This is the 
 | `started_at_ms` | INTEGER | no | Start time. |
 | `finished_at_ms` | INTEGER | yes | Finish time; NULL while active. |
 | `active_ms` | INTEGER | no | Accumulated active duration, nonnegative; default 0. |
-| `rate_waits` | INTEGER | no | Number of rate-limit waits in this attempt, at most three. |
+| `rate_waits` | INTEGER | no | Rate-limit waits since the last completed provider turn, capped at three; sets the backoff. |
 | `wait_reason` | TEXT | yes | question, rate_limit, provider_unavailable; required only while waiting. |
 | `waiting_since_ms` | INTEGER | yes | Start of the current wait; required only while waiting. |
 | `resume_at_ms` | INTEGER | yes | Earliest resume time for a timed wait; NULL means no scheduled time. |
@@ -998,8 +999,8 @@ Never reset/delete user work to satisfy cleanup. Installed production supervises
 development and tests use independent application roots/private test checkouts.
 
 Codex sessions are reused only for matching project/task/role/provider/scope/model/effort. Attempts
-pin revisions; pause/question/rate-limit resumption retains the attempt. Rate limits record a
-60-second backoff, not a provider reset estimate; queue mode automatically resumes when eligible.
+pin revisions; pause/question/rate-limit resumption retains the attempt. Rate limits wait for the
+provider's named reset time, else a capped backoff; queue mode automatically resumes when eligible.
 Waiting time is excluded from active time. Infrastructure failures do not spend the coding budget.
 Execution/remediation, supervisor checks, independent review and validation create separate steps.
 Structured criterion evidence is required before success; process exit zero alone is insufficient.

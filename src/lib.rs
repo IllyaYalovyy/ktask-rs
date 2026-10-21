@@ -4,6 +4,7 @@ mod actions;
 mod app;
 pub mod application;
 mod cli;
+pub(crate) mod clock;
 mod configuration_ui;
 mod dialog;
 pub mod instance;

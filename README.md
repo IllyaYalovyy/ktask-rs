@@ -198,8 +198,11 @@ If the guardian itself died without confirming cleanup, execution stays blocked;
 stopping orphaned processes and preserving work, use `recover --confirm-worker-cleanup`.
 Execution, review, validation and repair-worker connection failures retry twice within the same attempt, with short
 interruptible backoff and preserved work/session. Repeated failures stop with evidence;
-infrastructure failures do not spend the coding budget. Rate limits retain the attempt/session
-and a 60-second backoff (not a claimed provider reset time); queue mode resumes automatically.
+infrastructure failures do not spend the coding budget. Rate and usage limits never fail a task:
+the attempt/session waits until the provider's own reset time when it names one ("try again at
+Oct 26th, 2026 11:32 PM", "try again in 20s"), else backs off 1, 2, 4, then every 8 minutes.
+Current Task shows "Provider limit until <time>"; queue mode resumes automatically. Provider
+errors before the next successful turn count as the same outage.
 Pause stops automatic waiting; a later resume cannot bypass its recorded deadline.
 
 Codex uses explicit per-role models, structured results, workspace-write execution/remediation,

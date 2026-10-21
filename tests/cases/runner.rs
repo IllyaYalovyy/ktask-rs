@@ -223,6 +223,7 @@ case '{mode}' in
  usage-live) if [ "$model" = execution ]; then sleep 30; fi;;
  descendants) setsid sleep 30 & printf '%s' "$!" > descendant.pid; sleep 30;;
  rate) printf '{{"type":"turn.failed","error":{{"message":"rate_limit reached"}}}}\n'; exit 2;;
+ usage) printf '%s\n' '{{"type":"error","message":"You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 26th, 2099 11:32 PM."}}' '{{"type":"turn.failed","error":{{"message":"You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 26th, 2099 11:32 PM."}}}}'; exit 1;;
  malformed-work) printf 'verified\n' > result.txt; printf '{{"type":"turn.completed","usage":{{}}}}\n'; exit 0;;
  malformed) printf '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}\n'; exit 0;;
  fail) printf '{{"type":"turn.failed","error":{{"message":"transport lost"}}}}\n'; exit 2;;
@@ -4017,42 +4018,111 @@ fn real_tui_individual_check_timeout_remains_separate_from_task_deadline() -> Re
 }
 
 #[test]
-fn repeated_rate_limits_stop_after_three_waits_without_spending_coding_budget() -> Result {
+fn repeated_rate_limits_keep_waiting_with_capped_backoff_and_never_fail() -> Result {
     let f = Fixture::new()?;
     f.provider("rate")?;
-    f.add("Rate limit must stop")?;
-    for wait in 1..=3 {
+    f.add("Rate limit must not fail the task")?;
+    for (wait, minutes) in [1, 2, 4, 8, 8, 8].into_iter().enumerate() {
         f.ok(&["run", "--one"])?;
         let task = f.ok(&["show", "1"])?;
-        assert_eq!(task["status"], "waiting");
-        assert_eq!(
-            f.db()?.connection().query_row(
-                "SELECT rate_waits FROM attempts WHERE task_id=1",
-                [],
-                |r| r.get::<_, i64>(0)
-            )?,
-            wait
-        );
+        assert_eq!(task["status"], "waiting", "wait {wait}");
+        assert_eq!(task["attempts_used"], 0);
+        assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+        let backoff: i64 = f.db()?.connection().query_row(
+            "SELECT resume_at_ms-waiting_since_ms FROM attempts WHERE task_id=1",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(backoff, minutes * 60_000, "wait {wait}");
         f.db()?.connection().execute(
             "UPDATE attempts SET resume_at_ms=waiting_since_ms WHERE task_id=1",
             [],
         )?;
     }
-    assert_eq!(
-        f.process().args(["run", "--one"]).output()?.status.code(),
-        Some(4)
-    );
-    let task = f.ok(&["show", "1"])?;
-    assert_eq!(task["status"], "failed");
-    assert_eq!(task["attempts_used"], 0);
-    assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
-    assert!(
-        task["attempts"][0]["outcome"]
-            .as_str()
-            .unwrap()
-            .contains("after 3 waits")
-    );
     f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn provider_errors_right_after_a_usage_limit_wait_keep_waiting_instead_of_failing() -> Result {
+    let f = Fixture::new()?;
+    f.provider("usage")?;
+    f.add("Outage")?;
+    f.ok(&["run", "--one"])?;
+    let expire = "UPDATE attempts SET resume_at_ms=waiting_since_ms WHERE task_id=1";
+    f.db()?.connection().execute(expire, [])?;
+    // Codex failed compaction with "Bad Request" while still out of quota.
+    f.provider("fail")?;
+    f.ok(&["run", "--one"])?;
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "waiting");
+    assert_eq!(task["attempts_used"], 0);
+    assert_eq!(task["attempts"][0]["wait_reason"], "rate_limit");
+    f.db()?.connection().execute(expire, [])?;
+    f.provider("normal")?;
+    f.ok(&["run", "--one"])?;
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["lifecycle"], "succeeded");
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+    let waits: i64 = f.db()?.connection().query_row(
+        "SELECT rate_waits FROM attempts WHERE task_id=1",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(waits, 0, "a completed turn ends the provider-limit streak");
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn usage_limit_waits_until_the_provider_reset_time_and_shows_it() -> Result {
+    use chrono::TimeZone;
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("usage")?;
+        f.add("Quota wait")?;
+        f.ok(&["run", "--one"])?;
+        let task = f.ok(&["show", "1"])?;
+        assert_eq!(task["status"], "waiting");
+        assert_eq!(task["attempts_used"], 0);
+        let reset = chrono::Local
+            .with_ymd_and_hms(2099, 10, 26, 23, 32, 0)
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(task["attempts"][0]["resume_at_ms"], reset + 60_000);
+        assert!(
+            task["attempts"][0]["report"]
+                .as_str()
+                .unwrap()
+                .contains("Provider usage limit; resumes Oct 26 2099 23:33")
+        );
+        // Running again before the reset is refused instead of calling the provider.
+        assert_eq!(f.process().arg("resume").output()?.status.code(), Some(4));
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
+        let current = t.screen("usage limit current", |s| {
+            s.contains("Provider limit until Oct 26 2099 23:33 · r Resume")
+        })?;
+        println!("USAGE LIMIT CURRENT mouse={mouse}\n{current}");
+        if mouse {
+            t.click("u Readiness")?;
+        } else {
+            t.send("u")?;
+        }
+        let blocked = t.screen("usage limit readiness", |s| {
+            s.contains("Rate-limit wait:") && s.contains("d ") && s.contains("h remaining; then")
+        })?;
+        println!("USAGE LIMIT READINESS mouse={mouse}\n{blocked}");
+        let eligible = blocked.split("Eligible in ").nth(1).unwrap_or_default();
+        assert!(
+            eligible.split(' ').next().is_some_and(|n| n.ends_with('d')),
+            "status shows days, not raw seconds"
+        );
+        t.send("\x1b")?;
+        t.screen("readiness closed", |s| !s.contains("Execution readiness"))?;
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
     Ok(())
 }
 

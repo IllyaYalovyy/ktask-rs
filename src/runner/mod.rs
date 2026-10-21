@@ -5,6 +5,7 @@ mod cycle;
 mod output;
 pub(crate) mod process;
 pub mod remediation;
+mod reset;
 pub(crate) mod workspace;
 
 use crate::{
@@ -48,7 +49,8 @@ enum Outcome {
     },
     Paused,
     Question(String),
-    RateLimit,
+    /// Provider rate or usage limit, with its own reset time when it names one.
+    RateLimit(Option<i64>),
     /// The failure judge changed the plan (task revised, work inserted, model escalated);
     /// this attempt ends without spending budget, the plan is applied, and the loop goes on.
     Replanned(codex::Judgment),
@@ -307,6 +309,11 @@ fn run_inner(
             cycle::run(service, &run, &mut context, &checks, repair)
         });
         let outcome = match result {
+            // Until a turn succeeds after a provider limit, odd provider errors are
+            // part of that outage (Codex fails compaction while out of quota).
+            Ok(Outcome::Failed("transport", _)) if service.rate_waits(&run)? > 0 => {
+                Outcome::RateLimit(None)
+            }
             Ok(outcome) => outcome,
             Err(error) => Outcome::Failed("environment", error.to_string()),
         };
@@ -343,13 +350,10 @@ fn run_inner(
         // Freeze the clock before handing ownership to a pause, wait, or later attempt.
         context.persist_active_time(service, &run)?;
         match outcome {
-            Outcome::RateLimit => {
-                if service.rate_waits(&run)? >= 3 {
-                    let reason = "Provider rate-limit recovery exhausted after 3 waits; same task and work retained. Retry current explicitly when the provider is available";
-                    service.finish_run(&run, "failed", Some("rate_limit"), reason, None)?;
-                    return Err(Error::Conflict(reason.into()));
-                }
-                service.rate_wait(&run, "Provider rate limited; session retained")?;
+            // Never fail a task for provider limits: wait for the provider's own reset
+            // time when it names one, else back off, then resume the same attempt.
+            Outcome::RateLimit(reset_at) => {
+                service.rate_wait(&run, reset_at)?;
                 if options.queue && wait_for_backoff(service, &run, &context)? {
                     continue;
                 }
@@ -1074,7 +1078,7 @@ fn execute(
                 }
                 ctx.persist_active_time(service, run)?;
                 if interrupted.is_none() && ai && stream.rate_limited {
-                    return Ok(Outcome::RateLimit);
+                    return Ok(Outcome::RateLimit(stream.reset_at_ms));
                 }
                 if interrupted.is_none() && !ai {
                     service.finish_step(

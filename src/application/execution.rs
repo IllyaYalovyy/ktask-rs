@@ -360,13 +360,34 @@ impl Service {
     pub fn open_question(&self, task: i64) -> Result<Option<(i64, String)>> {
         Ok(self.db.connection().query_row("SELECT q.id,q.prompt FROM questions q JOIN attempts a ON a.id=q.attempt_id WHERE a.project_id=?1 AND a.task_id=?2 AND q.state='open' ORDER BY q.id DESC LIMIT 1", params![self.project_id,task], |r| Ok((r.get(0)?,r.get(1)?))).optional()?)
     }
-    pub fn rate_wait(&mut self, run: &Run, message: &str) -> Result<()> {
+    /// Park the attempt until the provider accepts work again. A named reset time is
+    /// honoured (plus a minute of margin); otherwise back off 1, 2, 4, then every 8 minutes.
+    /// Limits never fail the task or spend its budget.
+    pub fn rate_wait(&mut self, run: &Run, reset_at_ms: Option<i64>) -> Result<()> {
         let tx = self
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let now = now_ms();
-        require(tx.execute("UPDATE attempts SET state='waiting',wait_reason='rate_limit',waiting_since_ms=?2,resume_at_ms=?2+60000*(1 << rate_waits),rate_waits=rate_waits+1,report=?3 WHERE id=?1 AND execution_token=?4 AND state='running' AND rate_waits<3",params![run.attempt,now,message,run.token])?==1,"Rate-limit recovery exhausted or attempt ownership lost")?;
+        let waits: i64 = tx.query_row(
+            "SELECT rate_waits FROM attempts WHERE id=?1",
+            [run.attempt],
+            |r| r.get(0),
+        )?;
+        let resume_at = match reset_at_ms {
+            Some(at) => at.max(now) + 60_000,
+            None => now + 60_000 * (1 << waits.min(3)),
+        };
+        let until = crate::clock::format_local(resume_at, now);
+        let message = match reset_at_ms {
+            Some(_) => {
+                format!("Provider usage limit; resumes {until} with the same attempt and session")
+            }
+            None => {
+                format!("Provider rate limited; retrying {until} with the same attempt and session")
+            }
+        };
+        require(tx.execute("UPDATE attempts SET state='waiting',wait_reason='rate_limit',waiting_since_ms=?2,resume_at_ms=?5,rate_waits=min(rate_waits+1,3),report=?3 WHERE id=?1 AND execution_token=?4 AND state='running'",params![run.attempt,now,message,run.token,resume_at])?==1,"Attempt ownership lost during rate-limit wait")?;
         tx.execute("UPDATE attempt_steps SET state='interrupted',finished_at_ms=?2,report=?3 WHERE attempt_id=?1 AND state='running'",params![run.attempt,now,message])?;
         tx.execute("UPDATE model_calls SET state='failed',finished_at_ms=?2,error=?3 WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id=?1) AND state='running'",params![run.attempt,now,message])?;
         tx.execute(
@@ -376,12 +397,12 @@ impl Service {
         tx.execute(
             "INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message)
              VALUES (?1,?2,?3,?4,'attempt.waiting','info',?5)",
-            params![self.project_id,run.task,run.attempt,now,
-                "Provider rate limited; same attempt retained. Scheduled bounded backoff (not a provider reset estimate)"],
+            params![self.project_id, run.task, run.attempt, now, message],
         )?;
         tx.commit()?;
         Ok(())
     }
+    /// Provider-limit waits since the last completed provider turn (capped at 3).
     pub fn rate_waits(&self, run: &Run) -> Result<i64> {
         Ok(self.db.connection().query_row(
             "SELECT rate_waits FROM attempts WHERE id=?1 AND execution_token=?2",
@@ -590,6 +611,10 @@ impl Service {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute("UPDATE attempt_steps SET state=?2,report=?3,finished_at_ms=?4,exit_code=CASE WHEN role='check' THEN ?5 ELSE NULL END WHERE id=?1 AND state='running'", params![step.id,state,report,now_ms(),exit])?;
         tx.execute("UPDATE model_calls SET state=?2,finished_at_ms=?3,error=?4 WHERE step_id=?1 AND state='running'", params![step.id,if success {"succeeded"} else {"failed"},now_ms(),if success {None} else {Some(report)}])?;
+        if success {
+            // A completed provider turn ends the provider-limit streak.
+            tx.execute("UPDATE attempts SET rate_waits=0 WHERE id=(SELECT attempt_id FROM attempt_steps WHERE id=?1 AND role<>'check')", [step.id])?;
+        }
         tx.commit()?;
         Ok(())
     }

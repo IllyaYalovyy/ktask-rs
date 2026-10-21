@@ -706,6 +706,7 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                     .as_millis()
                     .div_ceil(1000)
             });
+            let seconds = crate::clock::format_remaining(seconds.try_into().unwrap_or(i64::MAX));
             let automatic = app.supervisor_alive
                 && app.execution_session.as_ref().is_none_or(|session| {
                     matches!(
@@ -715,9 +716,9 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                 });
             lines.push(Line::styled(
                 if automatic {
-                    format!("Resumes in {seconds}s")
+                    format!("Resumes in {seconds}")
                 } else {
-                    format!("Eligible in {seconds}s · manual resume")
+                    format!("Eligible in {seconds} · manual resume")
                 },
                 Style::new().fg(WARN),
             ));
@@ -820,6 +821,17 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
     draw_output(frame, app, output);
 }
 
+/// " until Oct 26 23:33" for a waiting attempt with a scheduled resume.
+fn until(task: &crate::presentation::Task) -> String {
+    let Some(at) = task.attempts.last().and_then(|a| a.resume_at) else {
+        return String::new();
+    };
+    let now = crate::application::now_ms();
+    let remaining = at.saturating_duration_since(std::time::Instant::now());
+    let at = now + i64::try_from(remaining.as_millis()).unwrap_or(i64::MAX / 2);
+    format!(" until {}", crate::clock::format_local(at, now))
+}
+
 /// One line that says what is happening and what the owner can do about it.
 fn situation(app: &App, task: &crate::presentation::Task) -> (String, Color) {
     if let Some(draft) = task.draft() {
@@ -857,15 +869,18 @@ fn situation(app: &App, task: &crate::presentation::Task) -> (String, Color) {
                 .is_some_and(|s| s.state == "paused") =>
         {
             (
-                format!("Provider rate limit · paused · r Resume{abandon}"),
+                format!("Provider limit{} · paused · r Resume{abandon}", until(task)),
                 WARN,
             )
         }
         Status::Waiting if app.supervisor_alive => (
-            format!("Provider rate limit · resumes by itself{abandon}"),
+            format!("Provider limit{} · resumes by itself{abandon}", until(task)),
             WARN,
         ),
-        Status::Waiting => (format!("Provider rate limit · r Resume{abandon}"), WARN),
+        Status::Waiting => (
+            format!("Provider limit{} · r Resume{abandon}", until(task)),
+            WARN,
+        ),
         Status::Running if app.service.is_some() => {
             (format!("{} · p Pause", active_phase(task)), ACCENT)
         }

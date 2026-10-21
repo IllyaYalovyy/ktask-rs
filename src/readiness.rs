@@ -142,8 +142,8 @@ pub(crate) fn inspect(app: &App) -> Readiness {
             }
             Status::Waiting => waiting.and_then(|waiting| match waiting {
                 Some(waiting) if !waiting.eligible => Err(format!(
-                    "Rate-limit wait: {}s remaining; then Refresh and Resume",
-                    waiting.remaining_seconds
+                    "Rate-limit wait: {} remaining; then Refresh and Resume",
+                    crate::clock::format_remaining(waiting.remaining_seconds)
                 )),
                 Some(_) => Ok(()),
                 None => Err("Waiting attempt changed; Refresh before resuming".into()),
