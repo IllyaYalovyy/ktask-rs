@@ -3389,9 +3389,14 @@ fn sqlite_queue_and_history_handle_240_tasks_in_execution_order() -> Result {
         t.screen("last page", |s| s.contains("120 / 120"))?
     );
     t.send("3\x1b[H")?;
-    t.screen("first history row", |s| {
+    let history = t.screen("first history row", |s| {
         s.contains("History · 1 / 120") && s.contains("#120") && s.contains("Attempts Time Cost")
     })?;
+    println!("LARGE SQLITE HISTORY\n{history}");
+    let details = key(&mut t, "\r", "Task details / attempts")?;
+    assert!(details.contains("Durable task 120"), "{details}");
+    println!("LARGE SQLITE HISTORY DETAILS\n{details}");
+    key(&mut t, "\x1b", "History · 1 / 120")?;
     key(&mut t, "/Durable task 1\r", "Search:")?;
     key(&mut t, "2", "Durable task 240")?;
     key(&mut t, "1", "Current #121")?;
