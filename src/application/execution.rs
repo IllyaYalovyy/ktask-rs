@@ -74,6 +74,7 @@ impl Service {
                 "Supervisor yielded this attempt normally; resume or abandon it",
             )?;
         }
+        let attempt = task.attempts.last().expect("live attempt has a row").id;
         let tx = self
             .db
             .connection_mut()
@@ -87,6 +88,13 @@ impl Service {
              AND state IN ('running','paused','waiting')",
             params![self.project_id, task.id, now, task.version],
         )? == 1, "Attempt changed; refresh the task")?;
+        close_unfinished(
+            &tx,
+            attempt,
+            now,
+            "Supervisor lost; recovered as interrupted",
+            "interrupted",
+        )?;
         tx.execute(
             "UPDATE questions SET state='cancelled', resolved_at_ms=?3
              WHERE attempt_id=(SELECT latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2)
@@ -388,8 +396,7 @@ impl Service {
             }
         };
         require(tx.execute("UPDATE attempts SET state='waiting',wait_reason='rate_limit',waiting_since_ms=?2,resume_at_ms=?5,rate_waits=min(rate_waits+1,3),report=?3 WHERE id=?1 AND execution_token=?4 AND state='running'",params![run.attempt,now,message,run.token,resume_at])?==1,"Attempt ownership lost during rate-limit wait")?;
-        tx.execute("UPDATE attempt_steps SET state='interrupted',finished_at_ms=?2,report=?3 WHERE attempt_id=?1 AND state='running'",params![run.attempt,now,message])?;
-        tx.execute("UPDATE model_calls SET state='failed',finished_at_ms=?2,error=?3 WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id=?1) AND state='running'",params![run.attempt,now,message])?;
+        close_unfinished(&tx, run.attempt, now, &message, "failed")?;
         tx.execute(
             "UPDATE tasks SET row_version=row_version+1,updated_at_ms=?2 WHERE id=?1",
             params![run.task, now],
@@ -524,14 +531,32 @@ impl Service {
             provider_session: None,
         })
     }
-    pub fn record_check_counts(&self, step: &Step, counts: CheckCounts) -> Result<()> {
+    /// A check's verdict, exit status and test counts are recorded together, once.
+    pub fn finish_check(
+        &self,
+        step: &Step,
+        passed: bool,
+        report: &str,
+        exit: Option<i32>,
+        counts: Option<CheckCounts>,
+    ) -> Result<()> {
         require(
             self.db.connection().execute(
-                "UPDATE attempt_steps SET passed_count=?2,failed_count=?3,ignored_count=?4
-                 WHERE id=?1 AND role='check' AND state<>'running'",
-                params![step.id, counts.passed, counts.failed, counts.ignored],
+                "UPDATE attempt_steps SET state=?2, report=?3, finished_at_ms=?4, exit_code=?5,
+                    passed_count=?6, failed_count=?7, ignored_count=?8
+                 WHERE id=?1 AND role='check' AND state='running'",
+                params![
+                    step.id,
+                    if passed { "succeeded" } else { "failed" },
+                    report,
+                    now_ms(),
+                    exit,
+                    counts.map(|c| c.passed),
+                    counts.map(|c| c.failed),
+                    counts.map(|c| c.ignored),
+                ],
             )? == 1,
-            "Check step changed before counts were recorded",
+            "Check step changed before its result was recorded",
         )
     }
     pub fn previous_check_counts(&self, run: &Run, check: i64) -> Result<Option<CheckCounts>> {
@@ -609,19 +634,12 @@ impl Service {
         }
         Ok(regressions)
     }
-    pub fn finish_step(
-        &mut self,
-        step: &Step,
-        success: bool,
-        report: &str,
-        exit: Option<i32>,
-    ) -> Result<()> {
+    pub fn finish_step(&mut self, step: &Step, success: bool, report: &str) -> Result<()> {
         self.complete_step(
             step,
             if success { "succeeded" } else { "failed" },
             success,
             report,
-            exit,
         )
     }
     pub fn finish_assessment(&mut self, step: &Step, needs_work: bool, report: &str) -> Result<()> {
@@ -634,7 +652,6 @@ impl Service {
             },
             true,
             report,
-            None,
         )
     }
     fn complete_step(
@@ -643,13 +660,12 @@ impl Service {
         state: &str,
         success: bool,
         report: &str,
-        exit: Option<i32>,
     ) -> Result<()> {
         let tx = self
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute("UPDATE attempt_steps SET state=?2,report=?3,finished_at_ms=?4,exit_code=CASE WHEN role='check' THEN ?5 ELSE NULL END WHERE id=?1 AND state='running'", params![step.id,state,report,now_ms(),exit])?;
+        tx.execute("UPDATE attempt_steps SET state=?2,report=?3,finished_at_ms=?4 WHERE id=?1 AND state='running'", params![step.id,state,report,now_ms()])?;
         tx.execute("UPDATE model_calls SET state=?2,finished_at_ms=?3,error=?4 WHERE step_id=?1 AND state='running'", params![step.id,if success {"succeeded"} else {"failed"},now_ms(),if success {None} else {Some(report)}])?;
         if success {
             // A completed provider turn ends the provider-limit streak.
@@ -692,8 +708,7 @@ impl Service {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let now = now_ms();
         require(tx.execute("UPDATE attempts SET state=?2,finished_at_ms=?3,outcome=?4,failure_category=?5,report=?6,head_commit=?7,wait_reason=?8,waiting_since_ms=?9 WHERE id=?1 AND execution_token=?10 AND state='running'", params![run.attempt,state,(!live).then_some(now),(!live).then_some(report),if live {None} else {category},report,head,(state=="waiting").then_some("question"),(state=="waiting").then_some(now),run.token])? == 1, "Attempt is no longer owned by this runner")?;
-        tx.execute("UPDATE attempt_steps SET state='interrupted',finished_at_ms=?2,report=?3 WHERE attempt_id=?1 AND state='running'",params![run.attempt,now,report])?;
-        tx.execute("UPDATE model_calls SET state='interrupted',finished_at_ms=?2,error=?3 WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id=?1) AND state='running'",params![run.attempt,now,report])?;
+        close_unfinished(&tx, run.attempt, now, report, "interrupted")?;
         if state == "waiting" {
             tx.execute("INSERT INTO questions(attempt_id,prompt,state,created_at_ms) VALUES (?1,?2,'open',?3)",params![run.attempt,report,now])?;
         }
@@ -708,6 +723,28 @@ impl Service {
         tx.commit()?;
         Ok(())
     }
+}
+
+/// An attempt that stops running takes its unfinished steps and provider calls with it, so
+/// no record claims live work after its attempt ended. Finished steps stay as recorded.
+fn close_unfinished(
+    tx: &Transaction<'_>,
+    attempt: i64,
+    now: i64,
+    reason: &str,
+    call_state: &str,
+) -> Result<()> {
+    tx.execute(
+        "UPDATE model_calls SET state=?4, finished_at_ms=?2, error=?3
+         WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id=?1) AND state='running'",
+        params![attempt, now, reason, call_state],
+    )?;
+    tx.execute(
+        "UPDATE attempt_steps SET state='interrupted', finished_at_ms=?2, report=?3
+         WHERE attempt_id=?1 AND state='running'",
+        params![attempt, now, reason],
+    )?;
+    Ok(())
 }
 
 /// Status and latest attempt of current, if it is this exact task version.

@@ -1,9 +1,5 @@
 use crate::support::{self, Result};
-use ktask_rs_mk3::storage::{
-    Database,
-    execution::{StartAttempt, WaitAttempt},
-    ordering,
-};
+use ktask_rs_mk3::storage::{Database, execution::StartAttempt, ordering};
 use rusqlite::{Connection, params};
 use std::{
     io::{BufRead, Read, Write},
@@ -261,8 +257,21 @@ fn rejected_and_retired_revisions_do_not_replace_ready_and_drafts_are_separate()
     Ok(())
 }
 
+/// The only attempt waits, as the runner leaves it, after 10 ms of active time.
+fn wait(store: &Database, reason: &str, resume_at_ms: Option<i64>) -> Result {
+    store.connection().execute(
+        "UPDATE attempts SET state = 'waiting', wait_reason = ?1, waiting_since_ms = 110,
+            resume_at_ms = ?2, active_ms = 10",
+        rusqlite::params![reason, resume_at_ms],
+    )?;
+    store
+        .connection()
+        .execute("UPDATE tasks SET row_version = row_version + 1", [])?;
+    Ok(())
+}
+
 #[test]
-fn timed_wait_resumes_same_attempt_without_charging_waiting_time_or_retry_budget() -> Result {
+fn timed_wait_resumes_same_attempt_without_charging_waiting_time() -> Result {
     let scratch = support::sandbox()?;
     let mut store = Database::open_in(scratch.path())?;
     let p = project(store.connection(), "wait")?;
@@ -277,26 +286,7 @@ fn timed_wait_resumes_same_attempt_without_charging_waiting_time_or_retry_budget
         execution_token: "wait",
         now_ms: 100,
     })?;
-    store.wait_attempt(WaitAttempt {
-        task_id: id,
-        expected_version: 2,
-        execution_token: "wait",
-        reason: "rate_limit",
-        resume_at_ms: Some(9000),
-        active_delta_ms: 10,
-        now_ms: 110,
-    })?;
-    assert_eq!(
-        scalar(store.connection(), "SELECT active_ms FROM attempts")?,
-        10
-    );
-    assert_eq!(
-        scalar(
-            store.connection(),
-            "SELECT attempts_used FROM current_tasks"
-        )?,
-        0
-    );
+    wait(&store, "rate_limit", Some(9000))?;
     let resume = |now_ms| StartAttempt {
         task_id: id,
         expected_version: 3,
@@ -504,15 +494,7 @@ fn draft_only_task_is_visible_but_not_runnable_and_questions_gate_resume() -> Re
         VALUES (1, 'Choose an option', 'open', 110)",
         [],
     )?;
-    store.wait_attempt(WaitAttempt {
-        task_id: id,
-        expected_version: 2,
-        execution_token: "question",
-        reason: "question",
-        resume_at_ms: None,
-        active_delta_ms: 10,
-        now_ms: 110,
-    })?;
+    wait(&store, "question", None)?;
     let resume = || StartAttempt {
         task_id: id,
         expected_version: 3,

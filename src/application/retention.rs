@@ -65,9 +65,11 @@ fn preview(
     let policy = policy(db, project)?;
     let output: i64 = db.query_row("SELECT coalesce(sum(length(CAST(o.content AS BLOB))),0) FROM attempt_output o JOIN attempts a ON a.id=o.attempt_id WHERE a.project_id=?1", [project], |r| r.get(0))?;
     let artifacts: i64 = db.query_row("SELECT coalesce(sum(f.size_bytes),0) FROM artifacts f JOIN attempts a ON a.id=f.attempt_id WHERE a.project_id=?1 AND f.pruned_at_ms IS NULL", [project], |r| r.get(0))?;
-    // Judges and workers can refer to earlier transcripts. Defer the whole project
-    // while any attempt or provider call is live; the write transaction rechecks.
-    let live: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE project_id=?1 AND state IN ('running','paused','waiting') UNION ALL SELECT 1 FROM model_calls WHERE project_id=?1 AND state='running' UNION ALL SELECT 1 FROM evidence_pins WHERE project_id=?1)", [project], |r| r.get(0))?;
+    // Judges and workers can refer to earlier transcripts. Defer the whole project while any
+    // attempt, project-level provider call or evidence pin is live; the write transaction
+    // rechecks. A call inside an attempt is live only through its attempt, so a call record
+    // left behind by a crash cannot defer cleanup forever.
+    let live: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE project_id=?1 AND state IN ('running','paused','waiting') UNION ALL SELECT 1 FROM model_calls WHERE project_id=?1 AND step_id IS NULL AND state='running' UNION ALL SELECT 1 FROM evidence_pins WHERE project_id=?1)", [project], |r| r.get(0))?;
     let mut candidates = Vec::new();
     if !live {
         let cutoff = now.saturating_sub(policy.days.saturating_mul(86_400_000));

@@ -217,6 +217,15 @@ case '{mode}' in
     *) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"failed\",\"summary\":\"Missing independent inspection evidence\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":false,\"evidence\":\"The review summary alone does not establish inspection\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
    esac;;
  esac;;
+ hostile-judge) if [ "$model" = review ]; then
+  log="$HOME/judge-writes"
+  printf tampered > result.txt; printf 'project %s\n' "$?" >> "$log"
+  git show HEAD --output=README.md >/dev/null 2>&1; printf 'git-output %s\n' "$?" >> "$log"
+  for f in "$XDG_STATE_HOME"/ktask-dev/evidence/*/*.log; do printf tampered >> "$f"; printf 'evidence %s\n' "$?" >> "$log"; done
+  printf '{{}}' > "$XDG_CONFIG_HOME/ktask-dev/injected.json"; printf 'config %s\n' "$?" >> "$log"
+  if [ -w "$(cat "$HOME/supervisor-path")" ]; then echo 'supervisor 0' >> "$log"; else echo 'supervisor 1' >> "$log"; fi
+  printf scratch > "$TMPDIR/judge-notes"; printf 'scratch %s\n' "$?" >> "$log"
+ fi;;
  review-once|noisy-review-once) if [ "$model" = review ] && [ ! -f "$HOME/review-failed" ]; then touch "$HOME/review-failed"; printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"failed\",\"summary\":\"result.txt:1: missing edge-case handling; repair and prove the boundary.\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":false,\"evidence\":\"Boundary case fails\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0; fi;;
  transient) if [ ! -f "$HOME/transport-retried" ]; then touch "$HOME/transport-retried"; printf '{{"type":"turn.failed","error":{{"message":"connection reset"}}}}\n'; exit 2; fi;;
  fail-first-attempt) if [ "$(wc -l < "$HOME/provider-invocations")" -le 3 ]; then printf '{{"type":"turn.completed","usage":{{}}}}\n'; exit 0; fi;;
@@ -256,7 +265,7 @@ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":
     /// supervisor survives, but its next guardian spawn gets a real EACCES from the OS.
     fn fail_check_launch(&self) -> Result<PathBuf> {
         let binary = self.scratch.path().join("check-launch-ktask-dev");
-        fs::copy(BIN, &binary)?;
+        support::copy_executable(BIN, &binary)?;
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
         self.provider("check-launch-failure")?;
         self.add("Recover check guardian launch")?;
@@ -1149,6 +1158,96 @@ fn real_binary_records_check_counts_and_rejects_regression_at_validation() -> Re
 }
 
 #[test]
+fn failing_tests_block_acceptance_even_when_the_check_exits_zero() -> Result {
+    let f = Fixture::new()?;
+    // A wrapper that swallows the test runner's status: the first run fails one test yet
+    // exits 0. Nothing earlier was checkpointed, and every fixture judge would accept.
+    f.ok(&[
+        "check-set", "build", "--command",
+        "if [ ! -f \"$HOME/masked-once\" ]; then touch \"$HOME/masked-once\"; printf 'test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\\n'; else printf 'test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'; fi; true",
+    ])?;
+    f.add("Masked test failure")?;
+    f.ok(&["run", "--one"])?;
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "succeeded", "{task}");
+    let steps = task["attempts"][0]["steps"].as_array().unwrap();
+    let roles: Vec<_> = steps.iter().map(|s| s["role"].as_str().unwrap()).collect();
+    assert_eq!(
+        roles,
+        [
+            "execution",
+            "check",
+            "remediation",
+            "remediation",
+            "check",
+            "review",
+            "validation"
+        ],
+        "the failing summary sends the attempt back for repair before any review"
+    );
+    let checks: Vec<_> = steps.iter().filter(|s| s["role"] == "check").collect();
+    assert_eq!(checks[0]["state"], "failed");
+    assert_eq!(
+        checks[0]["counts"],
+        serde_json::json!({"passed": 3, "failed": 1, "ignored": 0})
+    );
+    let report = checks[0]["report"].as_str().unwrap();
+    assert!(
+        report.contains("exited 0 but its test summary reports 1 failed"),
+        "{report}"
+    );
+    assert_eq!(checks[1]["state"], "succeeded");
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn read_only_judges_cannot_change_source_evidence_configuration_or_supervisor() -> Result {
+    let f = Fixture::new()?;
+    fs::write(
+        f.scratch.path().join("supervisor-path"),
+        fs::canonicalize(BIN)?.to_string_lossy().as_bytes(),
+    )?;
+    f.provider("hostile-judge")?;
+    f.add("Judge tries to write")?;
+    f.ok(&["run", "--one"])?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    let writes = fs::read_to_string(f.scratch.path().join("judge-writes"))?;
+    let refused: Vec<_> = writes
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .map(|(target, status)| (target, status != "0"))
+        .collect();
+    assert!(
+        refused.iter().any(|(target, _)| *target == "evidence"),
+        "{writes}"
+    );
+    for (target, was_refused) in refused {
+        assert_eq!(was_refused, target != "scratch", "{target}: {writes}");
+    }
+    // Nothing the judge tried reached the project, its records or its configuration.
+    assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
+    assert_eq!(
+        fs::read_to_string(f.root.join("README.md"))?,
+        "Initial project\n"
+    );
+    let evidence = f.scratch.path().join("state/ktask-dev/evidence");
+    for attempt in fs::read_dir(evidence)? {
+        for log in fs::read_dir(attempt?.path())? {
+            assert!(!fs::read_to_string(log?.path())?.contains("tampered"));
+        }
+    }
+    assert!(
+        !f.scratch
+            .path()
+            .join("config/ktask-dev/injected.json")
+            .exists()
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
 fn missing_counts_after_a_counted_checkpoint_request_validation_repair() -> Result {
     let f = Fixture::new()?;
     f.ok(&[
@@ -1841,6 +1940,35 @@ fn supervisor_death_stops_worker_and_recovery_is_explicit() -> Result {
     f.state("interrupted")?;
     f.no_scratch()?;
     assert!(!f.root.join("result.txt").exists());
+    // Recovery ends the dead attempt's unfinished step and provider call with it, so a
+    // resolved task never blocks storage cleanup as if its work were still live.
+    let db = f.db()?;
+    let live = |table: &str| -> Result<i64> {
+        Ok(db.connection().query_row(
+            &format!("SELECT count(*) FROM {table} WHERE state='running'"),
+            [],
+            |r| r.get(0),
+        )?)
+    };
+    assert_eq!((live("attempt_steps")?, live("model_calls")?), (0, 0));
+    f.ok(&[
+        "resolve",
+        "1",
+        "--outcome",
+        "failed-skipped",
+        "--reason",
+        "crashed",
+    ])?;
+    f.ok(&["retention", "0"])?;
+    let storage = f.ok(&["storage"])?;
+    assert_eq!(
+        storage["preview"]["deferred_for_live_work"], false,
+        "{storage}"
+    );
+    assert_eq!(
+        storage["preview"]["candidates"][0]["attempt_id"], 1,
+        "{storage}"
+    );
     Ok(())
 }
 #[test]
@@ -1949,10 +2077,16 @@ fn real_tui_shows_liveness_and_recovers_with_both_inputs_and_cleanup_guard() -> 
         let after = f.ok(&["show", "1"])?;
         assert_eq!(after["status"], "interrupted");
         assert_eq!(before["attempts"][0]["logs"], after["attempts"][0]["logs"]);
-        assert_eq!(
-            before["attempts"][0]["steps"],
-            after["attempts"][0]["steps"]
-        );
+        // Finished steps keep their records; the step the dead supervisor left running ends.
+        let steps = |task: &Value| task["attempts"][0]["steps"].as_array().cloned().unwrap();
+        for (before, after) in steps(&before).iter().zip(&steps(&after)) {
+            if before["state"] == "running" {
+                assert_eq!(after["state"], "interrupted", "{after}");
+                assert_eq!(before["role"], after["role"]);
+            } else {
+                assert_eq!(before, after);
+            }
+        }
         assert_eq!(
             before["attempts"][0]["report"],
             after["attempts"][0]["report"]
@@ -4085,6 +4219,22 @@ fn automatic_prerequisite_preserves_work_and_original_repair_round() -> Result {
         preservation.contains("preserve unfinished task #1, attempt #1"),
         "{preservation}"
     );
+    // The preserved implementation was committed without review. Both the prerequisite's
+    // review and the resumed original's review must still cover it, from the first baseline.
+    let baseline = f.git(&["rev-list", "--max-parents=0", "HEAD"])?;
+    for prompt in ["first-review-prompt", "prompt-review"] {
+        let prompt = fs::read_to_string(f.scratch.path().join(prompt))?;
+        let scope = &prompt[prompt.find("Review scope").expect("review scope")..];
+        assert!(
+            scope.contains(&format!("git diff {}", baseline.trim())),
+            "{scope}"
+        );
+        assert!(
+            scope.contains("preserve unfinished task #1, attempt #1"),
+            "{scope}"
+        );
+        assert!(scope.contains("A\tresult.txt"), "{scope}");
+    }
     assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
     assert!(f.git(&["status", "--porcelain"])?.trim().is_empty());
     let db = f.db()?;

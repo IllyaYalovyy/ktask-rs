@@ -189,7 +189,7 @@ pub fn propose_breakdown(
     title: &str,
     goal: &str,
     criteria: &[String],
-    scratch_root: &std::path::Path,
+    paths: &crate::instance::Paths,
     cwd: &std::path::Path,
 ) -> Result<BreakdownProposal> {
     let prompt = format!(
@@ -210,7 +210,7 @@ pub fn propose_breakdown(
             prompt,
             evidence_pin_guardian: None,
         },
-        scratch_root,
+        paths,
         cwd,
     )?;
     let proposal: BreakdownProposal = serde_json::from_str(&response)
@@ -241,7 +241,7 @@ struct ReadOnlyTurn<'a> {
 fn readonly_proposal(
     cancelled: &std::sync::atomic::AtomicBool,
     turn: ReadOnlyTurn<'_>,
-    scratch_root: &std::path::Path,
+    paths: &crate::instance::Paths,
     cwd: &std::path::Path,
 ) -> Result<String> {
     use crate::scratch::Scratch;
@@ -254,20 +254,19 @@ fn readonly_proposal(
     } = turn;
     let provider = Provider::of(model)?;
     let launch = provider.launch(model, None, Access::ReadOnly, &schema, prompt);
-    let scratch = Scratch::new(scratch_root)?;
+    let scratch = Scratch::new(&paths.cache.join("workers"))?;
+    let mut invocation = super::provider_invocation(
+        provider,
+        launch,
+        Access::ReadOnly,
+        cwd,
+        paths,
+        scratch.path().join("worker"),
+        scratch.path().join("worker.lock"),
+    )?;
+    invocation.evidence_pin_guardian = evidence_pin_guardian;
     let (code, stdout, stderr) = super::process::capture_readonly(
-        &super::process::Invocation {
-            executable: provider.executable()?,
-            args: launch.args,
-            env: launch.env,
-            cwd: cwd.to_owned(),
-            prompt: launch.prompt,
-            schema: launch.schema_file,
-            scratch_root: scratch.path().join("worker"),
-            worker_lock: scratch.path().join("worker.lock"),
-            evidence_pin_guardian,
-            callback: None,
-        },
+        &invocation,
         cancelled,
         std::time::Duration::from_secs(120),
     )?;
@@ -294,7 +293,7 @@ pub fn propose_remediation(
     model: &ModelConfig,
     definition: &crate::application::Definition,
     evidence: &str,
-    scratch_root: &std::path::Path,
+    paths: &crate::instance::Paths,
     cwd: &std::path::Path,
     pin: crate::application::evidence_pin::EvidencePin,
 ) -> Result<Judgment> {
@@ -310,7 +309,7 @@ pub fn propose_remediation(
             ),
             evidence_pin_guardian: Some(pin.guardian_lock()),
         },
-        scratch_root,
+        paths,
         cwd,
     )?;
     // The pin protects the evidence until the provider has finished reading it.
@@ -348,7 +347,7 @@ pub fn prompt(
 ) -> String {
     let job = match role {
         "review" => {
-            "Independently review the change (git diff against the attempt baseline, plus the surrounding repository) as a senior engineer holding the Clean Code bar: intention-revealing names; small functions that do one thing at one level of abstraction; no duplication of logic the project already has; no dead or commented-out code; comments only where the code cannot say it, never narration or noise; error handling that does not obscure the logic; no magic values; consistency with the project's existing structure and conventions; tests that are fast, independent, repeatable and readable, with none removed, weakened or ignored; no scope creep beyond the task. The change must leave the code at least as clean as it found it. Your sandbox is read-only by design: you cannot build, run tests, or edit files, and you must not ask to; the supervisor check transcripts and rendered screens in Context are the execution evidence, never executor claims. Fail for concrete correctness, safety, acceptance, or maintainability defects introduced or worsened by this change. Each blocking finding must identify file:line, a reachable trigger or demonstrated maintenance cost, the consequence, and a focused correction. Separate optional suggestions from blockers; personal style preferences or cosmetic duplication alone must not fail acceptance criteria. Review the full diff once and report all substantiated blockers together. The failure judge repair plan in Context authorizes repair scope, including diagnostic changes for failed checks; evaluate those changes on their merits rather than rejecting them merely for touching another file. Prior findings are hypotheses to verify against the current code, not reasons to fail again automatically. An attempt that changed nothing has nothing to review: pass it and leave whether the objective is already met to validation."
+            "Independently review the change named by the Review scope in Context (plus the surrounding repository) as a senior engineer holding the Clean Code bar: intention-revealing names; small functions that do one thing at one level of abstraction; no duplication of logic the project already has; no dead or commented-out code; comments only where the code cannot say it, never narration or noise; error handling that does not obscure the logic; no magic values; consistency with the project's existing structure and conventions; tests that are fast, independent, repeatable and readable, with none removed, weakened or ignored; no scope creep beyond the task. The change must leave the code at least as clean as it found it. Your sandbox is read-only by design: you cannot build, run tests, or edit files, and you must not ask to; the supervisor check transcripts and rendered screens in Context are the execution evidence, never executor claims. Fail for concrete correctness, safety, acceptance, or maintainability defects introduced or worsened by this change. Each blocking finding must identify file:line, a reachable trigger or demonstrated maintenance cost, the consequence, and a focused correction. Separate optional suggestions from blockers; personal style preferences or cosmetic duplication alone must not fail acceptance criteria. Review the full diff once and report all substantiated blockers together. The failure judge repair plan in Context authorizes repair scope, including diagnostic changes for failed checks; evaluate those changes on their merits rather than rejecting them merely for touching another file. Prior findings are hypotheses to verify against the current code, not reasons to fail again automatically. When the Review scope lists no changed files there is nothing to review: pass it and leave whether the objective is already met to validation."
         }
         "validation" => {
             "Independently validate that the objective was achieved as written, not a narrower version of it, and that the evidence is complete: every configured supervisor check ran and exited 0 (see the supervisor check evidence and transcripts in Context), no test was skipped, ignored, removed or weakened compared with the baseline, and every acceptance criterion has concrete proof in the transcripts, rendered screens or repository. Compare current_counts with previous_checkpoint_counts for each check: fewer passed tests, more ignored tests, or missing current counts after a counted checkpoint require repair. Your sandbox is read-only by design: you cannot build, run tests, or edit files, and you must not ask to. Do not trust executor claims; fail unmet criteria or missing evidence, naming exactly what is missing."

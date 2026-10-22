@@ -100,22 +100,23 @@ pub(super) fn run(
             "judge" if progress.round == 0 => judge(service, run, ctx)?,
             "judge" => judge_attempt(service, run, ctx, run.attempt)?,
             "check" => {
-                let before = ctx
-                    .workspace
-                    .fingerprint(&ctx.paths.cache.join("workers"))?;
-                let outcome = checks::run(service, run, ctx, checks)?;
-                if matches!(outcome, Outcome::Passed(_)) {
-                    let after = ctx
-                        .workspace
-                        .fingerprint(&ctx.paths.cache.join("workers"))?;
-                    if before != after {
-                        Outcome::Changes { report: "Supervisor checks changed the worktree; their results do not verify a stable source state. Make verification read-only with respect to project source.".into(), critical: true }
-                    } else {
-                        progress.verified_tree = after;
-                        outcome
+                let workers = ctx.paths.cache.join("workers");
+                let before = ctx.workspace.fingerprint(&workers)?;
+                match checks::run(service, run, ctx, checks)? {
+                    Outcome::Passed(evidence) => {
+                        let after = ctx.workspace.fingerprint(&workers)?;
+                        if before != after {
+                            Outcome::Changes { report: "Supervisor checks changed the worktree; their results do not verify a stable source state. Make verification read-only with respect to project source.".into(), critical: true }
+                        } else {
+                            let base = service.attempt_base(run.task)?.ok_or_else(|| {
+                                Error::Conflict("Attempt has no recorded baseline".into())
+                            })?;
+                            let scope = ctx.workspace.review_scope(&base, &after)?;
+                            progress.verified_tree = after;
+                            Outcome::Passed(format!("{evidence}{}", scope.describe()))
+                        }
                     }
-                } else {
-                    outcome
+                    other => other,
                 }
             }
             "review" => ai(service, run, ctx, "review", &progress.evidence)?,

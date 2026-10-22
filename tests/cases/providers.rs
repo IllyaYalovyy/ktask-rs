@@ -34,6 +34,7 @@ if [ "$mode" = review-once ] && [ "$model" = review ] && [ ! -f "$HOME/review-fa
  touch "$HOME/review-failed"
  reply '{"outcome":"changes_requested","summary":"Fix the boundary","question":null,"criteria":[{"ordinal":1,"passed":false,"evidence":"Boundary fails"}],"findings":[{"severity":"critical","description":"result.txt:1: missing boundary; write verified"}]}'
 fi
+case "$model" in review|validation) printf tampered > result.txt 2>/dev/null; echo "$?" >> "$HOME/judge-writes";; esac
 case "$model" in execution|remediation)
  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"printf verified > result.txt"}}]}}'
  printf 'verified\n' > result.txt
@@ -62,6 +63,7 @@ case "$mode" in rate)
 esac
 case "$prompt" in *"JSON Schema"*) :;; *) echo 'schema missing from prompt' >&2; exit 3;; esac
 ev step_start '{}'
+case "$model" in review|validation) printf tampered > result.txt 2>/dev/null; echo "$?" >> "$HOME/judge-writes";; esac
 case "$model" in execution|remediation)
  ev tool_use '{"tool":"bash","state":{"status":"completed","input":{"command":"printf verified > result.txt"},"output":"wrote result.txt"}}'
  printf 'verified\n' > result.txt
@@ -133,6 +135,20 @@ impl Fixture {
     }
 }
 
+impl Fixture {
+    /// Every judge's attempt to overwrite the project was refused by the sandbox.
+    fn judges_wrote_nothing(&self, judges: usize) -> Result {
+        let statuses = fs::read_to_string(self.scratch.path().join("judge-writes"))?;
+        assert_eq!(statuses.lines().count(), judges, "{statuses}");
+        assert!(statuses.lines().all(|status| status != "0"), "{statuses}");
+        assert_eq!(
+            fs::read_to_string(self.root.join("result.txt"))?,
+            "verified\n"
+        );
+        Ok(())
+    }
+}
+
 fn read_only(args: &str) -> bool {
     args.contains("--permission-mode dontAsk")
         && args.contains("--tools Read,Grep,Glob,Bash")
@@ -178,6 +194,7 @@ fn claude_runs_every_role_with_read_only_judges_session_reuse_and_uncached_usage
             "{args}"
         );
     }
+    f.judges_wrote_nothing(2)?;
     // The second review resumes the first review's session.
     assert_eq!(review.1, "");
     assert!(review_again.1.starts_with("claude-review-"), "{calls:?}");
@@ -290,6 +307,7 @@ fn opencode_runs_every_role_read_only_where_required_and_sums_step_usage() -> Re
     let calls = f.calls("opencode")?;
     let roles: Vec<_> = calls.iter().map(|(model, ..)| model.as_str()).collect();
     assert_eq!(roles, ["execution", "review", "validation"]);
+    f.judges_wrote_nothing(2)?;
     let (_, _, execution) = &calls[0];
     assert!(execution.starts_with("auto=yes|none"), "{execution}");
     for (_, _, reader) in &calls[1..] {

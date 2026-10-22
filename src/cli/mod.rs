@@ -349,7 +349,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             model,
             &definition,
             &evidence,
-            &paths.cache.join("workers"),
+            &paths,
             &root,
             pin,
         )?;
@@ -409,7 +409,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             &definition.title,
             &definition.goal,
             &definition.criteria,
-            &paths.cache.join("workers"),
+            &paths,
             &root,
         )?;
         let mut receipts = Vec::new();

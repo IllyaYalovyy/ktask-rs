@@ -30,7 +30,7 @@ fn command(binary: &str, root: &Path) -> Command {
             "PATH",
             format!("{}:/usr/bin:/bin", root.join("bin").display()),
         )
-        .current_dir(root)
+        .current_dir(project(root))
         .arg("--json");
     command
 }
@@ -127,7 +127,7 @@ struct Evidence {
 
 impl Evidence {
     fn new(root: &Path) -> Result<Self> {
-        support::empty_repository(root)?;
+        support::empty_repository(&project(root))?;
         let mut writer = service(root)?;
         let (_, closed) = closed_attempt(&mut writer, "retention-closed-token")?;
         let policy = writer.retention_policy()?;
@@ -299,7 +299,7 @@ fn retention_waits_for_overlapping_cli_and_tui_judges_and_is_instance_scoped() -
         held_provider(root)?;
         let mut cli = Running::start(root, evidence.failed)?;
         let first = calls(root, 1)?.remove(0);
-        let mut t = Terminal::open_real(DEV, root, 110, 42)?;
+        let mut t = Terminal::open_project(DEV, root, &project(root), 110, 42)?;
         t.screen("failed current before held judge", |s| {
             s.contains("Failed current")
         })?;
@@ -327,8 +327,11 @@ fn retention_waits_for_overlapping_cli_and_tui_judges_and_is_instance_scoped() -
         blocked(root, &evidence)?;
 
         // Development's judges must not defer retention in the production instance.
-        let mut production =
-            Service::open(Database::open_in(&root.join("state/ktask"))?, root, None)?;
+        let mut production = Service::open(
+            Database::open_in(&root.join("state/ktask"))?,
+            &project(root),
+            None,
+        )?;
         let (_, attempt) = closed_attempt(&mut production, "production-retention-token")?;
         let production_transcript = transcript(root, "ktask", attempt)?;
         let policy = production.retention_policy()?;
@@ -383,7 +386,7 @@ fn retention_releases_cli_and_tui_judge_pins_after_provider_errors_and_cancellat
         if input != "tui" {
             cli = Some(Running::start(root, evidence.failed)?);
         } else {
-            let mut t = Terminal::open_real(DEV, root, 110, 42)?;
+            let mut t = Terminal::open_project(DEV, root, &project(root), 110, 42)?;
             t.screen("failed task before provider error", |s| {
                 s.contains("Failed current")
             })?;
@@ -454,13 +457,17 @@ fn retention_recovers_killed_cli_owner_only_after_its_guardian_reaps_judge() -> 
     let mut cli = Running::start(root, evidence.failed)?;
     let call = calls(root, 1)?.remove(0);
     let provider = fs::read_to_string(call.join("provider-pid"))?;
-    let status = fs::read_to_string(format!("/proc/{}/status", provider.trim()))?;
-    let guardian = status
-        .lines()
-        .find_map(|line| line.strip_prefix("PPid:"))
-        .unwrap()
-        .trim()
-        .parse::<i32>()?;
+    // The provider runs inside the read-only sandbox, so its guardian is an ancestor.
+    let mut guardian = provider.trim().parse::<i32>()?;
+    while !fs::read_to_string(format!("/proc/{guardian}/cmdline"))?.contains("__worker") {
+        guardian = fs::read_to_string(format!("/proc/{guardian}/status"))?
+            .lines()
+            .find_map(|line| line.strip_prefix("PPid:"))
+            .unwrap()
+            .trim()
+            .parse()?;
+        assert!(guardian > 1, "provider has no guardian ancestor");
+    }
     let guardian = PausedGuardian(Pid::from_raw(guardian));
     kill(guardian.0, Signal::SIGSTOP)?;
     let deadline = Instant::now() + Duration::from_secs(5);

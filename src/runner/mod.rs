@@ -7,6 +7,7 @@ pub(crate) mod process;
 pub(crate) mod provider;
 pub mod remediation;
 mod reset;
+pub(crate) mod sandbox;
 pub(crate) mod workspace;
 
 use crate::{
@@ -97,7 +98,36 @@ fn connected(definition: &crate::application::Definition) -> Result<()> {
         })?;
         Provider::of(model)?.executable()?;
     }
-    Ok(())
+    sandbox::available()
+}
+
+/// The worker for one provider turn in `project`. A read-only turn runs in the sandbox, so
+/// whatever its provider allows, it cannot change the project or ktask's own records.
+pub(crate) fn provider_invocation(
+    provider: Provider,
+    launch: provider::Launch,
+    access: Access,
+    project: &std::path::Path,
+    paths: &Paths,
+    scratch_root: PathBuf,
+    worker_lock: PathBuf,
+) -> Result<Invocation> {
+    Ok(Invocation {
+        executable: provider.executable()?,
+        args: launch.args,
+        env: launch.env,
+        cwd: project.to_owned(),
+        prompt: launch.prompt,
+        schema: launch.schema_file,
+        scratch_root,
+        worker_lock,
+        evidence_pin_guardian: None,
+        callback: None,
+        sandbox: match access {
+            Access::ReadOnly => Some(sandbox::Sandbox::for_project(project, paths)?),
+            Access::Write => None,
+        },
+    })
 }
 pub(crate) fn executable(name: &str) -> Result<PathBuf> {
     let path = std::env::split_paths(
@@ -647,53 +677,38 @@ fn ai_turn(
         },
         |question| agent::nudge(role, question),
     );
+    let access = Access::for_role(role);
     let launch = provider.launch(
         model,
         step.provider_session.as_deref(),
-        Access::for_role(role),
+        access,
         &agent::schema(),
         prompt,
     );
-    let invocation = Invocation {
-        executable: provider.executable()?,
-        args: launch.args,
-        env: launch.env,
-        cwd: ctx.workspace.root.clone(),
-        prompt: launch.prompt,
-        schema: launch.schema_file,
-        scratch_root: ctx.paths.cache.join("workers"),
-        worker_lock: ctx.workspace.worker_lock.clone(),
-        evidence_pin_guardian: None,
-        callback: matches!(role, "execution" | "remediation").then(|| callback::Capability {
-            project: ctx.workspace.root.clone(),
-            state: ctx.paths.state.clone(),
-            task: run.task,
-            attempt: run.attempt,
-            token: run.token.clone(),
-        }),
-    };
+    let mut invocation = provider_invocation(
+        provider,
+        launch,
+        access,
+        &ctx.workspace.root,
+        ctx.paths,
+        ctx.paths.cache.join("workers"),
+        ctx.workspace.worker_lock.clone(),
+    )?;
+    invocation.callback = (access == Access::Write).then(|| callback::Capability {
+        project: ctx.workspace.root.clone(),
+        state: ctx.paths.state.clone(),
+        task: run.task,
+        attempt: run.attempt,
+        token: run.token.clone(),
+    });
     let mut stream = provider::Stream::new(provider);
-    match execute(
-        service,
-        run,
-        &step,
-        ctx,
-        &invocation,
-        run.definition.stage_timeout_ms,
-        true,
-        &mut stream,
-    )? {
-        Outcome::Passed(_) => {}
-        Outcome::Failed(category, message) => {
-            service.finish_step(&step, false, &message, None)?;
-            return Ok(Outcome::Failed(category, message));
-        }
-        other => return Ok(other),
+    if let Some(outcome) = provider_turn(service, run, &step, ctx, &invocation, &mut stream)? {
+        return Ok(outcome);
     }
     let mut assessment = match agent::assessment(&stream, run.definition.criteria.len()) {
         Ok(a) => a,
         Err(e) => {
-            service.finish_step(&step, false, &e.to_string(), None)?;
+            service.finish_step(&step, false, &e.to_string())?;
             return Ok(Outcome::Failed("protocol", e.to_string()));
         }
     };
@@ -764,6 +779,35 @@ fn ai_turn(
     } else {
         Outcome::Passed(report)
     })
+}
+/// One provider process for an AI step, under the stage limit. None means the provider
+/// exited cleanly and `stream` holds its reply; otherwise the outcome says why not, and a
+/// failed step is already recorded. Pause and limit waits leave the step to the attempt.
+fn provider_turn(
+    service: &mut Service,
+    run: &Run,
+    step: &Step,
+    ctx: &mut Context<'_>,
+    spec: &Invocation,
+    stream: &mut provider::Stream,
+) -> Result<Option<Outcome>> {
+    let timeout = run.definition.stage_timeout_ms;
+    let outcome = match execute(service, run, step, ctx, spec, timeout, Some(&mut *stream))? {
+        Finish::Exited(_) if stream.rate_limited => Outcome::RateLimit(stream.reset_at_ms),
+        Finish::Exited(0) => return Ok(None),
+        Finish::Exited(code) => Outcome::Failed(
+            "transport",
+            format!(
+                "{} exited {code}; see stored output",
+                stream.provider.label()
+            ),
+        ),
+        Finish::Stopped(outcome) => outcome,
+    };
+    if let Outcome::Failed(_, message) = &outcome {
+        service.finish_step(step, false, message)?;
+    }
+    Ok(Some(outcome))
 }
 /// The failure judge: a read-only turn of the remediation model that decides whether the
 /// next worker repairs, the task is rewritten, prerequisite work is inserted, the model is
@@ -860,45 +904,28 @@ fn judge_once(
         &schema,
         prompt,
     );
-    let invocation = Invocation {
-        executable: provider.executable()?,
-        args: launch.args,
-        env: launch.env,
-        cwd: ctx.workspace.root.clone(),
-        prompt: launch.prompt,
-        schema: launch.schema_file,
-        scratch_root: ctx.paths.cache.join("workers"),
-        worker_lock: ctx.workspace.worker_lock.clone(),
-        evidence_pin_guardian: None,
-        callback: None,
-    };
+    let invocation = provider_invocation(
+        provider,
+        launch,
+        Access::ReadOnly,
+        &ctx.workspace.root,
+        ctx.paths,
+        ctx.paths.cache.join("workers"),
+        ctx.workspace.worker_lock.clone(),
+    )?;
     let mut stream = provider::Stream::new(provider);
-    match execute(
-        service,
-        run,
-        &step,
-        ctx,
-        &invocation,
-        run.definition.stage_timeout_ms,
-        true,
-        &mut stream,
-    )? {
-        Outcome::Passed(_) => {}
-        Outcome::Failed(category, message) => {
-            service.finish_step(&step, false, &message, None)?;
-            return Ok(Outcome::Failed(category, message));
-        }
-        other => return Ok(other),
+    if let Some(outcome) = provider_turn(service, run, &step, ctx, &invocation, &mut stream)? {
+        return Ok(outcome);
     }
     if !stream.completed || stream.failed {
         let message = "Failure judge ended without a complete turn".to_owned();
-        service.finish_step(&step, false, &message, None)?;
+        service.finish_step(&step, false, &message)?;
         return Ok(Outcome::Failed("protocol", message));
     }
     let judgment = match agent::parse_judgment(stream.last_message.as_deref().unwrap_or("")) {
         Ok(j) => j,
         Err(e) => {
-            service.finish_step(&step, false, &e.to_string(), None)?;
+            service.finish_step(&step, false, &e.to_string())?;
             return Ok(Outcome::Failed("protocol", e.to_string()));
         }
     };
@@ -911,7 +938,7 @@ fn judge_once(
         )
     {
         let message = "Fix planner must repair, revise or insert during the normal ten-round cycle; owner escalation waits for the final critical decision";
-        service.finish_step(&step, false, message, None)?;
+        service.finish_step(&step, false, message)?;
         return Ok(Outcome::Failed("protocol", message.into()));
     }
     let (summary, outcome) = match judgment {
@@ -920,17 +947,12 @@ fn judge_once(
             Outcome::Passed(plan),
         ),
         agent::Judgment::Ask { question, reason } => {
-            service.finish_step(
-                &step,
-                false,
-                &format!("Owner decision needed: {reason}"),
-                None,
-            )?;
+            service.finish_step(&step, false, &format!("Owner decision needed: {reason}"))?;
             return Ok(Outcome::Question(question));
         }
         other => (describe(&other), Outcome::Replanned(other)),
     };
-    service.finish_step(&step, true, &summary, None)?;
+    service.finish_step(&step, true, &summary)?;
     Ok(outcome)
 }
 
@@ -1020,6 +1042,18 @@ fn apply_judgment(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// How a worker process ended.
+enum Finish {
+    /// It exited by itself with this code.
+    Exited(i32),
+    /// The supervisor ended it first, or could not start it: pause, a time limit, a launch
+    /// failure.
+    Stopped(Outcome),
+}
+
+/// Runs one worker to its end, streaming its output into the attempt. An AI turn passes its
+/// provider stream; a check passes none and its output is stored as written. Callers record
+/// the step's result.
 fn execute(
     service: &mut Service,
     run: &Run,
@@ -1027,19 +1061,22 @@ fn execute(
     ctx: &mut Context<'_>,
     spec: &Invocation,
     timeout: Option<i64>,
-    ai: bool,
-    stream: &mut provider::Stream,
-) -> Result<Outcome> {
+    mut stream: Option<&mut provider::Stream>,
+) -> Result<Finish> {
+    let ai = stream.is_some();
     ctx.persist_active_time(service, run)?;
     if let Some(outcome) = ctx.deadline_outcome(run) {
         ctx.persist_active_time(service, run)?;
-        return Ok(outcome);
+        return Ok(Finish::Stopped(outcome));
     }
     let mut worker = match Worker::spawn(&ctx.paths.executable, spec) {
         Ok(worker) => worker,
         Err(error) => {
             ctx.persist_active_time(service, run)?;
-            return Ok(Outcome::Failed("environment", error.to_string()));
+            return Ok(Finish::Stopped(Outcome::Failed(
+                "environment",
+                error.to_string(),
+            )));
         }
     };
     let started = Instant::now();
@@ -1083,7 +1120,7 @@ fn execute(
                 stream: source,
                 bytes,
             }) => {
-                if ai && source == "stdout" {
+                if let Some(stream) = stream.as_mut().filter(|_| source == "stdout") {
                     for event in stream.feed(&bytes)? {
                         match event {
                             provider::Event::Session(id) => service.record_session(step, &id)?,
@@ -1117,30 +1154,7 @@ fn execute(
                     }
                 }
                 ctx.persist_active_time(service, run)?;
-                if interrupted.is_none() && ai && stream.rate_limited {
-                    return Ok(Outcome::RateLimit(stream.reset_at_ms));
-                }
-                if interrupted.is_none() && !ai {
-                    service.finish_step(
-                        step,
-                        code == 0,
-                        &format!("Check exited {code}"),
-                        Some(code),
-                    )?;
-                }
-                return Ok(interrupted.unwrap_or_else(|| {
-                    if code == 0 {
-                        Outcome::Passed("Process completed and scratch cleaned".into())
-                    } else {
-                        Outcome::Failed(
-                            if ai { "transport" } else { "check" },
-                            format!(
-                                "{} exited {code}; see stored output",
-                                if ai { stream.provider.label() } else { "Check" }
-                            ),
-                        )
-                    }
-                }));
+                return Ok(interrupted.map_or(Finish::Exited(code), Finish::Stopped));
             }
             Ok(Message::Error(message)) => return Err(Error::Conflict(message)),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}

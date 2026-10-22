@@ -718,7 +718,10 @@ fn cli_project_and_instance_isolation_survives_renaming_and_callbacks() -> Resul
     )?;
     json_result(production, 3)?;
     let renamed = root.join("ktask");
-    step("copy development binary", std::fs::copy(DEV, &renamed))?;
+    step(
+        "copy development binary",
+        support::copy_executable(DEV, &renamed),
+    )?;
     let paths = json_result(
         step(
             "launch renamed binary",

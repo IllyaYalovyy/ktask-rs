@@ -6,7 +6,7 @@ use ktask_rs_mk3::{
     },
     storage::Database,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::{fs, os::unix::fs::PermissionsExt};
 
 #[path = "retention_remediation.rs"]
@@ -24,10 +24,17 @@ fn definition(title: &str) -> Definition {
         stage_timeout_ms: None,
     }
 }
+/// The project lives beside, not around, the instance's state and the fixtures' records, as
+/// a real checkout does. Read-only judges cannot write into it.
+fn project(root: &Path) -> PathBuf {
+    let project = root.join("project");
+    fs::create_dir_all(&project).expect("project directory");
+    project
+}
 fn service(root: &Path) -> Result<Service> {
     Ok(Service::open(
         Database::open_in(&root.join("state/ktask-dev"))?,
-        root,
+        &project(root),
         None,
     )?)
 }
@@ -45,7 +52,13 @@ fn target(service: &mut Service, id: i64) -> Result<VersionedTask> {
     })
 }
 fn terminal(root: &Path) -> Result<Terminal> {
-    Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, 70, 22)
+    Terminal::open_project(
+        env!("CARGO_BIN_EXE_ktask-dev"),
+        root,
+        &project(root),
+        70,
+        22,
+    )
 }
 
 #[test]
@@ -83,7 +96,13 @@ fn current_activity_shows_multiple_readable_events_at_small_and_large_sizes() ->
     drop(db);
 
     for (cols, rows) in [(70, 22), (100, 30)] {
-        let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, cols, rows)?;
+        let mut t = Terminal::open_project(
+            env!("CARGO_BIN_EXE_ktask-dev"),
+            root,
+            &project(root),
+            cols,
+            rows,
+        )?;
         let current = t.screen("multiple activity events", |screen| {
             screen.contains("Latest event detailed")
                 && screen.contains("context continues")
@@ -186,7 +205,13 @@ fn history_rows_show_attempts_total_time_and_cost_by_keyboard_and_mouse() -> Res
     drop(writer);
 
     for (cols, mouse) in [(70, false), (70, true), (100, false), (100, true)] {
-        let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, cols, 24)?;
+        let mut t = Terminal::open_project(
+            env!("CARGO_BIN_EXE_ktask-dev"),
+            root,
+            &project(root),
+            cols,
+            24,
+        )?;
         t.screen("startup", |s| s.contains("3 History"))?;
         if mouse {
             t.click("3 History")?;
@@ -243,7 +268,13 @@ fn recorded_usage_is_visible_in_current_details_history_and_statistics() -> Resu
     let revision_target = target(&mut service, id)?;
     service.revise(revision_target, &newer, true)?;
     drop(service);
-    let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, 100, 45)?;
+    let mut t = Terminal::open_project(
+        env!("CARGO_BIN_EXE_ktask-dev"),
+        root,
+        &project(root),
+        100,
+        45,
+    )?;
     // Validation reported no input, cache write or cost: what the review reported still shows.
     let current = t.screen("current recorded usage", |s| {
         s.contains("I 10 R 15 W 0 O 7") && s.contains("Cost $0.000100")
@@ -269,7 +300,13 @@ fn recorded_usage_is_visible_in_current_details_history_and_statistics() -> Resu
     let resolution_target = target(&mut service, id)?;
     service.resolve(resolution_target, Resolution::FailedSkipped, "Reviewed")?;
     drop(service);
-    let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, 100, 45)?;
+    let mut t = Terminal::open_project(
+        env!("CARGO_BIN_EXE_ktask-dev"),
+        root,
+        &project(root),
+        100,
+        45,
+    )?;
     let history = key(&mut t, "3", "History")?;
     println!("USAGE HISTORY\n{history}");
     t.send("\r")?;
@@ -317,7 +354,13 @@ fn exact_large_tokens_expand_by_keyboard_and_mouse_at_both_sizes() -> Result {
     assert_eq!(json["usage"]["output"], 153086421974_i64);
     for (cols, rows) in [(70, 22), (100, 45)] {
         for mouse in [false, true] {
-            let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, cols, rows)?;
+            let mut t = Terminal::open_project(
+                env!("CARGO_BIN_EXE_ktask-dev"),
+                root,
+                &project(root),
+                cols,
+                rows,
+            )?;
             let current = t.screen("compact large tokens", |s| {
                 s.contains("I 246G R 197G W 175G O 153G") && s.contains("Current #1")
             })?;
@@ -380,7 +423,13 @@ fn exact_large_tokens_expand_by_keyboard_and_mouse_at_both_sizes() -> Result {
     drop(writer);
     for (cols, rows) in [(70, 22), (100, 45)] {
         for mouse in [false, true] {
-            let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, cols, rows)?;
+            let mut t = Terminal::open_project(
+                env!("CARGO_BIN_EXE_ktask-dev"),
+                root,
+                &project(root),
+                cols,
+                rows,
+            )?;
             t.screen("completed current before history", |s| {
                 s.contains("Queue complete.") && s.contains("3 History")
             })?;
@@ -926,7 +975,7 @@ fn history_opens_each_attempt_review_and_failure_without_log_scrolling() -> Resu
         "Second review finding".to_owned(),
     ] {
         let step = writer.start_ai_step(&run, "review", &model, "fixture", false)?;
-        writer.finish_step(&step, false, &finding, None)?;
+        writer.finish_step(&step, false, &finding)?;
     }
     writer.finish_run(
         &run,
@@ -1332,7 +1381,7 @@ fn attempt_browser_shows_pinned_inputs_after_defaults_and_new_revisions_change()
     )?;
     let session = step.session.unwrap();
     writer.record_session(&step, "original-provider-session")?;
-    writer.finish_step(&step, true, "Historical execution result", None)?;
+    writer.finish_step(&step, true, "Historical execution result")?;
     writer.finish_run(
         &run,
         "failed",
@@ -1362,7 +1411,13 @@ fn attempt_browser_shows_pinned_inputs_after_defaults_and_new_revisions_change()
     writer.revise(expected, &revised, false)?;
     drop(writer);
     let before = evidence_contents(root)?;
-    let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, 110, 38)?;
+    let mut t = Terminal::open_project(
+        env!("CARGO_BIN_EXE_ktask-dev"),
+        root,
+        &project(root),
+        110,
+        38,
+    )?;
     t.screen("current ready revision", |s| s.contains("New ready intent"))?;
     let mut observed = key(&mut t, "\r", "Task details / attempts")?;
     println!("HISTORICAL INPUTS FIRST PAGE\n{observed}");
@@ -1438,7 +1493,13 @@ fn live_sqlite_log_selection_survives_new_output_and_mouse_copy() -> Result {
             writer.output(&run, "stdout", &format!("Persistent line {i:02}"))?;
         }
         writer.output(&run, "stdout", "ANCHOR fixed text for mouse copy")?;
-        let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, cols, rows)?;
+        let mut t = Terminal::open_project(
+            env!("CARGO_BIN_EXE_ktask-dev"),
+            root,
+            &project(root),
+            cols,
+            rows,
+        )?;
         let before = t.screen("SQLite log ready", |s| {
             s.contains("SQLite · real tasks")
                 && s.contains("ANCHOR fixed text")
@@ -1720,7 +1781,7 @@ fn failed_task(root: &Path) -> Result<(i64, i64)> {
         };
         let step = service.start_ai_step(&run, role, &model, "fixture", false)?;
         service.criterion(&run, &step, 1, false, &format!("{role} criterion evidence"))?;
-        service.finish_step(&step, false, &format!("{role} structured finding"), None)?;
+        service.finish_step(&step, false, &format!("{role} structured finding"))?;
     }
     service.finish_run(
         &run,
@@ -1802,7 +1863,7 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
     use std::process::Command;
     let scratch = support::sandbox()?;
     let root = scratch.path();
-    support::empty_repository(root)?;
+    support::empty_repository(&project(root))?;
     let (closed_id, closed_attempt) = failed_task(root)?;
     let mut service = service(root)?;
     assert!(service.storage_preview()?.candidates.is_empty()); // unresolved failure
@@ -1868,7 +1929,7 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
             .env("XDG_CACHE_HOME", root.join("cache"))
             .env("XDG_RUNTIME_DIR", root.join("runtime"))
             .env("TMPDIR", root)
-            .current_dir(root)
+            .current_dir(project(root))
             .arg("--json")
             .args(args)
             .output()?;
@@ -1887,7 +1948,13 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
             .len(),
         1
     );
-    let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, 110, 42)?;
+    let mut t = Terminal::open_project(
+        env!("CARGO_BIN_EXE_ktask-dev"),
+        root,
+        &project(root),
+        110,
+        42,
+    )?;
     t.screen("mouse Config navigation", |s| s.contains("4 Config"))?;
     t.click("4 Config")?;
     let config = t.screen("Config storage button", |s| s.contains("k Storage"))?;
@@ -1965,7 +2032,13 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
         "Resolved after review",
     )?;
     drop(service);
-    let mut keyboard = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, 110, 42)?;
+    let mut keyboard = Terminal::open_project(
+        env!("CARGO_BIN_EXE_ktask-dev"),
+        root,
+        &project(root),
+        110,
+        42,
+    )?;
     keyboard.send("4")?;
     keyboard.screen("keyboard Config", |s| s.contains("k Storage"))?;
     keyboard.send("k")?;
@@ -2415,7 +2488,7 @@ fn breakdown_cli_preview_apply_and_version_guard() -> Result {
                     "PATH",
                     format!("{}:/usr/bin:/bin", root.join("bin").display()),
                 )
-                .current_dir(root)
+                .current_dir(project(root))
                 .arg("--json")
                 .args(args)
                 .output()?;
@@ -2485,7 +2558,7 @@ fn breakdown_cli_preview_apply_and_version_guard() -> Result {
                 "PATH",
                 format!("{}:/usr/bin:/bin", root.join("bin").display()),
             )
-            .current_dir(root)
+            .current_dir(project(root))
             .args([
                 "--json",
                 "breakdown",
@@ -2636,7 +2709,7 @@ fn exercise_remediation(
     use ktask_rs_mk3::application::preferences::{Continuation, PlannerApproval, Preferences};
     let scratch = support::sandbox()?;
     let root = scratch.path();
-    support::empty_repository(root)?;
+    support::empty_repository(&project(root))?;
     let (id, attempt) = failed_task(root)?;
     let mut service = service(root)?;
     let before = service.task(id)?.unwrap();
@@ -2815,7 +2888,7 @@ fn revised_failure_waits_for_approval_before_queue_continues() -> Result {
     for mouse in [false, true] {
         let scratch = support::sandbox()?;
         let root = scratch.path();
-        support::empty_repository(root)?;
+        support::empty_repository(&project(root))?;
         let (id, attempt) = failed_task(root)?;
         let mut writer = service(root)?;
         writer.start_execution_session(true)?;
@@ -2936,7 +3009,7 @@ fn failed_judge_question_can_be_answered_by_mouse_and_keyboard() -> Result {
     for mouse in [false, true] {
         let scratch = support::sandbox()?;
         let root = scratch.path();
-        support::empty_repository(root)?;
+        support::empty_repository(&project(root))?;
         let (id, _) = failed_task(root)?;
         let writer = service(root)?;
         let config = root.join("config/ktask-dev");
@@ -3097,7 +3170,7 @@ fn remediation_reaps_pipe_holding_descendants_and_reports_provider_failure() -> 
                 if fail {
                     "echo fixture-provider-failed >&2\nexit 9"
                 } else {
-                    "cat provider-events.jsonl"
+                    "cat \"$HOME/provider-events.jsonl\""
                 }
             ),
         )?;
@@ -3378,7 +3451,13 @@ fn real_tui_saves_across_kill_restart_and_never_simulates_real_tasks() -> Result
 fn queue_add_sets_execution_model_by_keyboard_and_mouse() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();
-    let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, 100, 30)?;
+    let mut t = Terminal::open_project(
+        env!("CARGO_BIN_EXE_ktask-dev"),
+        root,
+        &project(root),
+        100,
+        30,
+    )?;
     t.screen("empty current", |s| s.contains("No current task."))?;
 
     let form = key(&mut t, "a", "Execution provider/model")?;
@@ -3498,7 +3577,13 @@ fn queue_add_whitespace_fields_keep_project_model_default() -> Result {
     writer.save_defaults(&old, &defaults)?;
     drop(writer);
 
-    let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, 100, 30)?;
+    let mut t = Terminal::open_project(
+        env!("CARGO_BIN_EXE_ktask-dev"),
+        root,
+        &project(root),
+        100,
+        30,
+    )?;
     let form = key(&mut t, "a", "Execution provider/model")?;
     println!("WHITESPACE DEFAULT FORM\n{form}");
     let saved = key(
@@ -3630,7 +3715,7 @@ fn real_tui_disk_import_export_preview_overwrite_and_atomic_error() -> Result {
     t.screen("startup", |s| s.contains("Transfer me"))?;
     key(&mut t, "2x", "Export task definitions")?;
     key(&mut t, "\r", "Exported to disk")?;
-    assert!(scratch.path().join("tasks.tsv").is_file());
+    assert!(project(scratch.path()).join("tasks.tsv").is_file());
     key(&mut t, "x\r", "Overwrite file?")?;
     t.click("Cancel")?;
     t.screen("cancelled", |s| !s.contains("Overwrite file?"))?;
@@ -3657,7 +3742,13 @@ fn real_tui_disk_import_export_preview_overwrite_and_atomic_error() -> Result {
 fn real_instances_and_demo_never_share_task_data() -> Result {
     let scratch = support::sandbox()?;
     service(scratch.path())?.create(&[definition("Development only")], None, true)?;
-    let mut prod = Terminal::open_real(env!("CARGO_BIN_EXE_ktask"), scratch.path(), 70, 22)?;
+    let mut prod = Terminal::open_project(
+        env!("CARGO_BIN_EXE_ktask"),
+        scratch.path(),
+        &project(scratch.path()),
+        70,
+        22,
+    )?;
     prod.screen("empty production", |s| {
         s.contains("No current task.") && !s.contains("Development only")
     })?;
@@ -3851,7 +3942,13 @@ fn large_current_log_stays_responsive_to_mouse_motion_and_screen_switches() -> R
             "Large task output: retain every line without rewrapping on every pointer move.\n";
         writer.output(&run, "stdout", &line.repeat(28_000))?;
         writer.output(&run, "stdout", "LAST LOG MARKER")?;
-        let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, cols, rows)?;
+        let mut t = Terminal::open_project(
+            env!("CARGO_BIN_EXE_ktask-dev"),
+            root,
+            &project(root),
+            cols,
+            rows,
+        )?;
         println!(
             "LARGE CURRENT {cols}x{rows}\n{}",
             t.screen("large log loaded", |s| s.contains("LAST LOG MARKER"))?

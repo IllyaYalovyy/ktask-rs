@@ -530,7 +530,7 @@ impl App {
                     &model,
                     &definition,
                     &evidence,
-                    &paths.cache.join("workers"),
+                    &paths,
                     &cwd,
                     pin,
                 )
@@ -585,7 +585,7 @@ impl App {
                     &definition.title,
                     &definition.goal,
                     &definition.criteria,
-                    &paths.cache.join("workers"),
+                    &paths,
                     &cwd,
                 )
                 .map(ProposalResult::Breakdown)

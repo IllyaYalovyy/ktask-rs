@@ -42,6 +42,22 @@ pub fn empty_repository(root: &Path) -> Result {
     ])
 }
 
+/// Copies an executable for a test to launch. A thread that forks while the copy is still
+/// open for writing passes that descriptor to its child until the child execs, and launching
+/// the copy meanwhile fails with ETXTBSY; wait until a harmless launch succeeds.
+pub fn copy_executable(from: &str, to: &Path) -> Result {
+    std::fs::copy(from, to)?;
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        match std::process::Command::new(to).arg("--version").output() {
+            Err(error) if error.raw_os_error() == Some(26) && Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            result => return result.map(drop).map_err(Into::into),
+        }
+    }
+}
+
 pub fn location(screen: &str, needle: &str) -> Result<(usize, usize)> {
     screen
         .lines()

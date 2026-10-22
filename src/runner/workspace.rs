@@ -5,6 +5,65 @@ use std::{
     process::Command,
 };
 
+/// Subjects of the commits ktask makes: a reviewed and validated attempt, and unfinished work
+/// committed without review so another task can build on it.
+const CHECKPOINT: Subject = Subject("ktask: task #", "");
+const PRESERVED: Subject = Subject("ktask: preserve unfinished task #", " for remediation");
+const MAX_LISTED_CHANGES: usize = 200;
+
+/// A commit subject: prefix, `N, attempt #M`, suffix.
+struct Subject(&'static str, &'static str);
+impl Subject {
+    fn format(&self, task: i64, attempt: i64) -> String {
+        format!("{}{task}, attempt #{attempt}{}", self.0, self.1)
+    }
+    fn matches(&self, subject: &str) -> bool {
+        let numbers = subject
+            .strip_prefix(self.0)
+            .and_then(|rest| rest.strip_suffix(self.1))
+            .and_then(|rest| rest.split_once(", attempt #"));
+        numbers.is_some_and(|(task, attempt)| {
+            [task, attempt]
+                .iter()
+                .all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
+    }
+}
+
+/// What an independent review must cover: every change from `base` to the verified `tree`.
+pub struct ReviewScope {
+    base: String,
+    tree: String,
+    /// Commits of unfinished work that no review has covered yet, oldest first.
+    unreviewed: Vec<String>,
+    /// `git diff --name-status` from base to tree, at most MAX_LISTED_CHANGES lines.
+    changes: Vec<String>,
+    truncated: bool,
+}
+impl ReviewScope {
+    pub fn describe(&self) -> String {
+        let (base, tree) = (&self.base, &self.tree);
+        let mut text = format!(
+            "\nReview scope, computed by the supervisor: `git diff {base} {tree}` is the complete change to review, including new files.\n"
+        );
+        if !self.unreviewed.is_empty() {
+            text.push_str(&format!(
+                "It includes unfinished work that was committed without review so another task could build on it:\n{}\nReview that work as part of this change. It may be incomplete by design while its own task is still open: judge its quality, not its completeness.\n",
+                self.unreviewed.join("\n")
+            ));
+        }
+        if self.changes.is_empty() {
+            text.push_str("Changed files: none; nothing changed since the review base.\n");
+        } else {
+            text.push_str(&format!("Changed files:\n{}\n", self.changes.join("\n")));
+            if self.truncated {
+                text.push_str("(list truncated; the diff above is complete)\n");
+            }
+        }
+        text
+    }
+}
+
 pub struct Workspace {
     pub root: PathBuf,
     pub worker_lock: PathBuf,
@@ -134,6 +193,50 @@ impl Workspace {
         scratch.close()?;
         Ok(tree)
     }
+    /// The review of an attempt that started at `attempt_base` covers its own work and any
+    /// unfinished work committed without review since the last checkpoint, which every
+    /// successful review covers in full.
+    pub fn review_scope(&self, attempt_base: &str, tree: &str) -> Result<ReviewScope> {
+        let history = git(
+            &self.root,
+            &[
+                "log",
+                "--first-parent",
+                "--fixed-strings",
+                "--grep=ktask: ",
+                "--format=%H %P%x09%s",
+                attempt_base,
+            ],
+        )?;
+        let mut base = attempt_base.to_owned();
+        let mut unreviewed = Vec::new();
+        for line in history.lines() {
+            let (ids, subject) = line.split_once('\t').unwrap_or((line, ""));
+            if CHECKPOINT.matches(subject) {
+                break;
+            }
+            let mut ids = ids.split(' ');
+            if let (Some(commit), Some(parent)) = (ids.next(), ids.next())
+                && PRESERVED.matches(subject)
+            {
+                base = parent.to_owned();
+                unreviewed.insert(0, format!("{commit} {subject}"));
+            }
+        }
+        let mut changes: Vec<String> = git(&self.root, &["diff", "--name-status", &base, tree])?
+            .lines()
+            .map(String::from)
+            .collect();
+        let truncated = changes.len() > MAX_LISTED_CHANGES;
+        changes.truncate(MAX_LISTED_CHANGES);
+        Ok(ReviewScope {
+            base,
+            tree: tree.to_owned(),
+            unreviewed,
+            changes,
+            truncated,
+        })
+    }
     pub fn checkpoint(
         &self,
         task: i64,
@@ -141,18 +244,10 @@ impl Workspace {
         base: &str,
         verified_tree: &str,
     ) -> Result<String> {
-        self.commit(
-            base,
-            &format!("ktask: task #{task}, attempt #{attempt}"),
-            Some(verified_tree),
-        )
+        self.commit(base, &CHECKPOINT.format(task, attempt), Some(verified_tree))
     }
     pub fn preserve(&self, task: i64, attempt: i64, base: &str) -> Result<String> {
-        self.commit(
-            base,
-            &format!("ktask: preserve unfinished task #{task}, attempt #{attempt} for remediation"),
-            None,
-        )
+        self.commit(base, &PRESERVED.format(task, attempt), None)
     }
     fn commit(&self, base: &str, message: &str, verified_tree: Option<&str>) -> Result<String> {
         if self.head()? != base {

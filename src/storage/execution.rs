@@ -10,16 +10,6 @@ pub struct StartAttempt<'a> {
     pub now_ms: i64,
 }
 
-pub struct WaitAttempt<'a> {
-    pub task_id: i64,
-    pub expected_version: i64,
-    pub execution_token: &'a str,
-    pub reason: &'a str,
-    pub resume_at_ms: Option<i64>,
-    pub active_delta_ms: i64,
-    pub now_ms: i64,
-}
-
 fn require(condition: bool, message: &str) -> Result<()> {
     if condition {
         Ok(())
@@ -98,40 +88,6 @@ impl Database {
         )?;
         tx.commit()?;
         Ok(id)
-    }
-
-    /// Waiting retains the same attempt. Paused/waiting time must never enter active_delta_ms.
-    pub fn wait_attempt(&mut self, command: WaitAttempt<'_>) -> Result<()> {
-        require(
-            command.active_delta_ms >= 0,
-            "active duration must not be negative",
-        )?;
-        let tx = self
-            .connection_mut()
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let changed_rows = tx.execute(
-            "UPDATE attempts SET state = 'waiting', wait_reason = ?4, waiting_since_ms = ?5,
-                resume_at_ms = ?6, active_ms = active_ms + ?7
-             WHERE execution_token = ?3 AND task_id = ?1 AND state = 'running'
-               AND id IN (SELECT latest_attempt_id FROM current_tasks WHERE id = ?1 AND row_version = ?2)
-               AND EXISTS (SELECT 1 FROM task_revisions r WHERE r.task_id = attempts.task_id
-                   AND r.revision = attempts.revision
-                   AND (r.attempt_timeout_ms IS NULL OR attempts.active_ms + ?7 < r.attempt_timeout_ms))",
-            params![command.task_id, command.expected_version, command.execution_token, command.reason,
-                command.now_ms, command.resume_at_ms, command.active_delta_ms])?;
-        require(
-            changed_rows == 1,
-            "attempt is stale, not running/current, or out of active time",
-        )?;
-        changed(
-            &tx,
-            command.task_id,
-            command.now_ms,
-            "attempt.waiting",
-            command.reason,
-        )?;
-        tx.commit()?;
-        Ok(())
     }
 
     /// Resumes the existing attempt once its timed wait is over; an owner ends it first.

@@ -31,6 +31,8 @@ BEFORE THE FIRST RUN
                                           --model gpt-6-sol --effort high
                                       (repeat for review, validation, remediation, planning)
   - The provider CLI (codex, claude or opencode) is on PATH and logged in.
+  - bubblewrap (bwrap) is installed: review, validation and judges run in a sandbox where
+    the project and ktask's own records are read-only, whatever the provider allows.
   Defaults apply only to tasks added later; change an existing task with edit --model.
 
 TYPICAL SESSION

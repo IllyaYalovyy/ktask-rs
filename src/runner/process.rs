@@ -41,6 +41,9 @@ pub struct Invocation {
     #[serde(default)]
     pub evidence_pin_guardian: Option<PathBuf>,
     pub callback: Option<Capability>,
+    /// Set for read-only turns: the provider runs inside it.
+    #[serde(default)]
+    pub sandbox: Option<super::sandbox::Sandbox>,
 }
 
 // A durable reservation closes the gap between spawning a guardian and its first
@@ -269,7 +272,10 @@ pub fn worker() -> Result<()> {
         .callback
         .map(|capability| Server::start(scratch.path(), capability))
         .transpose()?;
-    let mut command = Command::new(&spec.executable);
+    let mut command = match &spec.sandbox {
+        Some(sandbox) => sandbox.command(&spec.executable, scratch.path()),
+        None => Command::new(&spec.executable),
+    };
     command
         .args(&spec.args)
         .envs(spec.env.iter().map(|(key, value)| (key, value)))

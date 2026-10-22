@@ -1,4 +1,4 @@
-use super::{Context, Outcome, execute, operational_backoff, process::Invocation, provider};
+use super::{Context, Finish, Outcome, execute, operational_backoff, process::Invocation};
 use crate::{
     application::{
         CheckCounts, Service,
@@ -102,22 +102,18 @@ fn run_one(
         worker_lock: ctx.workspace.worker_lock.clone(),
         evidence_pin_guardian: None,
         callback: None,
+        sandbox: None,
     };
-    let mut stream = provider::Stream::default();
     let cursor = service.output_cursor(run)?;
-    let result = execute(
+    let finish = execute(
         service,
         run,
         &step,
         ctx,
         &invocation,
         Some(check.timeout_ms),
-        false,
-        &mut stream,
+        None,
     );
-    if let Ok(Outcome::Failed("environment", message)) = &result {
-        service.finish_step(&step, false, message, None)?;
-    }
     let relative = format!("evidence/attempt-{}/step-{}.log", run.attempt, step.id);
     let path = ctx.paths.state.join(&relative);
     std::fs::create_dir_all(path.parent().expect("evidence directory"))?;
@@ -131,16 +127,20 @@ fn run_one(
         &relative,
         transcript.metadata()?.len() as i64,
     )?;
-    let counts = if matches!(
-        &result,
-        Ok(Outcome::Passed(_) | Outcome::Failed("check", _))
-    ) {
-        parse_counts(&std::fs::read_to_string(&path)?)
-    } else {
-        None
+    let (outcome, exit, counts) = match finish? {
+        Finish::Exited(code) => {
+            let counts = parse_counts(&std::fs::read_to_string(&path)?);
+            (verdict(code, counts), Some(code), counts)
+        }
+        Finish::Stopped(outcome) => (outcome, None, None),
     };
+    match &outcome {
+        Outcome::Passed(report) => service.finish_check(&step, true, report, exit, counts)?,
+        Outcome::Failed(_, report) => service.finish_check(&step, false, report, exit, counts)?,
+        // A paused check ends with its attempt.
+        _ => {}
+    }
     if let Some(counts) = counts {
-        service.record_check_counts(&step, counts)?;
         service.output(
             run,
             "system",
@@ -150,48 +150,98 @@ fn run_one(
             ),
         )?;
     }
-    Ok((result?, path, counts))
+    Ok((outcome, path, counts))
 }
 
-/// Sum completed Rust test harness suites in the check's captured output.
+/// A check passes only when it exits 0 and its own test summaries report no failed test, so a
+/// wrapper that hides the test runner's exit status cannot turn failing tests into a pass.
+fn verdict(code: i32, counts: Option<CheckCounts>) -> Outcome {
+    match counts {
+        _ if code != 0 => {
+            Outcome::Failed("check", format!("Check exited {code}; see stored output"))
+        }
+        Some(counts) if counts.failed > 0 => Outcome::Failed(
+            "check",
+            format!(
+                "Check exited 0 but its test summary reports {} failed test(s); see stored output",
+                counts.failed
+            ),
+        ),
+        _ => Outcome::Passed("Check exited 0".into()),
+    }
+}
+
+/// Sums the Rust test harness summaries in a check's output.
 fn parse_counts(transcript: &str) -> Option<CheckCounts> {
     let mut total: Option<CheckCounts> = None;
-    for line in transcript.lines() {
-        let Some(summary) = line.trim().strip_prefix("test result: ") else {
-            continue;
-        };
-        let mut counts = [None; 3];
-        for segment in summary.split(';') {
-            let words = segment.split_whitespace().collect::<Vec<_>>();
-            let Some([number, kind]) = words
-                .windows(2)
-                .find(|pair| matches!(pair[1], "passed" | "failed" | "ignored"))
-            else {
-                continue;
-            };
-            let index = match *kind {
-                "passed" => 0,
-                "failed" => 1,
-                "ignored" => 2,
-                _ => continue,
-            };
-            counts[index] = number.parse::<i64>().ok().filter(|n| *n >= 0);
-        }
-        if let [Some(passed), Some(failed), Some(ignored)] = counts {
-            let next = CheckCounts {
-                passed,
-                failed,
-                ignored,
-            };
-            total = Some(match total {
-                Some(prior) => CheckCounts {
-                    passed: prior.passed.checked_add(next.passed)?,
-                    failed: prior.failed.checked_add(next.failed)?,
-                    ignored: prior.ignored.checked_add(next.ignored)?,
-                },
-                None => next,
-            });
-        }
+    for next in transcript.lines().filter_map(summary) {
+        total = Some(match total {
+            None => next,
+            Some(prior) => CheckCounts {
+                passed: prior.passed.checked_add(next.passed)?,
+                failed: prior.failed.checked_add(next.failed)?,
+                ignored: prior.ignored.checked_add(next.ignored)?,
+            },
+        });
     }
     total
+}
+
+/// One harness summary such as `test result: ok. 3 passed; 0 failed; 1 ignored; ...`. Only
+/// the harness's own line counts: it starts the line and its verdict agrees with its failure
+/// count, so indented or quoted copies of earlier results are not mistaken for this run.
+fn summary(line: &str) -> Option<CheckCounts> {
+    let (verdict, counts) = line
+        .trim_end()
+        .strip_prefix("test result: ")?
+        .split_once(". ")?;
+    let mut fields = counts.split("; ");
+    let mut next = |kind: &str| {
+        let (number, name) = fields.next()?.split_once(' ')?;
+        (name == kind).then(|| number.parse::<u32>().ok().map(i64::from))?
+    };
+    let counts = CheckCounts {
+        passed: next("passed")?,
+        failed: next("failed")?,
+        ignored: next("ignored")?,
+    };
+    let genuine = match verdict {
+        "ok" => counts.failed == 0,
+        "FAILED" => counts.failed > 0,
+        _ => false,
+    };
+    genuine.then_some(counts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn counts(passed: i64, failed: i64, ignored: i64) -> Option<CheckCounts> {
+        Some(CheckCounts {
+            passed,
+            failed,
+            ignored,
+        })
+    }
+
+    #[test]
+    fn only_the_harness_summary_counts_and_any_failure_fails_the_check() {
+        let transcript = "\
+running 4 tests
+test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.1s
+    test result: FAILED. 0 passed; 9 failed; 0 ignored; quoted from an old log
+test result: ok. 0 passed; 2 failed; 0 ignored; contradicts its own verdict
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\r
+";
+        assert_eq!(parse_counts(transcript), counts(7, 1, 1));
+        assert_eq!(parse_counts("no harness output"), None);
+        let failed = |code, counts| matches!(verdict(code, counts), Outcome::Failed("check", _));
+        assert!(
+            failed(0, counts(7, 1, 1)),
+            "exit 0 cannot hide a failed test"
+        );
+        assert!(failed(2, counts(1, 0, 0)) && failed(2, None));
+        assert!(!failed(0, counts(1, 0, 0)) && !failed(0, None));
+    }
 }

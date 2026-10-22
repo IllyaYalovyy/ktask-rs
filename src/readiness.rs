@@ -210,6 +210,11 @@ pub(crate) fn inspect(app: &App) -> Readiness {
             &format!("install/sign in to {}, then Refresh", provider.label()),
         );
     }
+    report.check(
+        "Read-only sandbox",
+        crate::runner::sandbox::available().map_err(|e| e.to_string()),
+        "install bubblewrap (bwrap), then Refresh",
+    );
     match root {
         Ok(root) => {
             let common = git(

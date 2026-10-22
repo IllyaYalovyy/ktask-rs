@@ -53,7 +53,7 @@ fn binaries_have_separate_roots_even_when_renamed_or_started_elsewhere() -> Resu
     }
     assert_eq!(dev, paths(DEV, root, &elsewhere)?);
     let renamed = root.join("ktask");
-    fs::copy(DEV, &renamed)?;
+    support::copy_executable(DEV, &renamed)?;
     let renamed_paths = paths(renamed.to_str().unwrap(), root, &elsewhere)?;
     assert_eq!(renamed_paths["instance"], "ktask-dev");
     assert_eq!(renamed_paths["state"], dev["state"]);
