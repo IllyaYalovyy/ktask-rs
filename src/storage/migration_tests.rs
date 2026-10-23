@@ -186,7 +186,7 @@ fn v1_reconciliation_copies_data_and_rejects_incompatible_columns() -> Result {
     let incompatible = Box::leak(
         ALL[0]
             .sql
-            .replace("    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0)\n) STRICT;", "    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),\n    required_new TEXT NOT NULL\n) STRICT;")
+            .replace("    agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1))\n) STRICT;", "    agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1)),\n    required_new TEXT NOT NULL\n) STRICT;")
             .into_boxed_str(),
     );
     let newer = [Migration {
@@ -219,8 +219,8 @@ fn v1_reconciliation_adds_nullable_column_without_losing_rows() -> Result {
         ALL[0]
             .sql
             .replace(
-                "    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0)\n) STRICT;",
-                "    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),\n    description TEXT\n) STRICT;",
+                "    agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1))\n) STRICT;",
+                "    agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1)),\n    description TEXT\n) STRICT;",
             )
             .into_boxed_str(),
     );
@@ -370,7 +370,7 @@ fn table_rebuild_keeps_referenced_data_and_invalid_rebuild_rolls_back() -> Resul
     let db = store.connection_mut();
     db.execute_batch(
         "BEGIN;
-         INSERT INTO projects VALUES (1, 'Keep project', x'2f776f726b', 100);
+         INSERT INTO projects(id, name, root_path, created_at_ms) VALUES (1, 'Keep project', x'2f776f726b', 100);
          INSERT INTO tasks(id, project_id, order_key, lifecycle, origin, created_at_ms, updated_at_ms)
              VALUES (1, 1, '8', 'new', 'human', 100, 100);
          INSERT INTO task_revisions(task_id, revision, lifecycle, kind, title, goal, created_by_kind, created_by, created_at_ms)
@@ -385,10 +385,11 @@ fn table_rebuild_keeps_referenced_data_and_invalid_rebuild_rolls_back() -> Resul
                 name TEXT NOT NULL UNIQUE CHECK (length(trim(name)) > 0),
                 root_path BLOB NOT NULL UNIQUE CHECK (length(root_path) > 0),
                 created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+                agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1)),
                 archived_at_ms INTEGER CHECK (archived_at_ms >= created_at_ms)
               ) STRICT;
-              INSERT INTO projects_new(id, name, root_path, created_at_ms)
-                  SELECT id, name, root_path, created_at_ms FROM projects;
+              INSERT INTO projects_new(id, name, root_path, created_at_ms, agent_network)
+                  SELECT id, name, root_path, created_at_ms, agent_network FROM projects;
               DROP TABLE projects;
               ALTER TABLE projects_new RENAME TO projects;",
     };

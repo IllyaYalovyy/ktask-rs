@@ -112,10 +112,12 @@ impl Fixture {
             r##"#!/bin/sh
 model=unknown
 session=""
+network=off
 while [ "$#" -gt 0 ]; do
- case "$1" in -m) shift; model="$1";; resume) shift; session="$1";; esac
+ case "$1" in -m) shift; model="$1";; resume) shift; session="$1";; sandbox_workspace_write.network_access=true) network=on;; esac
  shift
 done
+printf '%s %s\n' "$model" "$network" >> "$HOME/provider-network"
 if [ '{mode}' = check-launch-failure ]; then
  printf '%s %s\n' "$$" "$PPID" >> "$HOME/launch-fixture-pids"
 fi
@@ -2777,6 +2779,30 @@ fn real_tui_question_answer_mouse_and_keyboard_automatically_resume() -> Result 
     Ok(())
 }
 #[test]
+fn agent_network_reaches_only_project_turns_that_change_the_project() -> Result {
+    let f = Fixture::new()?;
+    let network = f.scratch.path().join("provider-network");
+    f.add("Offline by default")?;
+    f.ok(&["run", "--one"])?;
+    assert_eq!(
+        fs::read_to_string(&network)?,
+        "execution off\nreview off\nvalidation off\n"
+    );
+    fs::remove_file(&network)?;
+    assert_eq!(
+        f.ok(&["init", "--agent-network", "on"])?["agent_network"],
+        true
+    );
+    f.add("Implementation may install dependencies")?;
+    f.ok(&["run", "--one"])?;
+    assert_eq!(
+        fs::read_to_string(&network)?,
+        "execution on\nreview off\nvalidation off\n"
+    );
+    Ok(())
+}
+
+#[test]
 fn closing_tui_does_not_stop_supervisor() -> Result {
     let f = Fixture::new()?;
     f.provider("slow")?;
@@ -5352,11 +5378,15 @@ fn real_tui_check_launch_backoff_deadline_survives_restart_and_requires_explicit
             t.screen("launch backoff", |s| s
                 .contains("Check infrastructure failed"))?
         );
-        println!(
-            "CHECK LAUNCH DEADLINE EXPIRED mouse={mouse}\n{}",
-            t.screen("configured deadline expired", |s| s.contains("FAILED")
-                && s.contains("configured task-wide limit"))?
-        );
+        let expired = t
+            .screen("configured deadline expired", |s| {
+                s.contains("FAILED") && s.contains("configured task-wide limit")
+            })
+            .map_err(|error| {
+                let show = |id| f.ok(&["show", id]).map(|task| task.to_string());
+                format!("{error}\ntask 1: {:?}\ntask 2: {:?}", show("1"), show("2"))
+            })?;
+        println!("CHECK LAUNCH DEADLINE EXPIRED mouse={mouse}\n{expired}");
         f.supervisor_stopped()?;
         let failed = f.ok(&["show", "1"])?;
         let first_attempt = failed["attempts"][0].clone();

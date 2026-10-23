@@ -2,9 +2,9 @@ GUIDE FOR SCRIPTS AND AI AGENTS
   Each command above has its own detailed help: ktask <command> --help.
 
 CONCEPTS
-  Project    A Git repository, identified by its directory (--project, default: cwd). add,
-             import, check-set and model-default register it on first use; every other
-             command fails with exit 3 until it is registered.
+  Project    A Git repository, identified by its directory (--project, default: cwd).
+             init, add, import, check-set and model-default register it on first use;
+             every other command fails with exit 3 until it is registered.
   Instance   ktask and ktask-dev keep separate databases; --paths prints them. The working
              directory never selects the instance.
   Task       A title, a Goal and acceptance criteria (one --criterion each). State only the
@@ -27,15 +27,18 @@ CONCEPTS
              "claude" means claude/sonnet. Providers: codex, claude or opencode.
 
 BEFORE THE FIRST RUN
-  - The project is a Git repository with at least one commit and a clean worktree.
-  - At least one check exists:        ktask check-set build --command 'make check'
-  - Defaults exist for every role:    ktask model-default execution --provider codex \
-                                          --model gpt-6-sol --effort high
-                                      (repeat for review, validation, remediation and
-                                      planning; the three judging roles use a stronger model)
-  - The provider CLI (codex, claude or opencode) is on PATH and logged in.
-  - bubblewrap (bwrap) is installed: review, validation and judges run in a sandbox where
-    the project and ktask's own records are read-only, whatever the provider allows.
+  - Once per machine, save the model defaults new projects start with:
+        ktask model-default execution --provider codex --model gpt-6-sol --effort high \
+            --new-projects
+    Repeat for planning, review, validation and remediation; the three judging roles need
+    a stronger model than execution.
+  - In each project, a Git repository root with at least one commit and a clean worktree:
+        ktask init       registers it, detects a check, exits 4 listing anything missing
+    --check-command CMD sets the check; --agent-network on lets agents that change the
+    project use the network, for example to install dependencies.
+  - The provider CLI (codex, claude or opencode) is on PATH and logged in, and bubblewrap
+    (bwrap) is installed: review, validation and judges run in a sandbox where the project
+    and ktask's own records are read-only, whatever the provider allows.
   Defaults apply only to tasks added later; change an existing task with edit --model.
 
 TYPICAL SESSION

@@ -139,6 +139,38 @@ Run `make check` for formatting, Clippy, terminal flows, storage/migrations, iso
 cleanup, and build checks.
 The normal tests use deterministic provider processes; the opt-in live test uses authenticated Codex.
 
+## Use ktask on your project
+
+Install once with `make install`; it puts `ktask` in `~/.cargo/bin`. Execution also needs
+bubblewrap (`bwrap`) and a signed-in agent CLI. Save model defaults once, and every project
+you set up afterwards starts with them:
+
+```sh
+ktask model-default execution --provider codex --model gpt-6-sol --effort high --new-projects
+ktask model-default planning --provider codex --model gpt-6-sol --effort high --new-projects
+ktask model-default review --provider codex --model gpt-6-astra --effort high --new-projects
+# likewise validation and remediation
+```
+
+Review, validation and remediation must use a model different from (and stronger than)
+execution. Then, in each project (a Git repository root with at least one commit):
+
+```sh
+cd ~/src/my-project
+ktask init     # registers the project, detects its check, lists anything still missing
+ktask          # TUI: a Add, then r Run
+```
+
+`init` detects the check from a Makefile `check` or `test` target, `Cargo.toml`, a
+`package.json` test script, `go.mod`, or Python tests; `--check-command CMD` sets it
+explicitly. `--agent-network on` lets Codex agents that change the project use the network,
+for example to install dependencies; it is off by default. `init` exits 4 and lists each fix
+when the project still cannot run tasks. The TUI covers the same setup: in a new project
+**u Readiness** lists what is missing, with **c Checks** (the first check is prefilled with
+the detected command), **d Defaults** (choose "New projects: Start with these" to save them
+for later projects) and Configuration → **e Preferences** → Agent network. Each project keeps
+its own queue, checks and model defaults in the same instance database.
+
 ## Run real work
 
 Use an ordinary Git baseline commit and a clean checkout for a new task. No hidden worktrees,

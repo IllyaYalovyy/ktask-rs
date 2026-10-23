@@ -350,6 +350,19 @@ A step's verdict and evidence for one criterion of the same revision. Terminal v
 - FK `(step_id, task_id, revision)` → `attempt_steps(id, task_id, revision)`.
 - Index `ix_criteria_results_definition`: `INDEX ix_criteria_results_definition ON criterion_results(task_id, revision, criterion_ordinal)`.
 
+### default_models
+
+Model defaults a newly registered project starts with. They are copied once, at registration; each project then keeps and edits its own `project_models`.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `role` | TEXT | no | planning, execution, review, validation, remediation. |
+| `provider` | TEXT | no | Provider/adapter identifier; never a credential. |
+| `model` | TEXT | no | Explicit model identifier. |
+| `effort` | TEXT | yes | Provider-supported effort; NULL means no effort setting. |
+
+- PK `(role)`.
+
 ### events
 
 Append-only command/runner audit and activity feed. Task and attempt are optional, but an attempt requires its matching task. Commands append events atomically with state changes.
@@ -515,6 +528,7 @@ Registered checkout. Names and canonical native root paths are independently uni
 | `name` | TEXT | no | Nonblank name. |
 | `root_path` | BLOB | no | Canonical native absolute path bytes (not necessarily UTF-8). |
 | `created_at_ms` | INTEGER | no | Creation time. |
+| `agent_network` | INTEGER | no | 1 lets writable agent turns use the network; 0 (default) leaves Codex's sandbox without it. |
 
 - PK `(id)`.
 - UQ `(root_path)`.

@@ -253,7 +253,7 @@ fn readonly_proposal(
         evidence_pin_guardian,
     } = turn;
     let provider = Provider::of(model)?;
-    let launch = provider.launch(model, None, Access::ReadOnly, &schema, prompt);
+    let launch = provider.launch(model, None, Access::ReadOnly, false, &schema, prompt);
     let scratch = Scratch::new(&paths.cache.join("workers"))?;
     let mut invocation = super::provider_invocation(
         provider,

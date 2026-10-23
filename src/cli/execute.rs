@@ -128,12 +128,100 @@ fn tasks(service: &mut Service, scope: Scope) -> Result<Vec<Task>> {
     })
 }
 
+/// Registers (already done by the caller), configures the check and reports readiness.
+fn init(
+    service: &mut Service,
+    check_command: Option<&str>,
+    check_name: &str,
+    timeout_ms: i64,
+    agent_network: Option<Switch>,
+) -> Result<Reply> {
+    let root = service.project_root()?;
+    let check_source = if let Some(command) = check_command {
+        service.set_check(check_name, command, timeout_ms)?;
+        Some("given".to_owned())
+    } else if service.checks()?.is_empty()
+        && let Some((command, file)) = crate::runner::setup::detect_check(&root)
+    {
+        service.set_check(check_name, &command, timeout_ms)?;
+        Some(format!("detected from {file}"))
+    } else {
+        None
+    };
+    if let Some(switch) = agent_network {
+        service.set_agent_network(matches!(switch, Switch::On))?;
+    }
+    let checks = service.checks()?;
+    let models: Vec<(&str, Option<String>)> = app::configuration::MODEL_ROLES
+        .iter()
+        .zip(service.project_defaults()?)
+        .map(|(role, model)| (*role, model.map(|m| format!("{}/{}", m.provider, m.model))))
+        .collect();
+    let network = service.agent_network()?;
+    let problems = crate::runner::setup::problems(service)?;
+    let mut text = format!("Project {} at {}\n", service.project_name, root.display());
+    for check in &checks {
+        text.push_str(&format!(
+            "Check {}: {}{}\n",
+            output::safe(&check.name),
+            output::safe(&check.command),
+            check_source
+                .as_deref()
+                .filter(|_| check.name == check_name)
+                .map_or(String::new(), |source| format!(" ({source})"))
+        ));
+    }
+    for (role, model) in &models {
+        text.push_str(&format!(
+            "{role}: {}\n",
+            model.as_deref().unwrap_or("not set")
+        ));
+    }
+    text.push_str(&format!(
+        "Agent network: {}\n",
+        if network { "on" } else { "off" }
+    ));
+    if !problems.is_empty() {
+        let missing = problems
+            .iter()
+            .map(|p| format!("- {}: {}. Fix: {}", p.item, p.reason, p.fix))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(crate::storage::Error::Conflict(format!(
+            "{text}Setup saved, but the project cannot run tasks yet:\n{missing}"
+        ))
+        .into());
+    }
+    text.push_str("Ready: add a task with ktask add, then ktask run\n");
+    Ok(Reply {
+        data: json!({
+            "project": service.project_name, "root": root, "checks": checks,
+            "check_source": check_source, "agent_network": network,
+            "models": models.into_iter().map(|(role, model)| (role.to_owned(), json!(model)))
+                .collect::<serde_json::Map<_, _>>(),
+        }),
+        text,
+    })
+}
+
 pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply> {
     match command {
         Command::Run { .. }
         | Command::Recover { .. }
         | Command::Storage { .. }
         | Command::Retention { .. } => unreachable!("runner dispatch"),
+        Command::Init {
+            check_command,
+            check_name,
+            check_timeout_ms,
+            agent_network,
+        } => init(
+            service,
+            check_command.as_deref(),
+            check_name,
+            *check_timeout_ms,
+            *agent_network,
+        ),
         Command::Pause { target: input } => {
             let (_, target) = target(service, input)?;
             service.request_pause(target)?;
@@ -204,6 +292,7 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
             provider,
             model,
             effort,
+            new_projects,
         } => {
             let model = model
                 .clone()
@@ -220,10 +309,18 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
                     model: model.clone(),
                     effort: effort.clone(),
                 },
+                *new_projects,
             )?;
             Ok(Reply {
-                data: json!({"role":role,"provider":provider,"model":model,"effort":effort}),
-                text: format!("Default saved for {role}; existing tasks unchanged\n"),
+                data: json!({"role":role,"provider":provider,"model":model,"effort":effort,"new_projects":new_projects}),
+                text: format!(
+                    "Default saved for {role}{}; existing tasks unchanged\n",
+                    if *new_projects {
+                        " and for new projects"
+                    } else {
+                        ""
+                    }
+                ),
             })
         }
         Command::List {

@@ -77,7 +77,7 @@ impl App {
                     .unwrap()
                     .project_defaults()
                     .map_err(|e| e.to_string())?;
-                let fields = MODEL_ROLES
+                let mut fields: Vec<Field> = MODEL_ROLES
                     .iter()
                     .zip(&values)
                     .flat_map(|(role, value)| {
@@ -99,10 +99,15 @@ impl App {
                         ]
                     })
                     .collect();
+                fields.push(Field::choice(
+                    "New projects",
+                    &["Keep their defaults", "Start with these"],
+                    "Keep their defaults",
+                ));
                 Dialog::new(
                     DialogKind::ProjectModels(Box::new(values)),
                     "Project model defaults",
-                    "New tasks copy these defaults; existing revisions stay pinned.\nBreak down uses the planning model.\nUse provider/model: codex/gpt-6-sol, claude/sonnet, opencode/anthropic/claude-sonnet-5-5.\nBlank clears the default.",
+                    "New tasks copy these defaults; existing revisions stay pinned.\nBreak down uses the planning model. \"Start with these\" also makes them the defaults of projects you set up later.\nUse provider/model: codex/gpt-6-sol, claude/sonnet, opencode/anthropic/claude-sonnet-5-5.\nBlank clears the default.",
                     fields,
                 )
             }
@@ -136,6 +141,12 @@ impl App {
             }
             _ => {
                 let saved = self.load_preferences()?;
+                let network = self
+                    .service
+                    .as_ref()
+                    .ok_or("SQLite mode required")?
+                    .agent_network()
+                    .map_err(|e| e.to_string())?;
                 let fields = vec![
                     Field::choice(
                         "Mouse",
@@ -160,11 +171,16 @@ impl App {
                             "Run one"
                         },
                     ),
+                    Field::choice(
+                        "Agent network",
+                        &["Off", "On"],
+                        if network { "On" } else { "Off" },
+                    ),
                 ];
                 Dialog::new(
                     DialogKind::Preferences(saved),
                     "Project preferences",
-                    "Saved per project in this instance. Keyboard stays available.\nThis policy controls new breakdown and repair tasks.\nRun mode applies to the next Run/resume/retry.",
+                    "Saved per project in this instance. Keyboard stays available.\nThis policy controls new breakdown and repair tasks.\nRun mode applies to the next Run/resume/retry.\nAgent network On lets Codex agents that change the project use the network, for\nexample to install dependencies; Off runs them offline.",
                     fields,
                 )
             }
@@ -237,11 +253,15 @@ impl App {
                     *value =
                         ModelConfig::from_fields(dialog.value(i * 2), dialog.value(i * 2 + 1))?;
                 }
-                self.service
-                    .as_mut()
-                    .unwrap()
+                let service = self.service.as_mut().unwrap();
+                service
                     .save_defaults(expected, &values)
                     .map_err(|e| e.to_string())?;
+                if dialog.value(values.len() * 2) == "Start with these" {
+                    service
+                        .save_new_project_defaults(&values)
+                        .map_err(|e| e.to_string())?;
+                }
             }
             DialogKind::ProjectChecks(checks) => {
                 let selected = dialog.fields[0]
@@ -249,11 +269,16 @@ impl App {
                     .iter()
                     .position(|c| c == dialog.value(0))
                     .ok_or("Select a check")?;
+                // A project's first check starts from the command its files suggest.
+                let detected = (selected == 0 && checks.is_empty())
+                    .then(|| self.service.as_ref()?.project_root().ok())
+                    .flatten()
+                    .and_then(|root| crate::runner::setup::detect_check(&root));
                 let value = if selected == 0 {
                     ProjectCheck {
                         id: None,
-                        name: String::new(),
-                        command: String::new(),
+                        name: detected.as_ref().map_or("", |_| "check").into(),
+                        command: detected.as_ref().map_or_else(String::new, |d| d.0.clone()),
                         directory: ".".into(),
                         timeout_ms: 600_000,
                         enabled: true,
@@ -278,7 +303,12 @@ impl App {
                         id: value.id,
                     },
                     "Edit project check",
-                    "Save validates all fields together. Cancel changes nothing.\nChecks cannot change during running, paused or waiting attempts.",
+                    &format!(
+                        "Save validates all fields together. Cancel changes nothing.\nChecks cannot change during running, paused or waiting attempts.{}",
+                        detected.map_or(String::new(), |(_, file)| format!(
+                            "\nCommand suggested from {file}; change it if your project checks differently."
+                        ))
+                    ),
                     fields,
                 );
                 return Ok(false);
@@ -317,11 +347,12 @@ impl App {
                     },
                 };
                 let paths = self.instance.paths().map_err(|e| e.to_string())?;
-                let saved = self
-                    .service
-                    .as_ref()
-                    .unwrap()
+                let service = self.service.as_mut().unwrap();
+                let saved = service
                     .save_preferences(&paths.config, expected, &value)
+                    .map_err(|e| e.to_string())?;
+                service
+                    .set_agent_network(dialog.value(3) == "On")
                     .map_err(|e| e.to_string())?;
                 self.use_preferences(&saved);
             }

@@ -581,6 +581,7 @@ impl App {
         {
             let action = match key.code {
                 KeyCode::Char('c') => Some(Action::ProjectChecks),
+                KeyCode::Char('d') if self.current().is_none() => Some(Action::ProjectModels),
                 KeyCode::Char('m') => Some(Action::Models),
                 KeyCode::Char('v') => Some(Action::Approve),
                 KeyCode::Char('w') => Some(Action::Answer),

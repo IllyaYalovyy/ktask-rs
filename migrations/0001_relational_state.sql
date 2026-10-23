@@ -5,7 +5,9 @@ CREATE TABLE projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE CHECK (length(trim(name)) > 0),
     root_path BLOB NOT NULL UNIQUE CHECK (length(root_path) > 0),
-    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0)
+    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+    -- Writable agent turns may use the network (Codex sandboxes it off otherwise).
+    agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1))
 ) STRICT;
 
 -- Execution intent is project scoped and survives terminals and interventions.
@@ -26,6 +28,14 @@ CREATE TABLE project_models (
     model TEXT NOT NULL CHECK (length(trim(model)) > 0),
     effort TEXT CHECK (length(trim(effort)) > 0),
     PRIMARY KEY (project_id, role)
+) STRICT;
+
+-- Model defaults a newly registered project starts with; each project then keeps its own.
+CREATE TABLE default_models (
+    role TEXT PRIMARY KEY CHECK (role IN ('planning', 'execution', 'review', 'validation', 'remediation')),
+    provider TEXT NOT NULL CHECK (length(trim(provider)) > 0),
+    model TEXT NOT NULL CHECK (length(trim(model)) > 0),
+    effort TEXT CHECK (length(trim(effort)) > 0)
 ) STRICT;
 
 -- Commands are executed by the supervisor, never inferred from a model's claim.

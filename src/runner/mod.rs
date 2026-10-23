@@ -8,6 +8,7 @@ pub(crate) mod provider;
 pub mod remediation;
 mod reset;
 pub(crate) mod sandbox;
+pub mod setup;
 pub(crate) mod workspace;
 
 use crate::{
@@ -689,10 +690,12 @@ fn ai_turn(
         |question| agent::nudge(role, question),
     );
     let access = Access::for_role(role);
+    let network = access == Access::Write && service.agent_network()?;
     let launch = provider.launch(
         model,
         step.provider_session.as_deref(),
         access,
+        network,
         &agent::schema(),
         prompt,
     );
@@ -912,6 +915,7 @@ fn judge_once(
         model,
         step.provider_session.as_deref(),
         Access::ReadOnly,
+        false,
         &schema,
         prompt,
     );

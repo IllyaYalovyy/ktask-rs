@@ -50,6 +50,10 @@ pub struct ModelConfig {
 }
 
 impl ModelConfig {
+    /// Same provider and model, whatever the effort: a different effort is not a stronger model.
+    pub fn same_model(&self, other: &Self) -> bool {
+        (&self.provider, &self.model) == (&other.provider, &other.model)
+    }
     /// The model a provider uses when only the provider is named: Claude Code runs Sonnet.
     pub fn default_model(provider: &str) -> Option<&'static str> {
         (provider == "claude").then_some("sonnet")
@@ -112,10 +116,7 @@ impl Definition {
     /// a different model, not merely a different effort.
     pub fn reuses_execution_model(&self, role: usize) -> bool {
         match (&self.models[0], &self.models[role]) {
-            (Some(execution), Some(model)) => {
-                role > 0
-                    && (&execution.provider, &execution.model) == (&model.provider, &model.model)
-            }
+            (Some(execution), Some(model)) => role > 0 && execution.same_model(model),
             _ => false,
         }
     }
@@ -354,7 +355,12 @@ impl Service {
                 "INSERT INTO projects(name, root_path, created_at_ms) VALUES (?1, ?2, ?3)",
                 params![name, bytes, now_ms()],
             )?;
-            (tx.last_insert_rowid(), name.to_owned())
+            let id = tx.last_insert_rowid();
+            tx.execute(
+                "INSERT INTO project_models(project_id,role,provider,model,effort) SELECT ?1,role,provider,model,effort FROM default_models",
+                [id],
+            )?;
+            (id, name.to_owned())
         };
         tx.commit()?;
         Ok(Self {

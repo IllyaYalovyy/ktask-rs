@@ -22,10 +22,16 @@ pub struct ProjectCheck {
 }
 
 fn defaults(db: &Connection, project: i64) -> Result<Defaults> {
+    models(
+        db,
+        "SELECT role,provider,model,effort FROM project_models WHERE project_id=?1",
+        [project],
+    )
+}
+fn models(db: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<Defaults> {
     let mut values = std::array::from_fn(|_| None);
-    let mut stmt =
-        db.prepare("SELECT role,provider,model,effort FROM project_models WHERE project_id=?1")?;
-    for row in stmt.query_map([project], |r| {
+    let mut stmt = db.prepare(sql)?;
+    for row in stmt.query_map(params, |r| {
         Ok((
             r.get::<_, String>(0)?,
             ModelConfig {
@@ -48,6 +54,44 @@ fn checks(db: &Connection, project: i64) -> Result<Vec<ProjectCheck>> {
 impl Service {
     pub fn project_defaults(&self) -> Result<Defaults> {
         defaults(self.db.connection(), self.project_id)
+    }
+    /// The model defaults a newly registered project starts with.
+    pub fn new_project_defaults(&self) -> Result<Defaults> {
+        models(
+            self.db.connection(),
+            "SELECT role,provider,model,effort FROM default_models",
+            [],
+        )
+    }
+    /// Replaces the defaults new projects start with; existing projects keep their own.
+    pub fn save_new_project_defaults(&mut self, values: &Defaults) -> Result<()> {
+        let tx = self.db.connection_mut().transaction()?;
+        tx.execute("DELETE FROM default_models", [])?;
+        for (role, model) in MODEL_ROLES.iter().zip(values) {
+            if let Some(model) = model {
+                tx.execute(
+                    "INSERT INTO default_models(role,provider,model,effort) VALUES (?1,?2,?3,?4)",
+                    params![role, model.provider, model.model, model.effort],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+    /// Whether writable agent turns in this project may use the network.
+    pub fn agent_network(&self) -> Result<bool> {
+        Ok(self.db.connection().query_row(
+            "SELECT agent_network FROM projects WHERE id=?1",
+            [self.project_id],
+            |r| r.get(0),
+        )?)
+    }
+    pub fn set_agent_network(&mut self, enabled: bool) -> Result<()> {
+        self.db.connection().execute(
+            "UPDATE projects SET agent_network=?2 WHERE id=?1",
+            params![self.project_id, enabled],
+        )?;
+        Ok(())
     }
     pub fn project_checks(&self) -> Result<Vec<ProjectCheck>> {
         checks(self.db.connection(), self.project_id)

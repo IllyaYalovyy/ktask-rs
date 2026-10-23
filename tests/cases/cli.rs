@@ -995,3 +995,156 @@ fn self_host_script_configures_a_private_checkout_with_the_given_executable() ->
     assert_eq!(checks["data"]["checks"][0]["timeout_ms"], 120000);
     Ok(())
 }
+
+#[test]
+fn init_sets_up_new_projects_from_saved_defaults_and_their_own_files() -> Result {
+    let sandbox = support::sandbox()?;
+    let root = sandbox.path();
+    std::fs::create_dir(root.join("bin"))?;
+    support::write_executable(&root.join("bin/codex"), "#!/bin/sh\nexit 0\n")?;
+    let repository = |name: &str, files: &[(&str, &str)]| -> Result<String> {
+        let path = root.join(name);
+        std::fs::create_dir(&path)?;
+        support::empty_repository(&path)?;
+        for (file, content) in files {
+            std::fs::write(path.join(file), content)?;
+        }
+        Ok(path.to_string_lossy().into_owned())
+    };
+    let ktask = |project: &str, args: &[&str], exit: i32| {
+        let output = process(DEV, root)
+            .env(
+                "PATH",
+                format!("{}:/usr/bin:/bin", root.join("bin").display()),
+            )
+            .args(["--json", "--project", project])
+            .args(args)
+            .output()?;
+        json_result(output, exit)
+    };
+    let first = repository("first", &[])?;
+    for (role, model) in [
+        ("execution", "gpt-6-sol"),
+        ("planning", "gpt-6-sol"),
+        ("review", "gpt-6-astra"),
+        ("validation", "gpt-6-astra"),
+        ("remediation", "gpt-6-astra"),
+    ] {
+        ktask(
+            &first,
+            &[
+                "model-default",
+                role,
+                "--provider",
+                "codex",
+                "--model",
+                model,
+                "--new-projects",
+            ],
+            0,
+        )?;
+    }
+
+    // A new project starts with the saved defaults and the check its Makefile defines.
+    let second = repository(
+        "second",
+        &[("Makefile", "build:\n\tcc x.c\ncheck:\n\t./t\n")],
+    )?;
+    let ready = ktask(&second, &["init"], 0)?["data"].clone();
+    assert_eq!(ready["checks"][0]["command"], "make check");
+    assert_eq!(ready["check_source"], "detected from Makefile");
+    assert_eq!(ready["models"]["review"], "codex/gpt-6-astra");
+    assert_eq!(ready["models"]["execution"], "codex/gpt-6-sol");
+    assert_eq!(ready["agent_network"], false);
+
+    // Nothing to detect: init saves what it can and names the missing check.
+    let third = repository("third", &[("README", "notes\n")])?;
+    let missing = ktask(&third, &["init"], 4)?;
+    let message = missing["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("Project check: No enabled check"),
+        "{message}"
+    );
+    let fixed = ktask(
+        &third,
+        &[
+            "init",
+            "--check-command",
+            "test -f README",
+            "--agent-network",
+            "on",
+        ],
+        0,
+    )?;
+    assert_eq!(fixed["data"]["check_source"], "given");
+    assert_eq!(fixed["data"]["agent_network"], true);
+
+    // Later changes to the saved defaults leave registered projects alone, and a judge
+    // that reuses the execution model is reported.
+    ktask(
+        &first,
+        &[
+            "model-default",
+            "review",
+            "--provider",
+            "codex",
+            "--model",
+            "gpt-6-sol",
+            "--new-projects",
+        ],
+        0,
+    )?;
+    assert_eq!(
+        ktask(&second, &["init"], 0)?["data"]["models"]["review"],
+        "codex/gpt-6-astra"
+    );
+    let fourth = repository("fourth", &[("Cargo.toml", "[package]\n")])?;
+    let weak = ktask(&fourth, &["init"], 4)?;
+    let message = weak["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("cargo test (detected from Cargo.toml)"),
+        "{message}"
+    );
+    assert!(
+        message.contains("review model: Same as the execution model"),
+        "{message}"
+    );
+
+    // A project can only run from a Git repository root with a clean baseline.
+    let plain = root.join("plain");
+    std::fs::create_dir(&plain)?;
+    let message = ktask(
+        plain.to_str().unwrap(),
+        &["init", "--check-command", "true"],
+        4,
+    )?;
+    let message = message["error"]["message"].as_str().unwrap().to_owned();
+    assert!(
+        message.contains("Git repository: The project is not the root"),
+        "{message}"
+    );
+    let dirty = repository("dirty", &[("notes.txt", "draft\n")])?;
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .args([
+                "-C",
+                &dirty,
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@example.com",
+            ])
+            .args(args)
+            .output()
+    };
+    git(&["add", "-f", "notes.txt"])?;
+    git(&["commit", "-qm", "notes"])?;
+    std::fs::write(Path::new(&dirty).join("notes.txt"), "edited\n")?;
+    let message = ktask(&dirty, &["init", "--check-command", "true"], 4)?;
+    let message = message["error"]["message"].as_str().unwrap().to_owned();
+    assert!(
+        message.contains("Worktree: Uncommitted changes"),
+        "{message}"
+    );
+    Ok(())
+}

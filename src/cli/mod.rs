@@ -216,6 +216,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             | Command::Import { preview: false, .. }
             | Command::CheckSet { .. }
             | Command::ModelDefault { .. }
+            | Command::Init { .. }
     );
     let mut service = if creates_project {
         // Validate the source before registering a project for an import that cannot succeed.

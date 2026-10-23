@@ -314,6 +314,7 @@ fn real_configuration_rejects_stale_open_forms() -> Result {
             model: "concurrent".into(),
             effort: None,
         },
+        false,
     )?;
     t.send("codex/stale\x13")?;
     screen(&t, "Defaults changed elsewhere")?;
@@ -336,4 +337,84 @@ fn real_configuration_rejects_stale_open_forms() -> Result {
     assert!(other.preferences(&config)?.mouse);
     cancel(&mut t, false)?;
     quit(&mut t)
+}
+
+#[test]
+fn a_new_project_is_set_up_from_readiness_and_later_projects_start_with_its_defaults() -> Result {
+    for mouse in [false, true] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        std::fs::create_dir(root.join("bin"))?;
+        support::write_executable(&root.join("bin/codex"), "#!/bin/sh\nexit 0\n")?;
+        let project = root.join("project");
+        std::fs::create_dir(&project)?;
+        support::empty_repository(&project)?;
+        std::fs::write(
+            project.join("Makefile"),
+            "build:\n\tcc x.c\ncheck:\n\t./t\n",
+        )?;
+        let at = |path: &Path| -> Result<Service> {
+            Ok(Service::open(
+                Database::open_in(&root.join("state/ktask-dev"))?,
+                path,
+                None,
+            )?)
+        };
+        let mut t = Terminal::open_project(BIN, root, &project, 110, 44)?;
+        screen(&t, "Set up this project first")?;
+        open(&mut t, mouse, "u", "u Readiness", "BLOCK · Project check")?;
+        // The first check starts from the command the project's Makefile defines.
+        open(&mut t, mouse, "c", "c Checks", "No checks configured")?;
+        open(
+            &mut t,
+            mouse,
+            "\r",
+            "Apply",
+            "Command suggested from Makefile",
+        )?;
+        apply(&mut t, mouse)?;
+        assert_eq!(at(&project)?.project_checks()?[0].command, "make check");
+
+        open(&mut t, mouse, "u", "u Readiness", "BLOCK · execution model")?;
+        open(&mut t, mouse, "d", "d Defaults", "Project model defaults")?;
+        for (role, model) in [
+            ("execution", "codex/gpt-6-sol"),
+            ("review", "codex/gpt-6-astra"),
+            ("validation", "codex/gpt-6-astra"),
+            ("remediation", "codex/gpt-6-astra"),
+        ] {
+            let label = format!("{role} provider/model");
+            activate(&mut t, mouse, "\t\t", &label)?;
+            t.send(model)?;
+            t.screen(&label, |s| field(s, &label).contains(model))?;
+        }
+        // Clicking a choice's label cycles it; the keyboard moves there and presses Space.
+        activate(&mut t, mouse, "\t\t ", "New projects")?;
+        screen(&t, "< Start with these >")?;
+        apply(&mut t, mouse)?;
+        let saved = at(&project)?.project_defaults()?;
+        open(&mut t, mouse, "u", "u Readiness", "OK · Project setup")?;
+
+        // Agent network is a project preference.
+        t.send("\x1b")?;
+        t.screen("readiness closed", |s| !s.contains("Execution readiness"))?;
+        open(&mut t, mouse, "4", "4 Config", "Storage: SQLite")?;
+        open(&mut t, mouse, "e", "e Preferences", "Project preferences")?;
+        if mouse {
+            t.click_after("Agent network", "< Off >")?;
+        } else {
+            t.send("\t\t\t ")?;
+        }
+        screen(&t, "< On >")?;
+        apply(&mut t, mouse)?;
+        assert!(at(&project)?.agent_network()?);
+        quit(&mut t)?;
+
+        // A project registered later starts with the defaults saved for new projects.
+        let later = root.join("later");
+        std::fs::create_dir(&later)?;
+        assert_eq!(at(&later)?.project_defaults()?, saved);
+        assert!(!at(&later)?.agent_network()?);
+    }
+    Ok(())
 }

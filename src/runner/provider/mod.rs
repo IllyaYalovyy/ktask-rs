@@ -108,16 +108,19 @@ impl Provider {
             .ok_or_else(|| Error::Conflict(format!("{} auth home is not configured", self.label())))
     }
 
+    /// `network` lets a writable turn use the network. Only Codex sandboxes it; Claude Code
+    /// and OpenCode commands always have it.
     pub fn launch(
         self,
         model: &ModelConfig,
         session: Option<&str>,
         access: Access,
+        network: bool,
         schema: &Value,
         prompt: String,
     ) -> Launch {
         match self {
-            Self::Codex => codex::launch(model, session, access, schema, prompt),
+            Self::Codex => codex::launch(model, session, access, network, schema, prompt),
             Self::Claude => claude::launch(model, session, access, schema, prompt),
             Self::OpenCode => opencode::launch(model, session, access, schema, prompt),
         }

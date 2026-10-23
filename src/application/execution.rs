@@ -209,7 +209,14 @@ impl Service {
         tx.commit()?;
         Ok(())
     }
-    pub fn set_default(&mut self, role: &str, model: &ModelConfig) -> Result<()> {
+    /// Sets this project's default for `role`, and with `new_projects` also the default that
+    /// projects registered later start with.
+    pub fn set_default(
+        &mut self,
+        role: &str,
+        model: &ModelConfig,
+        new_projects: bool,
+    ) -> Result<()> {
         require(
             ROLES.contains(&role) || role == "planning",
             "Unknown model role",
@@ -220,7 +227,12 @@ impl Service {
                 && model.effort.as_ref().is_none_or(|s| !s.trim().is_empty()),
             "Invalid model configuration",
         )?;
-        self.db.connection().execute("INSERT INTO project_models(project_id,role,provider,model,effort) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(project_id,role) DO UPDATE SET provider=excluded.provider, model=excluded.model, effort=excluded.effort", params![self.project_id,role,model.provider,model.model,model.effort])?;
+        let tx = self.db.connection_mut().transaction()?;
+        tx.execute("INSERT INTO project_models(project_id,role,provider,model,effort) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(project_id,role) DO UPDATE SET provider=excluded.provider, model=excluded.model, effort=excluded.effort", params![self.project_id,role,model.provider,model.model,model.effort])?;
+        if new_projects {
+            tx.execute("INSERT INTO default_models(role,provider,model,effort) VALUES (?1,?2,?3,?4) ON CONFLICT(role) DO UPDATE SET provider=excluded.provider, model=excluded.model, effort=excluded.effort", params![role,model.provider,model.model,model.effort])?;
+        }
+        tx.commit()?;
         Ok(())
     }
     /// Called only after the supervisor owns both project/workspace leases and passes preflight.

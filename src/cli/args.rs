@@ -86,8 +86,36 @@ pub enum Outcome {
     Superseded,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+pub enum Switch {
+    On,
+    Off,
+}
+
 #[derive(Subcommand)]
 pub enum Command {
+    /// Set up this project: register it, configure its check, report what is missing.
+    ///
+    /// A new project starts with the model defaults saved by model-default --new-projects.
+    /// Without --check-command, a project that has no check gets one detected from its files:
+    /// a Makefile check or test target, Cargo.toml, a package.json test script, go.mod, or
+    /// Python test files. Rerunning is safe. Exits 4, after saving what it could, when the
+    /// project still cannot run tasks; the message lists each missing piece and its fix.
+    Init {
+        /// Check command, run from the project root; exit status 0 means passed.
+        #[arg(long, value_parser=nonempty)]
+        check_command: Option<String>,
+        /// Name of the check that --check-command sets.
+        #[arg(long, default_value = "check", value_parser=nonempty)]
+        check_name: String,
+        /// Time allowed for one run of the check.
+        #[arg(long, default_value_t=600000, value_parser=positive)]
+        check_timeout_ms: i64,
+        /// Let agents that change the project use the network, for example to install
+        /// dependencies. Codex otherwise runs them without network. Unchanged when omitted.
+        #[arg(long, value_enum)]
+        agent_network: Option<Switch>,
+    },
     /// Show stored output and what retention would remove; --apply removes it.
     ///
     /// Lists retained bytes and the completed attempts that are eligible for cleanup.
@@ -207,6 +235,9 @@ pub enum Command {
         /// Reasoning effort passed to the provider, such as high.
         #[arg(long, value_parser=nonempty)]
         effort: Option<String>,
+        /// Also make it the default that projects registered later start with.
+        #[arg(long)]
+        new_projects: bool,
     },
     /// List tasks in execution order (history: newest resolution first).
     List {

@@ -10,6 +10,7 @@ pub(super) fn launch(
     model: &ModelConfig,
     session: Option<&str>,
     access: Access,
+    network: bool,
     schema: &Value,
     prompt: String,
 ) -> Launch {
@@ -37,6 +38,12 @@ pub(super) fn launch(
     ]
     .map(String::from)
     .into();
+    if network && access == Access::Write {
+        args.extend([
+            "-c".into(),
+            "sandbox_workspace_write.network_access=true".into(),
+        ]);
+    }
     if let Some(effort) = &model.effort {
         args.extend([
             "-c".into(),
@@ -175,15 +182,24 @@ mod tests {
             effort: None,
         };
         for access in [Access::Write, Access::ReadOnly] {
-            let args = launch(&model, None, access, &json!({}), String::new()).args;
-            assert!(args.contains(&"sandbox_workspace_write.exclude_slash_tmp=true".into()));
-            assert!(args.contains(&"sandbox_workspace_write.exclude_tmpdir_env_var=false".into()));
-            let mode = if access == Access::ReadOnly {
-                "read-only"
-            } else {
-                "workspace-write"
-            };
-            assert!(args.contains(&format!("sandbox_mode=\"{mode}\"")));
+            for network in [false, true] {
+                let args = launch(&model, None, access, network, &json!({}), String::new()).args;
+                assert!(args.contains(&"sandbox_workspace_write.exclude_slash_tmp=true".into()));
+                assert!(
+                    args.contains(&"sandbox_workspace_write.exclude_tmpdir_env_var=false".into())
+                );
+                let mode = if access == Access::ReadOnly {
+                    "read-only"
+                } else {
+                    "workspace-write"
+                };
+                assert!(args.contains(&format!("sandbox_mode=\"{mode}\"")));
+                // Only a project's writable turns may get the network, and only when enabled.
+                assert_eq!(
+                    args.contains(&"sandbox_workspace_write.network_access=true".into()),
+                    network && access == Access::Write
+                );
+            }
         }
     }
 }

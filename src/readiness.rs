@@ -103,6 +103,25 @@ pub(crate) fn inspect(app: &App) -> Readiness {
         return report;
     };
     let Some(task) = app.current().and_then(|task| app.stored.get(&task.id)) else {
+        // No task yet: report what the project itself still needs.
+        match crate::runner::setup::problems(service) {
+            Ok(problems) if problems.is_empty() => report
+                .lines
+                .push("OK · Project setup: checks and model defaults are ready; add a task".into()),
+            Ok(problems) => {
+                for problem in problems {
+                    let action = if problem.item == "Project check" {
+                        "c Checks"
+                    } else if problem.item.ends_with(" model") {
+                        "d Defaults"
+                    } else {
+                        &problem.fix
+                    };
+                    report.check(&problem.item, Err(problem.reason), action);
+                }
+            }
+            Err(error) => report.check("Project setup", Err(error.to_string()), "u Refresh"),
+        }
         return report;
     };
     let definition = task.definition();

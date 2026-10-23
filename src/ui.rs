@@ -631,10 +631,12 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
             toolbar,
         );
         frame.render_widget(
-            Paragraph::new(if app.history.is_empty() {
-                "No current task.\nAdd or import work to begin."
-            } else {
+            Paragraph::new(if !app.history.is_empty() {
                 "Queue complete.\nInspect results in History, or add more work."
+            } else if app.readiness.as_ref().is_some_and(|r| r.blockers > 0) {
+                "No current task.\nSet up this project first: u Readiness lists what is missing."
+            } else {
+                "No current task.\nAdd or import work to begin."
             })
             .block(panel(" Ready ")),
             area,
@@ -1692,6 +1694,9 @@ fn position_dialog(
 
 fn readiness_controls(app: &App) -> Vec<(&'static str, Action)> {
     let mut controls = vec![("c Checks", Action::ProjectChecks)];
+    if app.current().is_none() {
+        controls.push(("d Defaults", Action::ProjectModels));
+    }
     for (label, action) in [
         ("m Models", Action::Models),
         ("v Approve", Action::Approve),
