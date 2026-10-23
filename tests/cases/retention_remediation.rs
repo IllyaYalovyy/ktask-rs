@@ -54,11 +54,8 @@ impl Running {
     }
 
     fn finish(&mut self) -> Result<Output> {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while self.child.as_mut().unwrap().try_wait()?.is_none() {
-            assert!(Instant::now() < deadline, "CLI judge failed to finish");
-            thread::sleep(Duration::from_millis(10));
-        }
+        let child = self.child.as_mut().unwrap();
+        support::eventually("CLI judge finishes", || Ok(child.try_wait()?.map(drop)))?;
         Ok(self.child.take().unwrap().wait_with_output()?)
     }
 }
@@ -69,7 +66,7 @@ impl Drop for Running {
             let guardians = fs::read_to_string(children).unwrap_or_default();
             let _ = child.kill();
             let _ = child.wait();
-            let deadline = Instant::now() + Duration::from_secs(5);
+            let deadline = Instant::now() + support::PATIENCE;
             for pid in guardians.split_whitespace() {
                 while process_running(pid) && Instant::now() < deadline {
                     thread::sleep(Duration::from_millis(10));
@@ -215,33 +212,23 @@ fn held_provider(root: &Path) -> Result {
 }
 
 fn calls(root: &Path, count: usize) -> Result<Vec<PathBuf>> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
+    support::eventually(&format!("{count} held providers"), || {
         let mut calls = fs::read_dir(root.join("provider-calls"))?
             .map(|entry| entry.map(|entry| entry.path()))
             .collect::<std::io::Result<Vec<_>>>()?;
         calls.retain(|path| path.join("descendant-pid").exists());
         calls.sort();
-        if calls.len() == count {
-            return Ok(calls);
-        }
-        assert!(
-            Instant::now() < deadline,
-            "expected {count} held providers, got {calls:?}"
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
+        Ok((calls.len() == count).then_some(calls))
+    })
 }
 
 fn reaped(call: &Path) -> Result {
-    let deadline = Instant::now() + Duration::from_secs(5);
     for file in ["provider-pid", "descendant-pid"] {
         let pid = fs::read_to_string(call.join(file))?;
         let process = Path::new("/proc").join(pid.trim());
-        while process.exists() {
-            assert!(Instant::now() < deadline, "judge leaked {file}: {pid}");
-            thread::sleep(Duration::from_millis(10));
-        }
+        support::eventually(&format!("judge reaps {file} {pid}"), || {
+            Ok((!process.exists()).then_some(()))
+        })?;
     }
     Ok(())
 }
@@ -470,14 +457,12 @@ fn retention_recovers_killed_cli_owner_only_after_its_guardian_reaps_judge() -> 
     }
     let guardian = PausedGuardian(Pid::from_raw(guardian));
     kill(guardian.0, Signal::SIGSTOP)?;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !fs::read_to_string(format!("/proc/{}/status", guardian.0))?
-        .lines()
-        .any(|line| line.starts_with("State:") && line.contains('T'))
-    {
-        assert!(Instant::now() < deadline, "guardian did not stop");
-        thread::sleep(Duration::from_millis(10));
-    }
+    support::eventually("guardian stopped", || {
+        Ok(fs::read_to_string(format!("/proc/{}/status", guardian.0))?
+            .lines()
+            .any(|line| line.starts_with("State:") && line.contains('T'))
+            .then_some(()))
+    })?;
     evidence.resolve(&mut service(root)?)?;
     cli.child.as_mut().unwrap().kill()?;
     let output = cli.finish()?;
@@ -488,14 +473,9 @@ fn retention_recovers_killed_cli_owner_only_after_its_guardian_reaps_judge() -> 
     reaped(&call)?;
     evidence.preserved(root)?;
     // Opening the service/preview reconciles the abandoned pin only after cleanup proof.
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while service(root)?.storage_preview()?.deferred_for_live_work {
-        assert!(
-            Instant::now() < deadline,
-            "guardian did not release cleanup marker"
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
+    support::eventually("guardian releases the cleanup marker", || {
+        Ok((!service(root)?.storage_preview()?.deferred_for_live_work).then_some(()))
+    })?;
     evidence.cleanup(root)?;
     Ok(())
 }

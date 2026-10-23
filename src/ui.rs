@@ -1899,4 +1899,27 @@ mod tests {
             assert_eq!(cache.rows, expected, "{text:?} at width {width}");
         }
     }
+
+    /// A redraw must not rewrap a large log: an unchanged log keeps its rows, and appended
+    /// output rewraps only the last line.
+    #[test]
+    fn redraws_reuse_wrapped_rows() {
+        let mut cache = OutputCache::default();
+        let log = "a line of output\n".repeat(1000);
+        cache.prepare(log.clone(), 8);
+        let first_row = cache.rows[0].as_ptr();
+        cache.prepare(log.clone(), 8);
+        assert_eq!(
+            cache.rows[0].as_ptr(),
+            first_row,
+            "unchanged log was rewrapped"
+        );
+        cache.prepare(log + "appended", 8);
+        assert_eq!(
+            cache.rows[0].as_ptr(),
+            first_row,
+            "append rewrapped earlier lines"
+        );
+        assert_eq!(cache.rows.last().map(String::as_str), Some("appended"));
+    }
 }

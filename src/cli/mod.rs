@@ -256,6 +256,11 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         continue_session,
     } = command
     {
+        if *notify {
+            // A detached supervisor leaves its launcher's session: with no controlling
+            // terminal, closing that terminal or the TUI cannot signal it.
+            nix::unistd::setsid().map_err(std::io::Error::from)?;
+        }
         let resuming = service
             .current_task()?
             .is_some_and(|task| matches!(task.status.as_str(), "paused" | "waiting"));

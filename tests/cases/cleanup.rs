@@ -5,7 +5,6 @@ use std::{
     process::{Child, Command, Stdio},
     sync::mpsc,
     thread,
-    time::Duration,
 };
 
 use ktask_rs_mk3::scratch::Scratch;
@@ -197,7 +196,7 @@ fn killed_test_process_is_reclaimed_by_the_next_test() -> Result {
             }
         }
     });
-    let abandoned = receiver.recv_timeout(Duration::from_secs(5))?;
+    let abandoned = receiver.recv_timeout(support::PATIENCE)?;
     reader.join().unwrap();
     let live = Scratch::new(&root)?;
     assert!(abandoned.join("partial-work").exists());

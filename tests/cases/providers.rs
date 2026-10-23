@@ -77,8 +77,7 @@ step stop
 impl Fixture {
     fn agent(&self, provider: &str, script: &str, mode: &str) -> Result {
         let path = self.scratch.path().join("bin").join(provider);
-        fs::write(&path, script)?;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
+        support::write_executable(&path, script)?;
         self.mode(mode)?;
         for role in ["execution", "review", "validation", "remediation"] {
             let model = if provider == "opencode" {

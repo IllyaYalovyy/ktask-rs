@@ -23,7 +23,7 @@ use process::{Invocation, Message, Worker};
 use provider::{Access, Provider};
 use std::{
     io::{BufRead, Read, Seek, SeekFrom, Write},
-    os::unix::{fs::PermissionsExt, process::CommandExt},
+    os::unix::fs::PermissionsExt,
     path::PathBuf,
     process::{Command, Stdio},
     sync::{
@@ -88,14 +88,25 @@ impl Context<'_> {
     }
 }
 /// Every role names a supported provider whose CLI is installed.
-fn connected(definition: &crate::application::Definition) -> Result<()> {
-    for model in &definition.models {
+/// Everything a task's definition needs before a supervisor can run it.
+fn preflight(definition: &crate::application::Definition) -> Result<()> {
+    for (index, (role, model)) in crate::application::ROLES
+        .iter()
+        .zip(&definition.models)
+        .enumerate()
+    {
         let model = model.as_ref().ok_or_else(|| {
             Error::Conflict(format!(
                 "Configure all four task roles in Models ({}); defaults only apply to new tasks",
                 provider::SUPPORTED
             ))
         })?;
+        require(
+            !definition.reuses_execution_model(index),
+            &format!(
+                "Configure a stronger {role} model distinct from the implementation model; changing effort alone is insufficient"
+            ),
+        )?;
         Provider::of(model)?.executable()?;
     }
     sandbox::available()
@@ -275,7 +286,7 @@ fn run_inner(
             task.definition().definition.kind == crate::application::Kind::Ai,
             "Current task requires human acknowledgment",
         )?;
-        connected(&task.definition().definition)?;
+        preflight(&task.definition().definition)?;
         let base = workspace.head()?;
         require(
             workspace.clean()? || service.attempt_base(task.id)?.as_deref() == Some(&base),
@@ -1202,7 +1213,7 @@ pub fn background(
         "Configure an enabled check in Configuration > Checks (or CLI check-set)",
     )?;
     if let Some(task) = service.current_task()? {
-        connected(&task.definition().definition)?;
+        preflight(&task.definition().definition)?;
     }
     std::fs::create_dir_all(&paths.state)?;
     let log_path = paths
@@ -1220,8 +1231,7 @@ pub fn background(
         .args(["run", "--notify"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(log)
-        .process_group(0);
+        .stderr(log);
     command.arg(if queue { "--queue" } else { "--one" });
     if continue_session {
         command.arg("--continue-session");

@@ -1,6 +1,7 @@
 use std::{
     io::{Read, Write},
     path::Path,
+    process::Stdio,
     sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
@@ -10,7 +11,10 @@ use ktask_rs_mk3::scratch::Scratch;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 pub type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
-const TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a test waits for something it expects. A wait ends as soon as the condition
+/// holds, so this only turns a hang into a failure. It must never bound how fast work runs:
+/// the suite runs tests in parallel, and the machine's load varies.
+pub const PATIENCE: Duration = Duration::from_secs(60);
 const FRAME_END: &[u8] = b"\x1b[?2026l";
 
 /// A private Git baseline for storage fixtures; generated fixture/state files stay ignored.
@@ -42,19 +46,56 @@ pub fn empty_repository(root: &Path) -> Result {
     ])
 }
 
-/// Copies an executable for a test to launch. A thread that forks while the copy is still
-/// open for writing passes that descriptor to its child until the child execs, and launching
-/// the copy meanwhile fails with ETXTBSY; wait until a harmless launch succeeds.
-pub fn copy_executable(from: &str, to: &Path) -> Result {
-    std::fs::copy(from, to)?;
-    let deadline = Instant::now() + TIMEOUT;
+/// Tests run on parallel threads, and a child that another thread starts holds copies of
+/// all of this process's open files until it execs. Launching a file this process has just
+/// written then fails with ETXTBSY. So a short-lived child writes every executable a test
+/// launches and renames it into place; this process never opens it for writing.
+fn install_executable(to: &Path, source: Stdio, script: Option<&[u8]>) -> Result {
+    let staged = to.with_extension("installing");
+    let mut child = std::process::Command::new("sh")
+        .args([
+            "-c",
+            r#"cat > "$2" && chmod 755 "$2" && mv -f -- "$2" "$1""#,
+            "sh",
+        ])
+        .args([to, &staged])
+        .stdin(source)
+        .spawn()?;
+    if let Some(script) = script {
+        child
+            .stdin
+            .take()
+            .ok_or("installer stdin")?
+            .write_all(script)?;
+    }
+    let status = child.wait()?;
+    assert!(
+        status.success(),
+        "installing {} failed: {status}",
+        to.display()
+    );
+    Ok(())
+}
+
+pub fn copy_executable(from: impl AsRef<Path>, to: &Path) -> Result {
+    install_executable(to, std::fs::File::open(from)?.into(), None)
+}
+
+pub fn write_executable(to: &Path, script: impl AsRef<[u8]>) -> Result {
+    install_executable(to, Stdio::piped(), Some(script.as_ref()))
+}
+
+/// Polls `probe` until it yields a value, failing with `what` after PATIENCE.
+pub fn eventually<T>(what: &str, mut probe: impl FnMut() -> Result<Option<T>>) -> Result<T> {
+    let deadline = Instant::now() + PATIENCE;
     loop {
-        match std::process::Command::new(to).arg("--version").output() {
-            Err(error) if error.raw_os_error() == Some(26) && Instant::now() < deadline => {
-                thread::sleep(Duration::from_millis(10));
-            }
-            result => return result.map(drop).map_err(Into::into),
+        if let Some(value) = probe()? {
+            return Ok(value);
         }
+        if Instant::now() >= deadline {
+            return Err(format!("{what}: not reached within {PATIENCE:?}").into());
+        }
+        thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -163,7 +204,7 @@ fn copy_after(
     trigger(t)?;
     // OSC 52 is emitted after the frame terminator and may arrive in a later
     // read. Wait for its complete payload, not another rendered frame.
-    let deadline = Instant::now() + TIMEOUT;
+    let deadline = Instant::now() + PATIENCE;
     loop {
         let bytes = t.output_bytes();
         if bytes.windows(7).filter(|w| *w == b"\x1b]52;c;").count() > before && copied(t).is_ok() {
@@ -187,7 +228,9 @@ pub struct Terminal {
     exit: mpsc::Receiver<std::io::Result<portable_pty::ExitStatus>>,
     reader: Option<thread::JoinHandle<()>>,
     exited: bool,
-    _sandbox: Option<Scratch>,
+    /// The screen before input that no wait has observed yet.
+    before_input: Mutex<Option<String>>,
+    _sandbox: Option<Sandbox>,
 }
 
 impl Terminal {
@@ -291,11 +334,16 @@ impl Terminal {
             exit,
             reader: Some(reader),
             exited: false,
+            before_input: Mutex::new(None),
             _sandbox: None,
         })
     }
 
     pub fn send(&mut self, keys: &str) -> Result {
+        self.before_input
+            .lock()
+            .unwrap()
+            .get_or_insert_with(|| self.parser.lock().unwrap().screen().contents());
         while self.frames.try_recv().is_ok() {}
         self.writer.write_all(keys.as_bytes())?;
         self.writer.flush()?;
@@ -385,18 +433,32 @@ impl Terminal {
         self.parser.lock().unwrap().screen().contents()
     }
 
+    /// Waits until the screen matches. After input, the condition must describe its result:
+    /// one that the screen before the input already met cannot tell whether the input has
+    /// been handled, so the wait fails at once. Use `still` to check that input changed nothing.
+    /// The condition must depend only on the screen text it is given; for state outside the
+    /// text (selection colour, redraw count) check it is false before the input, then `still`.
     pub fn screen(&self, description: &str, matches: impl Fn(&str) -> bool) -> Result<String> {
-        self.screen_within(description, TIMEOUT, matches)
+        if let Some(before) = self.before_input.lock().unwrap().take()
+            && matches(&before)
+        {
+            return Err(format!(
+                "{description}: ambiguous wait, the screen already matched before the input:\n{before}"
+            )
+            .into());
+        }
+        self.wait_for(description, matches)
     }
 
-    /// For flows that span several attempts with their backoffs.
-    pub fn screen_within(
-        &self,
-        description: &str,
-        timeout: Duration,
-        matches: impl Fn(&str) -> bool,
-    ) -> Result<String> {
-        let deadline = Instant::now() + timeout;
+    /// Like `screen`, for a condition the screen met before the input too. It cannot prove
+    /// the input was handled, only that the screen still matches.
+    pub fn still(&self, description: &str, matches: impl Fn(&str) -> bool) -> Result<String> {
+        self.before_input.lock().unwrap().take();
+        self.wait_for(description, matches)
+    }
+
+    fn wait_for(&self, description: &str, matches: impl Fn(&str) -> bool) -> Result<String> {
+        let deadline = Instant::now() + PATIENCE;
         let mut last = self.parser.lock().unwrap().screen().contents();
         let mut matched = matches(&last);
         loop {
@@ -429,12 +491,12 @@ impl Terminal {
         self.master.resize(size(cols, rows))?;
         // Resizing the parser only crops its old contents. Wait for a real redraw
         // before a caller can match that stale screen or click during its replacement.
-        self.frames.recv_timeout(TIMEOUT)?;
+        self.frames.recv_timeout(PATIENCE)?;
         Ok(())
     }
 
     pub fn finish(&mut self) -> Result {
-        let status = self.exit.recv_timeout(TIMEOUT)??;
+        let status = self.exit.recv_timeout(PATIENCE)??;
         self.exited = true;
         assert!(status.success(), "exit status: {status:?}");
         if let Some(reader) = self.reader.take() {
@@ -458,7 +520,7 @@ impl Terminal {
 
     pub fn kill(&mut self) -> Result {
         self.killer.kill()?;
-        self.exit.recv_timeout(TIMEOUT)??;
+        self.exit.recv_timeout(PATIENCE)??;
         self.exited = true;
         if let Some(reader) = self.reader.take() {
             reader.join().expect("terminal reader panicked");
@@ -471,25 +533,107 @@ impl Drop for Terminal {
     fn drop(&mut self) {
         if !self.exited {
             let _ = self.killer.kill();
-            let _ = self.exit.recv_timeout(TIMEOUT);
+            let _ = self.exit.recv_timeout(PATIENCE);
         }
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }
-        if let Some(sandbox) = self._sandbox.take()
-            && let Err(error) = sandbox.close()
-        {
-            if std::thread::panicking() {
-                eprintln!("test sandbox cleanup failed: {error}");
+        // Dropping the sandbox checks that the TUI left no processes behind.
+        self._sandbox.take();
+    }
+}
+
+pub fn sandbox() -> std::io::Result<Sandbox> {
+    Scratch::new(&std::env::temp_dir().join("ktask-test-scratch")).map(|s| Sandbox(Some(s)))
+}
+
+/// A test's private directory. A test must stop everything it starts: when the sandbox
+/// goes, every process that still refers to it must exit, or the test fails naming them.
+pub struct Sandbox(Option<Scratch>);
+
+impl Sandbox {
+    pub fn path(&self) -> &Path {
+        self.0.as_ref().expect("open sandbox").path()
+    }
+
+    fn release(&mut self) -> Result {
+        let Some(scratch) = self.0.take() else {
+            return Ok(());
+        };
+        let stray = eventually("processes left by the test exit", || {
+            let stray = processes_using(scratch.path());
+            Ok(stray.is_empty().then_some(()))
+        });
+        let result = if stray.is_err() {
+            let stray = processes_using(scratch.path());
+            for (pid, _) in &stray {
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(*pid),
+                    nix::sys::signal::Signal::SIGKILL,
+                );
+            }
+            let list: Vec<String> = stray
+                .iter()
+                .map(|(pid, cmd)| format!("{pid} {cmd}"))
+                .collect();
+            Err(format!("test left processes running:\n{}", list.join("\n")).into())
+        } else {
+            Ok(())
+        };
+        scratch.close()?;
+        result
+    }
+}
+
+impl Drop for Sandbox {
+    fn drop(&mut self) {
+        if let Err(error) = self.release() {
+            if thread::panicking() {
+                eprintln!("{error}");
             } else {
-                panic!("test sandbox cleanup failed: {error}");
+                panic!("{error}");
             }
         }
     }
 }
 
-pub fn sandbox() -> std::io::Result<Scratch> {
-    Scratch::new(&std::env::temp_dir().join("ktask-test-scratch"))
+/// Live processes, other than this one, whose command line, working directory or HOME is
+/// inside `dir`.
+fn processes_using(dir: &Path) -> Vec<(i32, String)> {
+    let me = std::process::id() as i32;
+    let needle = dir.to_string_lossy().into_owned();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<i32>().ok())
+        .filter(|&pid| pid != me)
+        .filter_map(|pid| {
+            let proc = Path::new("/proc").join(pid.to_string());
+            let cmdline = std::fs::read(proc.join("cmdline")).ok()?;
+            let cmdline = String::from_utf8_lossy(&cmdline).replace('\0', " ");
+            let cwd = std::fs::read_link(proc.join("cwd")).ok();
+            let home = std::fs::read(proc.join("environ"))
+                .ok()
+                .and_then(|environ| {
+                    environ
+                        .split(|&b| b == 0)
+                        .find_map(|var| var.strip_prefix(b"HOME=").map(|v| v.to_vec()))
+                });
+            let uses = cmdline.contains(&needle)
+                || cwd.is_some_and(|cwd| cwd.starts_with(dir))
+                || home.is_some_and(|home| {
+                    Path::new(&*String::from_utf8_lossy(&home)).starts_with(dir)
+                });
+            // A zombie has exited; its parent reaps it.
+            let zombie = std::fs::read_to_string(proc.join("stat")).is_ok_and(|stat| {
+                stat.rsplit_once(')')
+                    .is_some_and(|(_, rest)| rest.starts_with(" Z"))
+            });
+            (uses && !zombie).then_some((pid, cmdline))
+        })
+        .collect()
 }
 
 fn size(cols: u16, rows: u16) -> PtySize {

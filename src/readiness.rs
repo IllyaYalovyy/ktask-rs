@@ -190,6 +190,9 @@ pub(crate) fn inspect(app: &App) -> Readiness {
                 model.provider,
                 crate::runner::provider::SUPPORTED
             )),
+            _ if definition.definition.reuses_execution_model(index) => {
+                Err("Must be stronger than the execution model".into())
+            }
             _ => Ok(()),
         };
         report.check(&format!("{role} model"), valid, "m Models");

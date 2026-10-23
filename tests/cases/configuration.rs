@@ -21,6 +21,11 @@ fn screen(t: &Terminal, label: &str) -> Result<String> {
     println!("{label}\n{rendered}");
     Ok(rendered)
 }
+/// The value line under a form field's `label`.
+fn field<'a>(s: &'a str, label: &str) -> &'a str {
+    let mut lines = s.lines().skip_while(|line| !line.contains(label)).skip(1);
+    lines.next().unwrap_or_default()
+}
 fn activate(t: &mut Terminal, mouse: bool, key: &str, label: &str) -> Result {
     if mouse {
         t.click(label)?;
@@ -90,7 +95,11 @@ fn real_configuration_forms_mouse_keyboard_restart_and_validation() -> Result {
             if !mouse && i < 4 {
                 t.send("\t")?;
             }
-            screen(&t, &format!("{role} effort"))?;
+            let (model, effort) = (format!("codex/{role}"), format!("{role} effort"));
+            let rendered = t.screen(&effort, |s| {
+                field(s, &label).contains(&model) && field(s, &effort).contains("high")
+            })?;
+            println!("{effort}\n{rendered}");
         }
         apply(&mut t, mouse)?;
         let saved = service(root)?.project_defaults()?;

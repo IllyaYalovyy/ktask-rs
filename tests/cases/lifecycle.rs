@@ -3,12 +3,12 @@ use crate::support::{Result, Terminal};
 #[test]
 fn planner_subtasks_need_approval_only_by_policy() -> Result {
     let mut t = open()?;
-    key(&mut t, "4e\t\t\t \r1", "Current #1 · FAILED")?;
+    configure(&mut t, "\t\t\t ", "Planner approval: Review required")?;
     key(&mut t, "b\r", "Current #241 · NEW")?;
     key(&mut t, "v", "approved by Human")?;
     key(&mut t, "j", "› #242 ")?;
     key(&mut t, "nDiscard duplicate\r", "revision 1 rejected")?;
-    key(&mut t, "1", "Current #241 · PENDING")?;
+    current(&mut t, "1", "Current #241 · PENDING")?;
     click(&mut t, "r Run one", "Current #241 · RUNNING")?;
     quit(&mut t)
 }
@@ -17,7 +17,7 @@ fn planner_subtasks_need_approval_only_by_policy() -> Result {
 fn automatic_queue_continues_but_stops_for_human_and_questions() -> Result {
     let mut t = open()?;
     dataset(&mut t, " ", "< Guided >")?;
-    key(&mut t, "4e\t\x01100\t\t\t\t\t \r1", "Current #1 · FAILED")?;
+    configure(&mut t, "\t\x01100\t\t\t\t\t ", "Continue queue: Enabled")?;
     key(&mut t, "d\r", "Current #1 · RUNNING")?;
     t.screen("human blocks automatic queue", |s| {
         s.contains("Current #2 · PENDING")
@@ -39,11 +39,30 @@ fn click(t: &mut Terminal, label: &str, text: &str) -> Result<String> {
     t.click(label)?;
     t.screen(text, |s| s.contains(text))
 }
+/// Waits for the Current view itself: the status header shows on every view.
+fn current(t: &mut Terminal, keys: &str, header: &str) -> Result<String> {
+    t.send(keys)?;
+    t.screen(header, |s| {
+        s.contains(header) && s.contains("Task brief · Enter: full details")
+    })
+}
+/// Applies demo configuration fields, checks Config shows `applied`, and returns to the failed current.
+fn configure(t: &mut Terminal, fields: &str, applied: &str) -> Result {
+    t.send(&format!("4e{fields}\r"))?;
+    t.screen(applied, |s| s.contains(applied) && !s.contains("[Apply]"))?;
+    current(t, "1", "Current #1 · FAILED")?;
+    Ok(())
+}
+/// Whether the text field under `label` shows the cursor.
+fn focused(s: &str, label: &str) -> bool {
+    let mut lines = s.lines().skip_while(|line| !line.contains(label)).skip(1);
+    lines.next().is_some_and(|line| line.contains('▏'))
+}
 fn open() -> Result<Terminal> {
     let mut t = Terminal::open(70, 22)?;
     t.screen("startup", |s| s.contains("Current #1 · FAILED"))?;
     // These interaction tests explicitly use Run one; the queue-default flow is tested separately.
-    t.send("4e\t\t\t\t\t\t \r1")?;
+    configure(&mut t, "\t\t\t\t\t\t ", "Continue queue: Disabled")?;
     t.screen("single task interaction mode", |s| {
         s.contains("Run one preference")
     })?;
@@ -53,11 +72,15 @@ fn quit(t: &mut Terminal) -> Result {
     t.send("\x03")?;
     t.finish()
 }
-fn dataset(t: &mut Terminal, spaces: &str, current: &str) -> Result {
-    key(t, "4e\t\t", "Demo dataset")?;
-    key(t, spaces, current)?;
+fn dataset(t: &mut Terminal, spaces: &str, choice: &str) -> Result {
+    key(t, "4e\t\t", "Changing Demo dataset")?;
+    key(t, spaces, choice)?;
     key(t, "\r", "Reset mock workspace?")?;
-    key(t, "\r1", "Current #1")?;
+    t.send("\r")?;
+    t.screen("dataset reset", |s| {
+        !s.contains("Reset mock workspace?") && !s.contains("[Apply]")
+    })?;
+    current(t, "1", "Current #1")?;
     Ok(())
 }
 
@@ -108,7 +131,7 @@ fn approval_and_rejection_use_normal_tasks_without_losing_ready_revision() -> Re
     click(&mut t, "v Approve", "approved by Human")?;
     key(&mut t, "r", "Current #1 · RUNNING")?;
     t.screen("failure", |s| s.contains("Current #1 · FAILED"))?;
-    key(&mut t, "4e\t\t\t \r1", "Current #1 · FAILED")?;
+    configure(&mut t, "\t\t\t ", "Planner approval: Review required")?;
     key(&mut t, "d\r", "Remediation needs approval")?;
     println!(
         "REJECT REVISION\n{}",
@@ -132,13 +155,15 @@ fn approval_and_rejection_use_normal_tasks_without_losing_ready_revision() -> Re
     quit(&mut t)
 }
 
+const OUTCOMES: [&str; 3] = ["Succeeded override", "Failed skipped", "Superseded"];
+
 #[test]
 fn resolutions_preserve_failed_attempt_evidence_with_mouse_and_keyboard() -> Result {
     for mouse in [false, true] {
         for (cycles, outcome, status) in [
-            (0, "Succeeded override", "OVERRIDE"),
-            (1, "Failed skipped", "SKIPPED"),
-            (2, "Superseded", "REPLACED"),
+            (0, OUTCOMES[0], "OVERRIDE"),
+            (1, OUTCOMES[1], "SKIPPED"),
+            (2, OUTCOMES[2], "REPLACED"),
         ] {
             let mut t = open()?;
             if mouse {
@@ -152,20 +177,22 @@ fn resolutions_preserve_failed_attempt_evidence_with_mouse_and_keyboard() -> Res
                     t.screen("resolution form", |s| s.contains("Reason"))?
                 );
             }
-            for _ in 0..cycles {
+            for next in &OUTCOMES[1..=cycles] {
                 if mouse {
                     t.click("Outcome")?;
                 } else {
                     t.send(" ")?;
                 }
-                t.screen("outcome choice", |s| s.contains("< "))?;
+                let choice = format!("< {next} >");
+                t.screen(&choice, |s| s.contains(&choice))?;
             }
             t.screen("selected outcome", |s| s.contains(outcome))?;
             if mouse {
-                click(&mut t, "Reason", "Reason")?;
+                t.click("Reason")?;
             } else {
-                key(&mut t, "\t", "Reason")?;
+                t.send("\t")?;
             }
+            t.screen("reason focused", |s| focused(s, "Reason"))?;
             key(&mut t, "\r", "A reason is required")?;
             key(&mut t, "Accepted with evidence", "Accepted with evidence")?;
             if mouse {
@@ -192,7 +219,11 @@ fn resolutions_preserve_failed_attempt_evidence_with_mouse_and_keyboard() -> Res
 fn insertion_before_stopped_current_cleanup_failure_and_running_guard() -> Result {
     let mut t = open()?;
     // Slow execution gives time to inspect running and paused insertion boundaries.
-    key(&mut t, "4e\t\x012000\t\t\t \r1", "Current #1 · FAILED")?;
+    configure(
+        &mut t,
+        "\t\x012000\t\t\t ",
+        "Simulation step delay: 2000 ms",
+    )?;
     key(
         &mut t,
         "2iRepair first\tGoal\tCheck\t\t1\r",
@@ -228,7 +259,7 @@ fn insertion_before_stopped_current_cleanup_failure_and_running_guard() -> Resul
 #[test]
 fn ordinary_remediation_task_runs_before_failure_and_continues_original() -> Result {
     let mut t = open()?;
-    key(&mut t, "4e\t\x01100\r1", "Current #1 · FAILED")?;
+    configure(&mut t, "\t\x01100", "Simulation step delay: 100 ms")?;
     click(&mut t, "d Remediate", "Strategy")?;
     click(&mut t, "Strategy", "< Insert repair task >")?;
     click(&mut t, "Apply", "Current #241 · RUNNING")?;
@@ -250,18 +281,36 @@ fn timed_wait_keeps_attempt_session_and_active_time() -> Result {
         "RATE WAIT\n{}",
         t.screen("rate wait", |s| s.contains("Current #1 · WAITING"))?
     );
-    key(&mut t, "s", "Elapsed execution: 0.8s")?;
-    std::thread::sleep(std::time::Duration::from_millis(600));
-    t.screen("wait not charged", |s| {
-        s.contains("Elapsed execution: 0.8s")
-    })?;
-    key(&mut t, "\x1b", "Current #1 · WAITING")?;
     t.screen("same attempt resumes", |s| {
         s.contains("Current #1 · RUNNING") && s.contains("Attempt 1")
     })?;
     key(&mut t, "p", "Current #1 · PAUSED")?;
-    click(&mut t, "Enter Details", "Attempt 1 / 1")?;
-    key(&mut t, "\x1b[F", "session 1")?;
+    // Each simulated step adds 0.4 s of execution time; the 3 s wait must add none.
+    let stats = key(&mut t, "s", "Elapsed execution")?;
+    let value = |label: &str| -> Result<f64> {
+        let line = stats
+            .lines()
+            .find(|l| l.contains(label))
+            .ok_or(label.to_owned())?;
+        let rest = &line[line.find(label).unwrap() + label.len()..];
+        let number: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        Ok(number.parse()?)
+    };
+    let (steps, elapsed) = (value("Execution steps: ")?, value("Elapsed execution: ")?);
+    println!("WAIT NOT CHARGED\n{stats}");
+    assert!(
+        (elapsed - steps * 0.4).abs() < 0.05,
+        "wait time was charged:\n{stats}"
+    );
+    t.send("\x1b")?;
+    t.screen("statistics closed", |s| !s.contains("Project statistics"))?;
+    t.click("Enter Details")?;
+    t.screen("same session retained", |s| {
+        s.contains("Attempt 1 / 1") && s.contains("session 1")
+    })?;
     quit(&mut t)
 }
 
@@ -292,12 +341,13 @@ fn new_task_rejection_mouse_and_configuration_field_paging() -> Result {
 #[test]
 fn review_all_views_at_minimum_size() -> Result {
     let mut t = open()?;
+    // Current comes last: the test starts there, so clicking it first would show nothing new.
     for (tab, marker) in [
-        ("1 Current", "Log · following"),
         ("2 Queue", "Queue · 120 shown"),
         ("3 History", "History · 120 shown"),
         ("4 Config", "Planner approval:"),
         ("5 About", "ktask RS ·"),
+        ("1 Current", "Log · following"),
     ] {
         let screen = click(&mut t, tab, marker)?;
         assert!(screen.contains("q Quit"), "{screen}");

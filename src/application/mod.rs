@@ -107,6 +107,18 @@ pub struct Definition {
     pub stage_timeout_ms: Option<i64>,
 }
 impl Definition {
+    /// Review, validation and remediation judge the implementation, so each needs a stronger
+    /// model than execution. ktask cannot rank models; it enforces the part it can check:
+    /// a different model, not merely a different effort.
+    pub fn reuses_execution_model(&self, role: usize) -> bool {
+        match (&self.models[0], &self.models[role]) {
+            (Some(execution), Some(model)) => {
+                role > 0
+                    && (&execution.provider, &execution.model) == (&model.provider, &model.model)
+            }
+            _ => false,
+        }
+    }
     pub fn validate(&self) -> Result<()> {
         require(
             !self.title.trim().is_empty() && !self.goal.trim().is_empty(),

@@ -6,8 +6,8 @@ use ktask_rs_mk3::{
     },
     storage::Database,
 };
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::{fs, os::unix::fs::PermissionsExt};
 
 #[path = "retention_remediation.rs"]
 mod retention_remediation;
@@ -119,7 +119,7 @@ fn current_activity_shows_multiple_readable_events_at_small_and_large_sizes() ->
         })?;
         t.send("\x1b")?;
         t.screen("current after keyboard events", |screen| {
-            screen.contains("Activity · #1")
+            !screen.contains("Project events") && screen.contains("Activity · #1")
         })?;
         t.click("Activity · #1")?;
         t.screen("mouse opens all events", |screen| {
@@ -158,7 +158,9 @@ fn current_activity_shows_multiple_readable_events_at_small_and_large_sizes() ->
     })?;
     t.send("\x1b")?;
     t.screen("stopped current after keyboard events", |screen| {
-        screen.contains("Activity · #1") && screen.contains("Stop event visible")
+        !screen.contains("Project events")
+            && screen.contains("Activity · #1")
+            && screen.contains("Stop event visible")
     })?;
     t.click("Activity · #1")?;
     t.screen("stopped mouse opens all events", |screen| {
@@ -307,7 +309,7 @@ fn recorded_usage_is_visible_in_current_details_history_and_statistics() -> Resu
         100,
         45,
     )?;
-    let history = key(&mut t, "3", "History")?;
+    let history = open_history(&mut t, "3")?;
     println!("USAGE HISTORY\n{history}");
     t.send("\r")?;
     let detail = t.screen("history attempt usage", |s| s.contains("Usage: 2 calls"))?;
@@ -316,18 +318,18 @@ fn recorded_usage_is_visible_in_current_details_history_and_statistics() -> Resu
 }
 
 fn scroll_usage(t: &mut Terminal, mouse: bool, needle: &str) -> Result<String> {
-    for _ in 0..24 {
-        let screen = t.screen("usage dialog", |_| true)?;
-        if screen.contains(needle) {
-            return Ok(screen);
-        }
-        if mouse {
-            t.wheel(true, 10, 8)?;
-        } else {
-            t.send("\x1b[6~")?;
-        }
-    }
-    Err(format!("Usage {needle:?} was not visible after scrolling").into())
+    scroll_until(
+        t,
+        &format!("usage {needle:?} scrolled into view"),
+        |t| {
+            if mouse {
+                t.wheel(true, 10, 8)
+            } else {
+                t.send("\x1b[6~")
+            }
+        },
+        |s| s.contains(needle),
+    )
 }
 
 #[test]
@@ -439,7 +441,7 @@ fn exact_large_tokens_expand_by_keyboard_and_mouse_at_both_sizes() -> Result {
                 t.send("3")?;
             }
             let history = t.screen("history row", |s| {
-                s.contains("History") && s.contains("Failed current")
+                on_history(s) && s.contains("Failed current")
             })?;
             println!("LARGE USAGE HISTORY {cols}x{rows} mouse={mouse}\n{history}");
             if mouse {
@@ -609,48 +611,55 @@ fn persistent_report_and_log_support_mouse_text_copy() -> Result {
     })?;
     println!("PERSISTENT REPORT BEFORE SELECTION\n{report}");
     let goal = location(&report, "Goal:")?;
-    drag(&mut t, goal, (goal.0 + 11, goal.1 + 1))?;
-    let selected = t.screen("persistent goal selected", |_| {
-        t.selected_at(goal.0, goal.1)
-    })?;
+    let selected = drag_select(
+        &mut t,
+        goal,
+        (goal.0 + 11, goal.1 + 1),
+        "persistent goal selected",
+    )?;
     println!("PERSISTENT GOAL SELECTED\n{selected}");
     assert!(copy(&mut t)?.starts_with("Goal: Persist"));
     assert!(t.output_bytes().windows(7).any(|w| w == b"\x1b]52;c;"));
-    key(&mut t, "\x1b", "Current #1")?;
+    clear_selection(&mut t, "Current #1")?;
     let report_at = location(&report, "Review · failed")?;
-    drag(&mut t, report_at, (report_at.0 + 14, report_at.1))?;
-    t.screen("report selected", |_| {
-        t.selected_at(report_at.0, report_at.1)
-    })?;
+    drag_select(
+        &mut t,
+        report_at,
+        (report_at.0 + 14, report_at.1),
+        "report selected",
+    )?;
     assert!(copy(&mut t)?.starts_with("Review · failed"));
-    key(&mut t, "\x1b", "Current #1")?;
+    clear_selection(&mut t, "Current #1")?;
     let log = key(&mut t, "o", "Log ·")?;
     assert!(log.contains("Check failed: transcript evidence"));
     println!("PERSISTENT RAW LOG\n{log}");
     let evidence_at = location(&log, "Check failed: transcript evidence")?;
-    drag(&mut t, evidence_at, (evidence_at.0 + 19, evidence_at.1))?;
-    t.screen("raw evidence selected", |_| {
-        t.selected_at(evidence_at.0, evidence_at.1)
-    })?;
+    drag_select(
+        &mut t,
+        evidence_at,
+        (evidence_at.0 + 19, evidence_at.1),
+        "raw evidence selected",
+    )?;
     let log_copy = copy(&mut t)?;
     assert!(log_copy.starts_with("Check failed: transc"), "{log_copy:?}");
-    key(&mut t, "\x1b", "Current #1")?;
-    let mut details = key(&mut t, "\r", "Task details / attempts")?;
-    for _ in 0..10 {
-        if details.contains("Check failed: transcript evidence") {
-            break;
-        }
-        details = key(&mut t, "\x1b[6~", "Task details / attempts")?;
-    }
-    assert!(details.contains("Check failed: transcript evidence"));
+    clear_selection(&mut t, "Current #1")?;
+    key(&mut t, "\r", "Task details / attempts")?;
+    let details = scroll_until(
+        &mut t,
+        "details scrolled to the evidence",
+        |t| t.send("\x1b[6~"),
+        |s| s.contains("Check failed: transcript evidence"),
+    )?;
     println!("PERSISTENT EVIDENCE DIALOG\n{details}");
     let dialog_at = location(&details, "Check failed: transcript evidence")?;
-    drag(&mut t, dialog_at, (dialog_at.0 + 19, dialog_at.1))?;
-    t.screen("dialog evidence selected", |_| {
-        t.selected_at(dialog_at.0, dialog_at.1)
-    })?;
+    drag_select(
+        &mut t,
+        dialog_at,
+        (dialog_at.0 + 19, dialog_at.1),
+        "dialog evidence selected",
+    )?;
     assert!(copy(&mut t)?.starts_with("Check failed: transc"));
-    key(&mut t, "\x1b", "Task details / attempts")?;
+    clear_selection(&mut t, "Task details / attempts")?;
     quit(&mut t)
 }
 
@@ -760,10 +769,12 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     assert!(found.contains("Output page 28 / 28"));
     assert!(found.contains("Match:"));
     let marker = location(&found, "EARLY_MARKER_COPY")?;
-    drag(&mut t, marker, (marker.0 + 11, marker.1))?;
-    let mouse_selected = t.screen("old evidence selected", |_| {
-        t.selected_at(marker.0, marker.1)
-    })?;
+    let mouse_selected = drag_select(
+        &mut t,
+        marker,
+        (marker.0 + 11, marker.1),
+        "old evidence selected",
+    )?;
     println!("MOUSE EVIDENCE SELECTION\n{mouse_selected}");
     let mouse_payload = mouse_copy(&mut t)?;
     println!("MOUSE EVIDENCE COPY {mouse_payload:?}");
@@ -771,11 +782,11 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
         mouse_payload.starts_with("EARLY_MARKER"),
         "{mouse_payload:?}"
     );
-    key(&mut t, "\x1b", "Task details / attempts")?;
+    clear_selection(&mut t, "Task details / attempts")?;
     let selected = keyboard_select(&mut t, &found, "EARLY_MARKER_COPY", 12)?;
     println!("KEYBOARD EVIDENCE SELECTION\n{selected}");
     assert!(copy_key(&mut t, "\r")?.starts_with("EARLY_MARKER"));
-    key(&mut t, "\x1b", "Task details / attempts")?;
+    clear_selection(&mut t, "Task details / attempts")?;
     let mouse_search = find_evidence(&mut t, "Find output", "request/check?", "request/check?")?;
     println!("MOUSE FOCUSED SEARCH\n{mouse_search}");
     let multiline = find_evidence(&mut t, "Find output", "LATE/QUERY", "LATE/QUERY MATCH")?;
@@ -885,13 +896,12 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     key(&mut t, "]", "Attempt 2 / 2")?;
     let attempt_restored = restore_transcript(&mut t, &second_body, |t| t.send("["))?;
     println!("TRANSCRIPT SCROLL AND ARTIFACT RESTORED AFTER ATTEMPT CHANGE\n{attempt_restored}");
-    key(&mut t, "\x1b", "Current #1")?;
-    key(&mut t, "2", "Queue")?;
-    key(&mut t, "1", "Current #1")?;
+    switch_away_and_back(&mut t)?;
     let reopened = restore_transcript(&mut t, &second_body, |t| t.send("\r"))?;
     println!("CURRENT TRANSCRIPT SCROLL AND ARTIFACT RESTORED AFTER REOPEN\n{reopened}");
     restore_transcript(&mut t, &first_body, |t| t.send(","))?;
-    key(&mut t, "\x1b[H", "Chunk 3 / ")?;
+    let chunk_top = transcript_body(&first_deep)?;
+    restore_transcript(&mut t, &chunk_top, |t| t.send("\x1b[H"))?;
     t.click("Newer")?;
     t.click("Newer")?;
     t.screen("first transcript chunk restored", |s| {
@@ -909,9 +919,7 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     t.click("Check +")?;
     let missing = t.screen("missing transcript marker", |s| s.contains("MISSING:"))?;
     println!("MISSING EVIDENCE\n{missing}");
-    key(&mut t, "\x1b", "Current #1")?;
-    key(&mut t, "2", "Queue")?;
-    key(&mut t, "1", "Current #1")?;
+    switch_away_and_back(&mut t)?;
     let restored_attempt = key(&mut t, "\r", "Attempt 1 / 2")?;
     println!("CURRENT EARLIER ATTEMPT RESTORED AFTER SCREEN SWITCH\n{restored_attempt}");
     assert!(restored_attempt.contains("MISSING:"));
@@ -923,7 +931,7 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     drop(writer);
     let before_history = evidence_contents(root)?;
     let mut history = terminal(root)?;
-    key(&mut history, "3", "History")?;
+    open_history(&mut history, "3")?;
     let details = key(&mut history, "\r", "Task details / attempts")?;
     println!("HISTORY BROWSER\n{details}");
     assert!(details.contains("Attempt 2 / 2"));
@@ -938,9 +946,11 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     let history_scrolled = scroll_transcript(&mut history, &history_deep, 8, true)?;
     println!("HISTORY TRANSCRIPT MOUSE SCROLL EIGHT ROWS\n{history_scrolled}");
     let history_body = transcript_body(&history_scrolled)?;
-    key(&mut history, "\x1b", "History")?;
-    key(&mut history, "2", "Queue")?;
-    key(&mut history, "3", "History")?;
+    close_details(&mut history, on_history)?;
+    history.send("2")?;
+    history.screen("Queue", on_queue)?;
+    history.send("3")?;
+    history.screen("History", on_history)?;
     let restored_history = restore_transcript(&mut history, &history_body, |t| t.send("\r"))?;
     println!(
         "HISTORY EARLIER ATTEMPT ARTIFACT AND SCROLL RESTORED AFTER SCREEN SWITCH\n{restored_history}"
@@ -989,23 +999,23 @@ fn history_opens_each_attempt_review_and_failure_without_log_scrolling() -> Resu
     drop(writer);
 
     let mut t = terminal(root)?;
-    let history = key(&mut t, "3", "History")?;
+    let history = open_history(&mut t, "3")?;
     println!("HISTORY NAVIGATION START\n{history}");
     t.click("V Reviews")?;
     let direct = t.screen("review from History toolbar", |s| {
         s.contains("First review finding")
     })?;
     println!("HISTORY DIRECT REVIEW\n{direct}");
-    key(&mut t, "\x1b", "History")?;
+    close_details(&mut t, on_history)?;
     t.click("F Failures")?;
     t.screen("failure from History toolbar", |s| {
         s.contains("Failure category: review")
     })?;
-    key(&mut t, "\x1b", "History")?;
+    close_details(&mut t, on_history)?;
     key(&mut t, "V", "First review finding")?;
-    key(&mut t, "\x1b", "History")?;
+    close_details(&mut t, on_history)?;
     key(&mut t, "F", "Failure category: review")?;
-    key(&mut t, "\x1b", "History")?;
+    close_details(&mut t, on_history)?;
     key(&mut t, "\r", "Task details / attempts")?;
     t.click("Summary")?;
     let summary = t.screen("attempt step summary directly", |s| {
@@ -1030,15 +1040,21 @@ fn history_opens_each_attempt_review_and_failure_without_log_scrolling() -> Resu
     })?;
     println!("HISTORY SECOND REVIEW\n{second}");
     assert!(second.contains("Reviews · 2 / 2"));
+    // Only the first, long review has detail lines; scrolled, its heading is out of view.
+    let first_scrolled = |s: &str| {
+        s.contains("review detail")
+            && s.contains("Other steps")
+            && !s.contains("First review finding")
+    };
     t.click("Prev step")?;
-    t.screen("first review position restored", |s| {
-        s.contains("Other steps") && !s.contains("First review finding")
-    })?;
+    t.screen("first review position restored", first_scrolled)?;
     let again = key(&mut t, "n", "Second review finding")?;
     assert!(again.contains("Reviews · 2 / 2"));
-    key(&mut t, "p", "Other steps")?;
+    t.send("p")?;
+    t.screen("keyboard previous review position restored", first_scrolled)?;
     key(&mut t, "s", "Recorded steps")?;
-    key(&mut t, "v", "Other steps")?;
+    t.send("v")?;
+    t.screen("review position restored after summary", first_scrolled)?;
     let failures = key(&mut t, "f", "Failures and requested fixes")?;
     println!("HISTORY FAILURE REASON\n{failures}");
     assert!(failures.contains("Failure category: review"));
@@ -1202,7 +1218,7 @@ fn attempt_browser_preserves_nul_suffixes_and_utf8_across_byte_chunks() -> Resul
     history.screen("NUL history startup ready", |s| {
         s.contains("No current task") && s.contains("Queue complete.")
     })?;
-    key(&mut history, "3", "History")?;
+    open_history(&mut history, "3")?;
     key(&mut history, "\r", "Task details / attempts")?;
     exercise_nul_browser(&mut history, "HISTORY")?;
     quit(&mut history)?;
@@ -1230,10 +1246,10 @@ fn exercise_nul_browser(t: &mut Terminal, view: &str) -> Result {
     let copied = copy_key(t, "\r")?;
     println!("{view} KEYBOARD BROWSE COPY {copied:?}");
     assert_eq!(copied, "AFTER_NUL_COPY");
-    key(t, "\x1b", "Task details / attempts")?;
+    clear_selection(t, "Task details / attempts")?;
     t.click("Chunk -")?;
     t.screen("mouse returns to first NUL byte chunk", |s| {
-        evidence_visible(s, "BEFORE_NUL␀␀")
+        evidence_visible(s, "BEFORE_NUL␀␀") && s.contains("chunk 1 / 17")
     })?;
     t.click("Chunk +")?;
     let mouse_page = t.screen("mouse browses beyond NUL", |s| {
@@ -1252,7 +1268,7 @@ fn exercise_nul_browser(t: &mut Terminal, view: &str) -> Result {
     let copied = copy_key(t, "\r")?;
     println!("{view} KEYBOARD SEARCH COPY {copied:?}");
     assert_eq!(copied, "AFTER_NUL_COPY");
-    key(t, "\x1b", "Task details / attempts")?;
+    clear_selection(t, "Task details / attempts")?;
     t.click("Chunk -")?;
     t.screen("mouse search starts without the suffix visible", |s| {
         s.contains("chunk 1 / 17") && !evidence_visible(s, "AFTER_NUL_COPY")
@@ -1287,15 +1303,17 @@ fn copy_nul_suffix_with_mouse(t: &mut Terminal, screen: &str, view: &str, path: 
                 .map(|offset| (line[..offset].chars().count(), row))
         })
         .ok_or("NUL suffix only appeared in search field")?;
-    drag(t, start, (start.0 + 13, start.1))?;
-    let selected = t.screen("mouse selects NUL suffix", |_| {
-        t.selected_at(start.0, start.1)
-    })?;
+    let selected = drag_select(
+        t,
+        start,
+        (start.0 + 13, start.1),
+        "mouse selects NUL suffix",
+    )?;
     println!("{view} MOUSE {path} SELECTION\n{selected}");
     let copied = mouse_copy(t)?;
     println!("{view} MOUSE {path} COPY {copied:?}");
     assert_eq!(copied, "AFTER_NUL_COPY");
-    key(t, "\x1b", "Task details / attempts")?;
+    clear_selection(t, "Task details / attempts")?;
     Ok(())
 }
 
@@ -1319,7 +1337,14 @@ fn attempt_browser_keeps_output_pages_stable_until_keyboard_or_mouse_refresh() -
         writer.output(&run, "stdout", &format!("APPENDED OUTPUT {sequence:03}"))?;
     }
     let after_append = evidence_contents(root)?;
-    let stable_page = key(&mut t, "\x1b[H", "#81 [stdout] ORIGINAL OUTPUT 081")?;
+    // Redraw the page after the appends: scroll one row, then back to its top.
+    let page_top = details_top(&old_page);
+    t.send("j")?;
+    t.screen("page scrolled one row", |s| details_top(s) != page_top)?;
+    t.send("\x1b[H")?;
+    let stable_page = t.screen("page top after appends", |s| {
+        details_top(s) == page_top && s.contains("#81 [stdout] ORIGINAL OUTPUT 081")
+    })?;
     println!("BROWSER PAGE AFTER 80 APPENDS\n{stable_page}");
     assert!(stable_page.contains("Output page 2 / 3"));
     assert!(!stable_page.contains("APPENDED OUTPUT"));
@@ -1419,14 +1444,9 @@ fn attempt_browser_shows_pinned_inputs_after_defaults_and_new_revisions_change()
         38,
     )?;
     t.screen("current ready revision", |s| s.contains("New ready intent"))?;
-    let mut observed = key(&mut t, "\r", "Task details / attempts")?;
-    println!("HISTORICAL INPUTS FIRST PAGE\n{observed}");
-    for page in 1..=8 {
-        let screen = key(&mut t, "\x1b[6~", "Task details / attempts")?;
-        println!("HISTORICAL INPUTS PAGE {page}\n{screen}");
-        observed.push_str(&screen);
-    }
-    for expected in [
+    key(&mut t, "\r", "Task details / attempts")?;
+    let mut observed = String::new();
+    let expected = [
         "Attempt inputs: revision 1",
         &format!("session {session}"),
         "Approval: ready · ai: Evidence AI",
@@ -1444,12 +1464,26 @@ fn attempt_browser_shows_pinned_inputs_after_defaults_and_new_revisions_change()
         "Task limit: 2 min 3 s",
         "New ready intent",
         "New draft intent",
-    ] {
+    ];
+    let mut page = 0;
+    let result = scroll_until(
+        &mut t,
+        "historical inputs page",
+        |t| t.send("\x1b[6~"),
+        |screen| {
+            println!("HISTORICAL INPUTS PAGE {page}\n{screen}");
+            page += 1;
+            observed.push_str(screen);
+            expected.iter().all(|text| observed.contains(text))
+        },
+    );
+    for text in expected {
         assert!(
-            observed.contains(expected),
-            "historical inputs missing {expected:?}:\n{observed}"
+            observed.contains(text),
+            "historical inputs missing {text:?}:\n{observed}"
         );
     }
+    result?;
     quit(&mut t)?;
     assert_eq!(evidence_contents(root)?, before);
     Ok(())
@@ -1519,8 +1553,10 @@ fn live_sqlite_log_selection_survives_new_output_and_mouse_copy() -> Result {
         } else {
             anchor
         };
+        assert!(!highlighted(&t), "selected before the drag");
         drag(&mut t, start, endpoint)?;
-        let selected = t.screen("SQLite log selected", |_| t.selected_at(anchor.0, anchor.1))?;
+        // See `highlighted`: the highlight is not screen text.
+        let selected = t.still("SQLite log selected", |_| t.selected_at(anchor.0, anchor.1))?;
         println!(
             "LIVE SQLITE SELECTED {cols}x{rows} release_over_copy={release_over_copy}\n{selected}"
         );
@@ -1530,6 +1566,9 @@ fn live_sqlite_log_selection_survives_new_output_and_mouse_copy() -> Result {
         );
         let expected = mouse_copy(&mut t)?;
         assert_eq!(expected, "ANCHOR fixed", "{cols}x{rows}");
+        // Waiting for the copy's result leaves no input pending: the next wait follows stored
+        // output, which a scrolled log may not show, so it counts redraws instead.
+        t.screen("copy reported", |s| s.contains("Sent 12 characters"))?;
         let redraws = t.redraw_count();
         for i in 0..8 {
             writer.output(&run, "stdout", &format!("NEW SQLITE OUTPUT {i:02}"))?;
@@ -1567,13 +1606,117 @@ fn live_sqlite_log_selection_survives_new_output_and_mouse_copy() -> Result {
     }
     Ok(())
 }
+/// Sends `keys` and waits for `text`, which only their result may show: not typed text,
+/// a tab label or the global status line.
 fn key(t: &mut Terminal, keys: &str, text: &str) -> Result<String> {
     t.send(keys)?;
     t.screen(text, |s| s.contains(text))
 }
+/// Sends `keys` that close the form or prompt showing `form`, and waits for `text` without
+/// it: typed text is visible before the form is applied.
+fn submit(t: &mut Terminal, keys: &str, form: &str, text: &str) -> Result<String> {
+    t.send(keys)?;
+    t.screen(text, |s| !s.contains(form) && s.contains(text))
+}
+/// Types into the focused field and waits for its value before the cursor.
+fn type_field(t: &mut Terminal, text: &str) -> Result<String> {
+    key(t, text, &format!("{text}▏"))
+}
 fn quit(t: &mut Terminal) -> Result {
     t.send("\x03")?;
     t.finish()
+}
+
+// Every screen shows the tab labels and the global status line ("Current #1 · FAILED |
+// Queue 2 · History 0"), so waits for a view use what only that view draws.
+fn on_current(s: &str) -> bool {
+    s.contains("Task brief · Enter") || s.contains("╭ Ready")
+}
+fn on_queue(s: &str) -> bool {
+    s.contains(" total · execution order")
+}
+fn on_history(s: &str) -> bool {
+    s.contains(" total · read-only")
+}
+fn close_details(t: &mut Terminal, view: fn(&str) -> bool) -> Result<String> {
+    t.send("\x1b")?;
+    t.screen("details closed", |s| {
+        !s.contains("Task details / attempts") && view(s)
+    })
+}
+/// Closes the current task's details, then visits Queue and returns to Current.
+fn switch_away_and_back(t: &mut Terminal) -> Result {
+    close_details(t, on_current)?;
+    t.send("2")?;
+    t.screen("Queue", on_queue)?;
+    t.send("1")?;
+    t.screen("Current", |s| on_current(s) && s.contains("Current #1"))?;
+    Ok(())
+}
+/// Sends `keys` to a fresh terminal once it has drawn, and waits for History.
+fn open_history(t: &mut Terminal, keys: &str) -> Result<String> {
+    t.screen("startup", |s| s.contains("3 History"))?;
+    t.send(keys)?;
+    t.screen("History", on_history)
+}
+
+// A selection highlight is cell styling that screen text cannot show, and `screen` would
+// test the live highlight against the earlier text. These helpers check the highlight's
+// state before the input instead, then wait for its change with `still`.
+fn highlighted(t: &Terminal) -> bool {
+    // A row's byte length bounds its columns, wide characters included.
+    t.current_screen()
+        .lines()
+        .enumerate()
+        .any(|(row, line)| (0..line.len()).any(|col| t.selected_at(col, row)))
+}
+fn drag_select(
+    t: &mut Terminal,
+    from: (usize, usize),
+    to: (usize, usize),
+    description: &str,
+) -> Result<String> {
+    assert!(
+        !t.selected_at(from.0, from.1),
+        "{description}: selected before the drag"
+    );
+    drag(t, from, to)?;
+    t.still(description, |_| t.selected_at(from.0, from.1))
+}
+/// Proves earlier input was handled when its result may look like the screen before:
+/// handled in order after it, F2 highlights the keyboard selection cursor and Esc clears it.
+fn handled(t: &mut Terminal, description: &str) -> Result<String> {
+    assert!(!highlighted(t), "{description}: selection already active");
+    t.send("\x1bOQ")?;
+    t.still(description, |_| highlighted(t))?;
+    t.send("\x1b")?;
+    t.still(description, |_| !highlighted(t))
+}
+/// Esc clears the active selection and changes nothing else, so `context` stays visible.
+fn clear_selection(t: &mut Terminal, context: &str) -> Result<String> {
+    assert!(highlighted(t), "no selection to clear");
+    t.send("\x1b")?;
+    t.still("selection cleared", |s| {
+        s.contains(context) && !highlighted(t)
+    })
+}
+/// Scrolls until `done` accepts a screen; every step must move the content.
+fn scroll_until(
+    t: &mut Terminal,
+    description: &str,
+    scroll: impl Fn(&mut Terminal) -> Result,
+    mut done: impl FnMut(&str) -> bool,
+) -> Result<String> {
+    let mut screen = t.current_screen();
+    for _ in 0..24 {
+        if done(&screen) {
+            return Ok(screen);
+        }
+        scroll(t)?;
+        let previous = screen;
+        screen = t.screen(description, |s| s != previous)?;
+    }
+    Err(format!("{description}: not reached after scrolling:\n{screen}").into())
 }
 
 fn find_evidence(t: &mut Terminal, field: &str, query: &str, expected: &str) -> Result<String> {
@@ -1582,19 +1725,17 @@ fn find_evidence(t: &mut Terminal, field: &str, query: &str, expected: &str) -> 
     } else {
         t.click(field)?;
     }
-    let before_typing_frame = t.redraw_count();
+    // Type first, prove the typing was handled, then search: the guarded wait below then
+    // compares against the screen with the query typed, so a match the previous search
+    // left on screen cannot pass for this one.
     t.send(&format!("\x01{query}"))?;
-    let rendered_query = format!("{query}▏");
-    t.screen("evidence query rendered before submitting search", |s| {
-        t.redraw_count() > before_typing_frame && s.contains(&rendered_query)
-    })?;
-    let mut before_search_frame = t.redraw_count();
+    handled(t, "query typed")?;
     t.send("\r")?;
+    let rendered_query = format!("{query}▏");
     for _ in 0..128 {
         let screen = t.screen("evidence search result or bounded continuation", |s| {
-            t.redraw_count() > before_search_frame
-                && s.contains(&rendered_query)
-                && (evidence_visible(s, expected)
+            s.contains(&rendered_query)
+                && (match_shown(s) && evidence_visible(s, expected)
                     || evidence_visible(s, "Search continues")
                     || evidence_visible(s, "No matching evidence recorded"))
         })?;
@@ -1604,10 +1745,26 @@ fn find_evidence(t: &mut Terminal, field: &str, query: &str, expected: &str) -> 
         if !screen.contains("Search continues") {
             return Err(format!("search {query:?} did not find {expected:?}:\n{screen}").into());
         }
-        before_search_frame = t.redraw_count();
+        // Each continuation may look the same as the one before.
         t.send("\r")?;
+        handled(t, "search continued")?;
     }
     Err(format!("search {query:?} did not finish its bounded scan").into())
+}
+
+/// A match shows its "Match:" excerpt, or scrolls the details from their "Attempt" header
+/// to the matching record.
+fn match_shown(screen: &str) -> bool {
+    screen.contains("Match: ")
+        || !details_top(screen).is_some_and(|line| line.starts_with("│Attempt "))
+}
+/// The first row inside the details dialog.
+fn details_top(screen: &str) -> Option<String> {
+    screen
+        .lines()
+        .skip_while(|line| !line.contains("Task details / attempts"))
+        .nth(1)
+        .map(str::to_owned)
 }
 
 fn evidence_visible(screen: &str, text: &str) -> bool {
@@ -1647,7 +1804,6 @@ fn scroll_transcript(t: &mut Terminal, baseline: &str, rows: usize, mouse: bool)
         .lines()
         .nth(rows)
         .ok_or("scroll baseline too short")?;
-    let before_frame = t.redraw_count();
     if mouse {
         assert_eq!(rows, 8);
         t.click("Down")?;
@@ -1655,8 +1811,7 @@ fn scroll_transcript(t: &mut Terminal, baseline: &str, rows: usize, mouse: bool)
         t.send(&"j".repeat(rows))?;
     }
     let scrolled = t.screen("transcript scroll changes the exact visible top row", |s| {
-        t.redraw_count() > before_frame
-            && transcript_body(s).is_ok_and(|body| body.lines().next() == Some(expected_top))
+        transcript_body(s).is_ok_and(|body| body.lines().next() == Some(expected_top))
     })?;
     let scrolled_body = transcript_body(&scrolled)?;
     assert_ne!(scrolled_body, baseline_body);
@@ -1675,11 +1830,9 @@ fn restore_transcript(
     expected_body: &str,
     action: impl FnOnce(&mut Terminal) -> Result,
 ) -> Result<String> {
-    let before_frame = t.redraw_count();
     action(t)?;
-    t.screen("exact transcript body and nonzero scroll restored", |s| {
-        t.redraw_count() > before_frame
-            && transcript_body(s).is_ok_and(|body| body == expected_body)
+    t.screen("exact transcript body restored", |s| {
+        transcript_body(s).is_ok_and(|body| body == expected_body)
     })
 }
 
@@ -1687,13 +1840,18 @@ fn keyboard_select(t: &mut Terminal, screen: &str, needle: &str, length: usize) 
     let start = location(screen, needle)?;
     let title = location(screen, "Task details / attempts")?;
     let body = (title.0 - 1, title.1 + 1);
+    assert!(
+        !t.selected_at(start.0, start.1),
+        "{needle} selected before F2"
+    );
     t.send(&format!(
         "\x1bOQ{}{}{}",
         "\x1b[B".repeat(start.1 - body.1),
         "\x1b[C".repeat(start.0 - body.0),
         "\x1b[1;2C".repeat(length - 1)
     ))?;
-    t.screen("keyboard selected evidence without mouse selection", |_| {
+    // See `highlighted`: the highlight is not screen text.
+    t.still("keyboard selected evidence without mouse selection", |_| {
         t.selected_at(start.0, start.1)
     })
 }
@@ -1811,7 +1969,9 @@ fn confirm_storage_cleanup_mouse(
     println!("RETENTION MOUSE CONFIRMATION SCREEN\n{confirmation}");
     assert!(artifact.exists());
     terminal.click("Cancel")?;
-    terminal.screen("mouse cleanup cancelled", |s| s.contains("k Storage"))?;
+    terminal.screen("mouse cleanup cancelled", |s| {
+        !s.contains("Delete stored evidence?") && s.contains("k Storage")
+    })?;
     assert!(artifact.exists());
     assert!(!service(root)?.task(task_id)?.unwrap().attempts[0].output_pruned);
     terminal.click("k Storage")?;
@@ -1843,7 +2003,9 @@ fn confirm_storage_cleanup_keyboard(
     println!("RETENTION KEYBOARD CONFIRMATION SCREEN\n{confirmation}");
     assert!(!service(root)?.task(task_id)?.unwrap().attempts[0].output_pruned);
     terminal.send("\x1b")?;
-    terminal.screen("keyboard cleanup cancelled", |s| s.contains("k Storage"))?;
+    terminal.screen("keyboard cleanup cancelled", |s| {
+        !s.contains("Delete stored evidence?") && s.contains("k Storage")
+    })?;
     assert!(!service(root)?.task(task_id)?.unwrap().attempts[0].output_pruned);
     terminal.send("k")?;
     terminal.screen("keyboard cleanup preview reopened", |s| {
@@ -2058,7 +2220,7 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
     })?;
     println!("RETENTION KEYBOARD APPLIED SCREEN\n{keyboard_applied}");
     keyboard.send("3")?;
-    keyboard.screen("pruned History", |s| s.contains("History"))?;
+    keyboard.screen("pruned History", on_history)?;
     keyboard.send("\r")?;
     let pruned_history = keyboard.screen("pruned output in History", |s| {
         s.contains("PRUNED: stored output")
@@ -2066,7 +2228,9 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
     println!("RETENTION PRUNED HISTORY SCREEN\n{pruned_history}");
     keyboard.click("Close")?;
     keyboard.send("4")?;
-    keyboard.screen("policy Config", |s| s.contains("k Storage"))?;
+    keyboard.screen("policy Config", |s| {
+        !s.contains("Task details / attempts") && s.contains("k Storage")
+    })?;
     keyboard.send("k")?;
     keyboard.screen("policy form", |s| s.contains("Retain completed attempts"))?;
     keyboard.send("\x015")?;
@@ -2223,8 +2387,7 @@ fn provider_fixture(root: &Path, proposal: serde_json::Value, fail: bool) -> Res
         fixture.display()
     );
     let executable = bin.join("codex");
-    fs::write(&executable, script)?;
-    fs::set_permissions(executable, fs::Permissions::from_mode(0o755))?;
+    support::write_executable(&executable, script)?;
     Ok(())
 }
 
@@ -2601,7 +2764,9 @@ fn breakdown_pending_queue_row_keeps_failed_current_in_place() -> Result {
         } else {
             t.send("2")?;
         }
-        t.screen("queue", |s| s.contains("Pending after failure"))?;
+        t.screen("queue", |s| {
+            on_queue(s) && s.contains("Pending after failure")
+        })?;
         if mouse {
             t.click("#2   PENDING")?;
         } else {
@@ -2943,7 +3108,9 @@ fn revised_failure_waits_for_approval_before_queue_continues() -> Result {
         verify_revised_remediation(root, id, &draft, PlannerApproval::ReviewRequired)?;
         terminal.send("1")?;
         let pending = terminal.screen("owner approval pending", |s| {
-            s.contains("Pending revision 2 · needs approval") && s.contains("v Approve")
+            on_current(s)
+                && s.contains("Pending revision 2 · needs approval")
+                && s.contains("v Approve")
         })?;
         println!("REVISE AWAITS APPROVAL mouse={mouse}\n{pending}");
 
@@ -2954,11 +3121,9 @@ fn revised_failure_waits_for_approval_before_queue_continues() -> Result {
         }
         // The replacement provider always exits 9: the revised task is repaired automatically
         // until three attempts in a row have failed, then the stop banner says so.
-        let after = terminal.screen_within(
-            "approved revision attempted",
-            std::time::Duration::from_secs(30),
-            |s| s.contains("EXECUTION STOPPED"),
-        )?;
+        let after = terminal.screen("approved revision attempted", |s| {
+            s.contains("EXECUTION STOPPED")
+        })?;
         println!("REVISE AFTER APPROVAL mouse={mouse}\n{after}");
         let task = writer.task(id)?.unwrap();
         assert_eq!(task.attempts.len(), 4);
@@ -3104,14 +3269,16 @@ fn remediation_stalled_provider_can_cancel_and_quit_without_leaking_children() -
             terminal.screen("pending proposal", |s| s
                 .contains("Requesting failure judgment"))?
         );
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        while !root.join("descendant-pid").exists() {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        terminal.send("\r")?;
+        support::eventually("stalled judge started its descendant", || {
+            Ok(root.join("descendant-pid").exists().then_some(()))
+        })?;
+        // F6 without a selection only shows a hint: input is handled in order, so the hint
+        // proves Enter was handled, and the request is still pending.
+        terminal.send("\r\x1b[17~")?;
         terminal.screen("pending Enter is inert", |s| {
-            s.contains("Requesting failure judgment") && !s.contains("Simulation")
+            s.contains("Drag text, or F2")
+                && s.contains("Requesting failure judgment")
+                && !s.contains("Simulation")
         })?;
         match input {
             "mouse" => terminal.click("Cancel")?,
@@ -3401,16 +3568,18 @@ fn real_tui_saves_across_kill_restart_and_never_simulates_real_tasks() -> Result
     key(&mut t, "a", "Add task")?;
     println!(
         "REAL ADD\n{}",
-        key(
+        submit(
             &mut t,
             "Real durable task\tGoal\tCheck\r",
+            "╭ Add task",
             "Real durable task"
         )?
     );
     key(&mut t, "c", "Execution provider/model")?;
-    key(
+    submit(
         &mut t,
         "test-provider/worker-v2\tcustom\r",
+        "╭ Task models and limits",
         "Saved to SQLite",
     )?;
     t.send("1r")?;
@@ -3427,12 +3596,21 @@ fn real_tui_saves_across_kill_restart_and_never_simulates_real_tasks() -> Result
         t.screen("persisted", |s| s.contains("Real durable task")
             && s.contains("PENDING"))?
     );
-    key(&mut t, "c", "test-provider/worker-v2")?;
+    t.send("c")?;
+    t.screen("stored model", |s| {
+        s.contains("Execution provider/model") && s.contains("test-provider/worker-v2")
+    })?;
     t.screen("custom effort persists", |s| s.contains("custom"))?;
-    key(&mut t, "\x1b", "Real durable task")?;
-    key(
+    submit(
+        &mut t,
+        "\x1b",
+        "╭ Task models and limits",
+        "Real durable task",
+    )?;
+    submit(
         &mut t,
         "e\x01Renamed durable task\r",
+        "╭ Edit task",
         "Renamed durable task",
     )?;
     quit(&mut t)?;
@@ -3462,62 +3640,63 @@ fn queue_add_sets_execution_model_by_keyboard_and_mouse() -> Result {
 
     let form = key(&mut t, "a", "Execution provider/model")?;
     println!("KEYBOARD NEW TASK FORM\n{form}");
-    let saved = key(
+    let saved = submit(
         &mut t,
         "Keyboard model task\tGoal\tCriterion\t\tdummy/worker\thigh\x13",
+        "╭ Add task",
         "Keyboard model task",
     )?;
     println!("KEYBOARD MODEL SAVED\n{saved}");
-
-    t.click("2 Queue")?;
-    t.screen("queue", |s| s.contains("Keyboard model task"))?;
+    assert!(on_queue(&saved), "saving a new task shows it in Queue");
     t.click("a Add")?;
     let form = t.screen("mouse new task form", |s| {
         s.contains("Execution provider/model")
     })?;
     println!("MOUSE NEW TASK FORM\n{form}");
     t.click("Title")?;
-    key(&mut t, "Mouse model task", "Mouse model task")?;
+    type_field(&mut t, "Mouse model task")?;
     t.click("Goal")?;
-    key(&mut t, "Goal", "Goal")?;
+    type_field(&mut t, "Goal")?;
     t.click("Acceptance check")?;
-    key(&mut t, "Criterion", "Criterion")?;
+    type_field(&mut t, "Criterion")?;
     t.click("Execution provider/model")?;
-    key(&mut t, "dummy/mouse", "dummy/mouse")?;
+    type_field(&mut t, "dummy/mouse")?;
     t.click("Execution effort")?;
-    key(&mut t, "low", "low")?;
+    type_field(&mut t, "low")?;
     t.click("Apply")?;
-    let saved = t.screen("mouse model saved", |s| s.contains("Mouse model task"))?;
-    println!("MOUSE MODEL SAVED\n{saved}");
-    let inserted = key(
-        &mut t,
-        "iInserted model task\tGoal\tCriterion\t\t1\tdummy/insert\tmax\x13",
-        "Inserted model task",
-    )?;
-    println!("INSERTED MODEL SAVED\n{inserted}");
-    t.screen("keyboard insert committed", |s| {
-        s.contains("Saved to SQLite") && !s.contains("╭ Insert task")
+    let saved = t.screen("mouse model saved", |s| {
+        !s.contains("╭ Add task") && s.contains("Mouse model task")
     })?;
+    println!("MOUSE MODEL SAVED\n{saved}");
+    t.send("iInserted model task\tGoal\tCriterion\t\t1\tdummy/insert\tmax\x13")?;
+    let inserted = t.screen("keyboard insert committed", |s| {
+        s.contains("Saved to SQLite")
+            && !s.contains("╭ Insert task")
+            && s.contains("Inserted model task")
+    })?;
+    println!("INSERTED MODEL SAVED\n{inserted}");
     t.click("i Insert")?;
     let form = t.screen("mouse insert task form", |s| {
         s.contains("Before task ID") && s.contains("Execution provider/model")
     })?;
     println!("MOUSE INSERT TASK FORM\n{form}");
     t.click("Title")?;
-    key(&mut t, "Mouse inserted task", "Mouse inserted task")?;
+    type_field(&mut t, "Mouse inserted task")?;
     t.click("Goal")?;
-    key(&mut t, "Goal", "Goal")?;
+    type_field(&mut t, "Goal")?;
     t.click("Acceptance check")?;
-    key(&mut t, "Criterion", "Criterion")?;
+    type_field(&mut t, "Criterion")?;
     t.click("Before task ID")?;
-    key(&mut t, "2", "2")?;
+    type_field(&mut t, "2")?;
     t.click("Execution provider/model")?;
-    key(&mut t, "dummy/mouse-insert", "dummy/mouse-insert")?;
+    type_field(&mut t, "dummy/mouse-insert")?;
     t.click("Execution effort")?;
-    key(&mut t, "medium", "medium")?;
+    type_field(&mut t, "medium")?;
     t.click("Apply")?;
     let inserted = t.screen("mouse inserted model saved", |s| {
-        s.contains("Mouse inserted task") && s.contains("dummy/mouse-insert")
+        !s.contains("╭ Insert task")
+            && s.contains("Mouse inserted task")
+            && s.contains("dummy/mouse-insert")
     })?;
     println!("MOUSE INSERTED MODEL SAVED\n{inserted}");
     quit(&mut t)?;
@@ -3586,20 +3765,30 @@ fn queue_add_whitespace_fields_keep_project_model_default() -> Result {
     )?;
     let form = key(&mut t, "a", "Execution provider/model")?;
     println!("WHITESPACE DEFAULT FORM\n{form}");
-    let saved = key(
+    let saved = submit(
         &mut t,
         "Default whitespace task\tGoal\tCriterion\t\t  \t  \x13",
+        "╭ Add task",
         "Default whitespace task",
     )?;
     println!("WHITESPACE DEFAULT SAVED\n{saved}");
-    let models = key(&mut t, "c", "dummy/default")?;
+    t.send("c")?;
+    let models = t.screen("stored default model", |s| {
+        s.contains("Execution provider/model") && s.contains("dummy/default")
+    })?;
     println!("WHITESPACE DEFAULT MODELS\n{models}");
-    key(&mut t, "\x1b", "Default whitespace task")?;
+    submit(
+        &mut t,
+        "\x1b",
+        "╭ Task models and limits",
+        "Default whitespace task",
+    )?;
     let form = key(&mut t, "a", "Execution provider/model")?;
     println!("WHITESPACE EFFORT FORM\n{form}");
-    let saved = key(
+    let saved = submit(
         &mut t,
         "Trimmed effort task\tGoal\tCriterion\t\t  \t  high  \x13",
+        "╭ Add task",
         "Trimmed effort task",
     )?;
     println!("TRIMMED EFFORT SAVED\n{saved}");
@@ -3638,35 +3827,44 @@ fn real_tui_mouse_approval_history_delete_undo_and_all_views() -> Result {
     t.click("v Approve")?;
     t.screen("ready second", |s| s.contains("Current #2 · PENDING"))?;
     t.click("2 Queue")?;
-    t.screen("queue", |s| s.contains("d Delete"))?;
+    t.screen("queue", |s| on_queue(s) && s.contains("d Delete"))?;
     t.click("d Delete")?;
     t.screen("confirm", |s| s.contains("Delete pending task?"))?;
     t.click("Apply")?;
     t.screen("deleted", |s| s.contains("Queue 0"))?;
     t.click("u Undo")?;
     t.screen("restored", |s| s.contains("Queue 1"))?;
-    for (tab, text) in [
-        ("1 Current", "No attempts yet"),
-        ("2 Queue", "Delete and restore"),
-        ("3 History", "Human approval"),
-        ("4 Config", "Storage: SQLite"),
-        ("5 About", "relational SQLite"),
+    // Config and About draw these only on their own screens.
+    let anywhere: fn(&str) -> bool = |_| true;
+    for (tab, view, text) in [
+        (
+            "1 Current",
+            on_current as fn(&str) -> bool,
+            "No attempts yet",
+        ),
+        ("2 Queue", on_queue, "Delete and restore"),
+        ("3 History", on_history, "Human approval"),
+        ("4 Config", anywhere, "Storage: SQLite"),
+        ("5 About", anywhere, "relational SQLite"),
     ] {
         t.click(tab)?;
-        println!("REAL {tab}\n{}", t.screen(tab, |s| s.contains(text))?);
+        println!(
+            "REAL {tab}\n{}",
+            t.screen(tab, |s| view(s) && s.contains(text))?
+        );
     }
     key(&mut t, "4e", "Project preferences")?;
     t.click("< Enabled >")?;
     t.screen("disabled", |s| s.contains("< Disabled >"))?;
-    key(&mut t, "\r", "Mouse: Disabled")?;
-    key(&mut t, "e \r", "Mouse: Enabled")?;
+    submit(&mut t, "\r", "Project preferences", "Mouse: Disabled")?;
+    submit(&mut t, "e \r", "Project preferences", "Mouse: Enabled")?;
     println!(
         "SQLITE STATS\n{}",
         key(&mut t, "s", "Project statistics · SQLite")?
     );
-    key(&mut t, "\x1b", "Mouse: Enabled")?;
+    submit(&mut t, "\x1b", "Project statistics", "Mouse: Enabled")?;
     println!("SQLITE EVENTS\n{}", key(&mut t, "l", "Project events")?);
-    key(&mut t, "\x1b", "Mouse: Enabled")?;
+    submit(&mut t, "\x1b", "Project events", "Mouse: Enabled")?;
     key(&mut t, "?", "Keyboard help")?;
     println!(
         "SQLITE HELP\n{}",
@@ -3689,12 +3887,12 @@ fn two_real_windows_reject_stale_forms_and_refresh_external_changes() -> Result 
         t.screen("original", |s| s.contains("Original"))?;
         key(t, "e", "Edit task")?;
     }
-    key(&mut a, "\x01First writer\r", "First writer")?;
+    submit(&mut a, "\x01First writer\r", "╭ Edit task", "First writer")?;
     println!(
         "CONFLICT\n{}",
         key(&mut b, "\x01Stale writer\r", "Task changed elsewhere")?
     );
-    key(&mut b, "\x1b", "First writer")?;
+    submit(&mut b, "\x1b", "╭ Edit task", "First writer")?;
     quit(&mut a)?;
     quit(&mut b)?;
     assert_eq!(
@@ -3715,13 +3913,21 @@ fn real_tui_disk_import_export_preview_overwrite_and_atomic_error() -> Result {
     t.screen("startup", |s| s.contains("Transfer me"))?;
     key(&mut t, "2x", "Export task definitions")?;
     key(&mut t, "\r", "Exported to disk")?;
-    assert!(project(scratch.path()).join("tasks.tsv").is_file());
+    let exported = project(scratch.path()).join("tasks.tsv");
+    assert!(exported.is_file());
+    let definitions = fs::read_to_string(&exported)?;
+    // A stale file shows whether a later export replaced it: the message stays the same.
+    fs::write(&exported, "stale")?;
     key(&mut t, "x\r", "Overwrite file?")?;
     t.click("Cancel")?;
     t.screen("cancelled", |s| !s.contains("Overwrite file?"))?;
+    assert_eq!(fs::read_to_string(&exported)?, "stale");
     key(&mut t, "x\r", "Overwrite file?")?;
     t.click("Apply")?;
-    t.screen("exported", |s| s.contains("Exported to disk"))?;
+    t.screen("exported", |s| {
+        !s.contains("Overwrite file?") && s.contains("Exported to disk")
+    })?;
+    assert_eq!(fs::read_to_string(&exported)?, definitions);
     t.click("o Import")?;
     t.screen("import", |s| s.contains("Import task definitions"))?;
     t.click("Apply")?;
@@ -3733,7 +3939,8 @@ fn real_tui_disk_import_export_preview_overwrite_and_atomic_error() -> Result {
     key(&mut t, "999\r", "insertion target is not in this queue")?;
     assert_eq!(service(scratch.path())?.snapshot()?.queue.len(), 1);
     key(&mut t, "\x011\r", "Queue 2")?;
-    key(&mut t, "1", "Current #2")?;
+    t.send("1")?;
+    t.screen("Current", |s| on_current(s) && s.contains("Current #2"))?;
     quit(&mut t)?;
     Ok(())
 }
@@ -3756,7 +3963,12 @@ fn real_instances_and_demo_never_share_task_data() -> Result {
     demo.screen("demo", |s| {
         s.contains("MOCK DATA") && s.contains("Queue 120")
     })?;
-    key(&mut demo, "aDemo only\tGoal\tCheck\r", "Demo only")?;
+    submit(
+        &mut demo,
+        "aDemo only\tGoal\tCheck\r",
+        "╭ Add task",
+        "Demo only",
+    )?;
     quit(&mut demo)?;
     quit(&mut prod)?;
     assert_eq!(service(scratch.path())?.snapshot()?.queue.len(), 1);
@@ -3803,7 +4015,12 @@ fn running_guards_and_real_failure_resolution_preserve_attempt_evidence() -> Res
         "STORED FAILURE\n{}",
         key(&mut t, "\r", "Recorded fixture failure")?
     );
-    key(&mut t, "\x1b", "Current #1 · FAILED")?;
+    submit(
+        &mut t,
+        "\x1b",
+        "Task details / attempts",
+        "Current #1 · FAILED",
+    )?;
     key(&mut t, "z", "Resolve failed current")?;
     key(&mut t, "\tAccepted evidence\r", "History 1")?;
     key(&mut t, "3\r", "Original evidence retained")?;
@@ -3833,7 +4050,12 @@ fn real_forms_save_drafts_all_model_roles_limits_and_reject_without_blocking() -
         "e\x01Proposed title\t\t\t\t \r",
         "Pending revision 2",
     )?;
-    key(&mut t, "nKeep old inputs\r", "Saved to SQLite")?;
+    t.send("nKeep old inputs\r")?;
+    t.screen("draft rejected", |s| {
+        !s.contains("Reject pending revision")
+            && !s.contains("Pending revision")
+            && s.contains("Saved to SQLite")
+    })?;
     t.screen("ready survived", |s| {
         s.contains("Keep ready") && !s.contains("Pending revision")
     })?;
@@ -3842,7 +4064,7 @@ fn real_forms_save_drafts_all_model_roles_limits_and_reject_without_blocking() -
         "STORED MODEL FORM\n{}",
         t.screen("models", |s| s.contains("Execution provider/model"))?
     );
-    key(&mut t, "malformed\r", "Use provider/model")?;
+    key(&mut t, "malformed\r", "Use provider/model (for example")?;
     key(
         &mut t,
         "\x01test/executor\tlow\ttest/reviewer\tmedium\ttest/validator\thigh\ttest/remediator\tmax\t\x017\t  ",
@@ -3854,11 +4076,20 @@ fn real_forms_save_drafts_all_model_roles_limits_and_reject_without_blocking() -
         t.screen("limits", |s| s.contains("Attempt limit"))?
     );
     t.click("Apply")?;
-    t.screen("saved", |s| s.contains("Saved to SQLite"))?;
+    t.screen("saved", |s| {
+        !s.contains("╭ Task models and limits") && s.contains("Saved to SQLite")
+    })?;
     key(&mut t, "2i", "Insert task")?;
-    key(&mut t, "Earlier task\tGoal\tCheck\t\t1\r", "Earlier task")?;
-    key(&mut t, "m1\r", "Saved to SQLite")?;
-    key(&mut t, "1", "Current #2")?;
+    submit(
+        &mut t,
+        "Earlier task\tGoal\tCheck\t\t1\r",
+        "╭ Insert task",
+        "Earlier task",
+    )?;
+    key(&mut t, "m", "Move pending task")?;
+    submit(&mut t, "1\r", "Move pending task", "Saved to SQLite")?;
+    t.send("1")?;
+    t.screen("Current", |s| on_current(s) && s.contains("Current #2"))?;
     quit(&mut t)?;
     let snapshot = service(scratch.path())?.snapshot()?;
     let d = &snapshot.queue[1].definition().definition;
@@ -3905,7 +4136,10 @@ fn sqlite_queue_and_history_handle_240_tasks_in_execution_order() -> Result {
     t.screen("large stored queue", |s| {
         s.contains("Queue 120 · History 120") && s.contains("Current #121")
     })?;
-    key(&mut t, "2\x1b[F", "Durable task 240")?;
+    t.send("2\x1b[F")?;
+    t.screen("Queue end", |s| {
+        on_queue(s) && s.contains("Durable task 240")
+    })?;
     println!(
         "LARGE SQLITE QUEUE\n{}",
         t.screen("last page", |s| s.contains("120 / 120"))?
@@ -3918,10 +4152,17 @@ fn sqlite_queue_and_history_handle_240_tasks_in_execution_order() -> Result {
     let details = key(&mut t, "\r", "Task details / attempts")?;
     assert!(details.contains("Durable task 120"), "{details}");
     println!("LARGE SQLITE HISTORY DETAILS\n{details}");
-    key(&mut t, "\x1b", "History · 1 / 120")?;
-    key(&mut t, "/Durable task 1\r", "Search:")?;
-    key(&mut t, "2", "Durable task 240")?;
-    key(&mut t, "1", "Current #121")?;
+    close_details(&mut t, |s| s.contains("History · 1 / 120"))?;
+    submit(
+        &mut t,
+        "/Durable task 1\r",
+        "Enter Apply search",
+        "Search: Durable task 1",
+    )?;
+    t.send("2")?;
+    t.screen("Queue", |s| on_queue(s) && s.contains("Durable task 240"))?;
+    t.send("1")?;
+    t.screen("Current", |s| on_current(s) && s.contains("Current #121"))?;
     quit(&mut t)?;
     assert_eq!(s.snapshot()?.queue.len(), 120);
     Ok(())
@@ -3930,6 +4171,8 @@ fn sqlite_queue_and_history_handle_240_tasks_in_execution_order() -> Result {
 #[test]
 fn large_current_log_stays_responsive_to_mouse_motion_and_screen_switches() -> Result {
     use std::time::{Duration, Instant};
+    // One read's worth of motion reports (12 bytes each); a larger burst can split a report.
+    const POINTER_MOVES: usize = 60;
     for (cols, rows) in [(70, 22), (120, 30)] {
         let scratch = support::sandbox()?;
         let root = scratch.path();
@@ -3953,26 +4196,27 @@ fn large_current_log_stays_responsive_to_mouse_motion_and_screen_switches() -> R
             "LARGE CURRENT {cols}x{rows}\n{}",
             t.screen("large log loaded", |s| s.contains("LAST LOG MARKER"))?
         );
-        let started = Instant::now();
-        t.send(&"\x1b[<35;50;12M".repeat(60))?;
+        // Hover changes nothing on screen, so it must not redraw; the unit test
+        // redraws_reuse_wrapped_rows covers what a redraw costs.
+        let frames = t.redraw_count();
+        t.send(&"\x1b[<35;50;12M".repeat(POINTER_MOVES))?;
         t.click("2 Queue")?;
         let queue = t.screen("queue after pointer flood", |s| {
             s.contains("Queue · 201 shown")
         })?;
-        let mouse_latency = started.elapsed();
-        println!("MOUSE LATENCY {cols}x{rows}: {mouse_latency:?}\n{queue}");
+        let redraws = t.redraw_count() - frames;
+        println!("POINTER FLOOD {cols}x{rows}: {redraws} redraws\n{queue}");
         assert!(
-            mouse_latency < Duration::from_secs(2),
-            "mouse input was blocked for {mouse_latency:?}"
+            redraws < POINTER_MOVES,
+            "{POINTER_MOVES} pointer moves caused {redraws} redraws"
         );
         t.send("1")?;
         t.screen("current revisited", |s| s.contains("LAST LOG MARKER"))?;
-        let started = Instant::now();
         t.send("2")?;
-        let queue = t.screen("keyboard queue", |s| s.contains("Queue · 201 shown"))?;
-        let keyboard_latency = started.elapsed();
-        println!("KEYBOARD LATENCY {cols}x{rows}: {keyboard_latency:?}\n{queue}");
-        assert!(keyboard_latency < Duration::from_secs(2));
+        println!(
+            "KEYBOARD QUEUE {cols}x{rows}\n{}",
+            t.screen("keyboard queue", |s| s.contains("Queue · 201 shown"))?
+        );
         writer.output(&run, "stdout", "NEW OUTPUT INVALIDATES CACHE")?;
         t.send("1")?;
         println!(
@@ -3983,19 +4227,15 @@ fn large_current_log_stays_responsive_to_mouse_motion_and_screen_switches() -> R
         writer.output(&run, "stdout", "OUTPUT DURING CONTINUOUS HOVER")?;
         let started = Instant::now();
         let mut motion = 0;
-        let hovered = loop {
+        let hovered = support::eventually("live refresh during continuous hover", || {
             t.send(&format!("\x1b[<35;{};12M", 45 + motion % 10))?;
             motion += 1;
-            let screen = t.current_screen();
-            if screen.contains("OUTPUT DURING CONTINUOUS HOVER") {
-                break screen;
-            }
-            assert!(
-                started.elapsed() < Duration::from_secs(5),
-                "continuous hover starved live SQLite refresh:\n{screen}"
-            );
             std::thread::sleep(Duration::from_millis(5));
-        };
+            let screen = t.current_screen();
+            Ok(screen
+                .contains("OUTPUT DURING CONTINUOUS HOVER")
+                .then_some(screen))
+        })?;
         println!(
             "CURRENT REFRESH DURING HOVER {cols}x{rows} after {:?}\n{hovered}",
             started.elapsed()

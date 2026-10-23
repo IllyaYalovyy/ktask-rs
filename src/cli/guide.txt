@@ -20,6 +20,8 @@ CONCEPTS
   Version    Every task has a version that each change increments. Pass --if-version N,
              with N from show/list, so a change fails with exit 4 if the task moved on.
   Roles      execution, review, validation and remediation; every task needs all four.
+             Review, validation and remediation need a stronger model than execution;
+             run refuses to start when one reuses the execution model.
              planning (project default only) is used by breakdown. Models are written
              PROVIDER/MODEL: codex/gpt-6-sol, claude/sonnet, opencode/VENDOR/MODEL. A bare
              "claude" means claude/sonnet. Providers: codex, claude or opencode.
@@ -29,7 +31,8 @@ BEFORE THE FIRST RUN
   - At least one check exists:        ktask check-set build --command 'make check'
   - Defaults exist for every role:    ktask model-default execution --provider codex \
                                           --model gpt-6-sol --effort high
-                                      (repeat for review, validation, remediation, planning)
+                                      (repeat for review, validation, remediation and
+                                      planning; the three judging roles use a stronger model)
   - The provider CLI (codex, claude or opencode) is on PATH and logged in.
   - bubblewrap (bwrap) is installed: review, validation and judges run in a sandbox where
     the project and ktask's own records are read-only, whatever the provider allows.

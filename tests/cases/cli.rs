@@ -73,7 +73,7 @@ fn add(root: &Path, title: &str) -> Result<i64> {
 fn cli_remediate_json_returns_judgment_receipts_and_exit_four_for_noncurrent() -> Result {
     use ktask_rs_mk3::application::{Definition, Kind, ModelConfig, Service, VersionedTask};
     use ktask_rs_mk3::storage::Database;
-    use std::{fs, os::unix::fs::PermissionsExt};
+    use std::fs;
     for action in ["repair", "revise", "insert", "escalate", "ask"] {
         let scratch = support::sandbox()?;
         let root = scratch.path();
@@ -160,14 +160,13 @@ fn cli_remediate_json_returns_judgment_receipts_and_exit_four_for_noncurrent() -
         let output_file = root.join("events.jsonl");
         fs::write(&output_file, events)?;
         let executable = bin.join("codex");
-        fs::write(
+        support::write_executable(
             &executable,
             format!(
                 "#!/bin/sh\ncat >/dev/null\ncat '{}'\n",
                 output_file.display()
             ),
         )?;
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))?;
         let path = format!("{}:/usr/bin:/bin", bin.display());
         let mut command = process(DEV, root);
         command
@@ -980,7 +979,7 @@ fn self_host_script_configures_a_private_checkout_with_the_given_executable() ->
     assert_eq!(models["execution"]["provider"], "codex");
     assert_eq!(models["execution"]["model"], "cheap");
     assert_eq!(models["execution"]["effort"], "low");
-    assert_eq!(models["review"]["model"], "gpt-6-sol");
+    assert_eq!(models["review"]["model"], "gpt-6-astra");
     assert!(models["review"]["effort"].is_null(), "{models}");
     assert_eq!(models["validation"]["effort"], "high");
     assert_eq!(checks["data"]["checks"].as_array().map(Vec::len), Some(1));

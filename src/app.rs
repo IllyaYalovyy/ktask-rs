@@ -622,8 +622,28 @@ impl App {
             self.act(Action::PreviousAttempt);
         } else if readonly && key.code == KeyCode::Char(']') {
             self.act(Action::NextAttempt);
-        } else if let Some(dialog) = &mut self.dialog {
-            dialog.key(key);
+        } else {
+            self.edit_dialog(|dialog| dialog.key(key));
+        }
+    }
+    /// Editing the evidence query discards the previous match; rebuild the body so it no
+    /// longer shows that match next to the new query.
+    fn edit_dialog(&mut self, edit: impl FnOnce(&mut crate::dialog::Dialog)) {
+        let shows_match = |dialog: &Option<crate::dialog::Dialog>| {
+            matches!(
+                dialog,
+                Some(crate::dialog::Dialog {
+                    kind: crate::dialog::DialogKind::Inspect { match_sequence, excerpt, .. },
+                    ..
+                }) if match_sequence.is_some() || !excerpt.is_empty()
+            )
+        };
+        let before = shows_match(&self.dialog);
+        if let Some(dialog) = &mut self.dialog {
+            edit(dialog);
+        }
+        if before && !shows_match(&self.dialog) {
+            self.prepare_persistent_dialog();
         }
     }
     fn inspect_search_key(&mut self, key: KeyEvent) -> bool {
@@ -647,11 +667,7 @@ impl App {
                 }
             }
             KeyCode::Enter => self.act(Action::FindEvidence),
-            _ => {
-                if let Some(dialog) = &mut self.dialog {
-                    dialog.key(key);
-                }
-            }
+            _ => self.edit_dialog(|dialog| dialog.key(key)),
         }
         true
     }
@@ -728,8 +744,8 @@ impl App {
         if !fits {
             return;
         }
-        if let Some(dialog) = &mut self.dialog {
-            dialog.paste(text);
+        if self.dialog.is_some() {
+            self.edit_dialog(|dialog| dialog.paste(text));
         } else if self.search_before.is_some() {
             self.catalog_mut().query.extend(
                 text.chars()

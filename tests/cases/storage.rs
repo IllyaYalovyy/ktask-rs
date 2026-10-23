@@ -7,7 +7,6 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{Arc, Barrier, mpsc},
     thread,
-    time::Duration,
 };
 
 pub(super) fn project(db: &Connection, name: &str) -> rusqlite::Result<i64> {
@@ -688,7 +687,7 @@ fn killed_writer_recovers_only_committed_data_without_reseeding() -> Result {
             }
         }
     });
-    let ready = receiver.recv_timeout(Duration::from_secs(5));
+    let ready = receiver.recv_timeout(support::PATIENCE);
     writer.0.kill()?;
     writer.0.wait()?;
     reader.join().unwrap();

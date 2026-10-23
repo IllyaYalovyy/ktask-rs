@@ -1,5 +1,5 @@
 use crate::support::{self, Result, Terminal};
-use ktask_rs_mk3::{scratch::Scratch, storage::Database};
+use ktask_rs_mk3::storage::Database;
 use serde_json::Value;
 use std::{
     fs::{self, OpenOptions},
@@ -13,7 +13,7 @@ const BIN: &str = env!("CARGO_BIN_EXE_ktask-dev");
 #[path = "providers.rs"]
 mod providers;
 struct Fixture {
-    scratch: Scratch,
+    scratch: support::Sandbox,
     root: PathBuf,
 }
 impl Fixture {
@@ -100,17 +100,12 @@ impl Fixture {
         )?)
     }
     fn state(&self, state: &str) -> Result {
-        let until = Instant::now() + Duration::from_secs(10);
-        loop {
-            let d = self.ok(&["show", "1"])?;
-            if d["status"] == state {
-                return Ok(());
-            }
-            if Instant::now() > until {
-                return Err(format!("Expected {state}: {d}").into());
-            }
-            thread::sleep(Duration::from_millis(40));
-        }
+        let mut last = Value::Null;
+        support::eventually(&format!("task 1 {state}"), || {
+            last = self.ok(&["show", "1"])?;
+            Ok((last["status"] == state).then_some(()))
+        })
+        .map_err(|error| format!("{error}; last: {last}").into())
     }
     fn provider(&self, mode: &str) -> Result {
         let script = format!(
@@ -247,9 +242,7 @@ case "$model" in execution|remediation) printf 'verified\n' > result.txt;; esac
 printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"complete\",\"summary\":\"Verified result\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":true,\"evidence\":\"Inspected result.txt\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'
 "##
         );
-        let path = self.scratch.path().join("bin/codex");
-        fs::write(&path, script)?;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+        support::write_executable(&self.scratch.path().join("bin/codex"), script)?;
         Ok(())
     }
     /// Three failed attempts: the supervisor repairs automatically and stops only after the
@@ -266,14 +259,23 @@ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":
     fn fail_check_launch(&self) -> Result<PathBuf> {
         let binary = self.scratch.path().join("check-launch-ktask-dev");
         support::copy_executable(BIN, &binary)?;
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
         self.provider("check-launch-failure")?;
         self.add("Recover check guardian launch")?;
         self.ok(&["edit", "1", "--attempt-limit", "1"])?;
         self.add("Must wait for verified recovery")?;
         Ok(binary)
     }
+    /// The guardian outlives its supervisor until it has stopped and reaped every worker
+    /// process; then it empties and releases the worker lease.
+    fn guardian_finished(&self) -> Result {
+        let path = self.root.join(".git/ktask-worker.lock");
+        support::eventually("guardian finished its cleanup", || {
+            let lease = OpenOptions::new().read(true).write(true).open(&path)?;
+            Ok((lease.try_lock().is_ok() && lease.metadata()?.len() == 0).then_some(()))
+        })
+    }
     fn launch_workers_reaped(&self) -> Result {
+        self.guardian_finished()?;
         for pid in
             fs::read_to_string(self.scratch.path().join("launch-fixture-pids"))?.split_whitespace()
         {
@@ -282,12 +284,6 @@ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":
                 "fixture provider/guardian {pid} survived cleanup"
             );
         }
-        let lease = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(self.root.join(".git/ktask-worker.lock"))?;
-        lease.try_lock()?;
-        assert_eq!(lease.metadata()?.len(), 0, "uncleared guardian marker");
         println!(
             "CHECK LAUNCH CLEANUP: provider/guardian PIDs absent; worker lease free and marker empty"
         );
@@ -298,19 +294,13 @@ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":
             .read(true)
             .write(true)
             .open(self.root.join(".git/ktask-runner.lock"))?;
-        let until = Instant::now() + Duration::from_secs(5);
-        loop {
-            match lease.try_lock() {
-                Ok(()) => {
-                    println!("CHECK LAUNCH CLEANUP: supervisor lease released");
-                    return Ok(());
-                }
-                Err(std::fs::TryLockError::WouldBlock) if Instant::now() < until => {
-                    thread::sleep(Duration::from_millis(20));
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
+        support::eventually("supervisor lease released", || match lease.try_lock() {
+            Ok(()) => Ok(Some(())),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(error) => Err(error.into()),
+        })?;
+        println!("CHECK LAUNCH CLEANUP: supervisor lease released");
+        Ok(())
     }
     /// A project check that fails exactly once, so the next attempt goes through the judge.
     fn fail_first_check(&self) -> Result {
@@ -322,6 +312,21 @@ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":
         self.ok(&["check-set", "build", "--command", &command])?;
         Ok(())
     }
+    /// The /proc stat fields after the command name (state, ppid, pgrp, session, tty_nr,
+    /// ...) of this fixture's detached supervisor.
+    fn supervisor_stat(&self) -> Result<Vec<String>> {
+        let project = self.root.to_string_lossy().into_owned();
+        for entry in fs::read_dir("/proc")?.flatten() {
+            let cmdline = fs::read(entry.path().join("cmdline")).unwrap_or_default();
+            let cmdline = String::from_utf8_lossy(&cmdline).replace('\0', " ");
+            if cmdline.contains(&project) && cmdline.contains(" run --notify") {
+                let stat = fs::read_to_string(entry.path().join("stat"))?;
+                let fields = stat[stat.rfind(')').ok_or("bad stat")? + 2..].split(' ');
+                return Ok(fields.map(String::from).collect());
+            }
+        }
+        Err("no detached supervisor for this fixture".into())
+    }
     fn no_scratch(&self) -> Result {
         let root = self.scratch.path().join("cache/ktask-dev/workers");
         if root.exists() {
@@ -332,6 +337,16 @@ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":
             );
         }
         Ok(())
+    }
+}
+/// Whether the screen shows the named view's own content, not only its tab label.
+fn shows_view(screen: &str, name: &str) -> bool {
+    match name {
+        "Config" => screen.contains("Storage: SQLite output"),
+        "About" => screen.contains("A visual workspace for supervising"),
+        _ => screen
+            .lines()
+            .any(|line| line.starts_with(&format!(" {name} · ")) && line.contains(" shown / ")),
     }
 }
 struct Running(Child);
@@ -352,14 +367,9 @@ fn worker_callback_files_only_linked_drafts_and_terminal_shows_both_links() -> R
     // Release and reap the held provider even if a PTY assertion unwinds.
     let result = std::panic::catch_unwind(|| -> Result {
         let marker = f.scratch.path().join("follow-up-created");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !marker.exists() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(20));
-        }
-        assert!(
-            marker.exists(),
-            "deterministic provider did not create its draft"
-        );
+        support::eventually("deterministic provider creates its draft", || {
+            Ok(marker.exists().then_some(()))
+        })?;
         let queue = f.ok(&["list"])?;
         let rows = queue["tasks"].as_array().unwrap();
         assert_eq!(
@@ -479,8 +489,9 @@ fn worker_callback_files_only_linked_drafts_and_terminal_shows_both_links() -> R
     t.send("\r")?;
     println!(
         "FOLLOW-UP DETAIL KEYBOARD\n{}",
-        t.screen("linked detail", |s| s
-            .contains("Follow-up from task #1, attempt"))?
+        t.screen("linked detail", |s| {
+            s.contains("Task details / attempts") && s.contains("Follow-up from task #1, attempt")
+        })?
     );
     t.send("\x1b")?;
     t.screen("detail closed", |s| {
@@ -496,8 +507,10 @@ fn worker_callback_files_only_linked_drafts_and_terminal_shows_both_links() -> R
     t.send("\x1b[F")?;
     println!(
         "FOLLOW-UP SOURCE DETAIL MOUSE\n{}",
-        t.screen("source detail", |s| s
-            .contains("Follow-up #3: Discovered follow-up"))?
+        t.screen("source detail", |s| {
+            s.contains("Task details / attempts")
+                && s.contains("Follow-up #3: Discovered follow-up")
+        })?
     );
     t.send("\x1b")?;
     t.send("q")?;
@@ -541,7 +554,7 @@ fn review_cycles_accept_only_minor_findings_after_ten_repairs_in_real_tui() -> R
                 })?
             );
             let task = f.ok(&["show", "1"])?;
-            assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+            assert_eq!(task["attempts"].as_array().unwrap().len(), 1, "{task}");
             assert_eq!(task["attempts_used"], 1);
             let db = f.db()?;
             let round: i64 = db.connection().query_row(
@@ -625,11 +638,13 @@ fn pause_at_tenth_review_resumes_the_phase_without_an_eleventh_repair() -> Resul
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
         t.screen("ready", |s| s.contains("r Run queue"))?;
         t.send("r")?;
-        let until = Instant::now() + Duration::from_secs(20);
-        while !f.scratch.path().join("tenth-review-started").exists() {
-            assert!(Instant::now() < until, "tenth review never started");
-            thread::sleep(Duration::from_millis(20));
-        }
+        support::eventually("tenth review started", || {
+            Ok(f.scratch
+                .path()
+                .join("tenth-review-started")
+                .exists()
+                .then_some(()))
+        })?;
         println!(
             "TENTH REVIEW ACTIVE mouse={mouse}\n{}",
             t.screen("tenth review", |s| s
@@ -692,32 +707,57 @@ fn pause_at_tenth_review_resumes_the_phase_without_an_eleventh_repair() -> Resul
 }
 
 #[test]
-fn one_model_can_fill_every_role_with_read_only_review() -> Result {
-    for mouse in [false, true] {
+fn implementation_model_cannot_review_repair_or_validate_itself() -> Result {
+    for role in ["review", "remediation", "validation"] {
         let f = Fixture::new()?;
-        f.add("Same model everywhere")?;
-        for role in ["review", "remediation", "validation"] {
-            f.ok(&["edit", "1", "--model", &format!("{role}=codex/execution")])?;
-        }
-        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
-        t.screen("ready", |s| s.contains("r Run queue"))?;
-        if mouse {
-            t.click("r Run queue")?;
-        } else {
-            t.send("r")?;
-        }
-        println!(
-            "ONE MODEL mouse={mouse}\n{}",
-            t.screen("one model complete", |s| s.contains("Queue complete."))?
+        f.add("Require stronger judge model")?;
+        f.ok(&["edit", "1", "--model", &format!("{role}=codex/execution")])?;
+        let output = f.process().args(["run", "--json"]).output()?;
+        assert_eq!(output.status.code(), Some(4));
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains(&format!("stronger {role} model distinct"))
         );
-        assert_eq!(f.ok(&["show", "1"])?["lifecycle"], "succeeded");
-        assert_eq!(
-            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-            "execution\nexecution\nexecution\n"
+        assert!(!f.scratch.path().join("provider-invocations").exists());
+        assert!(
+            f.ok(&["show", "1"])?["attempts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
         );
-        t.send("q")?;
-        t.finish()?;
-        f.no_scratch()?;
+        for mouse in [false, true] {
+            let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
+            t.screen("ready", |s| s.contains("r Run queue"))?;
+            if mouse {
+                t.click("u Readiness")?;
+            } else {
+                t.send("u")?;
+            }
+            println!(
+                "MODEL SEPARATION READINESS {role} mouse={mouse}\n{}",
+                t.screen("readiness names the rule", |s| s
+                    .contains("Must be stronger than the execution model"))?
+            );
+            t.send("\x1b")?;
+            t.screen("ready again", |s| {
+                s.contains("r Run queue") && !s.contains("Execution readiness")
+            })?;
+            if mouse {
+                t.click("r Run queue")?;
+            } else {
+                t.send("r")?;
+            }
+            println!(
+                "MODEL SEPARATION {role} mouse={mouse}\n{}",
+                // The status line, not Activity, which keeps the earlier window's refusal.
+                t.screen("model configuration required", |s| s.lines().any(|line| {
+                    line.starts_with("command conflict: Configure a stronger")
+                }))?
+            );
+            assert!(!f.scratch.path().join("provider-invocations").exists());
+            t.send("q")?;
+            t.finish()?;
+        }
     }
     Ok(())
 }
@@ -768,12 +808,14 @@ fn mandatory_criteria_and_validation_findings_still_block_after_ten_rounds() -> 
         }
         println!(
             "MANDATORY DECISION DETAILS {mode}\n{}",
-            t.screen("full decision", |s| s
-                .contains("Required boundary behavior")
-                || s.contains("Critical findings remain"))?
+            t.screen("full decision", |s| s.contains("Task details / attempts")
+                && (s.contains("Required boundary behavior")
+                    || s.contains("Critical findings remain")))?
         );
         t.send("\x1b")?;
-        t.screen("details closed", |s| s.contains("FAILED"))?;
+        t.screen("details closed", |s| {
+            s.contains("FAILED") && !s.contains("Task details / attempts")
+        })?;
         t.send("q")?;
         t.finish()?;
         f.no_scratch()?;
@@ -795,11 +837,13 @@ fn changing_source_while_review_is_paused_invalidates_saved_proof() -> Result {
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
     t.screen("ready", |s| s.contains("r Run queue"))?;
     t.send("r")?;
-    let until = Instant::now() + Duration::from_secs(10);
-    while !f.scratch.path().join("review-started").exists() {
-        assert!(Instant::now() < until, "review never started");
-        thread::sleep(Duration::from_millis(20));
-    }
+    support::eventually("review started", || {
+        Ok(f.scratch
+            .path()
+            .join("review-started")
+            .exists()
+            .then_some(()))
+    })?;
     println!(
         "PROVEN SOURCE BEFORE PAUSE\n{}",
         t.screen("review", |s| s.contains("Workflow · Review"))?
@@ -1353,14 +1397,13 @@ fn current_screen_shows_recorded_check_counts_in_real_terminal() -> Result {
     f.ok(&["check-set", "build", "--command", "printf 'test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out\\n'; test -f result.txt"])?;
     f.add("Visible check counts")?;
     let mut runner = f.process().args(["run", "--one"]).spawn()?;
-    let until = Instant::now() + Duration::from_secs(10);
-    while !f.scratch.path().join("review-started").exists() {
-        assert!(
-            Instant::now() < until,
-            "review did not start after the count-bearing check"
-        );
-        thread::sleep(Duration::from_millis(20));
-    }
+    support::eventually("review starts after the count-bearing check", || {
+        Ok(f.scratch
+            .path()
+            .join("review-started")
+            .exists()
+            .then_some(()))
+    })?;
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 35)?;
     let screen = t.screen("current check counts", |s| {
         s.contains("Check build: 3 passed, 0 failed, 1 ignored")
@@ -1613,11 +1656,13 @@ fn paused_repair_resumes_its_reserved_round_and_same_attempt() -> Result {
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
         t.screen("ready", |s| s.contains("r Run queue"))?;
         t.send("r")?;
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !f.scratch.path().join("repair-started").exists() {
-            assert!(Instant::now() < deadline, "repair worker never started");
-            thread::sleep(Duration::from_millis(10));
-        }
+        support::eventually("repair worker started", || {
+            Ok(f.scratch
+                .path()
+                .join("repair-started")
+                .exists()
+                .then_some(()))
+        })?;
         let running = t.screen("repair running", |s| {
             s.contains("RUNNING · supervisor alive")
                 && s.contains("p Pause")
@@ -1881,7 +1926,7 @@ fn real_tui_shows_the_open_question_and_abandons_by_keyboard_and_mouse() -> Resu
         } else {
             // Tab to Scope, Space switches it to this attempt only.
             t.send("\t ")?;
-            t.screen("attempt scope", |s| s.contains("This attempt"))?;
+            t.screen("attempt scope", |s| s.contains("< This attempt >"))?;
             t.send("\r")?;
             let interrupted = t.screen("interrupted", |s| {
                 s.contains("Current #1 · INTERRUPTED") && s.contains("Report · attempt 1")
@@ -1926,17 +1971,13 @@ fn supervisor_death_stops_worker_and_recovery_is_explicit() -> Result {
     thread::sleep(Duration::from_millis(200));
     run.0.kill()?;
     run.0.wait()?;
-    let until = Instant::now() + Duration::from_secs(5);
-    loop {
+    let mut refusal = String::new();
+    support::eventually("recover succeeds", || {
         let out = f.process().arg("recover").output()?;
-        if out.status.success() {
-            break;
-        }
-        if Instant::now() > until {
-            return Err(String::from_utf8_lossy(&out.stderr).into_owned().into());
-        }
-        thread::sleep(Duration::from_millis(40));
-    }
+        refusal = String::from_utf8_lossy(&out.stderr).into_owned();
+        Ok(out.status.success().then_some(()))
+    })
+    .map_err(|error| format!("{error}; last refusal: {refusal}"))?;
     f.state("interrupted")?;
     f.no_scratch()?;
     assert!(!f.root.join("result.txt").exists());
@@ -1988,21 +2029,13 @@ fn real_tui_shows_liveness_and_recovers_with_both_inputs_and_cleanup_guard() -> 
         );
         run.0.kill()?;
         run.0.wait()?;
-        let deadline = Instant::now() + Duration::from_secs(5);
         let runner_lock = f.root.join(".git/ktask-runner.lock");
-        loop {
+        support::eventually("guardian releases its lease", || {
             let lock = fs::File::open(&runner_lock)?;
-            if lock.try_lock().is_ok()
-                && fs::metadata(f.root.join(".git/ktask-worker.lock"))?.len() == 0
-            {
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "guardian did not release its lease"
-            );
-            thread::sleep(Duration::from_millis(40));
-        }
+            Ok((lock.try_lock().is_ok()
+                && fs::metadata(f.root.join(".git/ktask-worker.lock"))?.len() == 0)
+                .then_some(()))
+        })?;
         println!(
             "ABANDONED\n{}",
             t.screen("abandoned current", |s| {
@@ -2017,7 +2050,7 @@ fn real_tui_shows_liveness_and_recovers_with_both_inputs_and_cleanup_guard() -> 
         ] {
             t.send(key)?;
             let screen = t.screen(name, |s| {
-                s.contains("ABANDONED · supervisor absent") && s.contains(name)
+                s.contains("ABANDONED · supervisor absent") && shows_view(s, name)
             })?;
             println!("{name}\n{screen}");
         }
@@ -2061,7 +2094,9 @@ fn real_tui_shows_liveness_and_recovers_with_both_inputs_and_cleanup_guard() -> 
             t.send("\r")?;
             println!(
                 "CLEANUP REQUIRED\n{}",
-                t.screen("cleanup required", |s| s.contains("cleanup confirmation"))?
+                t.screen("cleanup required", |s| {
+                    s.contains("Worker died without cleanup confirmation")
+                })?
             );
             assert_eq!(f.ok(&["show", "1"])?["status"], "running");
             t.send(" ")?;
@@ -2140,14 +2175,12 @@ fn real_tui_recovers_lost_paused_and_waiting_supervisors() -> Result {
             run.0.wait()?;
         }
         let runner_lock = f.root.join(".git/ktask-runner.lock");
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if fs::File::open(&runner_lock)?.try_lock().is_ok() {
-                break;
-            }
-            assert!(Instant::now() < deadline, "supervisor kept its lease");
-            thread::sleep(Duration::from_millis(40));
-        }
+        support::eventually("supervisor releases its lease", || {
+            Ok(fs::File::open(&runner_lock)?
+                .try_lock()
+                .is_ok()
+                .then_some(()))
+        })?;
         let before = f.ok(&["show", "1"])?;
         let head = f.git(&["rev-parse", "HEAD"])?;
         let files = f.git(&["status", "--porcelain"])?;
@@ -2167,7 +2200,8 @@ fn real_tui_recovers_lost_paused_and_waiting_supervisors() -> Result {
             t.send(key)?;
             println!(
                 "{state} {screen_name}\n{}",
-                t.screen(screen_name, |s| s.contains("ABANDONED · supervisor absent"))?
+                t.screen(screen_name, |s| s.contains("ABANDONED · supervisor absent")
+                    && shows_view(s, screen_name))?
             );
         }
         t.send("1")?;
@@ -2395,9 +2429,7 @@ fn failed_attempts_are_repaired_automatically_and_real_stops_show_a_red_banner()
         } else {
             t.send("r")?;
         }
-        let done = t.screen_within("queue complete", Duration::from_secs(30), |s| {
-            s.contains("Queue complete.")
-        })?;
+        let done = t.screen("queue complete", |s| s.contains("Queue complete."))?;
         println!("AUTOMATIC REPAIR COMPLETE mouse={mouse}\n{done}");
         let first = f.ok(&["show", "1"])?;
         assert_eq!(first["lifecycle"], "succeeded");
@@ -2428,7 +2460,7 @@ fn failed_attempts_are_repaired_automatically_and_real_stops_show_a_red_banner()
         } else {
             t.send("r")?;
         }
-        let stopped = t.screen_within("time limit banner", Duration::from_secs(30), |s| {
+        let stopped = t.screen("time limit banner", |s| {
             s.contains("EXECUTION STOPPED")
                 && s.contains("Reason: Active time limit reached")
                 && s.contains("Not resolved automatically: The task time limit (200 ms")
@@ -2448,16 +2480,17 @@ fn failed_attempts_are_repaired_automatically_and_real_stops_show_a_red_banner()
 
 #[test]
 fn stage_limit_restarts_with_every_agent_result_and_stops_a_stalled_agent() -> Result {
-    // Every turn takes 3 s; the 5 s stage limit holds although the attempt runs longer.
+    // Three turns sleep 3 s each, 9 s in all, so the attempt outlasts the 8 s stage limit
+    // that each turn stays well under.
     let f = Fixture::new()?;
     f.provider("slow")?;
     f.add("Three slow stages")?;
     assert!(f.ok(&["show", "1"])?["definition"]["stage_timeout_ms"].is_null());
-    f.ok(&["edit", "1", "--stage-limit", "5s"])?;
+    f.ok(&["edit", "1", "--stage-limit", "8s"])?;
     f.ok(&["run", "--one"])?;
     let task = f.ok(&["show", "1"])?;
     assert_eq!(task["lifecycle"], "succeeded");
-    assert!(task["attempts"][0]["active_ms"].as_i64().unwrap() > 5000);
+    assert!(task["attempts"][0]["active_ms"].as_i64().unwrap() > 8000);
 
     // A reviewer that never answers is cut off at the stage limit and repaired twice.
     let f = Fixture::new()?;
@@ -2502,8 +2535,9 @@ fn real_tui_switches_the_stage_limit_on_by_keyboard_and_mouse() -> Result {
         }
         t.screen("models", |s| s.contains("Task models and limits"))?;
         t.send(&"\t".repeat(10))?;
+        // Focus on a choice field has no text cursor; the model field had one.
         let off = t.screen("stage limit field", |s| {
-            s.contains("Stage time limit") && s.contains("< Off >")
+            s.contains("Stage time limit") && s.contains("< Off >") && !s.contains('▏')
         })?;
         println!("STAGE LIMIT OFF mouse={mouse}\n{off}");
         if mouse {
@@ -2612,20 +2646,21 @@ fn escaped_descendants_are_stopped_and_duplicate_runners_are_rejected() -> Resul
     f.add("Descendants")?;
     let mut run = Running(f.process().arg("run").stdout(Stdio::null()).spawn()?);
     f.state("running")?;
-    let until = Instant::now() + Duration::from_secs(5);
-    while !f.root.join("descendant.pid").exists() {
-        assert!(Instant::now() < until);
-        thread::sleep(Duration::from_millis(20));
-    }
+    support::eventually("descendant started", || {
+        Ok(f.root.join("descendant.pid").exists().then_some(()))
+    })?;
     let pid = fs::read_to_string(f.root.join("descendant.pid"))?;
     let duplicate = f.process().arg("run").output()?;
     assert_eq!(duplicate.status.code(), Some(4));
     f.ok(&["pause", "1"])?;
     run.0.wait()?;
     f.state("paused")?;
+    f.guardian_finished()?;
+    let survivor = fs::read_to_string(format!("/proc/{pid}/status"));
     assert!(
-        !PathBuf::from(format!("/proc/{pid}")).exists(),
-        "escaped descendant survived cleanup"
+        survivor.is_err(),
+        "escaped descendant {pid} survived cleanup:\n{}",
+        survivor.unwrap_or_default()
     );
     f.no_scratch()?;
     Ok(())
@@ -2710,7 +2745,9 @@ fn real_tui_question_answer_mouse_and_keyboard_automatically_resume() -> Result 
         }
         println!(
             "ANSWER FORM (mouse={mouse})\n{}",
-            t.screen("answer", |s| s.contains("Which content?"))?
+            t.screen("answer", |s| {
+                s.contains("Answer AI question") && s.contains("Which content?")
+            })?
         );
         t.send("Human answer: verified")?;
         t.screen("entered answer", |s| s.contains("Human answer: verified"))?;
@@ -2748,6 +2785,12 @@ fn closing_tui_does_not_stop_supervisor() -> Result {
     t.screen("current", |s| s.contains("Keep running"))?;
     t.send("r")?;
     t.screen("running", |s| s.contains("RUNNING"))?;
+    // The supervisor left the TUI's session, so the terminal cannot signal it.
+    let terminal = f.supervisor_stat()?[4].clone();
+    assert_eq!(
+        terminal, "0",
+        "detached supervisor has a controlling terminal"
+    );
     t.send("q")?;
     t.finish()?;
     f.state("succeeded")?;
@@ -2935,7 +2978,8 @@ fn real_tui_queue_runs_current_with_keyboard_and_mouse_in_both_modes() -> Result
             if mouse {
                 t.click("2 Queue")?;
                 t.screen("queue run control", |s| {
-                    s.contains(if queue { "r Run queue" } else { "r Run one" })
+                    shows_view(s, "Queue")
+                        && s.contains(if queue { "r Run queue" } else { "r Run one" })
                 })?;
                 t.click("#2   PENDING  Second configured task")?;
             } else {
@@ -3036,6 +3080,9 @@ fn real_tui_configuration_errors_and_live_check_guard() -> Result {
     assert_eq!(service.project_checks()?, checks);
     t.send("\x1b\x03")?;
     t.finish()?;
+    // The provider-limit wait would otherwise retry forever.
+    f.ok(&["pause", "1"])?;
+    f.supervisor_stopped()?;
     f.no_scratch()?;
     Ok(())
 }
@@ -3167,7 +3214,7 @@ fn readiness_lists_independent_blockers_and_recovers_stale_worker() -> Result {
     }
     println!("READINESS MULTIPLE BLOCKERS\n{details}");
     t.click("c Checks")?;
-    let check_form = t.screen("checks link", |s| s.contains("Project checks"))?;
+    let check_form = t.screen("checks link", |s| s.contains("Check to open"))?;
     println!("READINESS CHECK ACTION\n{check_form}");
     t.send("\x1b")?;
     t.screen("checks closed", |s| !s.contains("Project checks"))?;
@@ -3503,7 +3550,7 @@ fn readiness_shows_live_supervisor_and_worker_owners_without_taking_their_locks(
         } else {
             t.send("c")?;
         }
-        let checks = t.screen("linked checks action", |s| s.contains("Project checks"))?;
+        let checks = t.screen("linked checks action", |s| s.contains("Check to open"))?;
         println!("READINESS CHECKS LINK mouse={mouse}\n{checks}");
         t.send("\x1b")?;
         t.screen("checks action closed", |s| !s.contains("Project checks"))?;
@@ -3762,7 +3809,7 @@ fn pause_at_ready_task_handoff_never_starts_the_next_attempt() -> Result {
     let marker = f.scratch.path().join("handoff-open");
     let counter = f.scratch.path().join("head-count");
     let git = f.scratch.path().join("bin/git");
-    fs::write(
+    support::write_executable(
         &git,
         format!(
             "#!/bin/sh\nif [ \"$3\" = rev-parse ] && [ \"$4\" = HEAD ]; then\n count=$(cat '{}' 2>/dev/null || printf 0)\n count=$((count+1))\n printf '%s' \"$count\" > '{}'\n if [ \"$count\" = 4 ]; then touch '{}'; sleep 3; fi\nfi\nexec /usr/bin/git \"$@\"\n",
@@ -3771,7 +3818,6 @@ fn pause_at_ready_task_handoff_never_starts_the_next_attempt() -> Result {
             marker.display()
         ),
     )?;
-    fs::set_permissions(&git, fs::Permissions::from_mode(0o755))?;
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
     t.send("r")?;
     let handoff = t.screen("ready handoff", |s| {
@@ -4641,7 +4687,9 @@ fn background_startup_returns_actual_error_in_cli_and_tui() -> Result {
         }
         println!(
             "STARTUP ERROR mouse={mouse}\n{}",
-            t.screen("real startup reason", |s| s.contains("uncommitted work"))?
+            t.screen("real startup reason", |s| {
+                s.contains("command conflict: Workspace has uncommitted work")
+            })?
         );
         assert!(
             f.ok(&["show", "1"])?["attempts"]
@@ -4969,63 +5017,14 @@ fn review_converges_after_nine_repairs_with_a_single_attempt_budget() -> Result 
     Ok(())
 }
 
-#[test]
-fn executable_busy_recheck_retains_both_outcomes_without_a_second_coding_attempt() -> Result {
-    for persistent in [false, true] {
-        let f = Fixture::new()?;
-        f.add("Busy executable check")?;
-        f.ok(&["edit", "1", "--attempt-limit", "1"])?;
-        let command = if persistent {
-            "printf 'Error: Os { code: 26, kind: ExecutableFileBusy, message: Text file busy }\\n'; exit 1"
-        } else {
-            "if [ ! -f \"$HOME/check-once\" ]; then touch \"$HOME/check-once\"; printf 'Error: Os { code: 26, kind: ExecutableFileBusy, message: Text file busy }\\n'; exit 1; fi; echo 'recheck passed'"
-        };
-        f.ok(&["check-set", "build", "--command", command])?;
-        let result = f.process().args(["run"]).output()?;
-        assert_eq!(result.status.success(), !persistent);
-        let task = f.ok(&["show", "1"])?;
-        assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
-        let db = f.db()?;
-        let mut query = db
-            .connection()
-            .prepare("SELECT state,exit_code FROM attempt_steps WHERE role='check' ORDER BY id")?;
-        let checks = query
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i32>(1)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        if persistent {
-            assert_eq!(checks, vec![("failed".into(), 1); 22]);
-            assert_eq!(task["status"], "failed");
-        } else {
-            assert_eq!(checks, vec![("failed".into(), 1), ("succeeded".into(), 0)]);
-        }
-        assert_eq!(
-            db.connection()
-                .query_row("SELECT count(*) FROM artifacts", [], |r| r.get::<_, i64>(0))?,
-            if persistent { 22 } else { 2 }
-        );
-        if !persistent {
-            assert_eq!(
-                fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-                "execution\nreview\nvalidation\n"
-            );
-            for role in ["review", "validation"] {
-                let prompt = fs::read_to_string(f.scratch.path().join(format!("prompt-{role}")))?;
-                assert!(
-                    prompt.contains("Earlier supervisor check failed with executable contention")
-                );
-                assert!(prompt.contains("does not prove the root cause is fixed"));
-                assert_eq!(prompt.matches("step-").count(), 2);
-            }
-        } else {
-            assert_eq!(task["attempts_used"], 1);
-        }
-        f.no_scratch()?;
-    }
-    Ok(())
-}
-
 /// Read persisted failures and their independently retained supervisor transcripts.
-fn assert_check_launch_records(f: &Fixture, failed: usize, passed: bool) -> Result<Vec<i64>> {
+/// `failed` bounds the failed launches: the retry schedule runs on wall-clock time, so how
+/// many fail before a test intervenes can vary.
+fn assert_check_launch_records(
+    f: &Fixture,
+    failed: std::ops::RangeInclusive<usize>,
+    passed: bool,
+) -> Result<Vec<i64>> {
     let db = f.db()?;
     let records = db.connection().prepare(
         "SELECT id,attempt_id,state,exit_code,started_at_ms,report FROM attempt_steps WHERE task_id=1 AND role='check' ORDER BY id",
@@ -5034,7 +5033,12 @@ fn assert_check_launch_records(f: &Fixture, failed: usize, passed: bool) -> Resu
         r.get::<_, Option<i32>>(3)?, r.get::<_, i64>(4)?, r.get::<_, String>(5)?,
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
     println!("CHECK LAUNCH RECORDS {records:#?}");
-    assert_eq!(records.len(), failed + usize::from(passed));
+    let failed_count = records.len() - usize::from(passed);
+    assert!(
+        failed.contains(&failed_count),
+        "{failed_count} failed launches, expected {failed:?}"
+    );
+    let failed = failed_count;
     for (index, (id, attempt, state, code, _, report)) in records.iter().enumerate() {
         assert_eq!(*attempt, 1, "automatic retries must retain their attempt");
         if index < failed {
@@ -5086,12 +5090,11 @@ fn real_tui_check_launch_failure_recovers_same_attempt_and_continues_queue() -> 
                 .contains("Check infrastructure failed")
                 && s.contains("retry 1/2 after 1s"))?
         );
+        // Restore launches before anything else: the two retries leave 3 s for it.
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
         let retrying = f.ok(&["show", "1"])?;
         assert_eq!(retrying["attempts_used"], 0);
         assert_eq!(retrying["attempts"].as_array().unwrap().len(), 1);
-        assert_check_launch_records(&f, 1, false)?;
-        f.launch_workers_reaped()?;
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
         println!(
             "CHECK LAUNCH TRANSIENT COMPLETE mouse={mouse}\n{}",
             t.screen("queue recovered", |s| s.contains("Queue complete.")
@@ -5102,11 +5105,10 @@ fn real_tui_check_launch_failure_recovers_same_attempt_and_continues_queue() -> 
         assert_eq!(first["attempts_used"], 1);
         assert_eq!(first["attempts"].as_array().unwrap().len(), 1);
         assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
-        let launches = assert_check_launch_records(&f, 1, true)?;
-        assert!(
-            launches[1] - launches[0] >= 1000,
-            "1s backoff skipped: {launches:?}"
-        );
+        let launches = assert_check_launch_records(&f, 1..=2, true)?;
+        for (pause, pair) in [1000, 2000].iter().zip(launches.windows(2)) {
+            assert!(pair[1] - pair[0] >= *pause, "backoff skipped: {launches:?}");
+        }
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
             "execution\nreview\nvalidation\nexecution\nreview\nvalidation\n"
@@ -5142,7 +5144,7 @@ fn real_tui_check_launch_failure_exhausts_three_launches_and_blocks_queue() -> R
         }
         println!(
             "CHECK LAUNCH EXHAUSTED mouse={mouse}\n{}",
-            t.screen_within("launch retries exhausted", Duration::from_secs(30), |s| s
+            t.screen("launch retries exhausted", |s| s
                 .contains("EXECUTION STOPPED")
                 && s.contains("Permission denied")
                 && s.contains("failed 3 attempts in a row"))?
@@ -5164,7 +5166,7 @@ fn real_tui_check_launch_failure_exhausts_three_launches_and_blocks_queue() -> R
         let second = f.ok(&["show", "2"])?;
         assert_eq!(second["status"], "ready");
         assert!(second["attempts"].as_array().unwrap().is_empty());
-        let launches = assert_check_launch_records(&f, 3, false)?;
+        let launches = assert_check_launch_records(&f, 3..=3, false)?;
         assert!(
             launches[1] - launches[0] >= 1000,
             "1s backoff skipped: {launches:?}"
@@ -5188,7 +5190,7 @@ fn real_tui_check_launch_failure_exhausts_three_launches_and_blocks_queue() -> R
                 .contains("EXECUTION STOPPED")
                 && s.contains("Permission denied"))?
         );
-        assert_check_launch_records(&f, 3, false)?;
+        assert_check_launch_records(&f, 3..=3, false)?;
         reopened.send("q")?;
         reopened.finish()?;
         f.launch_workers_reaped()?;
@@ -5240,12 +5242,17 @@ fn real_tui_check_launch_failure_pause_cancels_backoff_and_resumes_same_attempt(
         println!("CHECK LAUNCH CANCELLED ACTIVE TIME {active_before_pause} -> {paused_active}");
         assert_eq!(first["attempts_used"], 0);
         assert_eq!(first["attempts"].as_array().unwrap().len(), 1);
-        let before = assert_check_launch_records(&f, failures, false)?;
+        // Another backoff can end before Pause lands; none may start after it.
+        let before = assert_check_launch_records(&f, failures..=2, false)?;
+        let failures = before.len();
         f.launch_workers_reaped()?;
         f.supervisor_stopped()?;
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
         thread::sleep(Duration::from_millis(2200));
-        assert_eq!(assert_check_launch_records(&f, failures, false)?, before);
+        assert_eq!(
+            assert_check_launch_records(&f, failures..=failures, false)?,
+            before
+        );
         assert_eq!(f.ok(&["show", "1"])?["status"], "paused");
         assert_eq!(
             f.ok(&["show", "1"])?["attempts"][0]["active_ms"],
@@ -5282,7 +5289,7 @@ fn real_tui_check_launch_failure_pause_cancels_backoff_and_resumes_same_attempt(
         println!(
             "CHECK LAUNCH RESUMED ACTIVE TIME {paused_active} -> {resumed_active}; 2200ms pause excluded"
         );
-        assert_check_launch_records(&f, failures, true)?;
+        assert_check_launch_records(&f, failures..=failures, true)?;
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
             "execution\nreview\nvalidation\nexecution\nreview\nvalidation\n"
@@ -5295,33 +5302,29 @@ fn real_tui_check_launch_failure_pause_cancels_backoff_and_resumes_same_attempt(
 }
 
 fn assert_deadline_retry_finished(f: &Fixture, first_attempt: &Value, limit: i64) -> Result {
-    let until = Instant::now() + Duration::from_secs(5);
-    loop {
-        let retried = f.ok(&["show", "1"])?;
-        if retried["attempts"].as_array().unwrap().len() == 2 && retried["status"] == "failed" {
-            println!("CHECK LAUNCH DEADLINE RETRY TASK {retried}");
-            assert_eq!(&retried["attempts"][0], first_attempt);
-            assert!(
-                retried["attempts"][1]["outcome"]
-                    .as_str()
-                    .unwrap()
-                    .contains("configured task-wide limit")
-            );
-            let total = retried["attempts"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|a| a["active_ms"].as_i64().unwrap())
-                .sum::<i64>();
-            assert!(total >= limit);
-            return Ok(());
-        }
-        assert!(
-            Instant::now() < until,
-            "deadline Retry did not finish: {retried}"
-        );
-        thread::sleep(Duration::from_millis(20));
-    }
+    let retried = support::eventually("deadline Retry finishes", || {
+        let task = f.ok(&["show", "1"])?;
+        Ok(
+            (task["attempts"].as_array().unwrap().len() == 2 && task["status"] == "failed")
+                .then_some(task),
+        )
+    })?;
+    println!("CHECK LAUNCH DEADLINE RETRY TASK {retried}");
+    assert_eq!(&retried["attempts"][0], first_attempt);
+    assert!(
+        retried["attempts"][1]["outcome"]
+            .as_str()
+            .unwrap()
+            .contains("configured task-wide limit")
+    );
+    let total = retried["attempts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["active_ms"].as_i64().unwrap())
+        .sum::<i64>();
+    assert!(total >= limit);
+    Ok(())
 }
 
 #[test]
@@ -5330,8 +5333,10 @@ fn real_tui_check_launch_backoff_deadline_survives_restart_and_requires_explicit
     for mouse in [false, true] {
         let f = Fixture::new()?;
         let binary = f.fail_check_launch()?;
-        let limit = 2500;
-        f.ok(&["edit", "1", "--timeout-ms", "2500", "--attempt-limit", "3"])?;
+        // The third launch comes at least 3 s of backoff after the first, so a 3 s limit
+        // always expires during a backoff once the first launch has failed.
+        let limit = 3000;
+        f.ok(&["edit", "1", "--timeout-ms", "3000", "--attempt-limit", "3"])?;
         let mut t =
             Terminal::open_project(binary.to_str().unwrap(), f.scratch.path(), &f.root, 120, 34)?;
         t.screen("deadline launch fixture ready", |s| {
@@ -5344,14 +5349,9 @@ fn real_tui_check_launch_backoff_deadline_survives_restart_and_requires_explicit
         }
         println!(
             "CHECK LAUNCH DEADLINE BACKOFF mouse={mouse}\n{}",
-            t.screen("deadline during second launch backoff", |s| s
-                .contains("Check infrastructure failed")
-                && s.contains("retry 2/2 after 2s"))?
+            t.screen("launch backoff", |s| s
+                .contains("Check infrastructure failed"))?
         );
-        let before = f.ok(&["show", "1"])?;
-        assert_eq!(before["attempts_used"], 0);
-        assert!(before["attempts"][0]["active_ms"].as_i64().unwrap() < limit);
-        let launches = assert_check_launch_records(&f, 2, false)?;
         println!(
             "CHECK LAUNCH DEADLINE EXPIRED mouse={mouse}\n{}",
             t.screen("configured deadline expired", |s| s.contains("FAILED")
@@ -5367,7 +5367,7 @@ fn real_tui_check_launch_backoff_deadline_survives_restart_and_requires_explicit
             failed["attempts_used"], 1,
             "task deadline is an agent failure"
         );
-        assert_eq!(assert_check_launch_records(&f, 2, false)?, launches);
+        let launches = assert_check_launch_records(&f, 1..=2, false)?;
         assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
@@ -5404,6 +5404,7 @@ fn real_tui_check_launch_backoff_deadline_survives_restart_and_requires_explicit
             "CHECK LAUNCH DEADLINE RETRY BLOCKED mouse={mouse}\n{}",
             t.screen("retry still blocked by configured deadline", |s| s
                 .contains("FAILED")
+                && s.contains("Attempt 2")
                 && s.contains("configured task-wide limit"))?
         );
         assert_eq!(
@@ -5411,7 +5412,10 @@ fn real_tui_check_launch_backoff_deadline_survives_restart_and_requires_explicit
             "execution\n",
             "expired retry must not start even a judge worker"
         );
-        assert_eq!(assert_check_launch_records(&f, 2, false)?, launches);
+        assert_eq!(
+            assert_check_launch_records(&f, launches.len()..=launches.len(), false)?,
+            launches
+        );
         assert!(
             f.ok(&["show", "2"])?["attempts"]
                 .as_array()

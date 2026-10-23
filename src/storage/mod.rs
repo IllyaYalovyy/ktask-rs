@@ -175,6 +175,10 @@ impl Database {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", true)?;
         connection.pragma_update(None, "synchronous", "FULL")?;
+        // Switching a new database to WAL needs every other connection idle, and SQLite then
+        // reports BUSY at once instead of waiting. Opens take turns on the state directory;
+        // an error return closes it, which releases the lock.
+        state_dir.lock()?;
         // Validate identity/version before changing the persistent journal mode.
         migrations::apply(&mut connection, migrations::ALL)?;
         let mode: String =
@@ -182,6 +186,7 @@ impl Database {
         if mode != "wal" {
             return Err(Error::Incompatible(format!("WAL unavailable: {mode}")));
         }
+        state_dir.unlock()?;
         Ok(Self {
             connection,
             state_dir,

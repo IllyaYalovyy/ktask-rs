@@ -43,14 +43,6 @@ pub(super) fn run(
                         }
                         continue;
                     }
-                    if category == "check" && recheck == 0 && executable_busy(&path)? {
-                        evidence.push_str(&format!("\nEarlier supervisor check failed with executable contention: {message}. One verification retry follows, without another AI worker. This does not prove the root cause is fixed."));
-                        service.output(run, "system", "Check encountered ETXTBSY (executable busy): verification retry 1/1 after 1s in the same attempt; original failure and transcript retained; Pause cancels")?;
-                        if let Some(outcome) = operational_backoff(service, run, ctx, 0)? {
-                            return Ok(outcome);
-                        }
-                        continue;
-                    }
                     return Ok(Outcome::Failed(category, message));
                 }
                 other => return Ok(other),
@@ -58,20 +50,6 @@ pub(super) fn run(
         }
     }
     Ok(Outcome::Passed(evidence))
-}
-
-fn executable_busy(path: &std::path::Path) -> Result<bool> {
-    use std::io::BufRead;
-    let transcript = std::io::BufReader::new(std::fs::File::open(path)?);
-    for line in transcript.lines() {
-        let line = line?;
-        if (line.contains("code: 26") && line.contains("kind: ExecutableFileBusy"))
-            || line.contains("[Errno 26] Text file busy")
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 fn run_one(
