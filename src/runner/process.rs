@@ -12,7 +12,7 @@ use nix::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{File, OpenOptions},
+    fs::{File, OpenOptions, TryLockError},
     io::{self, BufRead, Read, Write},
     os::unix::process::CommandExt,
     path::PathBuf,
@@ -23,7 +23,7 @@ use std::{
         mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Serialize, Deserialize)]
@@ -151,6 +151,9 @@ pub enum Message {
     Exit { code: i32 },
     Error(String),
 }
+/// Takes ownership: an exclusive lock held for the owner's lifetime. Status checks
+/// ([`inspect`]) hold a shared lock for an instant, so contention from them is retried;
+/// only an exclusive holder is another owner.
 pub fn lock(path: &std::path::Path) -> Result<File> {
     let file = OpenOptions::new()
         .create(true)
@@ -158,12 +161,43 @@ pub fn lock(path: &std::path::Path) -> Result<File> {
         .read(true)
         .write(true)
         .open(path)?;
-    file.try_lock().map_err(|e| {
-        Error::Conflict(format!(
-            "Workspace is already owned by a runner/worker: {e}"
-        ))
-    })?;
-    Ok(file)
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(TryLockError::WouldBlock) => {}
+            Err(TryLockError::Error(error)) => return Err(error.into()),
+        }
+        match file.try_lock_shared() {
+            Ok(()) => file.unlock()?,
+            Err(TryLockError::WouldBlock) => {
+                return Err(Error::Conflict(
+                    "Workspace is already owned by a runner/worker".into(),
+                ));
+            }
+            Err(TryLockError::Error(error)) => return Err(error.into()),
+        }
+        if Instant::now() >= deadline {
+            return Err(Error::Conflict(format!(
+                "A ktask status check held {} for 10s; retry",
+                path.display()
+            )));
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+/// Read-only ownership check: None while an owner holds the lock, else `read`'s result.
+/// The shared lock never blocks another check, and keeps owners out while `read` runs.
+pub fn inspect<T>(file: &File, read: impl FnOnce(&File) -> io::Result<T>) -> io::Result<Option<T>> {
+    match file.try_lock_shared() {
+        Ok(()) => {
+            let result = read(file);
+            file.unlock()?;
+            result.map(Some)
+        }
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Error(error)) => Err(error),
+    }
 }
 pub fn stopped() -> io::Result<Arc<AtomicBool>> {
     let flag = Arc::new(AtomicBool::new(false));
@@ -473,5 +507,42 @@ fn require_exit(success: bool) -> Result<()> {
 impl Drop for Worker {
     fn drop(&mut self) {
         let _ = self.join();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_checks_never_block_owners_or_each_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ktask-runner.lock");
+        let check = File::create(&path).unwrap();
+        let other_check = File::open(&path).unwrap();
+        // A check in progress neither blocks another check nor fails an arriving owner.
+        check.try_lock_shared().unwrap();
+        assert_eq!(inspect(&other_check, |_| Ok(())).unwrap(), Some(()));
+        let (arriving, arrived) = mpsc::channel();
+        let owner = thread::spawn({
+            let path = path.clone();
+            move || {
+                arriving.send(()).unwrap();
+                lock(&path)
+            }
+        });
+        arrived.recv().unwrap();
+        // Give the owner time to meet the check; its result does not depend on this delay.
+        thread::sleep(Duration::from_millis(50));
+        check.unlock().unwrap();
+        let owner = owner
+            .join()
+            .unwrap()
+            .expect("owner waits out a status check");
+        // A live owner is reported to checks and refused to a second owner.
+        assert_eq!(inspect(&check, |_| Ok(())).unwrap(), None);
+        assert!(matches!(lock(&path), Err(Error::Conflict(_))));
+        drop(owner);
+        assert_eq!(inspect(&check, |_| Ok(())).unwrap(), Some(()));
     }
 }

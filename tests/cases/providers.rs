@@ -385,7 +385,10 @@ fn real_tui_runs_a_claude_task_by_keyboard_and_mouse() -> Result {
                 .iter()
                 .map(|(model, ..)| model.as_str())
                 .collect::<Vec<_>>(),
-            ["execution", "review", "validation"]
+            ["execution", "review", "validation"],
+            "{task:#}\n{}",
+            f.ok(&["events", "--after", "0"])
+                .map_or_else(|e| e.to_string(), |l| l.to_string())
         );
         t.send("q")?;
         t.finish()?;

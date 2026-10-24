@@ -230,7 +230,7 @@ case '{mode}' in
  slow-review) if [ "$model" = review ]; then touch "$HOME/review-started"; sleep 30; fi;;
  slow) sleep 3;;
  usage-live) if [ "$model" = execution ]; then sleep 30; fi;;
- descendants) setsid sleep 30 & printf '%s' "$!" > descendant.pid; sleep 30;;
+ descendants) setsid sleep 30 & printf '%s' "$!" > descendant.staged; mv descendant.staged descendant.pid; sleep 30;;
  rate) printf '{{"type":"turn.failed","error":{{"message":"rate_limit reached"}}}}\n'; exit 2;;
  usage) printf '%s\n' '{{"type":"error","message":"You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 26th, 2099 11:32 PM."}}' '{{"type":"turn.failed","error":{{"message":"You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 26th, 2099 11:32 PM."}}}}'; exit 1;;
  malformed-work) printf 'verified\n' > result.txt; printf '{{"type":"turn.completed","usage":{{}}}}\n'; exit 0;;
@@ -659,7 +659,9 @@ fn pause_at_tenth_review_resumes_the_phase_without_an_eleventh_repair() -> Resul
         }
         println!(
             "TENTH REVIEW PAUSED mouse={mouse}\n{}",
-            t.screen("paused", |s| s.contains("PAUSED") && s.contains("r Resume"))?
+            t.screen("paused", |s| {
+                s.contains("PAUSED · supervisor absent") && s.contains("r Resume")
+            })?
         );
         f.provider("review-critical")?;
         if mouse {
@@ -855,7 +857,9 @@ fn changing_source_while_review_is_paused_invalidates_saved_proof() -> Result {
         "fingerprinting must preserve the user's index"
     );
     t.click("p Pause")?;
-    t.screen("paused", |s| s.contains("PAUSED") && s.contains("r Resume"))?;
+    t.screen("paused", |s| {
+        s.contains("PAUSED · supervisor absent") && s.contains("r Resume")
+    })?;
     fs::write(f.root.join("result.txt"), "unverified change\n")?;
     fs::write(f.root.join(".gitignore"), "included.secret\n")?;
     fs::write(f.root.join("included.secret"), "deliberately staged\n")?;
@@ -1680,7 +1684,7 @@ fn paused_repair_resumes_its_reserved_round_and_same_attempt() -> Result {
         println!(
             "REPAIR PAUSED mouse={mouse}\n{}",
             t.screen("repair paused", |s| s.contains("[r Resume]")
-                && s.contains("PAUSED"))?
+                && s.contains("PAUSED · supervisor absent"))?
         );
         let before = f.ok(&["show", "1"])?;
         let attempt = before["attempts"][0]["id"].clone();
@@ -2648,21 +2652,24 @@ fn escaped_descendants_are_stopped_and_duplicate_runners_are_rejected() -> Resul
     f.add("Descendants")?;
     let mut run = Running(f.process().arg("run").stdout(Stdio::null()).spawn()?);
     f.state("running")?;
-    support::eventually("descendant started", || {
-        Ok(f.root.join("descendant.pid").exists().then_some(()))
+    let pid: u32 = support::eventually("descendant started", || {
+        Ok(fs::read_to_string(f.root.join("descendant.pid"))
+            .ok()
+            .map(|pid| pid.parse().expect("descendant pid")))
     })?;
-    let pid = fs::read_to_string(f.root.join("descendant.pid"))?;
+    // The start time tells the descendant apart from a later process given the same pid.
+    let started = support::start_time(pid)?.ok_or("descendant exited before cleanup")?;
     let duplicate = f.process().arg("run").output()?;
     assert_eq!(duplicate.status.code(), Some(4));
     f.ok(&["pause", "1"])?;
     run.0.wait()?;
     f.state("paused")?;
     f.guardian_finished()?;
-    let survivor = fs::read_to_string(format!("/proc/{pid}/status"));
-    assert!(
-        survivor.is_err(),
+    assert_ne!(
+        support::start_time(pid)?,
+        Some(started),
         "escaped descendant {pid} survived cleanup:\n{}",
-        survivor.unwrap_or_default()
+        fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default()
     );
     f.no_scratch()?;
     Ok(())
@@ -2689,10 +2696,10 @@ fn real_tui_question_answer_mouse_and_keyboard_automatically_resume() -> Result 
         } else {
             t.send("r")?;
         }
-        let waiting = t.screen("question", |s| s.contains("QUESTION"))?;
+        // The supervisor records the question, then releases the session and exits.
+        let waiting = t.screen("question", |s| s.contains("QUESTION · supervisor absent"))?;
         println!("QUESTION CONTROLS (mouse={mouse})\n{waiting}");
         assert!(waiting.contains("w Answer"));
-        assert!(waiting.contains("QUESTION · supervisor absent"));
         assert!(!waiting.contains("[R Recover]"));
         assert!(!waiting.contains("[r R"));
         let waiting_task = f.ok(&["show", "1"])?;

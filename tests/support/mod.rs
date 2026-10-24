@@ -85,6 +85,18 @@ pub fn write_executable(to: &Path, script: impl AsRef<[u8]>) -> Result {
     install_executable(to, Stdio::piped(), Some(script.as_ref()))
 }
 
+/// The kernel start time of `pid`, or None once it no longer exists. Unlike the pid,
+/// which the kernel reuses, the pair identifies one process.
+pub fn start_time(pid: u32) -> Result<Option<u64>> {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return Ok(None);
+    };
+    // Field 22 of proc_pid_stat(5); the command name before it may contain spaces.
+    let after_name = &stat[stat.rfind(')').ok_or("bad stat")? + 2..];
+    let started = after_name.split(' ').nth(19).ok_or("short stat")?;
+    Ok(Some(started.parse()?))
+}
+
 /// Polls `probe` until it yields a value, failing with `what` after PATIENCE.
 pub fn eventually<T>(what: &str, mut probe: impl FnMut() -> Result<Option<T>>) -> Result<T> {
     let deadline = Instant::now() + PATIENCE;

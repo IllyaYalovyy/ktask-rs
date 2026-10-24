@@ -54,17 +54,15 @@ fn ownership(common: &Path, name: &str, description: &str, marker: bool) -> Resu
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(format!("Cannot inspect {description} ownership: {error}")),
     };
-    match file.try_lock() {
-        Ok(()) if marker && file.metadata().map_err(|e| e.to_string())?.len() != 0 => {
+    match crate::runner::process::inspect(&file, |file| Ok(file.metadata()?.len())) {
+        Ok(Some(marked)) if marker && marked != 0 => {
             Err("Worker cleanup is unconfirmed; inspect descendants, then use Recover".into())
         }
-        Ok(()) => Ok(()),
-        Err(std::fs::TryLockError::WouldBlock) => Err(format!(
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(format!(
             "A live {description} owns the workspace; wait for release"
         )),
-        Err(std::fs::TryLockError::Error(error)) => {
-            Err(format!("Cannot inspect {description} ownership: {error}"))
-        }
+        Err(error) => Err(format!("Cannot inspect {description} ownership: {error}")),
     }
 }
 

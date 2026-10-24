@@ -36,9 +36,14 @@ pub fn launch(instance: instance::Instance) -> std::process::ExitCode {
         return match runner::process::worker() {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(error) => {
+                // The supervisor re-raises this as a conflict; send the bare message once.
+                let message = match error {
+                    storage::Error::Conflict(message) => message,
+                    other => other.to_string(),
+                };
                 println!(
                     "{}",
-                    serde_json::to_string(&runner::process::Message::Error(error.to_string()))
+                    serde_json::to_string(&runner::process::Message::Error(message))
                         .expect("error JSON")
                 );
                 std::process::ExitCode::FAILURE

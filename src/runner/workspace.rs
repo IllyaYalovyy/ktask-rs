@@ -103,11 +103,7 @@ impl Workspace {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(error) => return Err(error.into()),
         };
-        match file.try_lock() {
-            Ok(()) => Ok(false),
-            Err(std::fs::TryLockError::WouldBlock) => Ok(true),
-            Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
-        }
+        Ok(super::process::inspect(&file, |_| Ok(()))?.is_none())
     }
     pub fn acquire(root: &Path) -> Result<Self> {
         Self::acquire_with_cleanup_confirmation(root, false)

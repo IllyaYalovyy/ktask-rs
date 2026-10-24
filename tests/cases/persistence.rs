@@ -3086,8 +3086,8 @@ fn revised_failure_waits_for_approval_before_queue_continues() -> Result {
         // Any accidental continuation now has a configured check and reaches a real attempt.
         // The replacement provider exits promptly so even a regression cannot leave a worker.
         let approved_prompt = root.join("approved-prompt");
-        fs::write(
-            root.join("bin/codex"),
+        support::write_executable(
+            &root.join("bin/codex"),
             format!("#!/bin/sh\ncat > '{}'\nexit 9\n", approved_prompt.display()),
         )?;
         if mouse {
@@ -3254,10 +3254,10 @@ fn remediation_stalled_provider_can_cancel_and_quit_without_leaking_children() -
             rusqlite::params![attempt, "界".repeat(100_000)],
         )?;
         provider_fixture(root, serde_json::Value::Null, false)?;
-        fs::write(
-            root.join("bin/codex"),
+        support::write_executable(
+            &root.join("bin/codex"),
             format!(
-                "#!/bin/sh\necho $$ > '{0}/provider-pid'\nsleep 60 &\necho $! > '{0}/descendant-pid'\nwait\n",
+                "#!/bin/sh\necho $$ > '{0}/provider-pid'\nsleep 60 &\necho $! > '{0}/descendant.staged'\nmv '{0}/descendant.staged' '{0}/descendant-pid'\nwait\n",
                 root.display()
             ),
         )?;
@@ -3329,10 +3329,10 @@ fn remediation_reaps_pipe_holding_descendants_and_reports_provider_failure() -> 
             serde_json::json!({"action":"escalate","model":{"provider":"codex","model":"stronger","effort":"high"},"reason":"Repair the failed boundary."}),
             false,
         )?;
-        fs::write(
-            root.join("bin/codex"),
+        support::write_executable(
+            &root.join("bin/codex"),
             format!(
-                "#!/bin/sh\ncat >/dev/null\nsleep 60 &\necho $! > '{0}/descendant-pid'\n{1}\n",
+                "#!/bin/sh\ncat >/dev/null\nsleep 60 &\necho $! > '{0}/descendant.staged'\nmv '{0}/descendant.staged' '{0}/descendant-pid'\n{1}\n",
                 root.display(),
                 if fail {
                     "echo fixture-provider-failed >&2\nexit 9"

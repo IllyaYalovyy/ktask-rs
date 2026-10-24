@@ -202,10 +202,10 @@ fn held_provider(root: &Path) -> Result {
     )?;
     fs::create_dir(root.join("provider-calls"))?;
     let quoted = format!("'{}'", root.to_string_lossy().replace('\'', "'\\''"));
-    fs::write(
-        root.join("bin/codex"),
+    support::write_executable(
+        &root.join("bin/codex"),
         format!(
-            "#!/bin/sh\nset -eu\nfixture={quoted}\ncall=\"$fixture/provider-calls/$$\"\nmkdir \"$call\"\nprintf '%s\\n' \"$$\" > \"$call/provider-pid\"\ncat > \"$call/prompt\"\nsleep 60 &\nprintf '%s\\n' \"$!\" > \"$call/descendant-pid\"\nwhile [ ! -f \"$call/release\" ]; do sleep 0.02; done\nif [ -f \"$fixture/provider-fail\" ]; then echo held-provider-failed >&2; exit 9; fi\ncat \"$fixture/provider-events.jsonl\"\n"
+            "#!/bin/sh\nset -eu\nfixture={quoted}\ncall=\"$fixture/provider-calls/$$\"\nmkdir \"$call\"\nprintf '%s\\n' \"$$\" > \"$call/provider-pid\"\ncat > \"$call/prompt\"\nsleep 60 &\nprintf '%s\\n' \"$!\" > \"$call/descendant.staged\"\nmv \"$call/descendant.staged\" \"$call/descendant-pid\"\nwhile [ ! -f \"$call/release\" ]; do sleep 0.02; done\nif [ -f \"$fixture/provider-fail\" ]; then echo held-provider-failed >&2; exit 9; fi\ncat \"$fixture/provider-events.jsonl\"\n"
         ),
     )?;
     Ok(())
@@ -524,7 +524,9 @@ fn retention_releases_cli_judge_pins_for_missing_launch_and_malformed_responses(
         provider_fixture(root, serde_json::Value::Null, true)?;
         match failure {
             "missing" => fs::remove_file(root.join("bin/codex"))?,
-            "launch" => fs::write(root.join("bin/codex"), "invalid executable format\n")?,
+            "launch" => {
+                support::write_executable(&root.join("bin/codex"), "invalid executable format\n")?
+            }
             _ => (),
         }
         let mut cli = command(DEV, root);
