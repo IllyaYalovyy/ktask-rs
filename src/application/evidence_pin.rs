@@ -211,7 +211,7 @@ impl Service {
         // SQLite resolves the descriptor path while the original state directory is held.
         // This connection survives pathname replacement and cannot create a replacement DB.
         let db = self.db.evidence_connection()?;
-        db.busy_timeout(std::time::Duration::from_secs(5))?;
+        db.busy_timeout(crate::storage::BUSY_TIMEOUT)?;
         let tx = self
             .db
             .connection_mut()

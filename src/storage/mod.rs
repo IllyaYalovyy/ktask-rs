@@ -61,6 +61,11 @@ impl From<rusqlite::Error> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// How long a connection waits for another's write. Every project's supervisor and TUI share
+/// one database file and commits are flushed to disk, so under many projects' output a writer
+/// can queue for seconds; it waits rather than failing its attempt.
+pub const BUSY_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct Database {
     connection: Connection,
     state_dir: fs::File,
@@ -172,7 +177,9 @@ impl Database {
         state_dir: fs::File,
         database_identity: (u64, u64),
     ) -> Result<Self> {
-        connection.busy_timeout(Duration::from_secs(5))?;
+        connection.busy_timeout(BUSY_TIMEOUT)?;
+        // The TUI's refresh alone reuses more statements than the default cache of 16 holds.
+        connection.set_prepared_statement_cache_capacity(64);
         connection.pragma_update(None, "foreign_keys", true)?;
         connection.pragma_update(None, "synchronous", "FULL")?;
         // Switching a new database to WAL needs every other connection idle, and SQLite then

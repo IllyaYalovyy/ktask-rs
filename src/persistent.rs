@@ -36,6 +36,7 @@ const ABANDON_ATTEMPT: &str = "This attempt";
 
 impl App {
     pub(crate) fn open_readiness(&mut self) {
+        self.readiness_running = None;
         let report = match self.reload() {
             Ok(()) => self.readiness.clone().expect("reload inspects readiness"),
             Err(error) => crate::readiness::Readiness {
@@ -202,7 +203,16 @@ impl App {
             self.log_offset = 0;
         }
         self.reconcile();
-        self.readiness = Some(crate::readiness::inspect(self));
+        // While the supervisor runs the current attempt, nothing readiness checks can change,
+        // and inspecting runs Git: inspect again once that run ends or another task is current.
+        let running = self
+            .current()
+            .filter(|task| self.supervisor_alive && task.status() == Status::Running)
+            .map(|task| task.id);
+        if running.is_none() || running != self.readiness_running {
+            self.readiness = Some(crate::readiness::inspect(self));
+        }
+        self.readiness_running = running;
         Ok(())
     }
     /// Abandon gives up on the task. A waiting or paused attempt may be dropped alone instead.

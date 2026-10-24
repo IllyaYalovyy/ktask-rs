@@ -162,8 +162,12 @@ ktask          # TUI: a Add, then r Run
 ```
 
 `init` detects the check from a Makefile `check` or `test` target, `Cargo.toml`, a
-`package.json` test script, `go.mod`, or Python tests; `--check-command CMD` sets it
-explicitly. `--agent-network on` lets Codex agents that change the project use the network,
+`package.json` test script, `go.mod`, or Python tests (pytest or unittest, at the root or in
+`tests/`); `--check-command CMD` sets it explicitly. The supervisor reads the test summaries
+of `cargo test`, pytest, unittest (and Django), Jest, Vitest, Mocha and `node --test`: a
+reported failed test fails the check even when the command exits 0, and fewer passing or more
+ignored tests than at the previous checkpoint block validation. Other runners, such as
+`go test`, are judged by exit code alone. `--agent-network on` lets Codex agents that change the project use the network,
 for example to install dependencies; it is off by default. `init` exits 4 and lists each fix
 when the project still cannot run tasks. The TUI covers the same setup: in a new project
 **u Readiness** lists what is missing, with **c Checks** (the first check is prefilled with

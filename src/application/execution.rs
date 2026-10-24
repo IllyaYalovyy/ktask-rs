@@ -290,6 +290,31 @@ impl Service {
         self.db.connection().execute("INSERT INTO attempt_output(attempt_id,sequence,stream,recorded_at_ms,content) SELECT ?1,coalesce(max(sequence),0)+1,?2,?3,?4 FROM attempt_output WHERE attempt_id=?1", params![run.attempt,stream,now_ms(),text])?;
         Ok(())
     }
+    /// Appends (stream, text) rows to the attempt's output in one transaction, so output that
+    /// queued while other projects held the shared database costs one disk flush, not one each.
+    pub fn output_rows(&mut self, run: &Run, rows: &[(String, String)]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let last: i64 = tx.query_row(
+            "SELECT coalesce(max(sequence),0) FROM attempt_output WHERE attempt_id=?1",
+            [run.attempt],
+            |r| r.get(0),
+        )?;
+        let now = now_ms();
+        for (offset, (stream, text)) in rows.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO attempt_output(attempt_id,sequence,stream,recorded_at_ms,content) VALUES (?1,?2,?3,?4,?5)",
+                params![run.attempt, last + 1 + offset as i64, stream, now, text],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
     pub fn output_cursor(&self, run: &Run) -> Result<i64> {
         Ok(self.db.connection().query_row(
             "SELECT coalesce(max(sequence),0) FROM attempt_output WHERE attempt_id=?1",

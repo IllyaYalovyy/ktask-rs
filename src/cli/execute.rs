@@ -188,7 +188,8 @@ fn init(
             .collect::<Vec<_>>()
             .join("\n");
         return Err(crate::storage::Error::Conflict(format!(
-            "{text}Setup saved, but the project cannot run tasks yet:\n{missing}"
+            "Setup saved, but the project cannot run tasks yet:\n{missing}\n\n{}",
+            text.trim_end()
         ))
         .into());
     }

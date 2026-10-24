@@ -224,6 +224,8 @@ pub struct App {
     pub(crate) execution_session: Option<crate::application::session::ExecutionSession>,
     pub launch_issue: Option<String>,
     pub readiness: Option<crate::readiness::Readiness>,
+    /// The task whose live supervisor run `readiness` was inspected during, if any.
+    pub(crate) readiness_running: Option<usize>,
     pub last_workspace: Option<usize>,
     pub tick_ms: u64,
     pub hits: Vec<(Rect, Action)>,
@@ -313,6 +315,7 @@ impl App {
             execution_session: None,
             launch_issue: None,
             readiness: None,
+            readiness_running: None,
             last_workspace: Some(1),
             tick_ms: 400,
             hits: Vec::new(),
@@ -891,7 +894,12 @@ impl App {
                             | Status::Abandoned
                     )
                 }) {
-                    if let Err(error) = self.reload() {
+                    // Nothing stored changed, so only the supervisor can have started or
+                    // stopped; redraw anyway so timers and countdowns advance.
+                    let service = self.service.as_ref().expect("SQLite mode");
+                    let unchanged = crate::runner::supervisor_alive(service)
+                        .is_ok_and(|alive| alive == self.supervisor_alive);
+                    if !unchanged && let Err(error) = self.reload() {
                         self.message(error);
                     }
                     return true;

@@ -259,6 +259,7 @@ impl Resolution {
 pub struct Service {
     db: Database,
     observed_data_version: i64,
+    live_output: queries::LiveOutput,
     actor: Actor,
     pub project_id: i64,
     pub project_name: String,
@@ -306,6 +307,7 @@ impl Service {
             project_id,
             project_name,
             observed_data_version: 0,
+            live_output: Default::default(),
             actor: Actor::default(),
         }))
     }
@@ -366,6 +368,7 @@ impl Service {
         Ok(Self {
             db,
             observed_data_version: 0,
+            live_output: Default::default(),
             actor: Actor::default(),
             project_id,
             project_name,

@@ -143,12 +143,39 @@ pub fn detect_check(root: &Path) -> Option<(String, &'static str)> {
     if pytest {
         return Some(("python3 -m pytest".into(), "pytest configuration"));
     }
-    let python_tests = fs::read_dir(root).ok()?.flatten().any(|entry| {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        name.starts_with("test") && name.ends_with(".py")
-    });
-    python_tests.then(|| ("python3 -m unittest".into(), "Python test files"))
+    python_check(root)
+}
+
+/// Python test files at the root or in `tests`/`test`: pytest when any of them is written for
+/// pytest (it does not use unittest), otherwise unittest discovering that directory.
+fn python_check(root: &Path) -> Option<(String, &'static str)> {
+    let source = "Python test files";
+    for dir in ["", "tests", "test"] {
+        let tests: Vec<String> = fs::read_dir(root.join(dir))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.ends_with(".py") && (name.starts_with("test_") || name.ends_with("_test.py"))
+            })
+            .map(|entry| fs::read_to_string(entry.path()).unwrap_or_default())
+            .collect();
+        if tests.is_empty() {
+            continue;
+        }
+        if tests.iter().any(|text| !text.contains("unittest")) {
+            return Some(("python3 -m pytest".into(), source));
+        }
+        let command = if dir.is_empty() {
+            "python3 -m unittest".into()
+        } else {
+            format!("python3 -m unittest discover -s {dir}")
+        };
+        return Some((command, source));
+    }
+    None
 }
 
 #[cfg(test)]
@@ -161,7 +188,7 @@ mod tests {
 
     #[test]
     fn detects_the_check_a_project_already_defines() {
-        let cases: [(Files, Option<&str>); 7] = [
+        let cases: [(Files, Option<&str>); 10] = [
             (
                 &[("Makefile", "build:\n\tcc x.c\ntest:\n\t./t\ncheck: test\n")],
                 Some("make check"),
@@ -192,12 +219,26 @@ mod tests {
                 ],
                 Some("python3 -m pytest"),
             ),
-            (&[("test_wordcount.py", "")], Some("python3 -m unittest")),
+            (
+                &[("test_wordcount.py", "import unittest\n")],
+                Some("python3 -m unittest"),
+            ),
+            (
+                &[("tests/test_calc.py", "def test_add():\n    assert 1\n")],
+                Some("python3 -m pytest"),
+            ),
+            (
+                &[("test/util_test.py", "import unittest\n")],
+                Some("python3 -m unittest discover -s test"),
+            ),
+            (&[("tests/helpers.py", ""), ("testing.py", "")], None),
         ];
         for (files, expected) in cases {
             let root = tempfile::tempdir().unwrap();
             for (name, content) in files {
-                fs::write(root.path().join(name), content).unwrap();
+                let path = root.path().join(name);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, content).unwrap();
             }
             let detected = detect_check(root.path()).map(|(command, _)| command);
             assert_eq!(detected.as_deref(), expected, "{files:?}");

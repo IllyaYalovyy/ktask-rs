@@ -9,6 +9,7 @@ pub mod remediation;
 mod reset;
 pub(crate) mod sandbox;
 pub mod setup;
+mod test_summary;
 pub(crate) mod workspace;
 
 use crate::{
@@ -1103,6 +1104,7 @@ fn execute(
     let mut last_tick = Instant::now();
     let mut stdout = output::Utf8Stream::default();
     let mut stderr = output::Utf8Stream::default();
+    let mut pending = None;
     loop {
         if interrupted.is_none() {
             if ctx.stop.load(Ordering::Relaxed) || service.control_cursor(run)? > ctx.cursor {
@@ -1134,35 +1136,60 @@ fn execute(
             ctx.persist_active_time(service, run)?;
             last_tick = Instant::now();
         }
-        match worker.messages.recv_timeout(Duration::from_millis(40)) {
+        let message = match pending.take() {
+            Some(message) => Ok(message),
+            None => worker.messages.recv_timeout(Duration::from_millis(40)),
+        };
+        match message {
             Ok(Message::Output {
                 stream: source,
                 bytes,
             }) => {
-                if let Some(stream) = stream.as_mut().filter(|_| source == "stdout") {
-                    for event in stream.feed(&bytes)? {
-                        match event {
-                            provider::Event::Session(id) => service.record_session(step, &id)?,
-                            provider::Event::Usage(usage, cost) => {
-                                service.record_usage(step, &usage, cost)?
-                            }
-                            provider::Event::Text(text) => service.output(run, "stdout", &text)?,
-                            provider::Event::Message(reply) => {
-                                service.output(run, "stdout", &agent::display(&reply))?
+                let mut rows = Vec::new();
+                let mut chunk = Some((source, bytes));
+                let mut chunks = 0;
+                while let Some((source, bytes)) = chunk.take() {
+                    chunks += 1;
+                    if let Some(stream) = stream.as_mut().filter(|_| source == "stdout") {
+                        for event in stream.feed(&bytes)? {
+                            match event {
+                                provider::Event::Text(text) => rows.push(("stdout".into(), text)),
+                                provider::Event::Message(reply) => {
+                                    rows.push(("stdout".into(), agent::display(&reply)))
+                                }
+                                // Keep the stored order: earlier output first.
+                                provider::Event::Session(id) => {
+                                    service.output_rows(run, &std::mem::take(&mut rows))?;
+                                    service.record_session(step, &id)?
+                                }
+                                provider::Event::Usage(usage, cost) => {
+                                    service.output_rows(run, &std::mem::take(&mut rows))?;
+                                    service.record_usage(step, &usage, cost)?
+                                }
                             }
                         }
-                    }
-                } else {
-                    let decoder = if source == "stdout" {
-                        &mut stdout
                     } else {
-                        &mut stderr
-                    };
-                    let text = decoder.feed(&bytes);
-                    if !text.is_empty() {
-                        service.output(run, &source, &text)?;
+                        let decoder = if source == "stdout" {
+                            &mut stdout
+                        } else {
+                            &mut stderr
+                        };
+                        let text = decoder.feed(&bytes);
+                        if !text.is_empty() {
+                            rows.push((source, text));
+                        }
+                    }
+                    // Output that queued while the database was busy joins this transaction,
+                    // bounded so pause and time limits are still checked during a flood.
+                    if rows.len() < 1000 && chunks < 256 {
+                        match worker.messages.try_recv() {
+                            Ok(Message::Output { stream, bytes }) => chunk = Some((stream, bytes)),
+                            Ok(other) => pending = Some(other),
+                            Err(_) => {}
+                        }
                     }
                 }
+                service.output_rows(run, &rows)?;
             }
             Ok(Message::Exit { code }) => {
                 worker.join()?;
@@ -1274,7 +1301,7 @@ pub fn background(
             } else {
                 error
                     .trim()
-                    .strip_prefix("conflict: command conflict: ")
+                    .strip_prefix("conflict: ")
                     .unwrap_or(error.trim())
                     .to_owned()
             }));

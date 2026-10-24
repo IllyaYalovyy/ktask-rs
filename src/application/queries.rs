@@ -47,7 +47,7 @@ fn complete_task(db: &Connection, mut task: Task) -> Result<Task> {
         !task.revisions.is_empty(),
         "Stored task has no revision; database needs repair",
     )?;
-    task.attempts = attempts(db, task.id, true, true)?;
+    task.attempts = attempts(db, task.id, true, None)?;
     task.follow_ups = follow_ups(db, task.id)?;
     Ok(task)
 }
@@ -764,7 +764,7 @@ impl Service {
         let mut queue = Vec::new();
         let mut history = Vec::new();
         {
-            let mut stmt = tx.prepare("SELECT id, row_version, lifecycle, status, order_key, resolution_reason, attempts_used, closed_at_ms, resolved_by_kind || ': ' || resolved_by, origin_task_id, origin_attempt_id FROM task_details WHERE project_id = ?1 AND lifecycle <> 'deleted' ORDER BY CASE WHEN closed_at_ms IS NULL THEN 0 ELSE 1 END, CASE WHEN attempt_state = 'running' THEN 0 ELSE 1 END, closed_at_ms DESC, CASE WHEN closed_at_ms IS NOT NULL THEN id END DESC, order_key")?;
+            let mut stmt = tx.prepare_cached("SELECT id, row_version, lifecycle, status, order_key, resolution_reason, attempts_used, closed_at_ms, resolved_by_kind || ': ' || resolved_by, origin_task_id, origin_attempt_id FROM task_details WHERE project_id = ?1 AND lifecycle <> 'deleted' ORDER BY CASE WHEN closed_at_ms IS NULL THEN 0 ELSE 1 END, CASE WHEN attempt_state = 'running' THEN 0 ELSE 1 END, closed_at_ms DESC, CASE WHEN closed_at_ms IS NOT NULL THEN id END DESC, order_key")?;
             let rows = stmt.query_map([self.project_id], |r| {
                 Ok((
                     Task {
@@ -793,7 +793,8 @@ impl Service {
                     "Stored task has no revision; database needs repair",
                 )?;
                 let live_logs = closed.is_none() && queue.is_empty();
-                task.attempts = attempts(&tx, task.id, historical_logs, live_logs)?;
+                let live = live_logs.then_some(&mut self.live_output);
+                task.attempts = attempts(&tx, task.id, historical_logs, live)?;
                 task.follow_ups = follow_ups(&tx, task.id)?;
                 if closed.is_some() {
                     history.push(task);
@@ -904,11 +905,67 @@ fn revisions(db: &Connection, task: i64) -> Result<Vec<Revision>> {
     Ok(revisions)
 }
 
+/// Output rows the live pane shows: at least the last `LIVE_ROWS`, at most half as many again.
+const LIVE_ROWS: usize = 2000;
+
+/// The current attempt's recent output, kept between snapshots: a refresh reads only rows
+/// appended since the last one, and the window is trimmed in steps, so a long-running attempt's
+/// log is neither re-read nor shifted on every refresh.
+#[derive(Default)]
+pub(super) struct LiveOutput {
+    attempt: i64,
+    last_sequence: i64,
+    rows: Vec<String>,
+}
+impl LiveOutput {
+    fn read(&mut self, db: &Connection, attempt: i64) -> Result<Vec<String>> {
+        let newest: i64 = db
+            .prepare_cached(
+                "SELECT coalesce(max(sequence),0) FROM attempt_output WHERE attempt_id=?1",
+            )?
+            .query_row([attempt], |r| r.get(0))?;
+        // Another attempt, or its output was removed: start over from the stored rows.
+        if self.attempt != attempt || newest < self.last_sequence {
+            *self = Self {
+                attempt,
+                last_sequence: 0,
+                rows: Vec::new(),
+            };
+            let mut recent = db.prepare_cached("SELECT sequence, content FROM (SELECT sequence, content FROM attempt_output WHERE attempt_id = ?1 ORDER BY sequence DESC LIMIT ?2) ORDER BY sequence")?;
+            self.append(recent.query_map(params![attempt, LIVE_ROWS as i64], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?)?;
+        } else if newest > self.last_sequence {
+            let mut appended = db.prepare_cached("SELECT sequence, content FROM attempt_output WHERE attempt_id = ?1 AND sequence > ?2 ORDER BY sequence")?;
+            self.append(
+                appended.query_map(params![attempt, self.last_sequence], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?,
+            )?;
+        }
+        Ok(self.rows.clone())
+    }
+    fn append(
+        &mut self,
+        rows: impl Iterator<Item = rusqlite::Result<(i64, String)>>,
+    ) -> Result<()> {
+        for row in rows {
+            let (sequence, content) = row?;
+            self.last_sequence = sequence;
+            self.rows.push(content);
+        }
+        if self.rows.len() > LIVE_ROWS + LIVE_ROWS / 2 {
+            self.rows.drain(..self.rows.len() - LIVE_ROWS);
+        }
+        Ok(())
+    }
+}
+
 fn attempts(
     db: &Connection,
     task: i64,
     historical_logs: bool,
-    live_logs: bool,
+    mut live: Option<&mut LiveOutput>,
 ) -> Result<Vec<Attempt>> {
     let mut stmt = db.prepare_cached("SELECT a.id, a.revision, a.state, a.outcome, a.active_ms, a.wait_reason, a.resume_at_ms, (SELECT session_id FROM attempt_steps WHERE attempt_id = a.id AND role = 'execution' ORDER BY ordinal DESC LIMIT 1), (SELECT sum(cost_microusd) FROM model_calls WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id = a.id)), a.report, (SELECT prompt FROM questions WHERE attempt_id = a.id AND state = 'open' ORDER BY id DESC LIMIT 1), EXISTS(SELECT 1 FROM output_pruning WHERE attempt_id=a.id), a.failure_category FROM attempts a WHERE task_id = ?1 ORDER BY number")?;
     let mut attempts = stmt
@@ -942,11 +999,17 @@ fn attempts(
         attempt.waiting_ms = waiting_time(db, attempt.id)?;
         // The live pane only follows the current attempt. Historical output is
         // fetched in bounded pages when its evidence browser is opened.
-        if historical_logs || (live_logs && Some(attempt.id) == latest) {
-            let mut output = db.prepare_cached("SELECT content FROM (SELECT sequence, content FROM attempt_output WHERE attempt_id = ?1 ORDER BY sequence DESC LIMIT 2000) ORDER BY sequence")?;
-            attempt.logs = output
-                .query_map([attempt.id], |r| r.get(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
+        let live = live.as_deref_mut().filter(|_| Some(attempt.id) == latest);
+        if historical_logs || live.is_some() {
+            attempt.logs = match live {
+                Some(live) => live.read(db, attempt.id)?,
+                None => {
+                    let mut output = db.prepare_cached("SELECT content FROM (SELECT sequence, content FROM attempt_output WHERE attempt_id = ?1 ORDER BY sequence DESC LIMIT ?2) ORDER BY sequence")?;
+                    output
+                        .query_map(params![attempt.id, LIVE_ROWS as i64], |r| r.get(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?
+                }
+            };
             if attempt.output_pruned {
                 attempt
                     .logs
@@ -981,11 +1044,9 @@ fn attempts(
 }
 
 fn waiting_time(db: &Connection, attempt: i64) -> Result<i64> {
-    let finished: Option<i64> = db.query_row(
-        "SELECT finished_at_ms FROM attempts WHERE id=?1",
-        [attempt],
-        |r| r.get(0),
-    )?;
+    let finished: Option<i64> = db
+        .prepare_cached("SELECT finished_at_ms FROM attempts WHERE id=?1")?
+        .query_row([attempt], |r| r.get(0))?;
     let mut total: i64 = 0;
     let mut started: Option<i64> = None;
     let mut stmt = db.prepare_cached("SELECT occurred_at_ms,kind FROM events WHERE attempt_id=?1 AND kind IN ('attempt.waiting','attempt.paused','attempt.resumed','attempt.succeeded','attempt.failed','attempt.interrupted') ORDER BY id")?;
@@ -1024,5 +1085,58 @@ fn retain_tail(text: &mut String, limit: usize) {
     }
     if start > 0 {
         text.drain(..start);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LIVE_ROWS, LiveOutput};
+    use rusqlite::{Connection, params};
+
+    fn append(db: &Connection, attempt: i64, rows: std::ops::RangeInclusive<i64>) {
+        for sequence in rows {
+            db.execute(
+                "INSERT INTO attempt_output VALUES (?1, ?2, 'stdout', 0, ?3)",
+                params![attempt, sequence, format!("line {sequence}")],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn live_output_reads_only_new_rows_and_trims_in_steps() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE attempt_output (attempt_id INTEGER, sequence INTEGER, stream TEXT,
+             recorded_at_ms INTEGER, content TEXT, PRIMARY KEY (attempt_id, sequence))",
+        )
+        .unwrap();
+        let mut live = LiveOutput::default();
+        let total = (LIVE_ROWS * 2) as i64;
+        append(&db, 1, 1..=total);
+        let rows = live.read(&db, 1).unwrap();
+        assert_eq!(rows.len(), LIVE_ROWS);
+        assert_eq!(rows.last().unwrap(), &format!("line {total}"));
+
+        // Appended rows extend the window without dropping old ones until it is half again
+        // as long, then it is cut back to the newest LIVE_ROWS.
+        append(&db, 1, total + 1..=total + 10);
+        let rows = live.read(&db, 1).unwrap();
+        assert_eq!(rows.len(), LIVE_ROWS + 10);
+        assert_eq!(rows[0], format!("line {}", total - LIVE_ROWS as i64 + 1));
+        let end = total + (LIVE_ROWS / 2) as i64 + 1;
+        append(&db, 1, total + 11..=end);
+        let rows = live.read(&db, 1).unwrap();
+        assert_eq!(rows.len(), LIVE_ROWS);
+        assert_eq!(rows.last().unwrap(), &format!("line {end}"));
+
+        // A different attempt, or output removed by retention, starts over.
+        append(&db, 2, 1..=3);
+        assert_eq!(live.read(&db, 2).unwrap(), ["line 1", "line 2", "line 3"]);
+        db.execute("DELETE FROM attempt_output WHERE attempt_id=2", [])
+            .unwrap();
+        assert!(live.read(&db, 2).unwrap().is_empty());
+        append(&db, 2, 1..=1);
+        assert_eq!(live.read(&db, 2).unwrap(), ["line 1"]);
     }
 }

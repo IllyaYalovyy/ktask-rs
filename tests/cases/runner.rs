@@ -278,6 +278,13 @@ case '{mode}' in
   pwd -P >> "$HOME/overlap-started"
   i=0; while [ ! -f "$HOME/release" ] && [ "$i" -lt 6000 ]; do sleep 0.01; i=$((i + 1)); done
  fi;;
+ chatty) if [ "$model" = execution ]; then
+  i=0
+  while [ "$i" -lt 1500 ]; do
+   printf '{{"type":"item.completed","item":{{"type":"command_execution","command":"build step","aggregated_output":"compiled unit %s","exit_code":0}}}}\n' "$i"
+   i=$((i + 1))
+  done
+ fi;;
  descendants) setsid sleep 30 & printf '%s' "$!" > descendant.staged; mv descendant.staged descendant.pid; sleep 30;;
  rate) printf '{{"type":"turn.failed","error":{{"message":"rate_limit reached"}}}}\n'; exit 2;;
  usage) printf '%s\n' '{{"type":"error","message":"You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 26th, 2099 11:32 PM."}}' '{{"type":"turn.failed","error":{{"message":"You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 26th, 2099 11:32 PM."}}}}'; exit 1;;
@@ -5764,6 +5771,76 @@ fn readiness_lets_the_owner_resume_a_rate_limit_wait_at_once() -> Result {
         t.finish()?;
         f.no_scratch()?;
     }
+    Ok(())
+}
+
+/// Six projects share one instance and run their queues at the same time, each execution
+/// streaming 1,500 output events, so every supervisor writes the shared database at once.
+#[test]
+fn many_projects_streaming_output_at_once_all_finish() -> Result {
+    let f = Fixture::new()?;
+    f.provider("chatty")?;
+    let mut projects = vec![f.root.clone()];
+    for index in 1..6 {
+        projects.push(f.second_project(&format!("project-{index}"))?);
+    }
+    for (index, project) in projects.iter().enumerate() {
+        for task in ["first", "second"] {
+            let title = format!("Project {index} {task}");
+            let add = [
+                "add",
+                "--title",
+                &title,
+                "--goal",
+                "Create result.txt containing verified",
+                "--criterion",
+                "result.txt contains verified",
+            ];
+            f.ok_in(project, &add)?;
+        }
+    }
+    let mut runs = Vec::new();
+    for project in &projects {
+        let run = f
+            .process_in(project)
+            .args(["--json", "run"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        runs.push(Running(run));
+    }
+    for (project, run) in projects.iter().zip(&mut runs) {
+        let status = run.0.wait()?;
+        let mut stderr = String::new();
+        std::io::Read::read_to_string(&mut run.0.stderr.take().unwrap(), &mut stderr)?;
+        assert!(status.success(), "{}: {stderr}", project.display());
+    }
+    for (index, project) in projects.iter().enumerate() {
+        let tasks = f.ok_in(project, &["list", "--scope", "history"])?["tasks"].clone();
+        let tasks = tasks.as_array().unwrap();
+        assert_eq!(tasks.len(), 2, "{tasks:?}");
+        for task in tasks {
+            assert_eq!(task["status"], "succeeded", "{task}");
+            assert!(
+                task["title"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with(&format!("Project {index} "))
+            );
+            let id = task["id"].as_i64().unwrap().to_string();
+            let shown = f.ok_in(project, &["show", &id])?;
+            assert_eq!(shown["attempts"].as_array().unwrap().len(), 1, "{shown}");
+        }
+        assert_eq!(f.git_in(project, &["status", "--porcelain"])?, "");
+    }
+    let db = f.db()?;
+    let rows: i64 = db.connection().query_row(
+        "SELECT count(*) FROM attempt_output WHERE content LIKE '%compiled unit 1499%'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(rows, 12, "every execution's last streamed event was stored");
+    f.no_scratch()?;
     Ok(())
 }
 

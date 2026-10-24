@@ -44,10 +44,15 @@ impl From<storage::Error> for Failure {
             storage::Error::Io(_) => (1, "io"),
             storage::Error::Sql(_) => (1, "database"),
         };
+        // The code already names a conflict; its message is the reason alone.
+        let message = match error {
+            storage::Error::Conflict(message) => message,
+            other => other.to_string(),
+        };
         Self {
             status,
             code,
-            message: error.to_string(),
+            message,
         }
     }
 }
