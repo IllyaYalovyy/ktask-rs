@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::{
     fs::{self, OpenOptions},
     os::unix::fs::PermissionsExt,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -49,18 +49,59 @@ impl Fixture {
         }
         Ok(f)
     }
+    /// Another Git project, set up like the first, in the same ktask instance.
+    fn second_project(&self, name: &str) -> Result<PathBuf> {
+        let root = self.scratch.path().join(name);
+        fs::create_dir(&root)?;
+        fs::write(root.join("README.md"), "Second project\n")?;
+        let git = |args: &[&str]| self.git_in(&root, args).map(drop);
+        git(&["init", "-q"])?;
+        git(&["add", "README.md"])?;
+        git(&[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "baseline",
+        ])?;
+        self.ok_in(
+            &root,
+            &["check-set", "build", "--command", "test -f result.txt"],
+        )?;
+        for role in ["execution", "review", "validation", "remediation"] {
+            let args = [
+                "model-default",
+                role,
+                "--provider",
+                "codex",
+                "--model",
+                role,
+            ];
+            self.ok_in(&root, &args)?;
+        }
+        Ok(root)
+    }
     fn git(&self, args: &[&str]) -> Result<String> {
+        self.git_in(&self.root, args)
+    }
+    fn git_in(&self, project: &Path, args: &[&str]) -> Result<String> {
         let o = Command::new("git")
             .arg("-C")
-            .arg(&self.root)
+            .arg(project)
             .args(args)
             .output()?;
         assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
         Ok(String::from_utf8(o.stdout)?)
     }
     fn process(&self) -> Command {
+        self.process_in(&self.root)
+    }
+    /// The same ktask instance (state, cache, config) used from another project.
+    fn process_in(&self, project: &Path) -> Command {
         let mut c = Command::new(BIN);
-        c.current_dir(&self.root)
+        c.current_dir(project)
             .env_clear()
             .env("HOME", self.scratch.path())
             .env("TMPDIR", self.scratch.path())
@@ -78,7 +119,10 @@ impl Fixture {
         c
     }
     fn ok(&self, args: &[&str]) -> Result<Value> {
-        let o = self.process().arg("--json").args(args).output()?;
+        self.ok_in(&self.root, args)
+    }
+    fn ok_in(&self, project: &Path, args: &[&str]) -> Result<Value> {
+        let o = self.process_in(project).arg("--json").args(args).output()?;
         assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
         Ok(serde_json::from_slice::<Value>(&o.stdout)?["data"].clone())
     }
@@ -230,6 +274,10 @@ case '{mode}' in
  slow-review) if [ "$model" = review ]; then touch "$HOME/review-started"; sleep 30; fi;;
  slow) sleep 3;;
  usage-live) if [ "$model" = execution ]; then sleep 30; fi;;
+ overlap) if [ "$model" = execution ]; then
+  pwd -P >> "$HOME/overlap-started"
+  i=0; while [ ! -f "$HOME/release" ] && [ "$i" -lt 6000 ]; do sleep 0.01; i=$((i + 1)); done
+ fi;;
  descendants) setsid sleep 30 & printf '%s' "$!" > descendant.staged; mv descendant.staged descendant.pid; sleep 30;;
  rate) printf '{{"type":"turn.failed","error":{{"message":"rate_limit reached"}}}}\n'; exit 2;;
  usage) printf '%s\n' '{{"type":"error","message":"You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 26th, 2099 11:32 PM."}}' '{{"type":"turn.failed","error":{{"message":"You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 26th, 2099 11:32 PM."}}}}'; exit 1;;
@@ -5627,5 +5675,97 @@ fn readiness_lets_the_owner_resume_a_rate_limit_wait_at_once() -> Result {
         t.finish()?;
         f.no_scratch()?;
     }
+    Ok(())
+}
+
+#[test]
+fn two_projects_run_at_once_and_stay_separate() -> Result {
+    let f = Fixture::new()?;
+    let second = f.second_project("second")?;
+    f.provider("overlap")?;
+    f.add("Alpha task")?;
+    let beta = [
+        "add",
+        "--title",
+        "Beta task",
+        "--goal",
+        "Create result.txt containing verified",
+        "--criterion",
+        "result.txt contains verified",
+    ];
+    f.ok_in(&second, &beta)?;
+    let mut a = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
+    let mut b = Terminal::open_project(BIN, f.scratch.path(), &second, 110, 32)?;
+    a.screen("first project", |s| s.contains("Alpha task"))?;
+    b.screen("second project", |s| s.contains("Beta task"))?;
+    a.send("r")?;
+    b.click("r Run queue")?;
+    // Each execution waits for the release, so both are inside a provider turn at once.
+    let started = support::eventually("both executions running", || {
+        let started =
+            fs::read_to_string(f.scratch.path().join("overlap-started")).unwrap_or_default();
+        Ok((started.lines().count() == 2).then_some(started))
+    })?;
+    let mut ran_in: Vec<_> = started.lines().map(PathBuf::from).collect();
+    ran_in.sort();
+    let mut projects = vec![f.root.canonicalize()?, second.canonicalize()?];
+    projects.sort();
+    assert_eq!(ran_in, projects);
+    for (t, name) in [(&a, "first"), (&b, "second")] {
+        println!(
+            "{name} RUNNING\n{}",
+            t.screen(name, |s| s.contains("RUNNING · supervisor alive"))?
+        );
+    }
+    // Pausing one project leaves the other one running.
+    b.click("p Pause")?;
+    println!(
+        "SECOND PAUSED\n{}",
+        b.screen("second paused", |s| {
+            s.contains("PAUSED · supervisor absent")
+                && s.contains("r Resume")
+                && s.contains("Paused; worker stopped, Resume continues the same attempt")
+        })?
+    );
+    assert_eq!(f.ok(&["current"])?["status"], "running");
+    fs::write(f.scratch.path().join("release"), "")?;
+    println!(
+        "FIRST COMPLETE\n{}",
+        a.screen("first complete", |s| s.contains("Queue complete."))?
+    );
+    assert_eq!(f.ok_in(&second, &["current"])?["status"], "paused");
+    b.send("r")?;
+    println!(
+        "SECOND COMPLETE\n{}",
+        b.screen("second complete", |s| s.contains("Queue complete."))?
+    );
+    // Neither project's tasks, events or commits appear in the other.
+    for (project, own, other) in [
+        (&f.root, "Alpha task", "Beta task"),
+        (&second, "Beta task", "Alpha task"),
+    ] {
+        let tasks = f.ok_in(project, &["list", "--scope", "all"])?["tasks"].clone();
+        let tasks = tasks.as_array().unwrap();
+        assert_eq!(tasks.len(), 1, "{tasks:?}");
+        assert_eq!(tasks[0]["title"], own);
+        assert_eq!(tasks[0]["status"], "succeeded");
+        let id = tasks[0]["id"].as_i64().unwrap().to_string();
+        let events = f.ok_in(project, &["events", "--after", "0"])?.to_string();
+        assert!(events.contains(own) && !events.contains(other), "{events}");
+        let task = f.ok_in(project, &["show", &id])?;
+        assert_eq!(task["attempts"].as_array().unwrap().len(), 1, "{task}");
+        let log = f.git_in(project, &["log", "--format=%s"])?;
+        assert!(log.starts_with(&format!("ktask: task #{id}")), "{log}");
+        assert_eq!(
+            f.git_in(project, &["show", "HEAD:result.txt"])?,
+            "verified\n"
+        );
+        assert_eq!(f.git_in(project, &["status", "--porcelain"])?, "");
+    }
+    for mut t in [a, b] {
+        t.send("q")?;
+        t.finish()?;
+    }
+    f.no_scratch()?;
     Ok(())
 }

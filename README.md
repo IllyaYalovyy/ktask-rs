@@ -169,7 +169,9 @@ when the project still cannot run tasks. The TUI covers the same setup: in a new
 **u Readiness** lists what is missing, with **c Checks** (the first check is prefilled with
 the detected command), **d Defaults** (choose "New projects: Start with these" to save them
 for later projects) and Configuration → **e Preferences** → Agent network. Each project keeps
-its own queue, checks and model defaults in the same instance database.
+its own queue, checks and model defaults in the same instance database, and has its own
+supervisor: several projects run at the same time, each with its own TUI or CLI, and pausing
+one leaves the others running.
 
 ## Run real work
 

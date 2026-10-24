@@ -163,6 +163,18 @@ impl Service {
 
     /// Finish while the workspace lease is held. The intervention marker and
     /// final state serialize in one SQLite write transaction.
+    /// The supervisor finished a requested pause: the session reason stops promising it.
+    pub fn pause_settled(&mut self) -> Result<()> {
+        self.db.connection().execute(
+            "UPDATE execution_sessions SET reason=CASE reason
+               WHEN 'Pause requested; stopping worker' THEN 'Paused; worker stopped, Resume continues the same attempt'
+               ELSE 'Paused; no later task started' END,
+             updated_at_ms=?2
+             WHERE project_id=?1 AND state='paused' AND reason LIKE 'Pause requested;%'",
+            params![self.project_id, now_ms()],
+        )?;
+        Ok(())
+    }
     pub fn settle_execution_session(&mut self, state: &str, reason: &str) -> Result<bool> {
         let tx = self
             .db

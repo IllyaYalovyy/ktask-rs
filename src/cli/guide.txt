@@ -4,7 +4,8 @@ GUIDE FOR SCRIPTS AND AI AGENTS
 CONCEPTS
   Project    A Git repository, identified by its directory (--project, default: cwd).
              init, add, import, check-set and model-default register it on first use;
-             every other command fails with exit 3 until it is registered.
+             every other command fails with exit 3 until it is registered. Each project
+             has its own queue and supervisor; several projects run at the same time.
   Instance   ktask and ktask-dev keep separate databases; --paths prints them. The working
              directory never selects the instance.
   Task       A title, a Goal and acceptance criteria (one --criterion each). State only the

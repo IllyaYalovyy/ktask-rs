@@ -171,7 +171,11 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
         return result;
     }
     let mut requested = false;
-    if let Some(session) = service.execution_session()?
+    let session = service.execution_session()?;
+    if session.as_ref().is_some_and(|s| s.state == "paused") {
+        service.pause_settled()?;
+    }
+    if let Some(session) = session
         && session.state != "paused"
     {
         let (state, reason) = match &result {
