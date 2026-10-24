@@ -2396,42 +2396,131 @@ fn real_tui_runner_mouse_pause_keyboard_resume_and_live_history() -> Result {
 #[ignore = "Explicit opt-in: uses the installed authenticated Codex and incurs model usage"]
 fn live_codex_executes_reviews_and_validates_an_isolated_project() -> Result {
     let model = std::env::var("KTASK_LIVE_MODEL")?;
+    let judge = std::env::var("KTASK_LIVE_JUDGE_MODEL")?;
+    assert_ne!(model, judge, "Live judges must differ from implementation");
     let f = Fixture::new()?;
+    f.add("Other project must remain untouched")?;
+    let project = f.second_project("live-project")?;
     for role in ["execution", "review", "validation", "remediation"] {
-        f.ok(&[
-            "model-default",
-            role,
-            "--provider",
-            "codex",
-            "--model",
-            &model,
-        ])?;
+        f.ok_in(
+            &project,
+            &[
+                "model-default",
+                role,
+                "--provider",
+                "codex",
+                "--model",
+                if role == "execution" { &model } else { &judge },
+                "--effort",
+                "high",
+            ],
+        )?;
     }
-    f.add("Live provider smoke test")?;
+    let mut ids = Vec::new();
+    for (title, goal, criterion) in [
+        (
+            "Live first task",
+            "Create result.txt containing exactly verified followed by a newline. Keep the existing README.",
+            "result.txt contains verified",
+        ),
+        (
+            "Live automatic continuation",
+            "Create receipt.txt containing exactly ready followed by a newline. Preserve result.txt and the existing README.",
+            "receipt.txt contains ready and result.txt still contains verified",
+        ),
+    ] {
+        let receipt = f.ok_in(
+            &project,
+            &[
+                "add",
+                "--title",
+                title,
+                "--goal",
+                goal,
+                "--criterion",
+                criterion,
+            ],
+        )?;
+        ids.push(
+            receipt["tasks"][0]["id"]
+                .as_i64()
+                .ok_or("Missing created task ID")?,
+        );
+    }
     let home = std::env::var_os("HOME").ok_or("HOME missing")?;
     let codex_home = std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(home).join(".codex"));
     let output = f
-        .process()
+        .process_in(&project)
         .env("PATH", std::env::var_os("PATH").ok_or("PATH missing")?)
         .env("CODEX_HOME", codex_home)
-        .args(["--json", "run"])
+        .args([
+            "--json",
+            "--actor-kind",
+            "ai",
+            "--actor",
+            "release-validation",
+            "run",
+            "--queue",
+        ])
         .output()?;
     println!(
         "LIVE stdout={} stderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let task = f.ok(&["show", "1"])?;
-    println!("LIVE TASK {}", serde_json::to_string_pretty(&task)?);
+    for id in ids {
+        let task = f.ok_in(&project, &["show", &id.to_string()])?;
+        println!("LIVE TASK {}", serde_json::to_string_pretty(&task)?);
+        assert_eq!(task["lifecycle"], "succeeded");
+    }
     assert!(output.status.success());
-    assert_eq!(task["lifecycle"], "succeeded");
     assert_eq!(
-        fs::read_to_string(f.root.join("result.txt"))?.trim(),
-        "verified"
+        fs::read_to_string(project.join("result.txt"))?,
+        "verified\n"
     );
-    assert!(f.git(&["status", "--porcelain"])?.is_empty());
+    assert_eq!(fs::read_to_string(project.join("receipt.txt"))?, "ready\n");
+    assert!(f.git_in(&project, &["status", "--porcelain"])?.is_empty());
+    assert_eq!(f.ok(&["show", "1"])?["status"], "ready");
+    assert!(!f.root.join("result.txt").exists());
+    assert!(
+        !f.scratch.path().join("provider-invocations").exists(),
+        "Live run accidentally invoked a deterministic fixture"
+    );
+    let db = f.db()?;
+    for role in ["execution", "review", "validation"] {
+        let expected = if role == "execution" { &model } else { &judge };
+        let count: i64 = db.connection().query_row(
+            "SELECT count(*) FROM attempt_steps WHERE role=?1 AND model=?2 AND state='succeeded'",
+            [role, expected.as_str()],
+            |r| r.get(0),
+        )?;
+        assert!(
+            count >= 2,
+            "Both live tasks need a successful {role} turn with {expected}"
+        );
+    }
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &project, 120, 30)?;
+    println!(
+        "LIVE QUEUE COMPLETE\n{}",
+        t.screen("live completion", |s| s.contains("Queue complete.")
+            && s.contains("History 2"))?
+    );
+    t.click("3 History")?;
+    println!(
+        "LIVE HISTORY MOUSE\n{}",
+        t.screen("live history", |s| s
+            .contains("Live automatic continuation")
+            && s.contains("DONE"))?
+    );
+    t.send("1")?;
+    println!(
+        "LIVE CURRENT KEYBOARD\n{}",
+        t.screen("live current", |s| s.contains("Queue complete."))?
+    );
+    t.send("q")?;
+    t.finish()?;
     f.no_scratch()?;
     Ok(())
 }

@@ -284,7 +284,14 @@ not just an executor's summary. `make check` retains passing-test output, includ
 screens. Include `--show-output` or `--nocapture` in custom PTY checks to preserve those screens.
 
 Opt-in live verification (incurs model usage; disposable project and app state):
-`KTASK_LIVE_MODEL=YOUR_MODEL cargo test --test tui runner::live_codex -- --ignored --nocapture`.
+```sh
+KTASK_LIVE_MODEL=gpt-6-sol KTASK_LIVE_JUDGE_MODEL=gpt-6-astra \
+  cargo test --locked --test tui runner::live_codex -- --ignored --nocapture
+```
+
+This runs two consecutive tasks in a second disposable project with the real provider,
+checks their commits and distinct model roles, verifies the first project's queue is untouched,
+and inspects the completed queue through mouse and keyboard terminal interactions.
 
 ## Task CLI
 
