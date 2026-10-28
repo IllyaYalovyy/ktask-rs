@@ -207,7 +207,7 @@ fn content(rect: Rect) -> Rect {
 
 fn active_phase(task: &crate::presentation::Task) -> String {
     if let Some(line) = task.attempts.last().and_then(|a| a.report.lines().next())
-        && line.starts_with("Workflow ·")
+        && (line.starts_with("Workflow ·") || line.starts_with("Git delivery ·"))
     {
         return line.to_owned();
     }
@@ -347,6 +347,7 @@ fn controls(app: &App) -> Vec<(&'static str, Action)> {
         View::Config if app.service.is_some() => vec![
             ("m Defaults", Action::ProjectModels),
             ("c Checks", Action::ProjectChecks),
+            ("g Git delivery", Action::Delivery),
             ("k Storage", Action::Storage),
             ("e Preferences", Action::Configure),
             ("Esc Back", Action::Back),
@@ -734,16 +735,20 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         )),
         _ => {}
     }
-    let readiness = app.readiness.as_ref().map(|readiness| {
-        Line::styled(
-            if readiness.blockers == 0 {
-                "Can run · u Readiness".to_owned()
-            } else {
-                format!("Run blocked ({}) · u Readiness", readiness.blockers)
-            },
-            Style::new().fg(if readiness.blockers == 0 { OK } else { WARN }),
-        )
-    });
+    let readiness = app
+        .readiness
+        .as_ref()
+        .filter(|_| status != Status::Running && !app.supervisor_alive)
+        .map(|readiness| {
+            Line::styled(
+                if readiness.blockers == 0 {
+                    "Can run · u Readiness".to_owned()
+                } else {
+                    format!("Run blocked ({}) · u Readiness", readiness.blockers)
+                },
+                Style::new().fg(if readiness.blockers == 0 { OK } else { WARN }),
+            )
+        });
     if attempt.is_none() {
         lines.extend(readiness.clone());
     }
@@ -1360,8 +1365,13 @@ fn draw_information(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect)
     );
     let text = if app.service.is_some() {
         if app.view == View::Config {
+            let delivery = app
+                .service
+                .as_ref()
+                .and_then(|service| service.delivery_config().ok())
+                .unwrap_or_default();
             format!(
-                "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\n\nDefaults apply to new tasks; existing revisions stay pinned.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
+                "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\nDelivery: {} via {}/{}\n\nDefaults apply to new tasks; existing revisions stay pinned.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
                 app.project_name,
                 if app.mouse_enabled {
                     "Enabled"
@@ -1377,7 +1387,10 @@ fn draw_information(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect)
                     "Review required"
                 } else {
                     "Automatic"
-                }
+                },
+                delivery.mode,
+                delivery.remote,
+                delivery.base_branch
             )
         } else {
             format!(

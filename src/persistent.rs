@@ -261,7 +261,11 @@ impl App {
         }
         if matches!(
             action,
-            Action::Configure | Action::ProjectModels | Action::ProjectChecks | Action::Storage
+            Action::Configure
+                | Action::ProjectModels
+                | Action::ProjectChecks
+                | Action::Delivery
+                | Action::Storage
         ) {
             if let Err(error) = self.open_project_config(action) {
                 self.message(error);
@@ -974,7 +978,8 @@ impl App {
             DialogKind::ProjectModels(_)
                 | DialogKind::ProjectChecks(_)
                 | DialogKind::ProjectCheck { .. }
-                | DialogKind::Preferences(_)
+                | DialogKind::Preferences(..)
+                | DialogKind::Delivery(_)
                 | DialogKind::Storage(_)
                 | DialogKind::StorageConfirm(_)
         ) {

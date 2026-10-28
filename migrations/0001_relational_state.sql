@@ -10,6 +10,17 @@ CREATE TABLE projects (
     agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1))
 ) STRICT;
 
+-- Project delivery is guarded independently of task and preference versions.
+CREATE TABLE project_delivery (
+    project_id INTEGER PRIMARY KEY REFERENCES projects(id),
+    row_version INTEGER NOT NULL DEFAULT 1 CHECK (row_version > 0),
+    mode TEXT NOT NULL DEFAULT 'local' CHECK (mode IN ('local', 'direct', 'pr')),
+    remote TEXT NOT NULL DEFAULT 'origin' CHECK (length(trim(remote)) > 0),
+    base_branch TEXT NOT NULL DEFAULT 'main' CHECK (length(trim(base_branch)) > 0),
+    branch TEXT CHECK (length(trim(branch)) > 0),
+    owned_tip TEXT CHECK (length(owned_tip) IN (40,64))
+) STRICT;
+
 -- Execution intent is project scoped and survives terminals and interventions.
 -- Attempt state remains solely on attempts; this records the scheduler's policy.
 CREATE TABLE execution_sessions (
@@ -170,6 +181,28 @@ CREATE TABLE attempts (
         OR (state IN ('succeeded', 'cancelled') AND finished_at_ms IS NOT NULL AND outcome IS NOT NULL AND length(trim(outcome)) > 0 AND failure_category IS NULL)
         OR (state IN ('failed', 'interrupted') AND finished_at_ms IS NOT NULL AND outcome IS NOT NULL AND length(trim(outcome)) > 0 AND failure_category IS NOT NULL))
 ) STRICT;
+-- A running attempt pins delivery policy and records each external boundary.
+-- After a crash, the supervisor reads remote state before retrying a push or PR.
+CREATE TABLE attempt_delivery (
+    attempt_id INTEGER PRIMARY KEY REFERENCES attempts(id),
+    mode TEXT NOT NULL CHECK (mode IN ('local', 'direct', 'pr')),
+    remote TEXT NOT NULL,
+    destination_url TEXT NOT NULL CHECK (mode = 'local' OR length(trim(destination_url)) > 0),
+    base_branch TEXT NOT NULL,
+    branch TEXT,
+    stage TEXT NOT NULL CHECK (stage IN ('preparing', 'work', 'checkpointing', 'checkpointed', 'integrating', 'verified', 'pushed', 'pr_ready')),
+    checkpoint_head TEXT CHECK (length(checkpoint_head) IN (40,64)),
+    fetched_base TEXT CHECK (length(fetched_base) IN (40,64)),
+    pushed_head TEXT CHECK (length(pushed_head) IN (40,64)),
+    pr_url TEXT,
+    pending_head TEXT,
+    pending_tip TEXT,
+    handoff_target INTEGER REFERENCES tasks(id),
+    handoff_claimed_by INTEGER REFERENCES attempts(id),
+    repair_origin_task INTEGER REFERENCES tasks(id),
+    sync_cycles INTEGER NOT NULL DEFAULT 0 CHECK (sync_cycles BETWEEN 0 AND 6),
+    restart_sync INTEGER NOT NULL DEFAULT 0 CHECK (restart_sync IN (0,1))
+) STRICT;
 CREATE UNIQUE INDEX ux_live_attempt_task ON attempts(task_id) WHERE state IN ('running', 'paused', 'waiting');
 CREATE UNIQUE INDEX ux_running_attempt_project ON attempts(project_id) WHERE state = 'running';
 
@@ -177,7 +210,7 @@ CREATE UNIQUE INDEX ux_running_attempt_project ON attempts(project_id) WHERE sta
 CREATE TABLE attempt_progress (
     attempt_id INTEGER PRIMARY KEY REFERENCES attempts(id),
     repair_round INTEGER NOT NULL DEFAULT 0 CHECK (repair_round BETWEEN 0 AND 10),
-    phase TEXT NOT NULL CHECK (phase IN ('implement','judge','replanned','fix','check','review','validate','decide','complete')),
+    phase TEXT NOT NULL CHECK (phase IN ('implement','judge','replanned','fix','integrate','check','review','validate','decide','complete')),
     context TEXT NOT NULL DEFAULT '',
     evidence TEXT NOT NULL DEFAULT '',
     verified_tree TEXT NOT NULL DEFAULT ''

@@ -5,6 +5,7 @@ pub mod evidence_pin;
 mod output_text;
 pub use evidence::{EvidenceCursor, EvidenceMatch, EvidenceSearch};
 pub mod configuration;
+pub mod delivery;
 pub mod execution;
 pub mod limits;
 pub mod preferences;

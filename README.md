@@ -74,7 +74,26 @@ not the TUI. Concurrent stale edits fail without overwriting data; other windows
 New AI tasks have no invented model defaults. **Models** accepts `provider/model`, optional
 effort, and limits: `codex/gpt-6-sol`, `claude/sonnet` (or just `claude`, which means Sonnet),
 `opencode/anthropic/claude-sonnet-5-5` (OpenCode keeps its own `vendor/model`). Saving makes a new approved revision; previous attempts keep their inputs.
-Configuration provides project model defaults, check management, and saved preferences.
+Configuration provides project model defaults, check management, Git delivery, and saved preferences.
+Git delivery defaults to **Local**, which only commits verified work. **Direct push** fetches
+the configured remote and base branch (default `origin/main`), fast-forwards its clean checkout, then
+pushes a verified checkpoint to it. **Pull request** creates one project branch from the base,
+keeps queued tasks on it, and creates or updates one PR through `gh`. The branch is private to
+the configured project and remote; ktask refuses to adopt a branch or remote tip it does not own.
+The fetch and push URLs must match. No force push is used for Direct; the PR branch uses an exact
+lease against its recorded owned tip when a rebase must rewrite it. `gh` must be installed for PR
+delivery. A branch matching the remote base creates no empty PR. Direct delivery requires
+the configured base branch to be checked out; it never publishes unrelated local commits.
+
+When the remote base advances, the supervisor rebases its checkpoint and reruns project checks,
+independent review and validation before pushing. A content conflict enters the ordinary
+read-only judge and repair cycle, retaining the same attempt and ten-round limit. Pause preserves
+the rebase and edited files; resume continues them. Network steps have bounded retries and keep
+their delivery intent if they stop. Remote synchronization accepts at most six changing targets
+per attempt, separately from coding repair rounds. Resume and automatic replans retain that
+bound. After exhaustion, wait for remote writers to settle, explicitly Abandon attempt, then
+Run to retain the checkpoint and start a fresh bounded synchronization batch. CLI `delivery` reports the versioned configuration; for
+example `ktask delivery --mode pr --remote origin --base main --if-version 0`.
 Configuration → Storage previews retained output and check transcript bytes, sets the age
 of completed work eligible for cleanup, and applies cleanup after review. History marks
 pruned content; live work and unresolved failures retain their evidence.
@@ -226,8 +245,9 @@ and the next task; Current shows the goal, proof required, and the active superv
 In queue mode, answering a question, approving current, or acknowledging Human work continues
 automatically. A saved intervention stays saved if starting fails; the footer explains the blocker.
 **Pause** stops/reaps workers before recording paused state; **Run/resume** retains the attempt
-and compatible session. Closing the TUI does not stop the supervisor. Failed checks/review/
-validation use the remediation model on a new attempt, bounded by the task's attempt limit.
+and compatible session. Closing the TUI does not stop the supervisor. Check, review and
+validation findings stay in the same attempt for a read-only judge, fix, and regenerated proof;
+the ten-round limit applies. A terminal failed attempt opens a separately recorded repair attempt.
 Two optional time limits, both off by default (Models, or `--task-limit` / `--stage-limit` with
 `off`, `on` or a duration such as `45m`): the **task limit** (6 h when on) caps active time across
 all attempts; the **stage limit** (30 min when on) caps one agent turn and restarts with every

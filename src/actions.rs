@@ -435,7 +435,7 @@ impl App {
                 }
             }
             Action::Configure => self.open_config(),
-            Action::ProjectModels | Action::ProjectChecks | Action::Storage => {}
+            Action::ProjectModels | Action::ProjectChecks | Action::Delivery | Action::Storage => {}
             Action::Import => {
                 self.dialog = Some(Dialog::new(
                     DialogKind::Import,
@@ -1566,7 +1566,8 @@ impl App {
             DialogKind::ProjectModels(_)
             | DialogKind::ProjectChecks(_)
             | DialogKind::ProjectCheck { .. }
-            | DialogKind::Preferences(_)
+            | DialogKind::Preferences(..)
+            | DialogKind::Delivery(_)
             | DialogKind::Storage(_)
             | DialogKind::StorageConfirm(_)
             | DialogKind::StoredImport(_)

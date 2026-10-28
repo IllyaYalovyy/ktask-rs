@@ -18,6 +18,7 @@ impl Progress {
             "implement" => "Implement",
             "judge" => "Plan fixes",
             "fix" => "Fix",
+            "integrate" => "Integrate remote changes",
             "check" => "Check",
             "review" => "Review",
             "validate" => "Validate",
@@ -46,7 +47,8 @@ impl Service {
             .query_row(
                 "SELECT p.repair_round,p.phase,p.context,p.evidence,p.verified_tree
              FROM attempt_progress p JOIN attempts a ON a.id=p.attempt_id
-             WHERE a.task_id=?1 AND a.id<?2 ORDER BY a.id DESC LIMIT 1",
+             LEFT JOIN attempt_delivery d ON d.attempt_id=a.id
+             WHERE (a.task_id=?1 OR d.repair_origin_task=?1) AND a.id<?2 ORDER BY a.id DESC LIMIT 1",
                 params![run.task, run.attempt],
                 read_progress,
             )

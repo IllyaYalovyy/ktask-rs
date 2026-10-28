@@ -10,7 +10,8 @@ const GUIDE: &str = include_str!("guide.txt");
 /// acceptance criteria. `run` gives the current task to an AI agent (Codex, Claude Code or
 /// OpenCode). The supervisor then runs the project's checks, has independent read-only
 /// models review and validate the change, repairs findings for up to ten rounds, and
-/// commits the passing change. Everything is recorded in SQLite: tasks, revisions,
+/// commits the passing change and optionally delivers it by direct push or pull request.
+/// Everything is recorded in SQLite: tasks, revisions,
 /// attempts, events, token usage and cost. The TUI and this CLI share the same commands
 /// and rules.
 #[derive(Parser)]
@@ -94,6 +95,21 @@ pub enum Switch {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Show or change how verified commits leave this project.
+    Delivery {
+        /// Local commits only, direct push to the base branch, or one project pull request.
+        #[arg(long, value_parser=["local", "direct", "pr"])]
+        mode: Option<String>,
+        /// Configured Git remote name (default: origin).
+        #[arg(long)]
+        remote: Option<String>,
+        /// Target branch (default: main).
+        #[arg(long)]
+        base: Option<String>,
+        /// Reject a stale configuration edit.
+        #[arg(long)]
+        if_version: Option<i64>,
+    },
     /// Set up this project: register it, configure its check, report what is missing.
     ///
     /// A new project starts with the model defaults saved by model-default --new-projects.

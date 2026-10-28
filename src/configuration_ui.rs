@@ -3,7 +3,7 @@ use crate::{
     app::{Action, App},
     application::{
         ModelConfig,
-        configuration::{Defaults, MODEL_ROLES, ProjectCheck},
+        configuration::{Defaults, DeliveryConfig, MODEL_ROLES, ProjectCheck},
         preferences::{Continuation, PlannerApproval, Preferences},
     },
     dialog::{Dialog, DialogKind, Field},
@@ -139,6 +139,32 @@ impl App {
                     vec![field],
                 )
             }
+            Action::Delivery => {
+                let delivery = self
+                    .service
+                    .as_ref()
+                    .unwrap()
+                    .delivery_config()
+                    .map_err(|e| e.to_string())?;
+                Dialog::new(
+                    DialogKind::Delivery(delivery.clone()),
+                    "Git delivery",
+                    "Local commits only. Direct pushes verified commits to the base branch. Pull request uses a project branch and updates one PR. Remote and base default to origin/main.",
+                    vec![
+                        Field::choice(
+                            "Mode",
+                            &["Local", "Direct push", "Pull request"],
+                            match delivery.mode.as_str() {
+                                "direct" => "Direct push",
+                                "pr" => "Pull request",
+                                _ => "Local",
+                            },
+                        ),
+                        Field::text("Git remote", &delivery.remote),
+                        Field::text("Base branch", &delivery.base_branch),
+                    ],
+                )
+            }
             _ => {
                 let saved = self.load_preferences()?;
                 let network = self
@@ -180,7 +206,7 @@ impl App {
                 Dialog::new(
                     DialogKind::Preferences(saved),
                     "Project preferences",
-                    "Saved per project in this instance. Keyboard stays available.\nThis policy controls new breakdown and repair tasks.\nRun mode applies to the next Run/resume/retry.\nAgent network On lets Codex agents that change the project use the network, for\nexample to install dependencies; Off runs them offline.",
+                    "Saved per project in this instance. Keyboard stays available.\nThis policy controls new breakdown and repair tasks.\nRun mode applies to the next Run/resume/retry.\nAgent network On lets Codex agents that change the project use the network.",
                     fields,
                 )
             }
@@ -329,6 +355,24 @@ impl App {
                     .as_mut()
                     .unwrap()
                     .save_check(expected, &value)
+                    .map_err(|e| e.to_string())?;
+            }
+            DialogKind::Delivery(expected) => {
+                let value = DeliveryConfig {
+                    version: expected.version,
+                    mode: match dialog.value(0) {
+                        "Direct push" => "direct",
+                        "Pull request" => "pr",
+                        _ => "local",
+                    }
+                    .into(),
+                    remote: dialog.value(1).into(),
+                    base_branch: dialog.value(2).into(),
+                };
+                self.service
+                    .as_mut()
+                    .unwrap()
+                    .save_delivery_config(expected, &value)
                     .map_err(|e| e.to_string())?;
             }
             DialogKind::Preferences(expected) => {

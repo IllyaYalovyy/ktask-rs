@@ -207,6 +207,45 @@ fn init(
 
 pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply> {
     match command {
+        Command::Delivery {
+            mode,
+            remote,
+            base,
+            if_version,
+        } => {
+            let current = service.delivery_config()?;
+            if let Some(version) = if_version
+                && *version != current.version
+            {
+                return Err(crate::storage::Error::Conflict(format!(
+                    "Delivery configuration is version {}, not {}",
+                    current.version, version
+                ))
+                .into());
+            }
+            let mut value = current.clone();
+            if let Some(mode) = mode {
+                value.mode.clone_from(mode);
+            }
+            if let Some(remote) = remote {
+                value.remote.clone_from(remote);
+            }
+            if let Some(base) = base {
+                value.base_branch.clone_from(base);
+            }
+            let saved = if value != current {
+                service.save_delivery_config(&current, &value)?
+            } else {
+                current
+            };
+            Ok(Reply {
+                data: json!({"delivery":saved}),
+                text: format!(
+                    "Delivery v{}: {} via {}/{}\n",
+                    saved.version, saved.mode, saved.remote, saved.base_branch
+                ),
+            })
+        }
         Command::Run { .. }
         | Command::Recover { .. }
         | Command::Storage { .. }

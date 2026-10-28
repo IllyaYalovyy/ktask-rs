@@ -75,6 +75,40 @@ impl Service {
             )?;
         }
         let attempt = task.attempts.last().expect("live attempt has a row").id;
+        let delivery_stage: Option<String> = self
+            .db
+            .connection()
+            .query_row(
+                "SELECT stage FROM attempt_delivery WHERE attempt_id=?1",
+                [attempt],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if delivery_stage
+            .as_deref()
+            .is_some_and(|stage| stage != "work")
+        {
+            let tx = self
+                .db
+                .connection_mut()
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let now = now_ms();
+            require(tx.execute("UPDATE attempts SET state='paused',report='Recovered delivery supervisor; resume the same attempt',wait_reason=NULL,waiting_since_ms=NULL,resume_at_ms=NULL WHERE id=?1 AND state IN ('running','paused','waiting')",[attempt])? == 1,"Attempt changed during delivery recovery")?;
+            close_unfinished(
+                &tx,
+                attempt,
+                now,
+                "Recovered delivery supervisor",
+                "interrupted",
+            )?;
+            tx.execute(
+                "UPDATE tasks SET row_version=row_version+1,updated_at_ms=?2 WHERE id=?1",
+                params![task.id, now],
+            )?;
+            tx.execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'supervisor.released','info','Recovered delivery attempt for resume')",params![self.project_id,task.id,attempt,now])?;
+            tx.commit()?;
+            return Ok(());
+        }
         let tx = self
             .db
             .connection_mut()
@@ -133,6 +167,9 @@ impl Service {
         })?;
         let now = now_ms();
         interrupt(&tx, self.project_id, target.id, attempt, now, reason)?;
+        // Explicit abandonment authorizes a fresh bounded sync batch, while retaining
+        // the owned branch and checkpoint. Automatic replans never set restart_sync.
+        tx.execute("UPDATE attempt_delivery SET handoff_target=?2,repair_origin_task=coalesce(repair_origin_task,?2),restart_sync=1 WHERE attempt_id=?1 AND stage<>'work' AND handoff_claimed_by IS NULL",params![attempt,target.id])?;
         bump(&tx, target, now)?;
         tx.commit()?;
         Ok(())
@@ -746,6 +783,11 @@ impl Service {
         let now = now_ms();
         require(tx.execute("UPDATE attempts SET state=?2,finished_at_ms=?3,outcome=?4,failure_category=?5,report=?6,head_commit=?7,wait_reason=?8,waiting_since_ms=?9 WHERE id=?1 AND execution_token=?10 AND state='running'", params![run.attempt,state,(!live).then_some(now),(!live).then_some(report),if live {None} else {category},report,head,(state=="waiting").then_some("question"),(state=="waiting").then_some(now),run.token])? == 1, "Attempt is no longer owned by this runner")?;
         close_unfinished(&tx, run.attempt, now, report, "interrupted")?;
+        if matches!(state, "failed" | "interrupted") {
+            // Claimable delivery ownership is committed with the terminal attempt state.
+            // A later prerequisite insertion reroutes it in that same command's transaction.
+            tx.execute("UPDATE attempt_delivery SET handoff_target=?2,repair_origin_task=coalesce(repair_origin_task,?2) WHERE attempt_id=?1 AND stage<>'work' AND handoff_claimed_by IS NULL",params![run.attempt,run.task])?;
+        }
         if state == "waiting" {
             tx.execute("INSERT INTO questions(attempt_id,prompt,state,created_at_ms) VALUES (?1,?2,'open',?3)",params![run.attempt,report,now])?;
         }

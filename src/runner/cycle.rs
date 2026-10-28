@@ -97,6 +97,7 @@ pub(super) fn run(
                 },
                 &format!("{}\nRecorded answers:\n{answers}", progress.context),
             )?,
+            "integrate" => super::delivery::continue_integration(service, run, ctx)?,
             "judge" if progress.round == 0 => judge(service, run, ctx)?,
             "judge" => judge_attempt(service, run, ctx, run.attempt)?,
             "check" => {
@@ -108,10 +109,12 @@ pub(super) fn run(
                         if before != after {
                             Outcome::Changes { report: "Supervisor checks changed the worktree; their results do not verify a stable source state. Make verification read-only with respect to project source.".into(), critical: true }
                         } else {
-                            let base = service.attempt_base(run.task)?.ok_or_else(|| {
+                            let original_base = service.attempt_base(run.task)?.ok_or_else(|| {
                                 Error::Conflict("Attempt has no recorded baseline".into())
                             })?;
-                            let scope = ctx.workspace.review_scope(&base, &after)?;
+                            let delivery = service.attempt_delivery(run).ok();
+                            let base = delivery.as_ref().and_then(|d| (d.stage != "work").then_some(d.fetched_base.as_deref()).flatten()).unwrap_or(&original_base);
+                            let scope = ctx.workspace.review_scope(base, &after)?;
                             progress.verified_tree = after;
                             Outcome::Passed(format!("{evidence}{}", scope.describe()))
                         }
@@ -147,7 +150,19 @@ pub(super) fn run(
                         progress.context
                     );
                     progress.verified_tree.clear();
+                    progress.phase = if service
+                        .attempt_delivery(run)
+                        .is_ok_and(|d| d.stage == "integrating")
+                    {
+                        "integrate"
+                    } else {
+                        "check"
+                    }
+                    .into();
+                }
+                "integrate" => {
                     progress.phase = "check".into();
+                    progress.verified_tree.clear();
                 }
                 "judge" => {
                     progress
@@ -212,7 +227,7 @@ pub(super) fn run(
     }
 }
 
-fn request_fixes(
+pub(super) fn request_fixes(
     service: &Service,
     run: &Run,
     progress: &mut Progress,
@@ -234,7 +249,7 @@ fn request_fixes(
     )
 }
 
-fn escalation(report: &str) -> Outcome {
+pub(super) fn escalation(report: &str) -> Outcome {
     let readable = serde_json::from_str::<serde_json::Value>(report)
         .ok()
         .map(|value| {

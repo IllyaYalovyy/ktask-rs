@@ -2,6 +2,7 @@ pub(crate) mod agent;
 pub(crate) mod callback;
 mod checks;
 mod cycle;
+mod delivery;
 mod output;
 pub(crate) mod process;
 pub(crate) mod provider;
@@ -53,6 +54,7 @@ enum Outcome {
         critical: bool,
     },
     Paused,
+    DeliveryBlocked(String),
     Question(String),
     /// Provider rate or usage limit, with its own reset time when it names one.
     RateLimit(Option<i64>),
@@ -295,7 +297,12 @@ fn run_inner(
         preflight(&task.definition().definition)?;
         let base = workspace.head()?;
         require(
-            workspace.clean()? || service.attempt_base(task.id)?.as_deref() == Some(&base),
+            workspace.clean()?
+                || service.pending_delivery_handoff(task.id)?
+                || service.attempt_base(task.id)?.as_deref() == Some(&base)
+                || service
+                    .current_delivery_stage(task.id)?
+                    .is_some_and(|s| s != "work"),
             "Workspace has uncommitted work from outside this task; commit or preserve it before switching tasks",
         )?;
         let token = format!("{}:{}:{}", service.project_id, std::process::id(), now_ms());
@@ -312,6 +319,31 @@ fn run_inner(
             &token,
             &base,
         )?;
+        // A live attempt blocks configuration changes before settings are read or Git mutates.
+        let delivery_init: Result<()> = (|| {
+            if service.attempt_delivery(&run).is_ok() {
+                return Ok(());
+            }
+            if service.claim_delivery_handoff(&run)? {
+                return Ok(());
+            }
+            let config = service.delivery_config()?;
+            let destination = if config.mode == "local" {
+                String::new()
+            } else {
+                workspace::git(
+                    &workspace.root,
+                    &["remote", "get-url", "--push", &config.remote],
+                )?
+            };
+            let branch = if config.mode == "pr" {
+                Some(service.delivery_branch(&config)?)
+            } else {
+                None
+            };
+            service.ensure_attempt_delivery(&run, &config, branch.as_deref(), &destination)?;
+            Ok(())
+        })();
         if options.queue {
             service.supervisor_continuing_queue()?;
         }
@@ -329,6 +361,7 @@ fn run_inner(
             prior_ms: run.active_ms,
             earlier_task_ms: service.earlier_task_active_ms(&run)?,
         };
+
         // Only an attempt that directly follows a failure is a repair; a judge-replanned
         // attempt ends as interrupted, so the next one starts fresh on the new plan.
         let repair = task.attempts.last().is_some_and(|a| {
@@ -345,13 +378,109 @@ fn run_inner(
                 "Execution started; results require checks, review and validation"
             },
         )?;
-        let result = service.checks().and_then(|checks| {
-            require(
-                !checks.is_empty(),
-                "Configure at least one enabled project check",
-            )?;
-            cycle::run(service, &run, &mut context, &checks, repair)
-        });
+        let mut delivery_retries = 0_u32;
+        let result = loop {
+            if let Err(error) = &delivery_init {
+                break Ok(Outcome::DeliveryBlocked(error.to_string()));
+            }
+            match delivery::prepare(service, &run, &context) {
+                Ok(false) => break Ok(Outcome::Paused),
+                Ok(true) => {}
+                Err(error) => {
+                    if let Some(outcome) =
+                        delivery::retry(service, &run, &context, &error, &mut delivery_retries)?
+                    {
+                        break Ok(outcome);
+                    }
+                    continue;
+                }
+            }
+            if let Err(error) = delivery::reconcile_resume(service, &run, &context) {
+                break Ok(Outcome::DeliveryBlocked(error.to_string()));
+            }
+            let result = service.checks().and_then(|checks| {
+                require(
+                    !checks.is_empty(),
+                    "Configure at least one enabled project check",
+                )?;
+                cycle::run(service, &run, &mut context, &checks, repair)
+            });
+            let result = match result {
+                Ok(Outcome::Failed("transport" | "environment" | "protocol", message))
+                    if service.attempt_delivery(&run)?.stage != "work" =>
+                {
+                    Ok(Outcome::DeliveryBlocked(message))
+                }
+                Err(error) if service.attempt_delivery(&run)?.stage != "work" => {
+                    Ok(Outcome::DeliveryBlocked(error.to_string()))
+                }
+                other => other,
+            };
+            let Ok(Outcome::Passed(summary)) = result else {
+                break result;
+            };
+            if stop.load(Ordering::Relaxed) || service.control_cursor(&run)? > context.cursor {
+                break Ok(Outcome::Paused);
+            }
+            let verified = service
+                .progress(&run)?
+                .ok_or_else(|| Error::Conflict("Missing verified workflow state".into()))?
+                .verified_tree;
+            let delivery_state = service.attempt_delivery(&run)?;
+            let expected_head = delivery_state.checkpoint_head.clone().unwrap_or(
+                service
+                    .attempt_base(run.task)?
+                    .ok_or_else(|| Error::Conflict("Attempt baseline missing".into()))?,
+            );
+            service.delivery_stage(&run, "checkpointing", Some(&expected_head), None, None)?;
+            let head = match workspace.checkpoint(
+                run.task,
+                run.attempt,
+                &expected_head,
+                &verified,
+                matches!(
+                    delivery_state.stage.as_str(),
+                    "checkpointed" | "integrating" | "verified" | "pushed" | "pr_ready"
+                ),
+            ) {
+                Ok(head) => head,
+                Err(error) => break Ok(Outcome::DeliveryBlocked(error.to_string())),
+            };
+            service.delivery_stage(&run, "checkpointed", Some(&head), None, None)?;
+            match delivery::publish(service, &run, &mut context, &summary, &head) {
+                Ok(delivery::DeliveryOutcome::Done(report)) => {
+                    context.persist_active_time(service, &run)?;
+                    service.finish_run(
+                        &run,
+                        "succeeded",
+                        None,
+                        &report,
+                        Some(&workspace.head()?),
+                    )?;
+                    if !options.queue {
+                        return Ok(report);
+                    } else {
+                        break Ok(Outcome::Passed(report));
+                    }
+                }
+                Ok(delivery::DeliveryOutcome::Retry) => {
+                    delivery_retries = 0;
+                    continue;
+                }
+                Ok(delivery::DeliveryOutcome::Paused) => break Ok(Outcome::Paused),
+                Ok(delivery::DeliveryOutcome::Exhausted(reason)) => {
+                    break Ok(cycle::escalation(&reason));
+                }
+                Err(error) => {
+                    if let Some(outcome) =
+                        delivery::retry(service, &run, &context, &error, &mut delivery_retries)?
+                    {
+                        break Ok(outcome);
+                    }
+                    continue;
+                }
+            }
+        };
         let outcome = match result {
             // Until a turn succeeds after a provider limit, odd provider errors are
             // part of that outage (Codex fails compaction while out of quota).
@@ -368,28 +497,9 @@ fn run_inner(
         } else {
             outcome
         };
-        let outcome = match outcome {
-            Outcome::Passed(summary) => match workspace.checkpoint(
-                run.task,
-                run.attempt,
-                &base,
-                &service
-                    .progress(&run)?
-                    .ok_or_else(|| Error::Conflict("Missing verified workflow state".into()))?
-                    .verified_tree,
-            ) {
-                Ok(head) => {
-                    context.persist_active_time(service, &run)?;
-                    service.finish_run(&run, "succeeded", None, &summary, Some(&head))?;
-                    if !options.queue {
-                        return Ok(summary);
-                    }
-                    continue;
-                }
-                Err(error) => Outcome::Failed("environment", error.to_string()),
-            },
-            other => other,
-        };
+        if matches!(outcome, Outcome::Passed(_)) {
+            continue;
+        }
         // Include orchestration and operational backoff, even when no worker launched.
         // Freeze the clock before handing ownership to a pause, wait, or later attempt.
         context.persist_active_time(service, &run)?;
@@ -417,6 +527,16 @@ fn run_inner(
                 )?;
                 service.release_supervisor(&run)?;
                 return Ok("Paused".into());
+            }
+            Outcome::DeliveryBlocked(reason) => {
+                service.output(
+                    &run,
+                    "system",
+                    &format!("Delivery stopped; verified work retained: {reason}"),
+                )?;
+                service.finish_run(&run, "paused", None, &reason, None)?;
+                service.release_supervisor(&run)?;
+                return Ok(format!("Delivery paused: {reason}"));
             }
             Outcome::Question(question) => {
                 service.finish_run(&run, "waiting", None, &question, None)?;
@@ -1050,7 +1170,9 @@ fn apply_judgment(
                     stage_timeout_ms: run.definition.stage_timeout_ms,
                 })
                 .collect();
-            remediation::preserve(service, workspace, target)?;
+            if service.attempt_delivery(run)?.stage == "work" {
+                remediation::preserve(service, workspace, target)?;
+            }
             service.apply_remediation(target, None, &repairs, &reason, ready)?;
         }
         agent::Judgment::Escalate { model, reason } => {

@@ -41,6 +41,19 @@ write the supervisor's state root, and the endpoint accepts no other mutation.
 
 ## Waiting and limits
 
+Project delivery lives in `project_delivery` with a guarded row version, mode (`local`,
+`direct`, or `pr`), remote, base branch, owned PR branch and last published tip. The default
+when no row exists is Local via `origin/main`. `attempt_delivery` pins the mode, destination
+URL and branch when execution begins. Its stage and checkpoint, fetched-base, pushed-head and
+PR URL fields record external side-effect boundaries. Preparation is part of the live
+attempt, so its fetch can pause or retry. Pending push head and expected remote tip are
+reconciled before fetching a newer base; rebase completion and proof invalidation commit
+atomically. Handoff target/claim and repair-origin task retain integration ownership and
+the repair counter across applied judge revisions and prerequisites. After a supervisor crash,
+the runner compares Git state and remote refs with this intent before repeating a push or PR call. A
+published attempt still requires checks, read-only review and validation tied to its final
+tree; a rebase clears earlier proof and regenerates it. Delivery pauses retain the same attempt.
+
 attempts.wait_reason distinguishes question, rate_limit, and provider_unavailable. A wait
 records waiting_since_ms and optional resume_at_ms (earliest UTC resume time). A rate limit
 normally suspends the same attempt; it is not a failed coding attempt. Question waits require
@@ -105,6 +118,7 @@ erDiagram
     }
     projects ||--o{ project_models : "project_id"
     projects ||--o{ project_checks : "project_id"
+    projects ||--o| project_delivery : "project_id"
     projects ||--o| project_retention : "project_id"
     projects ||--o{ evidence_pins : "project_id"
     projects ||--o| execution_sessions : "project_id"
@@ -133,6 +147,10 @@ erDiagram
     project_checks o|--o{ attempt_steps : "project_check_id, project_id"
     ai_sessions o|--o{ attempt_steps : "session_id, project_id, task_id, role, provider"
     attempts ||--o| attempt_progress : "attempt_id"
+    attempts ||--o| attempt_delivery : "attempt_id"
+    attempts o|--o{ attempt_delivery : "handoff_claimed_by"
+    tasks o|--o{ attempt_delivery : "handoff_target"
+    tasks o|--o{ attempt_delivery : "repair_origin_task"
     attempts ||--o{ attempt_steps : "attempt_id, project_id, task_id, revision"
     acceptance_criteria ||--o{ criterion_results : "task_id, revision, criterion_ordinal"
     attempt_steps ||--o{ criterion_results : "step_id, task_id, revision"
@@ -220,6 +238,39 @@ Retained files outside SQLite, owned by an attempt. Paths are unique within the 
 - Index `ix_artifacts_attempt`: `INDEX ix_artifacts_attempt ON artifacts(attempt_id, id)`.
 - UQ `(relative_path)`.
 
+### attempt_delivery
+
+Pinned Git destination and durable preparation, checkpoint, integration, push and PR intent.
+A push intent is reconciled before another integration; proof resets commit atomically with
+rebase completion. Terminal attempt handoffs are claimed once by an authorized successor.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `attempt_id` | INTEGER | no | Owning attempt. |
+| `mode` | TEXT | no | local, direct, or pr. |
+| `remote` | TEXT | no | Pinned Git remote name. |
+| `destination_url` | TEXT | no | Pinned fetch/push destination; empty for local. |
+| `base_branch` | TEXT | no | Remote base branch. |
+| `branch` | TEXT | yes | Owned PR branch; NULL in other modes. |
+| `stage` | TEXT | no | preparing, work, checkpointing, checkpointed, integrating, verified, pushed, pr_ready. |
+| `checkpoint_head` | TEXT | yes | Expected checkpoint or pre-commit intent OID. |
+| `fetched_base` | TEXT | yes | Remote integration target OID. |
+| `pushed_head` | TEXT | yes | Acknowledged owned remote OID. |
+| `pr_url` | TEXT | yes | Reconciled pull request URL. |
+| `pending_head` | TEXT | yes | Intended push OID, retained until remote acknowledgment. |
+| `pending_tip` | TEXT | yes | Expected remote tip for that push; empty means absent. |
+| `handoff_target` | INTEGER | yes | Task authorized to inherit delivery after a terminal attempt. |
+| `handoff_claimed_by` | INTEGER | yes | Successor that claimed this handoff. |
+| `repair_origin_task` | INTEGER | yes | Original task whose repair-round count follows this handoff. |
+| `sync_cycles` | INTEGER | no | Distinct remote integration targets reserved, bounded at six; retained across resume and automatic handoffs. |
+| `restart_sync` | INTEGER | no | Explicit abandon-attempt authorizes the successor to start a fresh synchronization batch. |
+
+- PK `(attempt_id)`.
+- FK `(attempt_id)` → `attempts(id)`.
+- FK `(handoff_target)` → `tasks(id)`.
+- FK `(handoff_claimed_by)` → `attempts(id)`.
+- FK `(repair_origin_task)` → `tasks(id)`.
+
 ### attempt_output
 
 Ordered output chunks, not one row per character. Writer assigns a positive monotonic sequence per attempt and batches chunks in short transactions.
@@ -243,7 +294,7 @@ Durable phase within one attempt. Initial implementation is round zero; at most 
 | --- | --- | --- | --- |
 | `attempt_id` | INTEGER | no | Owning attempt. |
 | `repair_round` | INTEGER | no | Zero for implementation, then 1 through 10. |
-| `phase` | TEXT | no | implement, judge, replanned, fix, check, review, validate, decide, complete. |
+| `phase` | TEXT | no | implement, judge, replanned, fix, integrate, check, review, validate, decide, complete. |
 | `context` | TEXT | no | Current findings and authorized repair plan. |
 | `evidence` | TEXT | no | Current round's assessments and durable transcript references. |
 | `verified_tree` | TEXT | no | Git tree fingerprint binding the retained proof to source content. |
@@ -502,6 +553,24 @@ Configured tool commands (tests, Clippy, etc.), distinct from AI review and goal
 - FK `(project_id)` → `projects(id)`.
 - UQ `(id, project_id)`.
 - UQ `(project_id, name)`.
+
+### project_delivery
+
+Versioned project Git policy. Configuration changes are blocked during live attempts or
+execution sessions. Only recorded owned PR tips may be replaced using an exact lease.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `project_id` | INTEGER | no | Owning project. |
+| `row_version` | INTEGER | no | Optimistic configuration guard. |
+| `mode` | TEXT | no | local, direct, or pr; defaults to local. |
+| `remote` | TEXT | no | Git remote; defaults to origin. |
+| `base_branch` | TEXT | no | Base branch; defaults to main. |
+| `branch` | TEXT | yes | Project-owned PR branch. |
+| `owned_tip` | TEXT | yes | Last acknowledged owned PR OID, SHA-1 or SHA-256. |
+
+- PK `(project_id)`.
+- FK `(project_id)` → `projects(id)`.
 
 ### project_models
 

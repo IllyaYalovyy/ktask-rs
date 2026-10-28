@@ -237,10 +237,53 @@ impl Workspace {
         &self,
         task: i64,
         attempt: i64,
-        base: &str,
+        expected_head: &str,
         verified_tree: &str,
+        allow_amend: bool,
     ) -> Result<String> {
-        self.commit(base, &CHECKPOINT.format(task, attempt), Some(verified_tree))
+        if self.head()? != expected_head {
+            return Err(Error::Conflict(
+                "HEAD changed after checkpoint intent; work retained".into(),
+            ));
+        }
+        if allow_amend
+            && git(&self.root, &["log", "-1", "--format=%s"])? == CHECKPOINT.format(task, attempt)
+        {
+            if self.clean()? {
+                if git(&self.root, &["rev-parse", "HEAD^{tree}"])? == verified_tree {
+                    return self.head();
+                }
+            } else {
+                git(&self.root, &["add", "--all"])?;
+                if git(&self.root, &["write-tree"])? != verified_tree {
+                    return Err(Error::Conflict(
+                        "Worktree changed after validation; verification must run again".into(),
+                    ));
+                }
+                git(
+                    &self.root,
+                    &[
+                        "-c",
+                        "user.name=ktask",
+                        "-c",
+                        "user.email=ktask@localhost",
+                        "-c",
+                        "commit.gpgsign=false",
+                        "-c",
+                        "core.hooksPath=/dev/null",
+                        "commit",
+                        "--amend",
+                        "--no-edit",
+                    ],
+                )?;
+                return self.head();
+            }
+        }
+        self.commit(
+            expected_head,
+            &CHECKPOINT.format(task, attempt),
+            Some(verified_tree),
+        )
     }
     pub fn preserve(&self, task: i64, attempt: i64, base: &str) -> Result<String> {
         self.commit(base, &PRESERVED.format(task, attempt), None)

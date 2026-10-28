@@ -1,6 +1,43 @@
 //! Project configuration uses relational rows and compare-before-write transactions.
 use super::*;
 use rusqlite::Connection;
+use serde::Serialize;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DeliveryConfig {
+    pub version: i64,
+    pub mode: String,
+    pub remote: String,
+    pub base_branch: String,
+}
+
+impl Default for DeliveryConfig {
+    fn default() -> Self {
+        Self {
+            version: 0,
+            mode: "local".into(),
+            remote: "origin".into(),
+            base_branch: "main".into(),
+        }
+    }
+}
+
+fn valid_ref_component(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('-')
+        && !value.starts_with('/')
+        && !value.ends_with('/')
+        && !value.ends_with('.')
+        && !value.contains("..")
+        && !value.contains("//")
+        && !value.contains("@{")
+        && value
+            .split('/')
+            .all(|part| !part.starts_with('.') && !part.ends_with(".lock"))
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-'))
+}
 
 pub const MODEL_ROLES: [&str; 5] = [
     "planning",
@@ -52,6 +89,52 @@ fn checks(db: &Connection, project: i64) -> Result<Vec<ProjectCheck>> {
     Ok(db.prepare("SELECT id,name,command,working_directory,timeout_ms,enabled FROM project_checks WHERE project_id=?1 ORDER BY id")?.query_map([project], |r| Ok(ProjectCheck { id: Some(r.get(0)?), name: r.get(1)?, command: r.get(2)?, directory: r.get(3)?, timeout_ms: r.get(4)?, enabled: r.get(5)? }))?.collect::<rusqlite::Result<_>>()?)
 }
 impl Service {
+    pub fn delivery_config(&self) -> Result<DeliveryConfig> {
+        Ok(self.db.connection().query_row(
+            "SELECT row_version,mode,remote,base_branch FROM project_delivery WHERE project_id=?1",
+            [self.project_id],
+            |r| Ok(DeliveryConfig { version: r.get(0)?, mode: r.get(1)?, remote: r.get(2)?, base_branch: r.get(3)? }),
+        ).optional()?.unwrap_or_default())
+    }
+    pub fn save_delivery_config(
+        &mut self,
+        expected: &DeliveryConfig,
+        value: &DeliveryConfig,
+    ) -> Result<DeliveryConfig> {
+        require(
+            matches!(value.mode.as_str(), "local" | "direct" | "pr"),
+            "Delivery mode must be local, direct or pr",
+        )?;
+        require(
+            valid_ref_component(&value.remote) && !value.remote.contains('/'),
+            "Remote must be a Git remote name",
+        )?;
+        require(
+            valid_ref_component(&value.base_branch),
+            "Base branch must be a valid branch name",
+        )?;
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require(!tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE project_id=?1 AND state IN ('running','paused','waiting'))", [self.project_id], |r| r.get::<_, bool>(0))?, "Cannot change delivery during a live attempt")?;
+        require(!tx.query_row("SELECT EXISTS(SELECT 1 FROM execution_sessions WHERE project_id=?1 AND state IN ('running','resume_requested'))", [self.project_id], |r| r.get::<_, bool>(0))?, "Cannot change delivery during a live queue session")?;
+        let current = tx.query_row("SELECT row_version,mode,remote,base_branch FROM project_delivery WHERE project_id=?1", [self.project_id], |r| Ok(DeliveryConfig { version: r.get(0)?, mode: r.get(1)?, remote: r.get(2)?, base_branch: r.get(3)? })).optional()?.unwrap_or_default();
+        require(
+            &current == expected,
+            "Delivery configuration changed elsewhere; reopen the form",
+        )?;
+        let version = current
+            .version
+            .checked_add(1)
+            .ok_or_else(|| Error::Conflict("Delivery version exhausted".into()))?;
+        tx.execute("INSERT INTO project_delivery(project_id,row_version,mode,remote,base_branch) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(project_id) DO UPDATE SET row_version=excluded.row_version,mode=excluded.mode,remote=excluded.remote,base_branch=excluded.base_branch,branch=CASE WHEN project_delivery.mode=excluded.mode AND project_delivery.remote=excluded.remote AND project_delivery.base_branch=excluded.base_branch THEN project_delivery.branch ELSE NULL END,owned_tip=CASE WHEN project_delivery.mode=excluded.mode AND project_delivery.remote=excluded.remote AND project_delivery.base_branch=excluded.base_branch THEN project_delivery.owned_tip ELSE NULL END", params![self.project_id,version,value.mode,value.remote,value.base_branch])?;
+        tx.commit()?;
+        Ok(DeliveryConfig {
+            version,
+            ..value.clone()
+        })
+    }
     pub fn project_defaults(&self) -> Result<Defaults> {
         defaults(self.db.connection(), self.project_id)
     }

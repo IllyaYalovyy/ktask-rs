@@ -406,6 +406,9 @@ impl Service {
                 ids.push(id);
             }
         }
+        if let Some(first) = ids.first() {
+            tx.execute("UPDATE attempt_delivery SET handoff_target=?2 WHERE handoff_target=?1 AND handoff_claimed_by IS NULL AND attempt_id IN (SELECT id FROM attempts WHERE project_id=?3 AND state IN ('failed','interrupted'))",params![target.id,first,self.project_id])?;
+        }
         tx.commit()?;
         Ok(ids)
     }

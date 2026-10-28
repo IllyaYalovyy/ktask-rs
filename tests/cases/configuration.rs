@@ -9,6 +9,43 @@ use ktask_rs_mk3::{
 };
 use std::path::Path;
 const BIN: &str = env!("CARGO_BIN_EXE_ktask-dev");
+
+#[test]
+fn real_git_delivery_form_supports_keyboard_and_mouse() -> Result {
+    for mouse in [false, true] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        let mut t = Terminal::open_real(BIN, root, 80, 24)?;
+        screen(&t, "No current task")?;
+        open(&mut t, mouse, "4", "4 Config", "Storage: SQLite")?;
+        activate(&mut t, mouse, "g", "g Git delivery")?;
+        let opened = t.screen("Git delivery form", |s| s.contains("╭ Git delivery"))?;
+        println!("GIT DELIVERY FORM mouse={mouse}\n{opened}");
+        if mouse {
+            t.click("< Local >")?;
+            t.click("Git remote")?;
+            t.send("\x01upstream")?;
+            t.click("Base branch")?;
+            t.send("\x01trunk")?;
+            t.click("Apply")?;
+        } else {
+            t.send(" \t\x01upstream\t\x01trunk\x13")?;
+        }
+        let saved = screen(&t, "Delivery: direct via upstream/trunk")?;
+        println!("GIT DELIVERY CONFIG mouse={mouse}\n{saved}");
+        let config = service(root)?.delivery_config()?;
+        assert_eq!(
+            (
+                config.mode.as_str(),
+                config.remote.as_str(),
+                config.base_branch.as_str()
+            ),
+            ("direct", "upstream", "trunk")
+        );
+        quit(&mut t)?;
+    }
+    Ok(())
+}
 fn service(root: &Path) -> Result<Service> {
     Ok(Service::open(
         Database::open_in(&root.join("state/ktask-dev"))?,

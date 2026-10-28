@@ -10,6 +10,319 @@ use std::{
     time::{Duration, Instant},
 };
 const BIN: &str = env!("CARGO_BIN_EXE_ktask-dev");
+
+#[test]
+fn direct_delivery_pushes_only_verified_checkpoint_to_bare_remote() -> Result {
+    let f = Fixture::new()?;
+    f.git(&["branch", "-M", "main"])?;
+    let bare = f.scratch.path().join("remote.git");
+    let output = Command::new("git")
+        .args(["init", "--bare", "-q"])
+        .arg(&bare)
+        .output()?;
+    assert!(output.status.success());
+    f.git(&["remote", "add", "origin", bare.to_str().unwrap()])?;
+    f.git(&["push", "origin", "main"])?;
+    let config = f.ok(&["delivery", "--mode", "direct"])?;
+    assert_eq!(config["delivery"]["mode"], "direct");
+    f.add("Deliver verified work")?;
+    f.ok(&["run", "--one"])?;
+    let local = f.git(&["rev-parse", "HEAD"])?;
+    let pushed = Command::new("git")
+        .arg("--git-dir")
+        .arg(&bare)
+        .args(["rev-parse", "refs/heads/main"])
+        .output()?;
+    assert!(pushed.status.success());
+    assert_eq!(local.trim(), String::from_utf8(pushed.stdout)?.trim());
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    Ok(())
+}
+
+#[test]
+fn pull_request_delivery_pushes_owned_branch_and_reuses_existing_pr() -> Result {
+    let f = Fixture::new()?;
+    f.provider("sequential-pr")?;
+    f.git(&["branch", "-M", "main"])?;
+    let bare = f.scratch.path().join("remote.git");
+    assert!(
+        Command::new("git")
+            .args(["init", "--bare", "-q"])
+            .arg(&bare)
+            .status()?
+            .success()
+    );
+    f.git(&["remote", "add", "upstream", bare.to_str().unwrap()])?;
+    f.git(&["push", "upstream", "main"])?;
+    let script = r#"#!/bin/sh
+printf '%s\n' "$*" >> "$HOME/gh-calls"
+case "$*" in
+  repo\ view*) printf '{"nameWithOwner":"owner/repo","url":"https://github.com/owner/repo"}\n';;
+  pr\ list*) if [ -f "$HOME/pr-created" ]; then printf '[{"url":"https://github.com/owner/repo/pull/1","headRefOid":"%s"}]\n' "$(git rev-parse HEAD)"; else printf '[]\n'; fi;;
+  pr\ create*) touch "$HOME/pr-created"; printf 'https://github.com/owner/repo/pull/1\n';;
+  pr\ edit*) :;;
+  *) exit 9;;
+esac
+"#;
+    support::write_executable(&f.scratch.path().join("bin/gh"), script)?;
+    delivery::mock_pr_destination(&f, "upstream")?;
+    f.ok(&["delivery", "--mode", "pr", "--remote", "upstream"])?;
+    f.add("First PR task")?;
+    f.add("Second PR task")?;
+    f.ok(&["run"])?;
+    let calls = fs::read_to_string(f.scratch.path().join("gh-calls"))?;
+    assert_eq!(calls.matches("pr create").count(), 1, "{calls}");
+    assert_eq!(calls.matches("pr list").count(), 3, "{calls}");
+    let branch = f.git(&["branch", "--show-current"])?;
+    assert!(branch.starts_with("ktask/project-"));
+    let pushed = Command::new("git")
+        .arg("--git-dir")
+        .arg(&bare)
+        .arg("rev-parse")
+        .arg(format!("refs/heads/{}", branch.trim()))
+        .output()?;
+    assert!(pushed.status.success());
+    assert_eq!(
+        f.git(&["rev-parse", "HEAD"])?.trim(),
+        String::from_utf8(pushed.stdout)?.trim()
+    );
+    Ok(())
+}
+
+#[test]
+fn remote_advance_rebases_then_rechecks_reviews_and_validates_before_push() -> Result {
+    let f = Fixture::new()?;
+    f.git(&["branch", "-M", "main"])?;
+    let bare = f.scratch.path().join("remote.git");
+    assert!(
+        Command::new("git")
+            .args(["init", "--bare", "-q"])
+            .arg(&bare)
+            .status()?
+            .success()
+    );
+    f.git(&["remote", "add", "origin", bare.to_str().unwrap()])?;
+    f.git(&["push", "origin", "main"])?;
+    f.ok(&["delivery", "--mode", "direct"])?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        r#"test -f result.txt || exit 1
+if [ ! -f "$HOME/remote-advanced" ]; then
+  git clone -q "$HOME/remote.git" "$TMPDIR/peer" || exit 2
+  git -C "$TMPDIR/peer" switch -q main || exit 3
+  printf 'Remote edit\n' > "$TMPDIR/peer/remote.txt"
+  git -C "$TMPDIR/peer" add remote.txt
+  git -C "$TMPDIR/peer" -c user.name=Peer -c user.email=peer@example.com commit -qm peer
+  git -C "$TMPDIR/peer" push -q origin main || exit 4
+  touch "$HOME/remote-advanced"
+fi"#,
+    ])?;
+    f.add("Rebase remote advance")?;
+    let run = f.process().args(["run", "--one"]).output()?;
+    if !run.status.success() {
+        let db = f.db()?;
+        let mut stmt = db
+            .connection()
+            .prepare("SELECT stream,content FROM attempt_output ORDER BY sequence")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        println!(
+            "RUN STDERR {}\nOUTPUT {rows:?}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        let steps: Vec<String> = db
+            .connection()
+            .prepare("SELECT role || ':' || coalesce(report,'') FROM attempt_steps ORDER BY id")?
+            .query_map([], |r| r.get(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        println!("STEPS {steps:?}");
+    }
+    assert!(run.status.success());
+    assert!(f.root.join("remote.txt").exists());
+    let checked:i64=f.db()?.connection().query_row("SELECT count(*) FROM attempt_steps WHERE role='check' AND attempt_id=(SELECT id FROM attempts WHERE task_id=1)",[],|r|r.get(0))?;
+    assert!(
+        checked >= 2,
+        "checks were not rerun after rebase: {checked}"
+    );
+    let calls = fs::read_to_string(f.scratch.path().join("provider-invocations"))?;
+    assert!(calls.matches("review").count() >= 2, "{calls}");
+    assert!(calls.matches("validation").count() >= 2, "{calls}");
+    let remote_head = Command::new("git")
+        .arg("--git-dir")
+        .arg(&bare)
+        .args(["rev-parse", "refs/heads/main"])
+        .output()?;
+    assert_eq!(
+        f.git(&["rev-parse", "HEAD"])?.trim(),
+        String::from_utf8(remote_head.stdout)?.trim()
+    );
+    Ok(())
+}
+
+#[test]
+fn remote_content_conflict_uses_judge_and_repair_then_publishes_verified_merge() -> Result {
+    let f = Fixture::new()?;
+    f.provider("resolve-conflict")?;
+    f.git(&["branch", "-M", "main"])?;
+    let bare = f.scratch.path().join("remote.git");
+    assert!(
+        Command::new("git")
+            .args(["init", "--bare", "-q"])
+            .arg(&bare)
+            .status()?
+            .success()
+    );
+    f.git(&["remote", "add", "origin", bare.to_str().unwrap()])?;
+    f.git(&["push", "origin", "main"])?;
+    f.ok(&["delivery", "--mode", "direct"])?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        r#"test -f result.txt || exit 1
+if [ ! -f "$HOME/remote-advanced" ]; then
+  git clone -q "$HOME/remote.git" "$TMPDIR/peer" || exit 2
+  git -C "$TMPDIR/peer" switch -q main || exit 3
+  printf 'remote\n' > "$TMPDIR/peer/result.txt"
+  git -C "$TMPDIR/peer" add result.txt
+  git -C "$TMPDIR/peer" -c user.name=Peer -c user.email=peer@example.com commit -qm peer
+  git -C "$TMPDIR/peer" push -q origin main || exit 4
+  touch "$HOME/remote-advanced"
+fi"#,
+    ])?;
+    f.add("Resolve remote conflict")?;
+    let run = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(f.root.join("result.txt"))?,
+        "remote\nverified\n"
+    );
+    let calls = fs::read_to_string(f.scratch.path().join("provider-invocations"))?;
+    assert!(calls.contains("remediation"), "{calls}");
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "succeeded");
+    let attempts: i64 = f.db()?.connection().query_row(
+        "SELECT count(*) FROM attempts WHERE task_id=1",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(attempts, 1);
+    let remote_head = Command::new("git")
+        .arg("--git-dir")
+        .arg(&bare)
+        .args(["rev-parse", "refs/heads/main"])
+        .output()?;
+    assert_eq!(
+        f.git(&["rev-parse", "HEAD"])?.trim(),
+        String::from_utf8(remote_head.stdout)?.trim()
+    );
+    Ok(())
+}
+
+#[test]
+fn paused_remote_conflict_resumes_same_attempt_and_keeps_both_edits() -> Result {
+    let f = Fixture::new()?;
+    f.provider("resolve-conflict-pause")?;
+    f.git(&["branch", "-M", "main"])?;
+    let bare = f.scratch.path().join("remote.git");
+    assert!(
+        Command::new("git")
+            .args(["init", "--bare", "-q"])
+            .arg(&bare)
+            .status()?
+            .success()
+    );
+    f.git(&["remote", "add", "origin", bare.to_str().unwrap()])?;
+    f.git(&["push", "origin", "main"])?;
+    f.ok(&["delivery", "--mode", "direct"])?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        r#"test -f result.txt || exit 1
+if [ ! -f "$HOME/remote-advanced" ]; then
+  git clone -q "$HOME/remote.git" "$TMPDIR/peer" || exit 2
+  git -C "$TMPDIR/peer" switch -q main || exit 3
+  printf 'remote\n' > "$TMPDIR/peer/result.txt"
+  git -C "$TMPDIR/peer" add result.txt
+  git -C "$TMPDIR/peer" -c user.name=Peer -c user.email=peer@example.com commit -qm peer
+  git -C "$TMPDIR/peer" push -q origin main || exit 4
+  touch "$HOME/remote-advanced"
+fi"#,
+    ])?;
+    f.add("Pause during conflict")?;
+    let mut runner = Running(f.process().args(["run", "--one"]).spawn()?);
+    support::eventually("conflict repair worker", || {
+        Ok(f.scratch
+            .path()
+            .join("conflict-repair-started")
+            .exists()
+            .then_some(()))
+    })?;
+    f.ok(&["pause", "1"])?;
+    assert!(runner.0.wait()?.success());
+    assert_eq!(f.ok(&["show", "1"])?["status"], "paused");
+    assert!(f.root.join(".git/rebase-merge").exists());
+    f.provider("resolve-conflict")?;
+    f.ok(&["run", "--one"])?;
+    assert_eq!(
+        fs::read_to_string(f.root.join("result.txt"))?,
+        "remote\nverified\n"
+    );
+    let attempts: i64 = f.db()?.connection().query_row(
+        "SELECT count(*) FROM attempts WHERE task_id=1",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(attempts, 1);
+    Ok(())
+}
+
+#[test]
+fn transient_push_failure_retries_in_same_attempt_without_owner_intervention() -> Result {
+    let f = Fixture::new()?;
+    f.git(&["branch", "-M", "main"])?;
+    let bare = f.scratch.path().join("remote.git");
+    assert!(
+        Command::new("git")
+            .args(["init", "--bare", "-q"])
+            .arg(&bare)
+            .status()?
+            .success()
+    );
+    f.git(&["remote", "add", "origin", bare.to_str().unwrap()])?;
+    f.git(&["push", "origin", "main"])?;
+    support::write_executable(
+        &f.scratch.path().join("bin/git"),
+        r#"#!/bin/sh
+case " $* " in
+  *" push "*) if [ ! -f "$HOME/push-failed-once" ]; then touch "$HOME/push-failed-once"; echo 'temporary network failure' >&2; exit 1; fi;;
+esac
+exec /usr/bin/git "$@"
+"#,
+    )?;
+    f.ok(&["delivery", "--mode", "direct"])?;
+    f.add("Retry transient push")?;
+    f.ok(&["run", "--one"])?;
+    assert!(f.scratch.path().join("push-failed-once").exists());
+    let attempts: i64 = f.db()?.connection().query_row(
+        "SELECT count(*) FROM attempts WHERE task_id=1",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(attempts, 1);
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    Ok(())
+}
+#[path = "delivery.rs"]
+mod delivery;
 #[path = "providers.rs"]
 mod providers;
 struct Fixture {
@@ -200,6 +513,10 @@ if [ '{mode}' = noisy-review-once ] && [ "$model" = review ]; then
   i=$((i + 1))
  done
 fi
+if [ '{mode}' = resolve-conflict-pause ] && [ "$model" = remediation ] && [ ! -f "$HOME/conflict-repair-released" ]; then
+ touch "$HOME/conflict-repair-started"
+ sleep 30
+fi
 case '{mode}' in
  follow-up)
   if [ "$model" = execution ]; then
@@ -295,7 +612,7 @@ case '{mode}' in
  ask-once) case "$prompt" in *"You returned blocked"*) :;; *) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"blocked\",\"summary\":\"Need direction\",\"question\":\"Which content?\",\"criteria\":[]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;; esac;;
  review-asks) case "$model" in review) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"blocked\",\"summary\":\"Need direction\",\"question\":\"Which content?\",\"criteria\":[]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;; esac;;
 esac
-case "$model" in execution|remediation) printf 'verified\n' > result.txt;; esac
+case "$model" in execution) if [ '{mode}' = sequential-pr ]; then n=0; [ ! -f "$HOME/pr-executions" ] || n=$(cat "$HOME/pr-executions"); n=$((n+1)); printf '%s' "$n" > "$HOME/pr-executions"; printf 'verified %s\n' "$n" > result.txt; else printf 'verified\n' > result.txt; fi;; remediation) if [ '{mode}' = resolve-conflict ] || [ '{mode}' = resolve-conflict-pause ]; then printf 'remote\nverified\n' > result.txt; else printf 'verified\n' > result.txt; fi;; esac
 printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"complete\",\"summary\":\"Verified result\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":true,\"evidence\":\"Inspected result.txt\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'
 "##
         );
@@ -3981,19 +4298,28 @@ fn pause_at_ready_task_handoff_never_starts_the_next_attempt() -> Result {
     let f = Fixture::new()?;
     f.add("Complete before handoff")?;
     f.add("Do not start across pause")?;
-    // The fourth rev-parse HEAD is the next task's preflight, after the
-    // first checkpoint. Delay Git itself to expose the real handoff boundary.
+    // Hold Git at the actual durable boundary: task one succeeded and task two
+    // has no attempt. Query state rather than coupling to the number of Git reads.
     let marker = f.scratch.path().join("handoff-open");
-    let counter = f.scratch.path().join("head-count");
+    let release = f.scratch.path().join("handoff-release");
     let git = f.scratch.path().join("bin/git");
     support::write_executable(
         &git,
-        format!(
-            "#!/bin/sh\nif [ \"$3\" = rev-parse ] && [ \"$4\" = HEAD ]; then\n count=$(cat '{}' 2>/dev/null || printf 0)\n count=$((count+1))\n printf '%s' \"$count\" > '{}'\n if [ \"$count\" = 4 ]; then touch '{}'; sleep 3; fi\nfi\nexec /usr/bin/git \"$@\"\n",
-            counter.display(),
-            counter.display(),
-            marker.display()
-        ),
+        r#"#!/bin/sh
+if [ "$3" = rev-parse ] && [ "$4" = HEAD ]; then
+ if python3 - "$HOME/state/ktask-dev/ktask.sqlite3" <<'PYSQL'
+import sqlite3, sys
+with sqlite3.connect('file:' + sys.argv[1] + '?mode=ro', uri=True) as db:
+    ready = db.execute("SELECT EXISTS(SELECT 1 FROM attempts WHERE task_id=1 AND state='succeeded') AND NOT EXISTS(SELECT 1 FROM attempts WHERE task_id=2)").fetchone()[0]
+sys.exit(0 if ready else 1)
+PYSQL
+ then
+  touch "$HOME/handoff-open"
+  while [ ! -f "$HOME/handoff-release" ]; do sleep 0.02; done
+ fi
+fi
+exec /usr/bin/git "$@"
+"#,
     )?;
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
     t.send("r")?;
@@ -4011,7 +4337,8 @@ fn pause_at_ready_task_handoff_never_starts_the_next_attempt() -> Result {
             && !s.contains("Supervisor preparing the next task")
     })?;
     println!("PAUSED AT HANDOFF\n{paused}");
-    thread::sleep(Duration::from_millis(3200));
+    fs::write(release, "release after pause")?;
+    f.supervisor_stopped()?;
     assert!(
         f.ok(&["show", "2"])?["attempts"]
             .as_array()
@@ -4971,11 +5298,18 @@ fn detached_runner_survives_launching_cli_and_keeps_stderr() -> Result {
     let f = Fixture::new()?;
     f.add("Detached task")?;
     let provider = f.scratch.path().join("bin/codex");
-    let script = fs::read_to_string(&provider)?.replace(
-        "case \"$model\" in execution|remediation)",
-        "sleep 0.3\nprintf 'detached diagnostic\\n' >&2\ncase \"$model\" in execution|remediation)",
+    let original = fs::read_to_string(&provider)?;
+    let anchor = "case \"$model\" in execution)";
+    assert_eq!(
+        original.matches(anchor).count(),
+        1,
+        "provider injection anchor changed"
     );
-    fs::write(provider, script)?;
+    let script = original.replace(
+        anchor,
+        &format!("sleep 0.3\nprintf 'detached diagnostic\\n' >&2\n{anchor}"),
+    );
+    support::write_executable(&provider, script)?;
     f.ok(&["run", "--queue", "--background"])?;
     f.state("succeeded")?;
     assert_eq!(f.ok(&["show", "1"])?["lifecycle"], "succeeded");
