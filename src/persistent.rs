@@ -1630,6 +1630,7 @@ fn project_task(task: &domain::Task) -> Result<model::Task, String> {
                     Instant::now()
                         + Duration::from_millis(at.saturating_sub(domain::now_ms()).max(0) as u64)
                 }),
+                resume_at_ms: a.resume_at_ms,
                 logs: a.logs.clone(),
                 outcome: a.outcome.clone().unwrap_or_else(|| match a.state.as_str() {
                     "waiting" => "Waiting".to_owned(),

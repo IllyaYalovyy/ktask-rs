@@ -1016,12 +1016,18 @@ fn stop_error(reason: &str) -> Option<&str> {
 
 /// " until Oct 26 23:33" for a waiting attempt with a scheduled resume.
 fn until(task: &crate::presentation::Task) -> String {
-    let Some(at) = task.attempts.last().and_then(|a| a.resume_at) else {
+    let Some(attempt) = task.attempts.last() else {
         return String::new();
     };
     let now = crate::application::now_ms();
-    let remaining = at.saturating_duration_since(std::time::Instant::now());
-    let at = now + i64::try_from(remaining.as_millis()).unwrap_or(i64::MAX / 2);
+    let at = match (attempt.resume_at_ms, attempt.resume_at) {
+        (Some(at), _) => at,
+        (None, Some(at)) => {
+            let remaining = at.saturating_duration_since(std::time::Instant::now());
+            now + i64::try_from(remaining.as_millis()).unwrap_or(i64::MAX / 2)
+        }
+        (None, None) => return String::new(),
+    };
     format!(" until {}", crate::clock::format_local(at, now))
 }
 

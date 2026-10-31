@@ -287,8 +287,9 @@ fn run_reset_task_and_inspect_history(f: &Fixture, t: &mut Terminal, mouse: bool
     }
     t.screen("completed task history", |s| shows_view(s, "History"))?;
     t.send("/Reset invalid effort\r")?;
+    // Search filters while typing, so wait for the Enter that closes the search box too.
     t.screen("reset task selected in history", |s| {
-        s.contains("History · 1 shown / 2 total")
+        s.contains("History · 1 shown / 2 total") && !s.contains("Cancel search")
     })?;
     if mouse {
         t.click("Enter Details")?;
@@ -5509,9 +5510,11 @@ exec /usr/bin/git "$@"
     )?;
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
     t.send("r")?;
+    // The marker is not on screen, so a screen predicate would only see it on a later redraw,
+    // and the screen may already be final. Wait for it first.
+    support::eventually("handoff held at Git", || Ok(marker.exists().then_some(())))?;
     let handoff = t.screen("ready handoff", |s| {
-        marker.exists()
-            && s.contains("Current #2 · PENDING")
+        s.contains("Current #2 · PENDING")
             && s.contains("Session: Queue · running")
             && s.contains("p Pause")
     })?;

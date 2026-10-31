@@ -150,6 +150,9 @@ pub struct Attempt {
     pub session: Option<usize>,
     pub state: Status,
     pub resume_at: Option<Instant>,
+    /// The stored wall-clock resume time, shown as is: converting `resume_at` back through a
+    /// second clock reading can land just before a minute boundary.
+    pub resume_at_ms: Option<i64>,
     pub logs: Vec<String>,
     pub outcome: String,
     /// Final report: worker summary, supervisor verdict and step findings. Empty while unknown.
@@ -182,6 +185,7 @@ impl Attempt {
             session: Some(session),
             state: Status::Running,
             resume_at: None,
+            resume_at_ms: None,
             outcome: "Running".into(),
             report: String::new(),
             question: None,
