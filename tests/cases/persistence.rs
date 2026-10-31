@@ -64,6 +64,342 @@ fn terminal(root: &Path) -> Result<Terminal> {
 }
 
 #[test]
+fn real_pty_reopens_succeeded_with_mouse_and_cancelled_with_keyboard() -> Result {
+    for (mouse, cancelled) in [(true, false), (false, true)] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        let mut writer = service(root)?;
+        let mut first = definition(if cancelled {
+            "Cancelled before run"
+        } else {
+            "Succeeded before reopen"
+        });
+        first.kind = Kind::Human;
+        let id = writer.create(&[first, definition("Later pending")], None, !cancelled)?[0];
+        let old = target(&mut writer, id)?;
+        if cancelled {
+            writer.decide(old, false, "Initial cancellation")?;
+        } else {
+            writer.acknowledge(old)?;
+        }
+        let old_history = writer.task(id)?.unwrap();
+        assert_eq!(old_history.lifecycle_events.len(), 1);
+        drop(writer);
+        let mut t = Terminal::open_project(
+            env!("CARGO_BIN_EXE_ktask-dev"),
+            root,
+            &project(root),
+            120,
+            34,
+        )?;
+        t.screen("current before reopen", |s| s.contains("3 History"))?;
+        if mouse {
+            t.click("3 History")?;
+            t.screen("succeeded in history", |s| {
+                s.contains("Succeeded before reopen") && s.contains("R Reopen")
+            })?;
+            t.click("R Reopen")?;
+            t.screen("mouse reopen confirmation", |s| {
+                s.contains("Reopen closed task") && s.contains("< No >")
+            })?;
+            t.click("Reason")?;
+            t.send("Another pass requested")?;
+            t.click("No")?;
+            t.screen("mouse confirms reopen", |s| s.contains("< Reopen >"))?;
+            t.click("Apply")?;
+        } else {
+            t.send("3R")?;
+            t.screen("keyboard reopen confirmation", |s| {
+                s.contains("Reopen closed task") && s.contains("Cancelled before run")
+            })?;
+            t.send("Owner restored work\t \r")?;
+        }
+        let screen = t.screen("reopened at queue front", |s| {
+            s.contains("Queue 2")
+                && s.contains("History 0")
+                && !s.contains("R Reopen")
+                && s.contains(if cancelled {
+                    "Cancelled before run"
+                } else {
+                    "Succeeded before reopen"
+                })
+                && s.contains("Later pending")
+        })?;
+        println!("REOPENED PTY mouse={mouse}\n{screen}");
+        t.send("\r")?;
+        let details = t.screen("details open", |s| s.contains("Task details"))?;
+        println!("REOPENED DETAILS mouse={mouse}\n{details}");
+        assert!(details.contains("Reopen"));
+        println!("CLOSING DETAILS mouse={mouse}");
+        t.send("\x1b")?;
+        t.screen("details closed", |s| !s.contains("Task details / attempts"))?;
+        t.send("q")?;
+        println!("FINISHING PTY mouse={mouse}");
+        t.finish()?;
+        println!("READING SNAPSHOT mouse={mouse}");
+        let mut writer = service(root)?;
+        let snapshot = writer.snapshot()?;
+        assert_eq!(snapshot.queue[0].id, id);
+        assert_eq!(snapshot.queue[0].status, "ready");
+        assert_eq!(snapshot.queue[0].lifecycle_events.len(), 2);
+        assert!(snapshot.history.is_empty());
+        assert_eq!(snapshot.queue[0].attempts.len(), old_history.attempts.len());
+    }
+    Ok(())
+}
+
+#[test]
+fn reopen_preserves_spent_attempt_and_waits_after_running_current() -> Result {
+    use ktask_rs_mk3::storage::execution::StartAttempt;
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let mut service = service(root)?;
+    let mut spent = definition("Spent budget");
+    spent.attempt_limit = Some(1);
+    spent.models = std::array::from_fn(|_| {
+        Some(ModelConfig {
+            provider: "codex".into(),
+            model: "worker".into(),
+            effort: Some("medium".into()),
+        })
+    });
+    let spent_id = service.create(&[spent], None, true)?[0];
+    let mut running_definition = definition("Running current");
+    running_definition.models = std::array::from_fn(|_| {
+        Some(ModelConfig {
+            provider: "codex".into(),
+            model: "worker".into(),
+            effort: Some("medium".into()),
+        })
+    });
+    let running_id = service.create(&[running_definition], None, true)?[0];
+    let mut db = Database::open_in(&root.join("state/ktask-dev"))?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64;
+    let attempt = db.start_attempt(StartAttempt {
+        task_id: spent_id,
+        expected_version: 1,
+        execution_token: "spent-fixture",
+        now_ms: now,
+    })?;
+    db.connection().execute("UPDATE attempts SET state='failed', finished_at_ms=started_at_ms, outcome='Original failure', failure_category='check' WHERE id=?1", [attempt])?;
+    db.connection().execute("INSERT INTO attempt_output(attempt_id,sequence,stream,recorded_at_ms,content) VALUES (?1,1,'system',?2,'Original evidence')", rusqlite::params![attempt,now])?;
+    let spent_target = target(&mut service, spent_id)?;
+    service.resolve(spent_target, Resolution::FailedSkipped, "Skip for now")?;
+    let _running = db.start_attempt(StartAttempt {
+        task_id: running_id,
+        expected_version: 1,
+        execution_token: "running-fixture",
+        now_ms: now,
+    })?;
+    let usage_before = service.project_usage()?.label();
+    let closed_target = target(&mut service, spent_id)?;
+    assert!(service.reopen(closed_target, "Retry after limit edit")?);
+    let snapshot = service.snapshot()?;
+    assert_eq!(snapshot.queue[0].id, running_id);
+    assert_eq!(snapshot.queue[1].id, spent_id);
+    assert_eq!(snapshot.queue[1].status, "ready");
+    assert_eq!(snapshot.queue[1].attempts_used, 1);
+    assert_eq!(snapshot.queue[1].attempts[0].state, "failed");
+    assert_eq!(snapshot.queue[1].lifecycle_events.len(), 2);
+    assert_eq!(service.project_usage()?.label(), usage_before);
+    assert!(snapshot.history.is_empty());
+    Ok(())
+}
+
+#[test]
+fn reopen_cancels_historical_questions_and_allows_new_retry_questions() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (id, first_attempt) = failed_task(root)?;
+    let mut writer = service(root)?;
+    let failed = target(&mut writer, id)?;
+    writer.record_failure_judgment(
+        failed,
+        "ask",
+        "What was the earlier owner decision?",
+        "Record the earlier decision",
+    )?;
+    let answered_question = writer.open_question(id)?.unwrap().0;
+    let failed = target(&mut writer, id)?;
+    writer.answer(failed, "Keep the earlier behavior")?;
+    let failed = target(&mut writer, id)?;
+    writer.record_failure_judgment(
+        failed,
+        "ask",
+        "Which behavior should the first attempt use?",
+        "Owner decision required",
+    )?;
+    let old_question = writer.open_question(id)?.unwrap().0;
+    let mut other_definition = writer.task(id)?.unwrap().definition().definition.clone();
+    other_definition.title = "Unrelated failed task".into();
+    let failed = target(&mut writer, id)?;
+    writer.resolve(failed, Resolution::FailedSkipped, "Defer this task")?;
+    let other_id = writer.create(&[other_definition], None, true)?[0];
+    let other_target = target(&mut writer, other_id)?;
+    let other_run = writer.begin_run(other_target, "other-attempt", "base")?;
+    writer.finish_run(&other_run, "failed", Some("check"), "Other failure", None)?;
+    let other_target = target(&mut writer, other_id)?;
+    writer.record_failure_judgment(
+        other_target,
+        "ask",
+        "Keep the other task question open?",
+        "Other owner decision required",
+    )?;
+    let other_before = writer.task(other_id)?.unwrap();
+    let other_question = writer.open_question(other_id)?.unwrap();
+    let attempts_before = attempts_contents(root)?;
+    let closed = target(&mut writer, id)?;
+    assert!(!writer.reopen(closed, "Retry the deferred task")?);
+    assert!(writer.open_question(id)?.is_none());
+    assert_eq!(
+        writer.open_question(other_id)?,
+        Some(other_question.clone())
+    );
+    assert_eq!(
+        writer.task(other_id)?.unwrap().version,
+        other_before.version
+    );
+    assert_eq!(attempts_contents(root)?, attempts_before);
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    let (state, resolved): (String, Option<i64>) = db.connection().query_row(
+        "SELECT state,resolved_at_ms FROM questions WHERE id=?1",
+        [old_question],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(state, "cancelled");
+    assert!(resolved.is_some());
+    let (answered_state, answer): (String, Option<String>) = db.connection().query_row(
+        "SELECT state,answer FROM questions WHERE id=?1",
+        [answered_question],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(answered_state, "answered");
+    assert_eq!(answer.as_deref(), Some("Keep the earlier behavior"));
+    assert_eq!(writer.task(id)?.unwrap().attempts[0].id, first_attempt);
+    let unchanged = storage_contents(root)?;
+    assert!(writer.reopen(closed, "Stale request").is_err());
+    assert_eq!(storage_contents(root)?, unchanged);
+
+    let mut terminal = Terminal::open_project(
+        env!("CARGO_BIN_EXE_ktask-dev"),
+        root,
+        &project(root),
+        120,
+        34,
+    )?;
+    let ready = terminal.screen("reopened task has no old question", |screen| {
+        screen.contains("Current #1 · PENDING")
+            && !screen.contains("Which behavior should the first attempt use?")
+    })?;
+    println!("REOPENED QUESTION CLEARED\n{ready}");
+    quit(&mut terminal)?;
+
+    let retry_target = target(&mut writer, id)?;
+    let second = writer.begin_run(retry_target, "second-attempt", "base")?;
+    writer.finish_run(&second, "failed", Some("check"), "Second failure", None)?;
+    let failed_again = target(&mut writer, id)?;
+    writer.record_failure_judgment(
+        failed_again,
+        "ask",
+        "Which behavior should the new attempt use?",
+        "New owner decision required",
+    )?;
+    let new_question = writer.open_question(id)?.unwrap().0;
+    assert_ne!(new_question, old_question);
+    let mut terminal = Terminal::open_project(
+        env!("CARGO_BIN_EXE_ktask-dev"),
+        root,
+        &project(root),
+        120,
+        34,
+    )?;
+    let question_screen = terminal.screen("new retry question", |screen| {
+        screen.contains("Which behavior should the new attempt use?")
+            && screen.contains("Owner decision")
+    })?;
+    println!("NEW RETRY QUESTION\n{question_screen}");
+    terminal.send("w")?;
+    terminal.screen("answer new retry question", |screen| {
+        screen.contains("Answer AI question")
+    })?;
+    terminal.send("Use the updated behavior\x13")?;
+    let answered = terminal.screen("new retry question answered", |screen| {
+        !screen.contains("Answer AI question") && screen.contains("FAILED")
+    })?;
+    println!("NEW RETRY ANSWERED\n{answered}");
+    quit(&mut terminal)?;
+    assert!(writer.open_question(id)?.is_none());
+    assert_eq!(
+        writer.open_question(other_id)?,
+        Some(other_question.clone())
+    );
+    let (new_state, new_answer): (String, Option<String>) = db.connection().query_row(
+        "SELECT state,answer FROM questions WHERE id=?1",
+        [new_question],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(new_state, "answered");
+    assert_eq!(new_answer.as_deref(), Some("Use the updated behavior"));
+    let final_target = target(&mut writer, id)?;
+    let third = writer.begin_run(final_target, "third-attempt", "base")?;
+    writer.finish_run(&third, "succeeded", None, "Successful retry", None)?;
+    let done = writer.task(id)?.unwrap();
+    assert_eq!(done.status, "succeeded");
+    assert_eq!(done.attempts.len(), 3);
+    assert_eq!(done.attempts[0].id, first_attempt);
+    assert_eq!(done.attempts[1].id, second.attempt);
+    assert_eq!(done.attempts[2].id, third.attempt);
+    assert_eq!(writer.open_question(other_id)?, Some(other_question));
+    Ok(())
+}
+
+#[test]
+fn task_details_show_each_revision_once_with_accurate_position() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let mut writer = service(root)?;
+    let id = writer.create(&[definition("Original revision")], None, true)?[0];
+    let mut ready = definition("Current ready revision");
+    ready.goal = "Approved goal".into();
+    let original = target(&mut writer, id)?;
+    writer.revise(original, &ready, true)?;
+    let mut draft = ready.clone();
+    draft.title = "Unapproved newer draft".into();
+    draft.goal = "Proposed goal".into();
+    let current = target(&mut writer, id)?;
+    writer.revise(current, &draft, false)?;
+    assert_eq!(writer.task(id)?.unwrap().definition().number, 2);
+
+    let mut terminal = Terminal::open_project(
+        env!("CARGO_BIN_EXE_ktask-dev"),
+        root,
+        &project(root),
+        140,
+        48,
+    )?;
+    terminal.screen("ready revision is current", |screen| {
+        screen.contains("Current #1 · PENDING") && screen.contains("Current ready revision")
+    })?;
+    terminal.send("\r")?;
+    let details = terminal.screen("revision position in task details", |screen| {
+        screen.contains("Task details / attempts")
+            && screen.contains("Current ready revision")
+            && screen.contains("Earlier Revision 1")
+            && screen.contains("Newer draft revision 3 (needs approval)")
+            && screen.contains("Unapproved newer draft")
+    })?;
+    println!("REVISION POSITION DETAILS\n{details}");
+    assert_eq!(details.matches("Earlier Revision 1").count(), 1);
+    assert_eq!(details.matches("Newer draft revision 3").count(), 1);
+    assert!(!details.contains("Earlier Revision 3"));
+    terminal.send("\x1b")?;
+    quit(&mut terminal)?;
+    Ok(())
+}
+
+#[test]
 fn current_activity_shows_multiple_readable_events_at_small_and_large_sizes() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();
@@ -1638,7 +1974,7 @@ fn on_queue(s: &str) -> bool {
     s.contains(" total · execution order")
 }
 fn on_history(s: &str) -> bool {
-    s.contains(" total · read-only")
+    s.contains(" total · closed tasks")
 }
 fn close_details(t: &mut Terminal, view: fn(&str) -> bool) -> Result<String> {
     t.send("\x1b")?;

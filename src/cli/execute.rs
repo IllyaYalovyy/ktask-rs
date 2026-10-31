@@ -484,6 +484,21 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
             service.restore(target)?;
             Ok(receipt("restored", target))
         }
+        Command::Reopen {
+            target: input,
+            reason,
+        } => {
+            let (_, target) = target(service, input)?;
+            let exhausted = service.reopen(target, reason)?;
+            let mut reply = receipt("reopened", target);
+            reply.data["attempt_budget_exhausted"] = json!(exhausted);
+            if exhausted {
+                reply
+                    .text
+                    .push_str("Attempt budget used up; edit --attempt-limit before running.\n");
+            }
+            Ok(reply)
+        }
         Command::Import { file, before, .. } => {
             Ok(created(service.import(&transfer::import(file)?, *before)?))
         }

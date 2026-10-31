@@ -13,6 +13,7 @@
 - Current is running work, otherwise the first unfinished task in execution order; the first unresolved failure blocks later work. Inserting before non-running current makes the inserted task current, including when it needs approval.
 - Only current can run, resume, or retry. Selecting another task only opens its details; failure blocks later work.
 - Queue excludes historical tasks. Search and filters preserve execution order; display sorting is deferred.
+- Only done is final, and done can be reopened. Any closed task can be reopened with a reason; deleted tasks use restore.
 - All user flows support mouse and keyboard. Mouse is enabled by default and can be disabled in Configuration.
 
 ## Flows
@@ -43,6 +44,7 @@
 - Answer current AI questions → submit valid answers → record them and automatically continue in queue mode; incomplete answers leave the task waiting.
 - View project statistics → see task counts, completed work, failures, elapsed execution time, and cost.
 - Inspect History → find a task → open Reviews or Failures directly for the selected task, or open its attempt details and select Summary, Results, Output, or Transcripts. Read each recorded review and failure step without scrolling through output; switch attempts and steps with mouse or keyboard without altering execution.
+- Reopen any closed task from History → confirm with a reason → see it ready at the front of Queue, directly after a running current. Earlier revisions, attempts, evidence, usage and resolutions remain visible. If its attempt budget is exhausted, edit the limit before running.
 - Export tasks → choose scope and destination → see success or an actionable error; confirm before overwriting a file.
 - Import tasks → preview and validate → choose insertion position (default: end of Queue) → confirm; cancel or invalid input leaves Queue unchanged.
 - Break down pending work or failed current → the capable model inserts ordinary subtasks in execution order → mark the original superseded and retain its attempts in History; require approval only when policy calls for it.

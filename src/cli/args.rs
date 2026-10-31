@@ -393,6 +393,14 @@ pub enum Command {
         #[command(flatten)]
         target: Target,
     },
+    /// Return any closed task, including done, to the front of the queue.
+    Reopen {
+        #[command(flatten)]
+        target: Target,
+        /// Why this task needs another run.
+        #[arg(long, value_parser = nonempty)]
+        reason: String,
+    },
     /// Preview or atomically import a ktask-tasks-v2 (or v1) TSV file.
     Import {
         /// TSV file written by export.

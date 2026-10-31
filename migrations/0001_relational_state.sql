@@ -96,6 +96,19 @@ CREATE TABLE tasks (
         (resolved_by_kind IS NOT NULL AND resolved_by IS NOT NULL AND length(trim(resolved_by)) > 0))
 ) STRICT;
 
+CREATE TABLE task_lifecycle_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    action TEXT NOT NULL CHECK (action IN ('closed', 'reopened')),
+    outcome TEXT CHECK (outcome IN ('succeeded', 'succeeded_override', 'failed_skipped', 'superseded', 'cancelled')),
+    actor_kind TEXT NOT NULL CHECK (actor_kind IN ('human', 'ai', 'system')),
+    actor TEXT NOT NULL CHECK (length(trim(actor)) > 0),
+    reason TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+    occurred_at_ms INTEGER NOT NULL CHECK (occurred_at_ms >= 0),
+    CHECK ((action = 'closed') = (outcome IS NOT NULL))
+) STRICT;
+CREATE INDEX ix_task_lifecycle_events_task ON task_lifecycle_events(task_id, id);
+
 -- No selected-revision pointer/circular FK. Latest ready revision is derived; attempts pin inputs.
 CREATE TABLE task_revisions (
     task_id INTEGER NOT NULL REFERENCES tasks(id),

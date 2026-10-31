@@ -237,9 +237,18 @@ pub struct Task {
     pub follow_ups: Vec<(i64, String)>,
     pub resolution_reason: Option<String>,
     pub resolved_by: Option<String>,
+    pub lifecycle_events: Vec<LifecycleEvent>,
     pub revisions: Vec<Revision>,
     pub attempts: Vec<Attempt>,
     pub attempts_used: i64,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct LifecycleEvent {
+    pub action: String,
+    pub outcome: Option<String>,
+    pub actor: String,
+    pub reason: String,
+    pub occurred_at_ms: i64,
 }
 impl Task {
     /// Resume uses the attempt's pinned revision even when a newer revision is ready.

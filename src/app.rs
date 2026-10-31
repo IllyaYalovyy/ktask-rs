@@ -59,6 +59,7 @@ pub enum Action {
     Reject,
     Models,
     Resolve,
+    Reopen,
     Add,
     Insert,
     Edit,
@@ -541,6 +542,7 @@ impl App {
                     None
                 }
             },
+            View::History if code == KeyCode::Char('R') => Some(Action::Reopen),
             View::History if code == KeyCode::Char('V') => Some(Action::InspectSection(4)),
             View::History if code == KeyCode::Char('F') => Some(Action::InspectSection(5)),
             View::Queue | View::History => match code {

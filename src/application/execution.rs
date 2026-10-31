@@ -881,6 +881,15 @@ impl Service {
         }
         if state == "succeeded" {
             tx.execute("UPDATE tasks SET lifecycle='succeeded',closed_at_ms=?2,resolved_by_kind='system',resolved_by='runner',resolution_reason=?3 WHERE id=?1",params![run.task,now,report])?;
+            super::commands::lifecycle_event(
+                &tx,
+                run.task,
+                "closed",
+                Some("succeeded"),
+                ("system", "runner"),
+                report,
+                now,
+            )?;
         }
         tx.execute(
             "UPDATE tasks SET row_version=row_version+1,updated_at_ms=?2 WHERE id=?1",

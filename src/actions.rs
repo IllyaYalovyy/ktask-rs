@@ -102,6 +102,9 @@ impl App {
             Action::Resolve => {
                 self.view == View::Current && current.is_some_and(|t| t.status().failed())
             }
+            Action::Reopen => {
+                self.service.is_some() && self.view == View::History && selected.is_some()
+            }
             Action::Pause => {
                 self.view == View::Current
                     && current.is_some_and(|t| {
@@ -301,6 +304,7 @@ impl App {
             Action::Reject => self.open_reject(),
             Action::Models => self.open_models(),
             Action::Resolve => self.open_resolution(),
+            Action::Reopen => self.open_reopen(),
             Action::Field(index) => {
                 if let Some(dialog) = &mut self.dialog {
                     dialog.focus = index;
@@ -755,7 +759,7 @@ impl App {
         self.dialog = Some(Dialog::new(
             DialogKind::Help,
             "Keyboard help",
-            "1 Current  2 Queue  3 History  4 Config  5 About\nTab / Shift-Tab: next / previous screen\nClick tabs, rows, buttons, and fields; wheel scrolls.\nDrag body text to select; click Copy or press F6 for OSC 52.\nCtrl-Shift-C copies selection when terminal reports modifiers.\nF2 selects a text pane; F2 again moves to the next pane.\nShift-arrows extend selection; Enter copies; Esc clears.\nF7 releases mouse capture for native terminal selection.\nCurrent: r run/resume, p pause, P Reset to pending, t retry, d remediate\nCurrent: R recover abandoned, x abandon task, z resolve failed\nCurrent: c models/limits; v approve; n reject\nCurrent: y acknowledge Human, w answer AI\nCurrent: o toggles report / raw log; l all events\nQueue: a add, i insert, e edit, d delete/abandon, u undo\nQueue: m move, b break down, o import, x export\nQueue: c models/limits; v approve; n reject\nQueue/History: / search, f filter, Esc clear\nHistory: V reviews, F failures for selected task\nj/k or arrows: move/scroll; PgUp/PgDn: page\nHome/End: first/last; End follows current output\nEnter: inspect selected task; [ / ]: inspect attempts\nDetails: s summary, v reviews, f failures, g results, o output, t transcripts\nDetails: n/p step, Left/Right section, < / > evidence page\ns: project statistics; ?: help; q: quit\nForms: Tab/arrows focus; Space cycles choices\nForms: Ctrl-A clears field; Ctrl-S/Enter applies\nEsc cancels dialogs/search; Ctrl-C copies selection or quits\nSearch: Enter applies; Esc restores previous query\nAll tasks, models, runs, and files are simulated.",
+            "1 Current  2 Queue  3 History  4 Config  5 About\nTab / Shift-Tab: next / previous screen\nClick tabs, rows, buttons, and fields; wheel scrolls.\nDrag body text to select; click Copy or press F6 for OSC 52.\nCtrl-Shift-C copies selection when terminal reports modifiers.\nF2 selects a text pane; F2 again moves to the next pane.\nShift-arrows extend selection; Enter copies; Esc clears.\nF7 releases mouse capture for native terminal selection.\nCurrent: r run/resume, p pause, P Reset to pending, t retry, d remediate\nCurrent: R recover abandoned, x abandon task, z resolve failed\nCurrent: c models/limits; v approve; n reject\nCurrent: y acknowledge Human, w answer AI\nCurrent: o toggles report / raw log; l all events\nQueue: a add, i insert, e edit, d delete/abandon, u undo\nQueue: m move, b break down, o import, x export\nQueue: c models/limits; v approve; n reject\nQueue/History: / search, f filter, Esc clear\nHistory: R reopen closed (done too; only done final), V reviews, F failures\nj/k or arrows: move/scroll; PgUp/PgDn: page\nHome/End: first/last; End follows current output\nEnter: inspect selected task; [ / ]: inspect attempts\nDetails: s summary, v reviews, f failures, g results, o output, t transcripts\nDetails: n/p step, Left/Right section, < / > evidence page\ns: project statistics; ?: help; q: quit\nForms: Tab/arrows focus; Space cycles choices\nForms: Ctrl-A clears field; Ctrl-S/Enter applies\nEsc cancels dialogs/search; Ctrl-C copies selection or quits\nSearch: Enter applies; Esc restores previous query\nAll tasks, models, runs, and files are simulated.",
             vec![],
         ));
     }
@@ -1473,6 +1477,7 @@ impl App {
             }
             DialogKind::Models(id) => self.save_models(dialog, id)?,
             DialogKind::Resolve(id) => self.resolve_failed(dialog, id)?,
+            DialogKind::Reopen(_) => return Err("Reopen applies to stored tasks only".into()),
             DialogKind::Reject(id) => self.reject_revision(dialog, id)?,
             DialogKind::Breakdown(id) => self.accept_breakdown(dialog, id)?,
             DialogKind::Answer(id) => {

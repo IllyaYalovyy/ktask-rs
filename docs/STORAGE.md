@@ -154,6 +154,7 @@ erDiagram
     tasks ||--o{ tasks : "origin_task_id"
     attempts ||--o{ tasks : "origin_attempt_id, origin_task_id"
     tasks ||--o{ task_revisions : "task_id"
+    tasks ||--o{ task_lifecycle_events : "task_id"
     task_revisions ||--o{ revision_models : "task_id, revision"
     task_revisions ||--o{ acceptance_criteria : "task_id, revision"
     tasks ||--o{ task_links : "related_task_id, project_id"
@@ -692,6 +693,27 @@ Immutable migration ledger. Exact applied SQL detects changed migration files; v
 
 - PK `(version)`.
 - UQ `(name)`.
+
+### task_lifecycle_events
+
+Every closure and reopen is an append-only record. This retains earlier outcomes after a task
+returns to Queue; attempts, usage and evidence remain on their original rows. Older V1 closures
+are copied into this table when the task is first reopened.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `id` | INTEGER | no | Stable event row ID. |
+| `task_id` | INTEGER | no | Task whose lifecycle changed. |
+| `action` | TEXT | no | closed or reopened. |
+| `outcome` | TEXT | yes | Closure result; NULL for reopen. |
+| `actor_kind` | TEXT | no | human, ai or system. |
+| `actor` | TEXT | no | Nonblank actor name. |
+| `reason` | TEXT | no | Nonblank reason. |
+| `occurred_at_ms` | INTEGER | no | Time of closure or reopen. |
+
+- PK `(id)`.
+- FK `(task_id)` → `tasks(id)`.
+- Index `ix_task_lifecycle_events_task`: `INDEX ix_task_lifecycle_events_task ON task_lifecycle_events(task_id, id)`.
 
 ### task_links
 

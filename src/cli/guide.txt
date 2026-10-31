@@ -66,7 +66,9 @@ STATUS VALUES ("status" in list, show and current)
                   itself unless a stop rule applies (see below)
   interrupted     the last attempt was stopped without a result; run tries again
   succeeded  succeeded_override  failed_skipped  superseded  cancelled
-                  finished; listed with --scope history
+                  closed; listed with --scope history. Only done is final, and done can
+                  be reopened. Use reopen ID --reason '...' [--if-version N] for any
+                  closed task. Earlier attempts, usage and resolutions remain recorded.
   deleted         soft-deleted; list --scope deleted, then restore
 
 WHEN EXECUTION STOPS ON A FAILED TASK

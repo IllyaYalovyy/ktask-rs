@@ -37,6 +37,7 @@ fn task_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         resolution_reason: r.get(5)?,
         attempts_used: r.get(6)?,
         resolved_by: r.get(7)?,
+        lifecycle_events: Vec::new(),
         revisions: Vec::new(),
         attempts: Vec::new(),
     })
@@ -49,7 +50,27 @@ fn complete_task(db: &Connection, mut task: Task) -> Result<Task> {
     )?;
     task.attempts = attempts(db, task.id, true, None)?;
     task.follow_ups = follow_ups(db, task.id)?;
+    task.lifecycle_events = lifecycle_events(db, task.id)?;
     Ok(task)
+}
+fn lifecycle_events(db: &Connection, task: i64) -> Result<Vec<LifecycleEvent>> {
+    let mut stmt = db.prepare_cached("SELECT action,outcome,actor_kind || ': ' || actor,reason,occurred_at_ms FROM task_lifecycle_events WHERE task_id=?1 ORDER BY id")?;
+    let mut entries = stmt
+        .query_map([task], |r| {
+            Ok(LifecycleEvent {
+                action: r.get(0)?,
+                outcome: r.get(1)?,
+                actor: r.get(2)?,
+                reason: r.get(3)?,
+                occurred_at_ms: r.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if entries.is_empty() {
+        let old = db.query_row("SELECT lifecycle,coalesce(resolved_by_kind,'system') || ': ' || coalesce(resolved_by,'unknown'),coalesce(resolution_reason,'Resolved'),closed_at_ms FROM tasks WHERE id=?1 AND lifecycle IN ('succeeded','succeeded_override','failed_skipped','superseded','cancelled')", [task], |r| Ok(LifecycleEvent {action:"closed".into(),outcome:Some(r.get(0)?),actor:r.get(1)?,reason:r.get(2)?,occurred_at_ms:r.get(3)?})).optional()?;
+        entries.extend(old);
+    }
+    Ok(entries)
 }
 fn follow_ups(db: &Connection, task: i64) -> Result<Vec<(i64, String)>> {
     let mut stmt = db.prepare_cached("SELECT id, coalesce(title, (SELECT title FROM task_revisions WHERE task_id=t.id ORDER BY revision DESC LIMIT 1)) FROM task_details t WHERE origin_task_id=?1 AND lifecycle<>'deleted' ORDER BY order_key")?;
@@ -778,6 +799,7 @@ impl Service {
                         follow_ups: Vec::new(),
                         resolution_reason: r.get(5)?,
                         resolved_by: r.get(8)?,
+                        lifecycle_events: Vec::new(),
                         attempts_used: r.get(6)?,
                         revisions: Vec::new(),
                         attempts: Vec::new(),
@@ -796,6 +818,7 @@ impl Service {
                 let live = live_logs.then_some(&mut self.live_output);
                 task.attempts = attempts(&tx, task.id, historical_logs, live)?;
                 task.follow_ups = follow_ups(&tx, task.id)?;
+                task.lifecycle_events = lifecycle_events(&tx, task.id)?;
                 if closed.is_some() {
                     history.push(task);
                 } else {
@@ -855,7 +878,7 @@ pub(super) fn retained_artifact_path(
     path.starts_with(&root).then_some(path)
 }
 
-fn revisions(db: &Connection, task: i64) -> Result<Vec<Revision>> {
+pub(super) fn revisions(db: &Connection, task: i64) -> Result<Vec<Revision>> {
     let mut stmt = db.prepare_cached("SELECT revision, lifecycle, title, goal, kind, attempt_limit, attempt_timeout_ms, coalesce(decided_by_kind, created_by_kind) || ': ' || coalesce(decided_by, created_by), stage_timeout_ms FROM task_revisions WHERE task_id = ?1 ORDER BY revision")?;
     let mut revisions = stmt
         .query_map([task], |r| {

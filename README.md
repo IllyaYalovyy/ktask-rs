@@ -335,7 +335,9 @@ cargo run --locked -- approve 1 --if-version 1
   eligible content. `retention DAYS [--if-version N]` sets the age policy (default 30 days;
   0 allows immediate cleanup of closed work). Both commands support `--json`.
 - Change: `add`, `edit ID`, `move ID --before ID`, `approve`, `reject --reason`, `resolve
-  --outcome --reason`, `ack`, `delete`, `restore`. Delete is recoverable. Only current Human
+  --outcome --reason`, `ack`, `delete`, `restore`, `reopen ID --reason '...' [--if-version N]`.
+  Only done is final, and done can be reopened; any closed task returns to the front of Queue
+  with its full history. Delete is recoverable through restore. Only current Human
   work can be acknowledged; only failed current can be resolved.
 - Models/limits: add/edit accept repeated `--model ROLE=PROVIDER/MODEL`, `--effort ROLE=VALUE`
   (`none` clears effort), `--clear-model ROLE`, `--attempt-limit N`, `--timeout-ms N` (`unlimited`

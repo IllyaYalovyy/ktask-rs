@@ -73,6 +73,7 @@ pub fn task_value(task: &Task) -> Value {
     object.insert("attempts".into(), json!(task.attempts));
     object.insert("resolution_reason".into(), json!(task.resolution_reason));
     object.insert("resolved_by".into(), json!(task.resolved_by));
+    object.insert("lifecycle_events".into(), json!(task.lifecycle_events));
     object.insert("output_limit_per_attempt".into(), json!(2000));
     value
 }
@@ -162,6 +163,20 @@ fn task_text(task: &Task) -> String {
             "Resolution: {} · {}\n",
             safe(task.resolved_by.as_deref().unwrap_or("unknown")),
             safe(reason)
+        ));
+    }
+    for entry in &task.lifecycle_events {
+        text.push_str(&format!(
+            "{}: {} · {} · {} · {}\n",
+            if entry.action == "closed" {
+                "Resolution"
+            } else {
+                "Reopen"
+            },
+            entry.outcome.as_deref().unwrap_or("pending"),
+            safe(&entry.actor),
+            safe(&entry.reason),
+            entry.occurred_at_ms
         ));
     }
     text

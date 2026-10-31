@@ -511,6 +511,115 @@ fn cli_crud_order_versions_deleted_restore_and_human_completion() -> Result {
 }
 
 #[test]
+fn cli_reopens_done_with_reason_version_and_full_resolution_history() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    json(
+        root,
+        &[
+            "add",
+            "--title",
+            "Human reopening",
+            "--goal",
+            "Confirm work",
+            "--criterion",
+            "Recorded",
+            "--kind",
+            "human",
+        ],
+        0,
+    )?;
+    json(
+        root,
+        &[
+            "add",
+            "--title",
+            "Later",
+            "--goal",
+            "Later work",
+            "--criterion",
+            "Recorded",
+        ],
+        0,
+    )?;
+    json(root, &["ack", "1", "--if-version", "1"], 0)?;
+    let before = json(root, &["stats"], 0)?;
+    assert_eq!(
+        (
+            before["data"]["queue"].as_i64(),
+            before["data"]["history"].as_i64(),
+            before["data"]["succeeded"].as_i64()
+        ),
+        (Some(1), Some(1), Some(1))
+    );
+    assert_eq!(
+        json(
+            root,
+            &[
+                "reopen",
+                "1",
+                "--reason",
+                "Another review",
+                "--if-version",
+                "2"
+            ],
+            0
+        )?["data"]["version"],
+        3
+    );
+    assert_eq!(
+        json(
+            root,
+            &["reopen", "1", "--reason", "stale", "--if-version", "2"],
+            4
+        )?["error"]["code"],
+        "conflict"
+    );
+    let reopened = json(root, &["show", "1"], 0)?;
+    assert_eq!(reopened["data"]["status"], "ready");
+    let during = json(root, &["stats"], 0)?;
+    assert_eq!(
+        (
+            during["data"]["queue"].as_i64(),
+            during["data"]["history"].as_i64(),
+            during["data"]["succeeded"].as_i64()
+        ),
+        (Some(2), Some(0), Some(0))
+    );
+    assert_eq!(during["data"]["usage"], before["data"]["usage"]);
+    assert_eq!(
+        reopened["data"]["lifecycle_events"][0]["outcome"],
+        "succeeded"
+    );
+    assert_eq!(
+        reopened["data"]["lifecycle_events"][1]["reason"],
+        "Another review"
+    );
+    assert_eq!(
+        json(root, &["list", "--scope", "queue"], 0)?["data"]["tasks"][0]["id"],
+        1
+    );
+    json(root, &["ack", "1", "--if-version", "3"], 0)?;
+    let again = json(root, &["show", "1"], 0)?;
+    assert_eq!(
+        again["data"]["lifecycle_events"].as_array().unwrap().len(),
+        3
+    );
+    assert_eq!(again["data"]["attempts"].as_array().unwrap().len(), 0);
+    let after = json(root, &["stats"], 0)?;
+    assert_eq!(
+        (
+            after["data"]["queue"].as_i64(),
+            after["data"]["history"].as_i64(),
+            after["data"]["succeeded"].as_i64()
+        ),
+        (Some(1), Some(1), Some(1))
+    );
+    assert_eq!(after["data"]["usage"], before["data"]["usage"]);
+    Ok(())
+}
+
+#[test]
 fn cli_models_drafts_approval_rejection_and_actor_attribution() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();

@@ -490,6 +490,25 @@ impl App {
         }
         true
     }
+    pub(crate) fn open_reopen(&mut self) {
+        let task = self.selected_task().expect("enabled history selection");
+        let id = task.id;
+        let mut dialog = Dialog::new(
+            DialogKind::Reopen(id),
+            "Reopen closed task",
+            &format!(
+                "#{} {}\nConfirm returns it to the front of Queue. All attempts and resolutions stay recorded.",
+                id,
+                task.definition().title
+            ),
+            vec![
+                Field::text("Reason", ""),
+                Field::choice("Confirm", &["No", "Reopen"], "No"),
+            ],
+        );
+        dialog.expected = self.target(id).ok();
+        self.dialog = Some(dialog);
+    }
 
     /// A committed intervention must not be presented as a failed form if starting fails.
     pub(crate) fn continue_queue(&mut self) {
@@ -798,6 +817,7 @@ impl App {
             | DialogKind::Move(id)
             | DialogKind::Models(id)
             | DialogKind::Resolve(id)
+            | DialogKind::Reopen(id)
             | DialogKind::Abandon(id)
             | DialogKind::ResetToPending(id)
             | DialogKind::Reject(id) => Some(id),
@@ -1046,6 +1066,16 @@ impl App {
             } else {
                 "Saved to SQLite"
             });
+            if let DialogKind::Reopen(id) = dialog.kind
+                && let Some(task) = self.stored.get(&id)
+                && task
+                    .definition()
+                    .definition
+                    .attempt_limit
+                    .is_some_and(|limit| task.attempts_used >= limit)
+            {
+                self.message("Attempt budget used up; edit the attempt limit before running");
+            }
             let continue_after_remediation = match &dialog.kind {
                 DialogKind::RemediationReview {
                     judgment: crate::runner::agent::Judgment::Ask { .. },
@@ -1268,6 +1298,20 @@ impl App {
                     .unwrap()
                     .resolve(target()?, outcome, dialog.value(1))
                     .map_err(|e| e.to_string())?;
+            }
+            DialogKind::Reopen(id) => {
+                if dialog.value(1) != "Reopen" {
+                    return Err("Confirm Reopen to return this task to Queue".into());
+                }
+                self.service
+                    .as_mut()
+                    .unwrap()
+                    .reopen(target()?, dialog.value(0))
+                    .map_err(|e| e.to_string())?;
+                self.view = View::Queue;
+                self.queue_catalog.query.clear();
+                self.queue_catalog.filter = 0;
+                self.queue_catalog.selected = Some(*id);
             }
             DialogKind::Config => {
                 self.mouse_enabled = dialog.value(0) == "Enabled";
@@ -1695,6 +1739,13 @@ fn task_overview(task: &domain::Task) -> String {
         revision_overview(task.definition()),
         cost_label(cost)
     );
+    for revision in &task.revisions {
+        if revision.number < task.definition().number {
+            body.push_str(&format!("\nEarlier {}", revision_overview(revision)));
+        } else if revision.number > task.definition().number && revision.lifecycle != "draft" {
+            body.push_str(&format!("\nNewer {}", revision_overview(revision)));
+        }
+    }
     for (index, attempt) in task.attempts.iter().enumerate() {
         body.push_str(&format!(
             "\nAttempt {} · revision {} · {} · active {} ms · waiting {} ms\nUsage: {}",
@@ -1729,6 +1780,20 @@ fn task_overview(task: &domain::Task) -> String {
         body.push_str(&format!(
             "\nResolution: {} · {reason}",
             task.resolved_by.as_deref().unwrap_or("unknown actor")
+        ));
+    }
+    for entry in &task.lifecycle_events {
+        body.push_str(&format!(
+            "\n{}: {} · {} · {} · {}",
+            if entry.action == "closed" {
+                "Resolution"
+            } else {
+                "Reopen"
+            },
+            entry.outcome.as_deref().unwrap_or("pending"),
+            entry.actor,
+            entry.reason,
+            entry.occurred_at_ms
         ));
     }
     for (id, title) in &task.follow_ups {

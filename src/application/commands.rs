@@ -259,6 +259,15 @@ impl Service {
             ids.push(id);
         }
         tx.execute("UPDATE tasks SET lifecycle='superseded', closed_at_ms=max(created_at_ms,?2), resolution_reason=?3, resolved_by_kind='ai', resolved_by='planner' WHERE id=?1", params![target.id,now,reason])?;
+        lifecycle_event(
+            &tx,
+            target.id,
+            "closed",
+            Some("superseded"),
+            ("ai", "planner"),
+            reason,
+            now,
+        )?;
         bump(&tx, target, now)?;
         event(
             &tx,
@@ -595,6 +604,15 @@ impl Service {
             )?;
         } else {
             tx.execute("UPDATE tasks SET lifecycle = 'cancelled', closed_at_ms = max(created_at_ms, ?2), resolution_reason = ?3, resolved_by_kind = ?4, resolved_by = ?5 WHERE id = ?1", params![target.id, now, reason, self.actor.kind.as_str(), self.actor.name])?;
+            lifecycle_event(
+                &tx,
+                target.id,
+                "closed",
+                Some("cancelled"),
+                (self.actor.kind.as_str(), &self.actor.name),
+                reason,
+                now,
+            )?;
         }
         bump(&tx, target, now)?;
         event(
@@ -698,6 +716,91 @@ impl Service {
         Ok(())
     }
 
+    /// Requeue closed work without changing any revision or attempt. Retire unanswered
+    /// questions from prior attempts so they cannot block the new run.
+    pub fn reopen(&mut self, target: VersionedTask, reason: &str) -> Result<bool> {
+        require(!reason.trim().is_empty(), "A reason is required")?;
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (lifecycle, _) = checked(&tx, self.project_id, target)?;
+        require(
+            matches!(
+                lifecycle.as_str(),
+                "succeeded" | "succeeded_override" | "failed_skipped" | "superseded" | "cancelled"
+            ),
+            "Only closed tasks can be reopened; deleted tasks use restore",
+        )?;
+        let old: (String, String, String, i64) = tx.query_row(
+            "SELECT coalesce(resolution_reason,'Resolved'), coalesce(resolved_by_kind,'system'), coalesce(resolved_by,'unknown'), closed_at_ms FROM tasks WHERE id=?1",
+            [target.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        // Older V1 databases had only the latest closure on tasks. Preserve it before clearing.
+        if !tx.query_row("SELECT EXISTS(SELECT 1 FROM task_lifecycle_events WHERE task_id=?1 AND action='closed')", [target.id], |r| r.get::<_, bool>(0))? {
+            lifecycle_event(&tx, target.id, "closed", Some(&lifecycle), (&old.1, &old.2), &old.0, old.3)?;
+        }
+        let running: Option<String> = tx.query_row(
+            "SELECT t.order_key FROM tasks t JOIN attempts a ON a.task_id=t.id WHERE t.project_id=?1 AND a.state='running' ORDER BY t.order_key LIMIT 1",
+            [self.project_id], |r| r.get(0)).optional()?;
+        let upper: Option<String> = tx.query_row(
+            "SELECT min(order_key) FROM tasks WHERE project_id=?1 AND id<>?2 AND (?3 IS NULL OR order_key>?3)",
+            params![self.project_id, target.id, running], |r| r.get(0))?;
+        let key = ordering::between(running.as_deref(), upper.as_deref())?;
+        let used: i64 = tx.query_row(
+            "SELECT attempts_used FROM task_details WHERE id=?1",
+            [target.id],
+            |r| r.get(0),
+        )?;
+        let limit: Option<i64> = tx.query_row("SELECT attempt_limit FROM task_revisions WHERE task_id=?1 ORDER BY CASE WHEN lifecycle='ready' THEN 0 ELSE 1 END,revision DESC LIMIT 1", [target.id], |r| r.get(0))?;
+        let exhausted = limit.is_some_and(|limit| used >= limit);
+        let now = now_ms();
+        tx.execute(
+            "UPDATE questions SET state='cancelled', resolved_at_ms=max(created_at_ms,?3)
+             WHERE state='open' AND attempt_id IN (
+                 SELECT id FROM attempts WHERE project_id=?1 AND task_id=?2)",
+            params![self.project_id, target.id, now],
+        )?;
+        let has_ready: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM task_revisions WHERE task_id=?1 AND lifecycle='ready')",
+            [target.id],
+            |r| r.get(0),
+        )?;
+        if !has_ready {
+            let revisions = super::queries::revisions(&tx, target.id)?;
+            let latest = revisions.last().expect("task has a revision");
+            insert_revision(
+                &tx,
+                target.id,
+                latest.number + 1,
+                &latest.definition,
+                true,
+                now,
+                &self.actor,
+            )?;
+        }
+        tx.execute("UPDATE tasks SET lifecycle='ready', order_key=?2, closed_at_ms=NULL, resolution_reason=NULL, resolved_by_kind=NULL, resolved_by=NULL, reset_pending=1, reset_worktree=NULL WHERE id=?1", params![target.id,key])?;
+        lifecycle_event(
+            &tx,
+            target.id,
+            "reopened",
+            None,
+            (self.actor.kind.as_str(), &self.actor.name),
+            reason,
+            now,
+        )?;
+        bump(&tx, target, now)?;
+        event(
+            &tx,
+            self.project_id,
+            target.id,
+            now,
+            "task.reopened",
+            &format!("#{} reopened by {}: {reason}", target.id, self.actor.name),
+        )?;
+        tx.commit()?;
+        Ok(exhausted)
+    }
+
     pub fn resolve(
         &mut self,
         target: VersionedTask,
@@ -769,6 +872,15 @@ pub(super) fn close(
     now: i64,
 ) -> Result<()> {
     tx.execute("UPDATE tasks SET lifecycle = ?2, closed_at_ms = max(created_at_ms, ?3), resolution_reason = ?4, resolved_by_kind = ?5, resolved_by = ?6 WHERE id = ?1", params![target.id, lifecycle, now, reason, actor.kind.as_str(), actor.name])?;
+    lifecycle_event(
+        tx,
+        target.id,
+        "closed",
+        Some(lifecycle),
+        (actor.kind.as_str(), &actor.name),
+        reason,
+        now,
+    )?;
     bump(tx, target, now)?;
     event(
         tx,
@@ -778,4 +890,17 @@ pub(super) fn close(
         "task.resolved",
         &format!("#{} {lifecycle}: {reason}", target.id),
     )
+}
+
+pub(super) fn lifecycle_event(
+    tx: &Transaction<'_>,
+    task: i64,
+    action: &str,
+    outcome: Option<&str>,
+    actor: (&str, &str),
+    reason: &str,
+    now: i64,
+) -> Result<()> {
+    tx.execute("INSERT INTO task_lifecycle_events(task_id,action,outcome,actor_kind,actor,reason,occurred_at_ms) VALUES (?1,?2,?3,?4,?5,?6,?7)", params![task,action,outcome,actor.0,actor.1,reason,now])?;
+    Ok(())
 }

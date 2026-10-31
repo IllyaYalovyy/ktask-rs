@@ -335,6 +335,7 @@ fn controls(app: &App) -> Vec<(&'static str, Action)> {
             ("s Stats", Action::Stats),
         ],
         View::History => vec![
+            ("R Reopen", Action::Reopen),
             ("Enter Details", Action::Inspect),
             ("V Reviews", Action::InspectSection(4)),
             ("F Failures", Action::InspectSection(5)),
@@ -1221,6 +1222,8 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                     app.source().len(),
                     if app.view == View::Queue {
                         "execution order"
+                    } else if app.service.is_some() {
+                        "closed tasks"
                     } else {
                         "read-only"
                     }

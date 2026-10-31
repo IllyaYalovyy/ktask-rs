@@ -21,6 +21,7 @@ pub enum DialogKind {
     },
     Models(usize),
     Resolve(usize),
+    Reopen(usize),
     Reject(usize),
     Breakdown(usize),
     Answer(usize),
