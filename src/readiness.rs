@@ -122,7 +122,7 @@ pub(crate) fn inspect(app: &App) -> Readiness {
         }
         return report;
     };
-    let definition = task.definition();
+    let definition = task.execution_revision();
     let root = service.project_root();
     let state = app.current().expect("current task").status();
     let waiting = service
@@ -207,10 +207,20 @@ pub(crate) fn inspect(app: &App) -> Readiness {
                 model.provider,
                 crate::runner::provider::SUPPORTED
             )),
-            _ if definition.definition.reuses_execution_model(index) => {
-                Err("Must be stronger than the execution model".into())
-            }
-            _ => Ok(()),
+            Some(model) => service
+                .validate_model(role, model)
+                .and_then(|()| {
+                    if index > 0
+                        && let Some(execution) = &definition.definition.models[0]
+                    {
+                        crate::application::require(
+                            !service.same_model(role, execution, model)?,
+                            "Must be stronger than the execution model",
+                        )?;
+                    }
+                    Ok(())
+                })
+                .map_err(|error| error.to_string()),
         };
         report.check(&format!("{role} model"), valid, "m Models");
     }

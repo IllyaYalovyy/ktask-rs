@@ -559,6 +559,84 @@ pub fn sandbox() -> std::io::Result<Sandbox> {
     Scratch::new(&std::env::temp_dir().join("ktask-test-scratch")).map(|s| Sandbox(Some(s)))
 }
 
+/// Artificial provider IDs belong to test metadata, never the application's supported models.
+pub fn model_catalog(root: &Path) -> std::io::Result<()> {
+    let mut models = Vec::new();
+    let codex = [
+        "planning",
+        "execution",
+        "review",
+        "validation",
+        "remediation",
+        "executor",
+        "old",
+        "new",
+        "cheap",
+        "review-fixed",
+        "new-review-model",
+        "judge-review",
+        "concurrent",
+        "stale",
+        "default",
+        "fixture-model",
+        "fixture-judge",
+        "planning-fixture",
+        "test-model",
+        "fixture-strong",
+        "stronger",
+        "stronger-model",
+        "gpt-6-sol",
+        "gpt-6-astra",
+    ];
+    for model in codex {
+        models.push(serde_json::json!({"provider":"codex", "model":model}));
+    }
+    for role in [
+        "planning",
+        "execution",
+        "review",
+        "validation",
+        "remediation",
+    ] {
+        models.push(serde_json::json!({"provider":"codex", "model":format!("fixture-{role}")}));
+        models.push(serde_json::json!({"provider":"claude", "model":role}));
+        models.push(serde_json::json!({"provider":"opencode", "model":format!("test/{role}")}));
+    }
+    for i in 0..5 {
+        for prefix in [
+            "activity-fixture-",
+            "old-role-",
+            "new-default-",
+            "fixture-judge-",
+        ] {
+            models.push(serde_json::json!({"provider":"codex", "model":format!("{prefix}{i}")}));
+        }
+    }
+    for model in [
+        "worker",
+        "executor",
+        "reviewer",
+        "validator",
+        "remediator",
+        "strong",
+        "family/model",
+    ] {
+        models.push(serde_json::json!({"provider":"codex", "model":model}));
+    }
+    for model in ["worker", "mouse", "insert", "mouse-insert", "default"] {
+        models.push(serde_json::json!({"provider":"codex", "model":model}));
+    }
+    models.push(serde_json::json!({"provider":"codex", "model":"worker-v2", "efforts":["custom"]}));
+    for instance in ["ktask-dev", "ktask"] {
+        let path = root.join("state").join(instance).join("model-catalog.json");
+        if !path.exists() {
+            std::fs::create_dir_all(path.parent().unwrap())?;
+            std::fs::write(path, serde_json::to_vec(&models)?)?;
+        }
+    }
+    Ok(())
+}
+
 /// A test's private directory. A test must stop everything it starts: when the sandbox
 /// goes, every process that still refers to it must exit, or the test fails naming them.
 pub struct Sandbox(Option<Scratch>);

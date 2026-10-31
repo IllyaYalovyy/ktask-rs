@@ -350,6 +350,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             code: "conflict",
             message: "Configure a remediation model first".into(),
         })?;
+        service.validate_model("remediation", model)?;
         let pin = service.begin_remediation_evidence(application::VersionedTask {
             id: current.id,
             version: current.version,
@@ -413,6 +414,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         let model = service.project_defaults()?[0]
             .clone()
             .ok_or_else(|| storage::Error::Conflict("Configure a planning model first".into()))?;
+        service.validate_model("planning", &model)?;
         let definition = &task.definition().definition;
         let proposal = crate::runner::agent::propose_breakdown(
             crate::runner::process::stopped()?.as_ref(),

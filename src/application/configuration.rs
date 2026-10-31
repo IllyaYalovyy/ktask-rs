@@ -148,6 +148,11 @@ impl Service {
     }
     /// Replaces the defaults new projects start with; existing projects keep their own.
     pub fn save_new_project_defaults(&mut self, values: &Defaults) -> Result<()> {
+        for (role, model) in MODEL_ROLES.iter().zip(values) {
+            if let Some(model) = model {
+                self.validate_model(role, model)?;
+            }
+        }
         let tx = self.db.connection_mut().transaction()?;
         tx.execute("DELETE FROM default_models", [])?;
         for (role, model) in MODEL_ROLES.iter().zip(values) {
@@ -180,13 +185,10 @@ impl Service {
         checks(self.db.connection(), self.project_id)
     }
     pub fn save_defaults(&mut self, expected: &Defaults, values: &Defaults) -> Result<()> {
-        for model in values.iter().flatten() {
-            require(
-                !model.provider.trim().is_empty()
-                    && !model.model.trim().is_empty()
-                    && model.effort.as_ref().is_none_or(|s| !s.trim().is_empty()),
-                "Provider and model are required together; effort may be blank",
-            )?;
+        for (role, model) in MODEL_ROLES.iter().zip(values) {
+            if let Some(model) = model {
+                self.validate_model(role, model)?;
+            }
         }
         let tx = self
             .db

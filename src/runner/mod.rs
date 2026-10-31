@@ -93,7 +93,8 @@ impl Context<'_> {
 }
 /// Every role names a supported provider whose CLI is installed.
 /// Everything a task's definition needs before a supervisor can run it.
-fn preflight(definition: &crate::application::Definition) -> Result<()> {
+fn preflight(service: &Service, definition: &crate::application::Definition) -> Result<()> {
+    service.validate_definition_models(definition)?;
     for (index, (role, model)) in crate::application::ROLES
         .iter()
         .zip(&definition.models)
@@ -105,12 +106,8 @@ fn preflight(definition: &crate::application::Definition) -> Result<()> {
                 provider::SUPPORTED
             ))
         })?;
-        require(
-            !definition.reuses_execution_model(index),
-            &format!(
-                "Configure a stronger {role} model distinct from the implementation model; changing effort alone is insufficient"
-            ),
-        )?;
+        service.validate_judge_model(definition, index)?;
+        model.validate_for_role(role)?;
         Provider::of(model)?.executable()?;
     }
     sandbox::available()
@@ -294,7 +291,7 @@ fn run_inner(
             task.definition().definition.kind == crate::application::Kind::Ai,
             "Current task requires human acknowledgment",
         )?;
-        preflight(&task.definition().definition)?;
+        preflight(service, &task.execution_revision().definition)?;
         let base = workspace.head()?;
         require(
             workspace.clean()?
@@ -841,7 +838,8 @@ fn ai_turn(
         token: run.token.clone(),
     });
     let mut stream = provider::Stream::new(provider);
-    if let Some(outcome) = provider_turn(service, run, &step, ctx, &invocation, &mut stream)? {
+    if let Some(outcome) = provider_turn(service, run, &step, ctx, &invocation, &mut stream, role)?
+    {
         return Ok(outcome);
     }
     let mut assessment = match agent::assessment(&stream, run.definition.criteria.len()) {
@@ -929,18 +927,34 @@ fn provider_turn(
     ctx: &mut Context<'_>,
     spec: &Invocation,
     stream: &mut provider::Stream,
+    role: &str,
 ) -> Result<Option<Outcome>> {
     let timeout = run.definition.stage_timeout_ms;
     let outcome = match execute(service, run, step, ctx, spec, timeout, Some(&mut *stream))? {
         Finish::Exited(_) if stream.rate_limited => Outcome::RateLimit(stream.reset_at_ms),
-        Finish::Exited(0) => return Ok(None),
-        Finish::Exited(code) => Outcome::Failed(
-            "transport",
-            format!(
-                "{} exited {code}; see stored output",
-                stream.provider.label()
+        Finish::Exited(0) if stream.configuration_error.is_none() => return Ok(None),
+        Finish::Exited(code) => match &stream.configuration_error {
+            Some((setting, detail)) => Outcome::Failed(
+                "configuration",
+                format!(
+                    "{role} {setting} rejected by {} for {} (exit {code}): {detail}. Fix the {setting} setting before retrying",
+                    stream.provider.label(),
+                    crate::application::ROLES
+                        .iter()
+                        .position(|candidate| *candidate == role)
+                        .and_then(|index| run.definition.models[index].as_ref())
+                        .map(|model| format!("{}/{}", model.provider, model.model))
+                        .unwrap_or_else(|| "configured model".into()),
+                ),
             ),
-        ),
+            None => Outcome::Failed(
+                "transport",
+                format!(
+                    "{} exited {code}; see stored output",
+                    stream.provider.label()
+                ),
+            ),
+        },
         Finish::Stopped(outcome) => outcome,
     };
     if let Outcome::Failed(_, message) = &outcome {
@@ -1054,7 +1068,15 @@ fn judge_once(
         ctx.workspace.worker_lock.clone(),
     )?;
     let mut stream = provider::Stream::new(provider);
-    if let Some(outcome) = provider_turn(service, run, &step, ctx, &invocation, &mut stream)? {
+    if let Some(outcome) = provider_turn(
+        service,
+        run,
+        &step,
+        ctx,
+        &invocation,
+        &mut stream,
+        "remediation",
+    )? {
         return Ok(outcome);
     }
     if !stream.completed || stream.failed {
@@ -1141,6 +1163,7 @@ fn apply_judgment(
             title,
             goal,
             criteria,
+            models,
             reason,
         } => {
             let mut definition = run.definition.clone();
@@ -1153,6 +1176,8 @@ fn apply_judgment(
             definition.title = title;
             definition.goal = goal;
             definition.criteria = criteria;
+            remediation::apply_role_models(&mut definition, &models)?;
+            service.validate_judge_models(&definition)?;
             service.revise_as(target, &definition, ready, &judge, Some(&reason))?;
         }
         agent::Judgment::Insert { tasks, reason } => {
@@ -1298,6 +1323,11 @@ fn execute(
                         };
                         let text = decoder.feed(&bytes);
                         if !text.is_empty() {
+                            if source == "stderr"
+                                && let Some(stream) = stream.as_mut()
+                            {
+                                stream.note_error(&text);
+                            }
                             rows.push((source, text));
                         }
                     }
@@ -1318,6 +1348,11 @@ fn execute(
                 for (source, decoder) in [("stdout", &mut stdout), ("stderr", &mut stderr)] {
                     let text = decoder.finish();
                     if !text.is_empty() {
+                        if source == "stderr"
+                            && let Some(stream) = stream.as_mut()
+                        {
+                            stream.note_error(&text);
+                        }
                         service.output(run, source, &text)?;
                     }
                 }
@@ -1370,7 +1405,7 @@ pub fn background(
         "Configure an enabled check in Configuration > Checks (or CLI check-set)",
     )?;
     if let Some(task) = service.current_task()? {
-        preflight(&task.definition().definition)?;
+        preflight(service, &task.execution_revision().definition)?;
     }
     std::fs::create_dir_all(&paths.state)?;
     let log_path = paths

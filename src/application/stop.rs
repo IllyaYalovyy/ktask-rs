@@ -47,6 +47,12 @@ pub fn unresolvable(task: &Task) -> Option<Stop> {
                 .to_owned(),
             "Read the findings, then d Remediate, c Models for a stronger model, or z Resolve",
         )
+    } else if attempt.failure_category.as_deref() == Some("configuration") {
+        (
+            "The provider rejected a role's model or effort setting; automatic retry is stopped."
+                .to_owned(),
+            "c Models: correct the named role and setting, then t Retry",
+        )
     } else if outcome.starts_with("Automatic recovery exhausted") {
         (
             "The failure judge replanned ten times without a passing attempt.".to_owned(),

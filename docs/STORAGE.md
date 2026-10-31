@@ -41,6 +41,25 @@ write the supervisor's state root, and the endpoint accepts no other mutation.
 
 ## Waiting and limits
 
+Model saves and execution preflight validate exact provider model IDs. Codex reads
+`$CODEX_HOME/models_cache.json` (default `$HOME/.codex/models_cache.json`), including
+`models[].slug` and `supported_reasoning_levels[].effort`. Claude's standard `sonnet`,
+`opus`, and `haiku` aliases are accepted. Other IDs and custom deployments require an
+explicit entry in `model-catalog.json` beside the instance's `ktask.sqlite3`:
+
+```json
+[{"provider":"codex","model":"custom-deployment","aliases":["custom-alias"],"efforts":["low","high"]}]
+```
+
+Providers remain `codex`, `claude`, or `opencode`; OpenCode model IDs retain the
+vendor prefix. Optional `aliases` name the same model, and optional `efforts` specify
+its exact supported values (an empty list allows no effort). Omit `efforts` to use
+the provider's standard values. Catalog metadata takes precedence over native
+metadata. Missing or malformed metadata blocks the save/start with the role, model,
+and source/action; names never imply supported models or capabilities. Resume checks
+the attempt's pinned revision even if newer settings exist. Read-only inspection
+and export remain available when provider metadata disappears.
+
 Project delivery lives in `project_delivery` with a guarded row version, mode (`local`,
 `direct`, or `pr`), remote, base branch, owned PR branch and last published tip. The default
 when no row exists is Local via `origin/main`. `attempt_delivery` pins the mode, destination
@@ -72,7 +91,7 @@ switched on they are 6 hours and 30 minutes. New, imported and planned tasks def
 limits; inserted repairs inherit the failed task's limits.
 attempt_limit applies across ALL revisions of the task; escalation does not reset usage.
 attempts_used counts succeeded attempts and failures in check/review/validation/agent/unknown.
-Rate-limit, transport, environment, protocol, timeout, interruption, and cancellation do not
+Rate-limit, transport, configuration, environment, protocol, timeout, interruption, and cancellation do not
 consume the coding-attempt budget. Number is an audit sequence, not budget usage.
 Here timeout means an infrastructure/request timeout. Exhausting the active execution limit
 is an agent failure and consumes budget; it must not be mislabeled as infrastructure.
@@ -366,7 +385,7 @@ One execution against an exact revision; retry creates another row. This is the 
 | `waiting_since_ms` | INTEGER | yes | Start of the current wait; required only while waiting. |
 | `resume_at_ms` | INTEGER | yes | Earliest resume time for a timed wait; NULL means no scheduled time. |
 | `outcome` | TEXT | yes | Nonblank terminal attempt outcome. |
-| `failure_category` | TEXT | yes | rate_limit, timeout, transport, environment, protocol, check, review, validation, agent, interrupted, unknown. |
+| `failure_category` | TEXT | yes | rate_limit, timeout, transport, configuration, environment, protocol, check, review, validation, agent, interrupted, unknown. |
 | `base_commit` | TEXT | yes | Checkout commit before this attempt, if available. |
 | `head_commit` | TEXT | yes | Resulting commit, if available. |
 | `report` | TEXT | yes | Human-readable summary/evidence; not a serialized entity. |

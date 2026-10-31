@@ -7,6 +7,29 @@ use crate::{
     storage::{Error, Result},
 };
 
+pub fn apply_role_models(
+    definition: &mut Definition,
+    changes: &std::collections::BTreeMap<String, ModelConfig>,
+) -> Result<()> {
+    for (role, model) in changes {
+        let index = crate::application::ROLES
+            .iter()
+            .position(|candidate| candidate == role)
+            .ok_or_else(|| Error::Conflict(format!("Unknown revised model role {role}")))?;
+        model.validate_for_role(role)?;
+        definition.models[index] = Some(model.clone());
+    }
+    for (index, role) in crate::application::ROLES.iter().enumerate().skip(1) {
+        require(
+            !definition.reuses_execution_model(index),
+            &format!(
+                "{role} must use a model distinct from execution; changing effort alone is insufficient"
+            ),
+        )?;
+    }
+    Ok(())
+}
+
 /// Apply a reviewed failure judgment through versioned application commands.
 pub fn apply_judgment(
     service: &mut Service,
@@ -38,12 +61,15 @@ pub fn apply_judgment(
             title,
             goal,
             criteria,
+            models,
             reason,
         } => {
             let mut definition = current.definition().definition.clone();
             definition.title = title.clone();
             definition.goal = goal.clone();
             definition.criteria = criteria.clone();
+            apply_role_models(&mut definition, models)?;
+            service.validate_judge_models(&definition)?;
             service.revise_as(
                 target,
                 &definition,
@@ -132,4 +158,48 @@ pub(super) fn preserve(
         .ok_or_else(|| Error::Conflict("No attempt owns the unfinished work".into()))?;
     workspace.preserve(task.id, attempt.id, &base)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn revised_models_reject_invalid_effort_and_judge_reuse() {
+        let model = |name: &str, effort: &str| ModelConfig {
+            provider: "codex".into(),
+            model: name.into(),
+            effort: Some(effort.into()),
+        };
+        let mut definition = Definition {
+            title: "Task".into(),
+            goal: "Goal".into(),
+            kind: Kind::Ai,
+            criteria: vec!["Check".into()],
+            models: [
+                Some(model("execution", "high")),
+                Some(model("review", "high")),
+                Some(model("validation", "high")),
+                Some(model("remediation", "high")),
+            ],
+            attempt_limit: Some(3),
+            timeout_ms: None,
+            stage_timeout_ms: None,
+        };
+        let mut changes = std::collections::BTreeMap::new();
+        changes.insert("review".into(), model("review", ""));
+        assert!(
+            apply_role_models(&mut definition, &changes)
+                .unwrap_err()
+                .to_string()
+                .contains("review effort must be nonempty")
+        );
+        changes.insert("review".into(), model("execution", "low"));
+        assert!(
+            apply_role_models(&mut definition, &changes)
+                .unwrap_err()
+                .to_string()
+                .contains("distinct from execution")
+        );
+    }
 }

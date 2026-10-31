@@ -70,16 +70,22 @@ pub fn problems(service: &Service) -> Result<Vec<Problem>> {
                 "No default for new tasks".into(),
                 MODEL_FIX,
             ),
-            Some(judge)
-                if role != "execution" && execution.is_some_and(|e| e.same_model(judge)) =>
-            {
-                problem(
-                    format!("{role} model"),
-                    "Same as the execution model; it needs a stronger one".into(),
-                    MODEL_FIX,
-                )
+            Some(model) => {
+                let valid = service.validate_model(role, model).and_then(|()| {
+                    if role != "execution"
+                        && let Some(execution) = execution
+                    {
+                        crate::application::require(
+                            !service.same_model(role, execution, model)?,
+                            "Same as the execution model; it needs a stronger one",
+                        )?;
+                    }
+                    Ok(())
+                });
+                if let Err(error) = valid {
+                    problem(format!("{role} model"), error.to_string(), MODEL_FIX);
+                }
             }
-            Some(_) => {}
         }
     }
     let mut providers: Vec<_> = ROLES

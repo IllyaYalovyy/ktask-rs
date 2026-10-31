@@ -166,7 +166,7 @@ CREATE TABLE attempts (
     waiting_since_ms INTEGER CHECK (waiting_since_ms >= started_at_ms),
     resume_at_ms INTEGER CHECK (resume_at_ms >= waiting_since_ms),
     outcome TEXT,
-    failure_category TEXT CHECK (failure_category IN ('rate_limit', 'timeout', 'transport', 'environment', 'protocol', 'check', 'review', 'validation', 'agent', 'interrupted', 'unknown')),
+    failure_category TEXT CHECK (failure_category IN ('rate_limit', 'timeout', 'transport', 'configuration', 'environment', 'protocol', 'check', 'review', 'validation', 'agent', 'interrupted', 'unknown')),
     base_commit TEXT,
     head_commit TEXT,
     report TEXT,

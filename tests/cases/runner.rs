@@ -12,6 +12,468 @@ use std::{
 const BIN: &str = env!("CARGO_BIN_EXE_ktask-dev");
 
 #[test]
+fn native_model_metadata_is_exact_and_missing_metadata_is_actionable() -> Result {
+    let f = Fixture::new()?;
+    let catalog = f.scratch.path().join("state/ktask-dev/model-catalog.json");
+    fs::write(&catalog, "[]")?;
+    let native = f.scratch.path().join("custom-codex-home");
+    fs::create_dir(&native)?;
+    fs::write(
+        native.join("models_cache.json"),
+        r#"{"models":[{"slug":"native-custom-model","supported_reasoning_levels":[{"effort":"low"}]}]}"#,
+    )?;
+    let set = |model: &str, effort: &str| -> Result<std::process::Output> {
+        Ok(f.process()
+            .env("CODEX_HOME", &native)
+            .args([
+                "--json",
+                "model-default",
+                "planning",
+                "--provider",
+                "codex",
+                "--model",
+                model,
+                "--effort",
+                effort,
+            ])
+            .output()?)
+    };
+    let accepted = set("native-custom-model", "low")?;
+    assert!(
+        accepted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+    for (model, effort, needle) in [
+        ("native-custom-model", "high", "accepted values"),
+        ("native-custom-model-typo", "low", "not listed"),
+    ] {
+        let rejected = set(model, effort)?;
+        assert_eq!(rejected.status.code(), Some(4));
+        let message = String::from_utf8_lossy(&rejected.stderr);
+        assert!(
+            message.contains("planning")
+                && message.contains(model)
+                && message.contains(needle)
+                && message.contains("models_cache.json"),
+            "{message}"
+        );
+    }
+    fs::remove_file(native.join("models_cache.json"))?;
+    let rejected = set("native-custom-model", "low")?;
+    let message = String::from_utf8_lossy(&rejected.stderr);
+    assert_eq!(rejected.status.code(), Some(4));
+    assert!(
+        message.contains("planning")
+            && message.contains("codex/native-custom-model")
+            && message.contains("no supported metadata entry")
+            && message.contains("model-catalog.json"),
+        "{message}"
+    );
+    fs::write(
+        native.join("models_cache.json"),
+        "invalid provider metadata",
+    )?;
+    let rejected = set("native-custom-model", "low")?;
+    let message = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        message.contains("planning")
+            && message.contains("codex/native-custom-model")
+            && message.contains("invalid metadata"),
+        "{message}"
+    );
+    Ok(())
+}
+
+#[test]
+fn model_aliases_cannot_bypass_judge_separation_at_start_or_judge_revision() -> Result {
+    use ktask_rs_mk3::application::{Service, VersionedTask};
+    let f = Fixture::new()?;
+    let path = f.scratch.path().join("state/ktask-dev/model-catalog.json");
+    let mut catalog: Value = serde_json::from_slice(&fs::read(&path)?)?;
+    let entry = catalog
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| entry["provider"] == "codex" && entry["model"] == "execution")
+        .unwrap();
+    entry["aliases"] = serde_json::json!(["execution-alias"]);
+    fs::write(&path, serde_json::to_vec(&catalog)?)?;
+    f.add("Aliases preserve model identity")?;
+    f.ok(&["edit", "1", "--model", "review=codex/execution-alias"])?;
+    let rejected = f.process().args(["--json", "run", "--one"]).output()?;
+    assert_eq!(rejected.status.code(), Some(4));
+    let message = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        message.contains("review") && message.contains("distinct") && message.contains("alias"),
+        "{message}"
+    );
+    assert!(!f.scratch.path().join("provider-invocations").exists());
+    f.ok(&["edit", "1", "--model", "review=codex/review"])?;
+    let mut service = Service::open(f.db()?, &f.root, None)?;
+    let current = service.task(1)?.unwrap();
+    let run = service.begin_run(
+        VersionedTask {
+            id: 1,
+            version: current.version,
+        },
+        "alias-test",
+        "base",
+    )?;
+    service.finish_run(&run, "failed", Some("check"), "Fixture failure", None)?;
+    let current = service.task(1)?.unwrap();
+    let before = current.revisions.len();
+    let judgment = serde_json::from_value(
+        serde_json::json!({"action":"revise","title":"Alias revision","goal":"Keep judge independent","criteria":["Distinct models"],"models":{"review":{"provider":"codex","model":"execution-alias","effort":null}},"reason":"Test exact alias identity"}),
+    )?;
+    let error = ktask_rs_mk3::runner::remediation::apply_judgment(
+        &mut service,
+        VersionedTask {
+            id: 1,
+            version: current.version,
+        },
+        &judgment,
+        true,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("review") && error.contains("distinct") && error.contains("alias"),
+        "{error}"
+    );
+    assert_eq!(service.task(1)?.unwrap().revisions.len(), before);
+    assert_eq!(service.task(1)?.unwrap().version, current.version);
+    Ok(())
+}
+
+#[test]
+fn invalid_models_preflight_every_pinned_role_before_start_or_resume() -> Result {
+    use ktask_rs_mk3::storage::execution::StartAttempt;
+    for resume in [false, true] {
+        for role in ["execution", "review", "validation", "remediation"] {
+            for mouse in [false, true] {
+                let f = Fixture::new()?;
+                f.add("Invalid stored model")?;
+                let mut db = f.db()?;
+                if resume {
+                    let attempt = db.start_attempt(StartAttempt {
+                        task_id: 1,
+                        expected_version: 1,
+                        execution_token: "pinned-model",
+                        now_ms: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)?
+                            .as_millis() as i64,
+                    })?;
+                    db.connection()
+                        .execute("UPDATE attempts SET state='paused' WHERE id=?1", [attempt])?;
+                    db.connection().execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) SELECT project_id,task_id,id,started_at_ms,'supervisor.released','info','Fixture handoff' FROM attempts WHERE id=?1", [attempt])?;
+                    db.connection().execute("INSERT INTO task_revisions SELECT task_id,2,lifecycle,kind,title,goal,change_reason,created_by_kind,created_by,attempt_limit,attempt_timeout_ms,stage_timeout_ms,created_at_ms,decided_at_ms,decided_by_kind,decided_by FROM task_revisions WHERE task_id=1 AND revision=1", [])?;
+                    db.connection().execute("INSERT INTO revision_models SELECT task_id,2,role,provider,model,effort FROM revision_models WHERE task_id=1 AND revision=1", [])?;
+                    db.connection().execute("INSERT INTO acceptance_criteria SELECT task_id,2,ordinal,description FROM acceptance_criteria WHERE task_id=1 AND revision=1", [])?;
+                }
+                db.connection().execute("UPDATE revision_models SET model='typo-model' WHERE task_id=1 AND revision=1 AND role=?1", [role])?;
+                drop(db);
+                let rejected = f.process().args(["--json", "run", "--one"]).output()?;
+                assert_eq!(rejected.status.code(), Some(4));
+                let message = String::from_utf8_lossy(&rejected.stderr);
+                assert!(
+                    message.contains(role)
+                        && message.contains("codex/typo-model")
+                        && message.contains("model-catalog.json"),
+                    "{message}"
+                );
+                let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
+                terminal.screen("invalid model current", |s| {
+                    s.contains("Invalid stored model")
+                })?;
+                if mouse {
+                    terminal.click("u Readiness")?;
+                } else {
+                    terminal.send("u")?;
+                }
+                terminal.screen("invalid model readiness", |s| {
+                    s.contains("Execution readiness")
+                        && s.contains(role)
+                        && s.contains("typo-model")
+                })?;
+                if mouse {
+                    terminal.click("r Run")?;
+                } else {
+                    terminal.send("r")?;
+                }
+                let screen = terminal.screen("invalid model run blocked", |s| {
+                    !s.contains("Execution readiness")
+                        && s.contains("Run blocked")
+                        && s.contains(role)
+                        && s.contains("typo-model")
+                })?;
+                println!(
+                    "INVALID MODEL CURRENT role={role} resume={resume} mouse={mouse}\n{screen}"
+                );
+                terminal.send("q")?;
+                terminal.finish()?;
+                let task = f.ok(&["show", "1"])?;
+                assert_eq!(
+                    task["attempts"].as_array().unwrap().len(),
+                    usize::from(resume)
+                );
+                if resume {
+                    assert_eq!(task["attempts"][0]["state"], "paused");
+                    assert_eq!(task["attempts"][0]["revision"], 1);
+                }
+                assert!(!f.scratch.path().join("provider-invocations").exists());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn structured_model_rejection_runs_once_and_is_visible_on_current() -> Result {
+    request_rejection_is_stopped(
+        r#"{"type":"turn.failed","error":{"status":404,"code":"model_not_found","param":"model","message":"The model `execution` does not exist or you do not have access to it"}}"#,
+        "model",
+        "model_not_found",
+    )
+}
+
+#[test]
+fn structured_request_rejection_without_parameter_runs_once_without_budget() -> Result {
+    request_rejection_is_stopped(
+        r#"{"type":"turn.failed","error":{"type":"invalid_request_error","status":400,"message":"max_tokens must be a positive integer"}}"#,
+        "request settings",
+        "max_tokens must be a positive integer",
+    )
+}
+
+fn request_rejection_is_stopped(event: &str, setting: &str, detail: &str) -> Result {
+    let f = Fixture::new()?;
+    f.add("Rejected provider model")?;
+    fs::write(
+        f.scratch.path().join("rejected-settings.json"),
+        format!("{event}\n"),
+    )?;
+    support::write_executable(
+        &f.scratch.path().join("bin/codex"),
+        r#"#!/bin/sh
+cat >/dev/null
+printf '%s\n' called >> "$HOME/provider-invocations"
+cat "$HOME/rejected-settings.json"
+exit 1
+"#,
+    )?;
+    let rejected = f.process().args(["--json", "run", "--one"]).output()?;
+    assert_eq!(rejected.status.code(), Some(4));
+    let message = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        message.contains("configuration")
+            && message.contains(&format!("execution {setting}"))
+            && message.contains("codex/execution")
+            && message.contains(detail),
+        "{message}"
+    );
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["attempts_used"], 0);
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(task["attempts"][0]["failure_category"], "configuration");
+    assert_eq!(
+        fs::read_to_string(f.scratch.path().join("provider-invocations"))?
+            .lines()
+            .count(),
+        1
+    );
+    let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
+    let screen = terminal.screen("provider model failure on Current", |s| {
+        s.contains("Rejected provider model")
+            && s.contains("configuration")
+            && s.contains(&format!("execution {setting}"))
+            && s.contains("codex/execution")
+    })?;
+    println!("PROVIDER REJECTION CURRENT setting={setting}\n{screen}");
+    terminal.send("q")?;
+    terminal.finish()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn invalid_effort_is_rejected_at_save_preflight_and_provider_failure_on_current() -> Result {
+    let f = Fixture::new()?;
+    let invalid = f
+        .process()
+        .args([
+            "--json",
+            "model-default",
+            "execution",
+            "--provider",
+            "codex",
+            "--model",
+            "execution",
+            "--effort",
+            "hight",
+        ])
+        .output()?;
+    assert!(!invalid.status.success());
+    let error = String::from_utf8_lossy(&invalid.stderr);
+    assert!(
+        error.contains("execution") && error.contains("hight") && error.contains("accepted values"),
+        "{error}"
+    );
+    let saved: Option<String> = f.db()?.connection().query_row(
+        "SELECT effort FROM project_models WHERE role='execution'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_ne!(saved.as_deref(), Some("hight"));
+
+    f.add("Reject bad settings")?;
+    f.db()?.connection().execute(
+        "UPDATE revision_models SET effort='hight' WHERE task_id=1 AND role='execution'",
+        [],
+    )?;
+    let rejected = f.process().args(["--json", "run", "--one"]).output()?;
+    assert!(!rejected.status.success());
+    let error = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        error.contains("execution") && error.contains("hight") && error.contains("accepted values"),
+        "{error}"
+    );
+    let db = f.db()?;
+    let count: i64 =
+        db.connection()
+            .query_row("SELECT count(*) FROM attempts WHERE task_id=1", [], |r| {
+                r.get(0)
+            })?;
+    assert_eq!(count, 0);
+    assert!(!f.scratch.path().join("provider-invocations").exists());
+
+    db.connection().execute(
+        "UPDATE revision_models SET effort='high' WHERE task_id=1 AND role='execution'",
+        [],
+    )?;
+    support::write_executable(
+        &f.scratch.path().join("bin/codex"),
+        r#"#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"type":"turn.failed","error":{"message":"HTTP 400 invalid parameter: effort hight"}}'
+printf '%s\n' called >> "$HOME/provider-invocations"
+exit 2
+"#,
+    )?;
+    let failed = f.process().args(["--json", "run", "--one"]).output()?;
+    assert!(
+        !failed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&failed.stdout)
+    );
+    let cli_error = String::from_utf8_lossy(&failed.stderr);
+    assert!(
+        cli_error.contains("configuration")
+            && cli_error.contains("execution effort")
+            && cli_error.contains("hight"),
+        "{cli_error}"
+    );
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "failed");
+    assert_eq!(task["attempts_used"], 0);
+    let attempt = &task["attempts"][0];
+    assert_eq!(attempt["failure_category"], "configuration");
+    let outcome = attempt["outcome"].as_str().unwrap_or("");
+    assert!(
+        outcome.contains("execution") && outcome.contains("effort") && outcome.contains("hight"),
+        "{outcome}"
+    );
+    assert_eq!(
+        fs::read_to_string(f.scratch.path().join("provider-invocations"))?
+            .lines()
+            .count(),
+        1
+    );
+
+    let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 90, 28)?;
+    let screen = terminal.screen("configuration failure on Current", |s| {
+        s.contains("Reject bad settings")
+            && s.contains("configuration")
+            && s.contains("execution")
+            && s.contains("effort")
+    })?;
+    println!("CURRENT CONFIGURATION FAILURE\n{screen}");
+    terminal.send("q")?;
+    terminal.finish()?;
+    Ok(())
+}
+
+#[test]
+fn resume_preflights_pinned_revision_even_with_newer_ready_settings() -> Result {
+    use ktask_rs_mk3::storage::execution::StartAttempt;
+    let f = Fixture::new()?;
+    f.add("Pinned settings")?;
+    let mut db = f.db()?;
+    let attempt = db.start_attempt(StartAttempt {
+        task_id: 1,
+        expected_version: 1,
+        execution_token: "paused-fixture",
+        now_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis() as i64,
+    })?;
+    db.connection()
+        .execute("UPDATE attempts SET state='paused' WHERE id=?1", [attempt])?;
+    // Simulate a definition written by an older binary, then a later ready revision.
+    db.connection().execute("UPDATE revision_models SET effort='hight' WHERE task_id=1 AND revision=1 AND role='review'", [])?;
+    db.connection().execute("INSERT INTO task_revisions SELECT task_id,2,lifecycle,kind,title,goal,change_reason,created_by_kind,created_by,attempt_limit,attempt_timeout_ms,stage_timeout_ms,created_at_ms,decided_at_ms,decided_by_kind,decided_by FROM task_revisions WHERE task_id=1 AND revision=1", [])?;
+    db.connection().execute("INSERT INTO revision_models SELECT task_id,2,role,provider,model,effort FROM revision_models WHERE task_id=1 AND revision=1", [])?;
+    db.connection().execute(
+        "UPDATE revision_models SET effort='high' WHERE task_id=1 AND revision=2 AND role='review'",
+        [],
+    )?;
+    db.connection().execute("INSERT INTO acceptance_criteria SELECT task_id,2,ordinal,description FROM acceptance_criteria WHERE task_id=1 AND revision=1", [])?;
+    drop(db);
+    let rejected = f.process().args(["--json", "run", "--one"]).output()?;
+    assert!(!rejected.status.success());
+    let error = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        error.contains("review") && error.contains("hight") && error.contains("accepted values"),
+        "{error}"
+    );
+    let db = f.db()?;
+    let (count, state, revision): (i64, String, i64) = db.connection().query_row(
+        "SELECT (SELECT count(*) FROM attempts WHERE task_id=1),state,revision FROM attempts WHERE id=?1",
+        [attempt], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+    assert_eq!((count, state.as_str(), revision), (1, "paused", 1));
+    assert!(!f.scratch.path().join("provider-invocations").exists());
+    drop(db);
+    for mouse in [false, true] {
+        let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 40)?;
+        terminal.screen("pinned effort current", |s| s.contains("Pinned settings"))?;
+        if mouse {
+            terminal.click("u Readiness")?;
+        } else {
+            terminal.send("u")?;
+        }
+        let screen = terminal.screen("pinned effort readiness", |s| {
+            s.contains("Execution readiness")
+                && s.contains("review")
+                && s.contains("hight")
+                && s.contains("accepted values")
+        })?;
+        println!("PINNED EFFORT READINESS mouse={mouse}\n{screen}");
+        terminal.send("\x1b")?;
+        terminal.screen("pinned readiness closed", |s| {
+            !s.contains("Execution readiness")
+        })?;
+        terminal.send("q")?;
+        terminal.finish()?;
+    }
+    let db = f.db()?;
+    let (count, state, revision): (i64, String, i64) = db.connection().query_row(
+        "SELECT (SELECT count(*) FROM attempts WHERE task_id=1),state,revision FROM attempts WHERE id=?1", [attempt], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+    assert_eq!((count, state.as_str(), revision), (1, "paused", 1));
+    assert!(!f.scratch.path().join("provider-invocations").exists());
+    Ok(())
+}
+
+#[test]
 fn direct_delivery_pushes_only_verified_checkpoint_to_bare_remote() -> Result {
     let f = Fixture::new()?;
     f.git(&["branch", "-M", "main"])?;
@@ -332,6 +794,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> Result<Self> {
         let scratch = support::sandbox()?;
+        support::model_catalog(scratch.path())?;
         let root = scratch.path().join("project");
         fs::create_dir(&root)?;
         fs::create_dir(scratch.path().join("bin"))?;
@@ -1112,7 +1575,9 @@ fn implementation_model_cannot_review_repair_or_validate_itself() -> Result {
             println!(
                 "MODEL SEPARATION READINESS {role} mouse={mouse}\n{}",
                 t.screen("readiness names the rule", |s| s
-                    .contains("Must be stronger than the execution model"))?
+                    .contains("Must be stronger")
+                    && s.contains("execution")
+                    && s.contains("m Models"))?
             );
             t.send("\x1b")?;
             t.screen("ready again", |s| {

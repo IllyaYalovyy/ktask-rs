@@ -158,6 +158,7 @@ fn result(stream: &mut Stream, value: &Value) -> Result<Vec<Event>> {
             ));
         }
         stream.fail(&format!("{} {reply}", text(&value["subtype"])));
+        stream.note_error(&value.to_string());
         events.push(Event::Text(value.to_string()));
     } else {
         stream.completed = true;

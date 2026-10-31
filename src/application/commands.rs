@@ -52,6 +52,7 @@ impl Service {
     ) -> Result<i64> {
         require(!token.trim().is_empty(), "Worker token is required")?;
         definition.validate()?;
+        self.validate_definition_models(definition)?;
         let tx = self
             .db
             .connection_mut()
@@ -215,6 +216,7 @@ impl Service {
         require(!reason.trim().is_empty(), "Breakdown needs a reason")?;
         for definition in subtasks {
             definition.validate()?;
+            self.validate_definition_models(definition)?;
         }
         let tx = self
             .db
@@ -288,6 +290,16 @@ impl Service {
             .definition()
             .definition
             .clone();
+        if let Some(model) = &model {
+            let mut revised = existing.clone();
+            revised.models[0] = Some(model.clone());
+            self.validate_definition_models(&revised)?;
+        } else {
+            self.validate_definition_models(&existing)?;
+        }
+        for definition in repairs {
+            self.validate_definition_models(definition)?;
+        }
         let tx = self
             .db
             .connection_mut()
@@ -440,6 +452,9 @@ impl Service {
         origin: &str,
     ) -> Result<Vec<i64>> {
         require(!definitions.is_empty(), "No tasks to create")?;
+        for definition in definitions {
+            self.validate_definition_models(definition)?;
+        }
         let tx = self
             .db
             .connection_mut()
@@ -483,6 +498,7 @@ impl Service {
         actor: &Actor,
         reason: Option<&str>,
     ) -> Result<()> {
+        self.validate_definition_models(definition)?;
         let tx = self
             .db
             .connection_mut()

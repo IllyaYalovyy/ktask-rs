@@ -258,12 +258,7 @@ impl Service {
             ROLES.contains(&role) || role == "planning",
             "Unknown model role",
         )?;
-        require(
-            !model.provider.trim().is_empty()
-                && !model.model.trim().is_empty()
-                && model.effort.as_ref().is_none_or(|s| !s.trim().is_empty()),
-            "Invalid model configuration",
-        )?;
+        self.validate_model(role, model)?;
         let tx = self.db.connection_mut().transaction()?;
         tx.execute("INSERT INTO project_models(project_id,role,provider,model,effort) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(project_id,role) DO UPDATE SET provider=excluded.provider, model=excluded.model, effort=excluded.effort", params![self.project_id,role,model.provider,model.model,model.effort])?;
         if new_projects {
@@ -286,6 +281,26 @@ impl Service {
             "Answer the owner question before retrying",
         )?;
         let resume = matches!(task.status.as_str(), "paused" | "waiting");
+        let effective =
+            if resume {
+                let revision: i64 = self.db.connection().query_row(
+                "SELECT revision FROM attempts WHERE task_id=?1 AND state IN ('paused','waiting')",
+                [task.id], |row| row.get(0))?;
+                &task
+                    .revisions
+                    .iter()
+                    .find(|r| r.number == revision)
+                    .expect("attempt FK")
+                    .definition
+            } else {
+                &task.definition().definition
+            };
+        for (role, model) in ROLES.iter().zip(&effective.models) {
+            let model = model.as_ref().ok_or_else(|| {
+                Error::Conflict(format!("Configure {role} provider/model before running"))
+            })?;
+            self.validate_model(role, model)?;
+        }
         let (attempt, revision, token, active_ms) = if resume {
             let (id, rev, saved, active) = self.db.connection().query_row("SELECT id,revision,execution_token,active_ms FROM attempts WHERE task_id=?1 AND state IN ('paused','waiting')", [task.id], |r| Ok((r.get(0)?,r.get(1)?,r.get::<_,String>(2)?,r.get(3)?)))?;
             self.db.resume_attempt(StartAttempt {

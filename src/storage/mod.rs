@@ -73,6 +73,16 @@ pub struct Database {
 }
 
 impl Database {
+    /// Resolve files belonging to this opened instance, independent of the process environment.
+    pub(crate) fn state_file(&self, name: &str) -> Result<std::path::PathBuf> {
+        Ok(fs::read_link(format!(
+            "/proc/{}/fd/{}",
+            std::process::id(),
+            self.state_dir.as_raw_fd()
+        ))?
+        .join(name))
+    }
+
     /// CLI inspection must not create an empty application database or state directory.
     pub fn open_existing(paths: &Paths) -> Result<Option<Self>> {
         let state_dir = match Self::open_directory(&paths.state) {

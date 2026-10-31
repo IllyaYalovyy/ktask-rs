@@ -2,6 +2,7 @@
 mod commands;
 mod evidence;
 pub mod evidence_pin;
+mod model_catalog;
 mod output_text;
 pub use evidence::{EvidenceCursor, EvidenceMatch, EvidenceSearch};
 pub mod configuration;
@@ -51,6 +52,38 @@ pub struct ModelConfig {
 }
 
 impl ModelConfig {
+    /// Fallback effort spellings when exact model metadata does not declare them.
+    /// Authoritative model metadata may define additional provider variants.
+    pub fn accepted_efforts(provider: &str) -> Option<&'static [&'static str]> {
+        match provider {
+            "codex" => Some(&["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]),
+            "claude" => Some(&["low", "medium", "high", "max"]),
+            "opencode" => Some(&["low", "medium", "high", "max"]),
+            _ => None,
+        }
+    }
+
+    /// Context-free shape validation; Service resolves model identity and efforts.
+    pub fn validate_for_role(&self, role: &str) -> Result<()> {
+        require(
+            !self.provider.trim().is_empty() && !self.model.trim().is_empty(),
+            &format!("{role} provider and model are required together"),
+        )?;
+        require(
+            Self::accepted_efforts(&self.provider).is_some(),
+            &format!(
+                "{role} model {}/{}: unsupported provider; use codex, claude or opencode",
+                self.provider, self.model
+            ),
+        )?;
+        if let Some(effort) = &self.effort {
+            require(
+                !effort.trim().is_empty(),
+                &format!("{role} effort must be nonempty or none"),
+            )?;
+        }
+        Ok(())
+    }
     /// Same provider and model, whatever the effort: a different effort is not a stronger model.
     pub fn same_model(&self, other: &Self) -> bool {
         (&self.provider, &self.model) == (&other.provider, &other.model)
@@ -136,15 +169,10 @@ impl Definition {
                 && self.stage_timeout_ms.is_none_or(|n| n > 0),
             "Limits must be positive or unlimited",
         )?;
-        for model in self.models.iter().flatten() {
-            require(
-                !model.provider.trim().is_empty() && !model.model.trim().is_empty(),
-                "Provider and model are required together",
-            )?;
-            require(
-                model.effort.as_ref().is_none_or(|s| !s.trim().is_empty()),
-                "Effort must be nonempty or none",
-            )?;
+        for (role, model) in ROLES.iter().zip(&self.models) {
+            if let Some(model) = model {
+                model.validate_for_role(role)?;
+            }
         }
         Ok(())
     }
@@ -214,6 +242,20 @@ pub struct Task {
     pub attempts_used: i64,
 }
 impl Task {
+    /// Resume uses the attempt's pinned revision even when a newer revision is ready.
+    pub fn execution_revision(&self) -> &Revision {
+        if matches!(self.status.as_str(), "paused" | "waiting")
+            && let Some(attempt) = self.attempts.last()
+        {
+            return self
+                .revisions
+                .iter()
+                .find(|revision| revision.number == attempt.revision)
+                .expect("attempt FK");
+        }
+        self.definition()
+    }
+
     pub fn definition(&self) -> &Revision {
         self.revisions
             .iter()

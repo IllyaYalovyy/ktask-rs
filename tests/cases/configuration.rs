@@ -11,6 +11,172 @@ use std::path::Path;
 const BIN: &str = env!("CARGO_BIN_EXE_ktask-dev");
 
 #[test]
+fn model_metadata_rejects_each_save_atomically_and_accepts_explicit_aliases() -> Result {
+    use ktask_rs_mk3::application::{Definition, Kind, ROLES, VersionedTask};
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let mut service = service(root)?;
+    let defaults = service.project_defaults()?;
+    for (index, role) in MODEL_ROLES.iter().enumerate() {
+        let invalid = ModelConfig {
+            provider: "codex".into(),
+            model: "typo-model".into(),
+            effort: Some("high".into()),
+        };
+        let mut values = defaults.clone();
+        values[index] = Some(invalid.clone());
+        for error in [
+            service.save_defaults(&defaults, &values).unwrap_err(),
+            service.save_new_project_defaults(&values).unwrap_err(),
+            service.set_default(role, &invalid, true).unwrap_err(),
+        ] {
+            let message = error.to_string();
+            assert!(
+                message.contains(role)
+                    && message.contains("codex/typo-model")
+                    && message.contains("model-catalog.json"),
+                "{message}"
+            );
+        }
+        assert_eq!(service.project_defaults()?, defaults);
+        assert!(service.new_project_defaults()?.iter().all(Option::is_none));
+    }
+    let mut definition = Definition {
+        title: "Atomic models".into(),
+        goal: "Validate every model".into(),
+        kind: Kind::Ai,
+        criteria: vec!["No partial writes".into()],
+        models: std::array::from_fn(|_| None),
+        attempt_limit: Some(2),
+        timeout_ms: None,
+        stage_timeout_ms: None,
+    };
+    let id = service.create(&[definition.clone()], None, true)?[0];
+    for (index, role) in ROLES.iter().enumerate() {
+        definition.models[index] = Some(ModelConfig {
+            provider: "codex".into(),
+            model: "typo-model".into(),
+            effort: None,
+        });
+        let before = service.task(id)?.unwrap();
+        let error = service
+            .revise(
+                VersionedTask {
+                    id,
+                    version: before.version,
+                },
+                &definition,
+                true,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(role) && error.contains("typo-model"),
+            "{error}"
+        );
+        let error = service
+            .create(
+                &[before.definition().definition.clone(), definition.clone()],
+                None,
+                true,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(role), "{error}");
+        let after = service.task(id)?.unwrap();
+        assert_eq!(after.version, before.version);
+        assert_eq!(after.revisions.len(), before.revisions.len());
+        assert_eq!(service.snapshot()?.queue.len(), 1);
+        definition.models[index] = None;
+    }
+    let catalog = root.join("state/ktask-dev/model-catalog.json");
+    std::fs::write(
+        &catalog,
+        r#"[{"provider":"codex","model":"custom-deployment","aliases":["custom-alias"],"efforts":["low"]}]"#,
+    )?;
+    let alias = ModelConfig {
+        provider: "codex".into(),
+        model: "custom-alias".into(),
+        effort: Some("low".into()),
+    };
+    service.set_default("planning", &alias, true)?;
+    assert_eq!(service.project_defaults()?[0], Some(alias.clone()));
+    let mut bad_effort = alias;
+    bad_effort.effort = Some("high".into());
+    let error = service
+        .set_default("planning", &bad_effort, false)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("custom-alias")
+            && error.contains("accepted values")
+            && error.contains("low"),
+        "{error}"
+    );
+    std::fs::write(&catalog, "malformed metadata")?;
+    let error = service
+        .set_default("planning", &bad_effort, false)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("planning")
+            && error.contains("codex/custom-alias")
+            && error.contains("invalid metadata"),
+        "{error}"
+    );
+    std::fs::write(
+        &catalog,
+        r#"[{"provider":"opencode","model":"custom/vendor","efforts":["deep"]}]"#,
+    )?;
+    let custom = ModelConfig {
+        provider: "opencode".into(),
+        model: "custom/vendor".into(),
+        effort: Some("deep".into()),
+    };
+    service.set_default("planning", &custom, false)?;
+    let mut invalid = custom.clone();
+    invalid.effort = Some("hight".into());
+    assert!(
+        service
+            .set_default("planning", &invalid, false)
+            .unwrap_err()
+            .to_string()
+            .contains("accepted values")
+    );
+    std::fs::write(
+        &catalog,
+        r#"[{"provider":"opencode","model":"custom/vendor"}]"#,
+    )?;
+    assert!(
+        service
+            .set_default("planning", &custom, false)
+            .unwrap_err()
+            .to_string()
+            .contains("accepted values")
+    );
+    std::fs::write(
+        &catalog,
+        r#"[{"provider":"codex","model":"first","aliases":["collision"]},{"provider":"codex","model":"second","aliases":["collision"]}]"#,
+    )?;
+    let collision = ModelConfig {
+        provider: "codex".into(),
+        model: "collision".into(),
+        effort: None,
+    };
+    let error = service
+        .set_default("planning", &collision, false)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("planning")
+            && error.contains("collision")
+            && error.contains("model-catalog.json"),
+        "{error}"
+    );
+    Ok(())
+}
+
+#[test]
 fn real_git_delivery_form_supports_keyboard_and_mouse() -> Result {
     for mouse in [false, true] {
         let scratch = support::sandbox()?;
@@ -47,6 +213,7 @@ fn real_git_delivery_form_supports_keyboard_and_mouse() -> Result {
     Ok(())
 }
 fn service(root: &Path) -> Result<Service> {
+    support::model_catalog(root)?;
     Ok(Service::open(
         Database::open_in(&root.join("state/ktask-dev"))?,
         root,
@@ -92,6 +259,74 @@ fn quit(t: &mut Terminal) -> Result {
     t.finish()
 }
 
+fn reject_invalid_model_defaults(t: &mut Terminal, root: &Path, mouse: bool) -> Result {
+    open(t, mouse, "m", "m Defaults", "Project model defaults")?;
+    t.send("invalid\x13")?;
+    screen(t, "Use provider/model")?;
+    assert!(
+        service(root)?
+            .project_defaults()?
+            .iter()
+            .all(Option::is_none)
+    );
+    cancel(t, mouse)?;
+    open(t, mouse, "m", "m Defaults", "Project model defaults")?;
+    if mouse {
+        t.click("execution provider/model")?;
+    }
+    t.send("codex/typo-model")?;
+    if mouse {
+        t.click("Apply")?;
+    } else {
+        t.send("\x13")?;
+    }
+    let rejected = t.screen("invalid model save", |s| {
+        s.contains(if mouse {
+            "execution model"
+        } else {
+            "planning model"
+        }) && s.contains("codex/typo-model")
+    })?;
+    println!("INVALID MODEL SAVE mouse={mouse}\n{rejected}");
+    assert!(
+        service(root)?
+            .project_defaults()?
+            .iter()
+            .all(Option::is_none)
+    );
+    cancel(t, mouse)?;
+    open(t, mouse, "m", "m Defaults", "Project model defaults")?;
+    if mouse {
+        t.click("execution provider/model")?;
+        t.send("codex/executor")?;
+        t.click("execution effort")?;
+        t.send("hight")?;
+        t.click("Apply")?;
+    } else {
+        t.send("codex/executor\thight\x13")?;
+    }
+    let invalid = t.screen("invalid effort", |s| {
+        s.contains(if mouse {
+            "command conflict: execution effort"
+        } else {
+            "command conflict: planning effort"
+        }) && s.contains("hight")
+            && s.contains("accepted values")
+            && s.contains("minimal")
+            && s.contains("high")
+            && s.contains("ultra")
+    })?;
+    println!("INVALID EFFORT FORM mouse={mouse}\n{invalid}");
+    assert!(
+        service(root)?
+            .project_defaults()?
+            .iter()
+            .all(Option::is_none)
+    );
+    cancel(t, mouse)?;
+    Ok(())
+}
+
 #[test]
 fn real_configuration_forms_mouse_keyboard_restart_and_validation() -> Result {
     for mouse in [false, true] {
@@ -100,16 +335,7 @@ fn real_configuration_forms_mouse_keyboard_restart_and_validation() -> Result {
         let mut t = Terminal::open_real(BIN, root, 70, 22)?;
         screen(&t, "No current task")?;
         open(&mut t, mouse, "4", "4 Config", "Storage: SQLite")?;
-        open(&mut t, mouse, "m", "m Defaults", "Project model defaults")?;
-        t.send("invalid\x13")?;
-        screen(&t, "Use provider/model")?;
-        assert!(
-            service(root)?
-                .project_defaults()?
-                .iter()
-                .all(Option::is_none)
-        );
-        cancel(&mut t, mouse)?;
+        reject_invalid_model_defaults(&mut t, root, mouse)?;
         open(&mut t, mouse, "m", "m Defaults", "Project model defaults")?;
         for (i, role) in MODEL_ROLES.iter().enumerate() {
             let label = format!("{role} provider/model");
@@ -381,6 +607,7 @@ fn a_new_project_is_set_up_from_readiness_and_later_projects_start_with_its_defa
     for mouse in [false, true] {
         let scratch = support::sandbox()?;
         let root = scratch.path();
+        support::model_catalog(root)?;
         std::fs::create_dir(root.join("bin"))?;
         support::write_executable(&root.join("bin/codex"), "#!/bin/sh\nexit 0\n")?;
         let project = root.join("project");

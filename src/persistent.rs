@@ -513,6 +513,11 @@ impl App {
         let model = definition.models[3]
             .clone()
             .ok_or("Configure a remediation model first")?;
+        self.service
+            .as_ref()
+            .unwrap()
+            .validate_model("remediation", &model)
+            .map_err(|error| error.to_string())?;
         let paths = self.instance.paths().map_err(|e| e.to_string())?;
         let target = self.target(id)?;
         let pin = self
@@ -579,6 +584,11 @@ impl App {
             .map_err(|e| e.to_string())?[0]
             .clone()
             .ok_or("Configure a planning model first")?;
+        self.service
+            .as_ref()
+            .unwrap()
+            .validate_model("planning", &model)
+            .map_err(|error| error.to_string())?;
         let paths = self.instance.paths().map_err(|e| e.to_string())?;
         let cwd = self
             .service
@@ -695,12 +705,29 @@ impl App {
                 title,
                 goal,
                 criteria,
+                models,
                 reason,
             } => (
                 "Failure judgment · revise task".to_owned(),
                 format!(
-                    "Title: {title}\nGoal: {goal}\nCriteria: {}\nReason: {reason}\n\nApply creates an AI judge revision. Cancel changes nothing.",
-                    criteria.join("; ")
+                    "Title: {title}\nGoal: {goal}\nCriteria: {}\nModel changes: {}\nReason: {reason}\n\nApply creates an AI judge revision. Cancel changes nothing.",
+                    criteria.join("; "),
+                    if models.is_empty() {
+                        "none".into()
+                    } else {
+                        models
+                            .iter()
+                            .map(|(role, model)| {
+                                format!(
+                                    "{role}: {}/{} · {}",
+                                    model.provider,
+                                    model.model,
+                                    model.effort.as_deref().unwrap_or("none")
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    }
                 ),
             ),
             crate::runner::agent::Judgment::Escalate { model, reason } => (

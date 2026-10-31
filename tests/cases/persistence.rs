@@ -32,6 +32,7 @@ fn project(root: &Path) -> PathBuf {
     project
 }
 fn service(root: &Path) -> Result<Service> {
+    support::model_catalog(root)?;
     Ok(Service::open(
         Database::open_in(&root.join("state/ktask-dev"))?,
         &project(root),
@@ -52,6 +53,7 @@ fn target(service: &mut Service, id: i64) -> Result<VersionedTask> {
     })
 }
 fn terminal(root: &Path) -> Result<Terminal> {
+    support::model_catalog(root)?;
     Terminal::open_project(
         env!("CARGO_BIN_EXE_ktask-dev"),
         root,
@@ -2818,7 +2820,7 @@ fn failed_current_judgments_use_real_pty_apply_cancel_and_provider_errors() -> R
                 ),
                 (
                     "revise",
-                    serde_json::json!({"action":"revise","title":"Revised failed task","goal":"Prove the corrected behavior","criteria":["Correct behavior is verified"],"reason":"The original goal missed the boundary."}),
+                    serde_json::json!({"action":"revise","title":"Revised failed task","goal":"Prove the corrected behavior","criteria":["Correct behavior is verified"],"models":{"review":{"provider":"codex","model":"judge-review","effort":"high"}},"reason":"The original goal missed the boundary."}),
                     "Failure judgment · revise task",
                 ),
                 (
@@ -3030,6 +3032,18 @@ fn verify_revised_remediation(
     );
     assert_eq!(revision.actor.as_deref(), Some("ai: judge"));
     assert_eq!(
+        revision.definition.models[1].as_ref().unwrap().model,
+        "judge-review"
+    );
+    assert_eq!(
+        revision.definition.models[1]
+            .as_ref()
+            .unwrap()
+            .effort
+            .as_deref(),
+        Some("high")
+    );
+    assert_eq!(
         revision.lifecycle,
         if approval == PlannerApproval::Automatic {
             "ready"
@@ -3068,7 +3082,7 @@ fn revised_failure_waits_for_approval_before_queue_continues() -> Result {
         let attempts_before = attempts_contents(root)?;
         provider_fixture(
             root,
-            serde_json::json!({"action":"revise","title":"Revised failed task","goal":"Prove the corrected behavior","criteria":["Correct behavior is verified"],"reason":"The original goal missed the boundary."}),
+            serde_json::json!({"action":"revise","title":"Revised failed task","goal":"Prove the corrected behavior","criteria":["Correct behavior is verified"],"models":{"review":{"provider":"codex","model":"judge-review","effort":"high"}},"reason":"The original goal missed the boundary."}),
             false,
         )?;
         let mut terminal = terminal(root)?;
@@ -3399,7 +3413,7 @@ fn commands_are_atomic_versioned_relational_and_preserve_usable_revisions() -> R
     let old = target(&mut a, id)?;
     let mut draft = definition("Draft escalation");
     draft.models[0] = Some(ModelConfig {
-        provider: "test-provider".into(),
+        provider: "codex".into(),
         model: "test-model".into(),
         effort: None,
     });
@@ -3520,7 +3534,7 @@ fn project_identity_and_definition_transfer_are_lossless_and_safe() -> Result {
     let mut d = definition("Unicode 雪\tand\nnewlines\\");
     d.criteria.push("Second\rcriterion".into());
     d.models[3] = Some(ModelConfig {
-        provider: "test".into(),
+        provider: "codex".into(),
         model: "family/model".into(),
         effort: Some("custom".into()),
     });
@@ -3578,7 +3592,7 @@ fn real_tui_saves_across_kill_restart_and_never_simulates_real_tasks() -> Result
     key(&mut t, "c", "Execution provider/model")?;
     submit(
         &mut t,
-        "test-provider/worker-v2\tcustom\r",
+        "codex/worker-v2\tcustom\r",
         "╭ Task models and limits",
         "Saved to SQLite",
     )?;
@@ -3598,7 +3612,7 @@ fn real_tui_saves_across_kill_restart_and_never_simulates_real_tasks() -> Result
     );
     t.send("c")?;
     t.screen("stored model", |s| {
-        s.contains("Execution provider/model") && s.contains("test-provider/worker-v2")
+        s.contains("Execution provider/model") && s.contains("codex/worker-v2")
     })?;
     t.screen("custom effort persists", |s| s.contains("custom"))?;
     submit(
@@ -3629,6 +3643,7 @@ fn real_tui_saves_across_kill_restart_and_never_simulates_real_tasks() -> Result
 fn queue_add_sets_execution_model_by_keyboard_and_mouse() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();
+    support::model_catalog(root)?;
     let mut t = Terminal::open_project(
         env!("CARGO_BIN_EXE_ktask-dev"),
         root,
@@ -3642,7 +3657,7 @@ fn queue_add_sets_execution_model_by_keyboard_and_mouse() -> Result {
     println!("KEYBOARD NEW TASK FORM\n{form}");
     let saved = submit(
         &mut t,
-        "Keyboard model task\tGoal\tCriterion\t\tdummy/worker\thigh\x13",
+        "Keyboard model task\tGoal\tCriterion\t\tcodex/worker\thigh\x13",
         "╭ Add task",
         "Keyboard model task",
     )?;
@@ -3660,7 +3675,7 @@ fn queue_add_sets_execution_model_by_keyboard_and_mouse() -> Result {
     t.click("Acceptance check")?;
     type_field(&mut t, "Criterion")?;
     t.click("Execution provider/model")?;
-    type_field(&mut t, "dummy/mouse")?;
+    type_field(&mut t, "codex/mouse")?;
     t.click("Execution effort")?;
     type_field(&mut t, "low")?;
     t.click("Apply")?;
@@ -3668,7 +3683,7 @@ fn queue_add_sets_execution_model_by_keyboard_and_mouse() -> Result {
         !s.contains("╭ Add task") && s.contains("Mouse model task")
     })?;
     println!("MOUSE MODEL SAVED\n{saved}");
-    t.send("iInserted model task\tGoal\tCriterion\t\t1\tdummy/insert\tmax\x13")?;
+    t.send("iInserted model task\tGoal\tCriterion\t\t1\tcodex/insert\tmax\x13")?;
     let inserted = t.screen("keyboard insert committed", |s| {
         s.contains("Saved to SQLite")
             && !s.contains("╭ Insert task")
@@ -3689,14 +3704,14 @@ fn queue_add_sets_execution_model_by_keyboard_and_mouse() -> Result {
     t.click("Before task ID")?;
     type_field(&mut t, "2")?;
     t.click("Execution provider/model")?;
-    type_field(&mut t, "dummy/mouse-insert")?;
+    type_field(&mut t, "codex/mouse-insert")?;
     t.click("Execution effort")?;
     type_field(&mut t, "medium")?;
     t.click("Apply")?;
     let inserted = t.screen("mouse inserted model saved", |s| {
         !s.contains("╭ Insert task")
             && s.contains("Mouse inserted task")
-            && s.contains("dummy/mouse-insert")
+            && s.contains("codex/mouse-insert")
     })?;
     println!("MOUSE INSERTED MODEL SAVED\n{inserted}");
     quit(&mut t)?;
@@ -3715,7 +3730,7 @@ fn queue_add_sets_execution_model_by_keyboard_and_mouse() -> Result {
                 .as_ref()
                 .unwrap()
                 .provider,
-            "dummy"
+            "codex"
         );
         assert_eq!(
             task.definition().definition.models[0]
@@ -3749,7 +3764,7 @@ fn queue_add_whitespace_fields_keep_project_model_default() -> Result {
     let old = writer.project_defaults()?;
     let mut defaults = old.clone();
     defaults[1] = Some(ModelConfig {
-        provider: "dummy".into(),
+        provider: "codex".into(),
         model: "default".into(),
         effort: Some("medium".into()),
     });
@@ -3774,7 +3789,7 @@ fn queue_add_whitespace_fields_keep_project_model_default() -> Result {
     println!("WHITESPACE DEFAULT SAVED\n{saved}");
     t.send("c")?;
     let models = t.screen("stored default model", |s| {
-        s.contains("Execution provider/model") && s.contains("dummy/default")
+        s.contains("Execution provider/model") && s.contains("codex/default")
     })?;
     println!("WHITESPACE DEFAULT MODELS\n{models}");
     submit(
@@ -3983,7 +3998,7 @@ fn running_guards_and_real_failure_resolution_preserve_attempt_evidence() -> Res
     let mut d = definition("Stored failure");
     d.models = std::array::from_fn(|_| {
         Some(ModelConfig {
-            provider: "test".into(),
+            provider: "codex".into(),
             model: "worker".into(),
             effort: Some("medium".into()),
         })
@@ -4067,7 +4082,7 @@ fn real_forms_save_drafts_all_model_roles_limits_and_reject_without_blocking() -
     key(&mut t, "malformed\r", "Use provider/model (for example")?;
     key(
         &mut t,
-        "\x01test/executor\tlow\ttest/reviewer\tmedium\ttest/validator\thigh\ttest/remediator\tmax\t\x017\t  ",
+        "\x01codex/executor\tlow\tcodex/reviewer\tmedium\tcodex/validator\thigh\tcodex/remediator\tmax\t\x017\t  ",
         "< 6 h >",
     )?;
     key(&mut t, "\t ", "< 30 min >")?;

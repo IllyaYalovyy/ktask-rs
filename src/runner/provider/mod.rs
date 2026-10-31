@@ -140,6 +140,8 @@ pub struct Stream {
     /// The provider's own reset time for a limit, when it names one.
     pub reset_at_ms: Option<i64>,
     pub last_message: Option<String>,
+    pub configuration_error: Option<(String, String)>,
+    error_context: String,
     session: Option<String>,
     usage: Totals,
     pending: Vec<u8>,
@@ -199,6 +201,7 @@ impl Stream {
     fn fail(&mut self, text: &str) {
         self.failed = true;
         self.completed = false;
+        self.note_error(text);
         let lower = text.to_lowercase();
         if [
             "rate_limit",
@@ -211,6 +214,89 @@ impl Stream {
         .any(|s| lower.contains(s))
         {
             self.limit(super::reset::reset_at(text, crate::application::now_ms()));
+        }
+    }
+
+    pub fn note_error(&mut self, text: &str) {
+        if let Ok(value) = serde_json::from_str::<Value>(text) {
+            let status = error_field(
+                &value,
+                &[
+                    "status",
+                    "status_code",
+                    "statusCode",
+                    "api_error_status",
+                    "code",
+                ],
+            )
+            .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()));
+            if status == Some(429) {
+                self.limit(super::reset::reset_at(text, crate::application::now_ms()));
+                return;
+            }
+            if status.is_some_and(|status| status >= 500) {
+                return;
+            }
+            if let Some(setting) = structured_rejection(&value, status) {
+                self.configuration_error = Some((setting.into(), text.chars().take(500).collect()));
+                return;
+            }
+        }
+        self.error_context.push_str(text);
+        if self.error_context.len() > 4096 {
+            let start = self.error_context.len() - 4096;
+            self.error_context =
+                self.error_context[self.error_context.floor_char_boundary(start)..].to_owned();
+        }
+        let lower = self.error_context.to_ascii_lowercase();
+        if [
+            "rate_limit",
+            "rate limit",
+            "too many requests",
+            "http 429",
+            "status 429",
+        ]
+        .iter()
+        .any(|needle| lower.contains(needle))
+        {
+            return;
+        }
+        let setting = if lower.contains("effort") || lower.contains("variant") {
+            Some("effort")
+        } else if lower.contains("model") {
+            Some("model")
+        } else if lower.contains("invalid parameter") || lower.contains("invalid request") {
+            Some("request settings")
+        } else {
+            None
+        };
+        let rejected = lower.contains("http 400")
+            || lower.contains("error code: 400")
+            || lower.contains("status code: 400")
+            || lower.contains("status 400")
+            || lower.contains("status\":400")
+            || lower.contains("code\":400")
+            || lower.contains("status_code\":400")
+            || lower.contains("400 bad request")
+            || lower.contains("unknown model")
+            || lower.contains("model not found")
+            || lower.contains("unsupported model")
+            || lower.contains("invalid parameter")
+            || lower.contains("invalid value")
+            || lower.contains("unsupported value")
+            || lower.contains("invalid model")
+            || lower.contains("unrecognized model")
+            || lower.contains("model does not exist")
+            || (lower.contains("model")
+                && lower.contains("does not exist or you do not have access"))
+            || lower.contains("model_not_found")
+            || lower.contains("invalid effort")
+            || lower.contains("unsupported effort");
+        if rejected && let Some(setting) = setting {
+            self.configuration_error = Some((
+                setting.into(),
+                self.error_context.chars().take(500).collect(),
+            ));
         }
     }
 
@@ -227,6 +313,236 @@ impl Stream {
         }
         self.session = Some(id.into());
         Some(Event::Session(id.into()))
+    }
+}
+
+/// Inspect provider error fields before falling back to its human-readable message.
+fn error_field<'a>(value: &'a Value, names: &[&str]) -> Option<&'a Value> {
+    names.iter().find_map(|name| named_error_field(value, name))
+}
+
+fn named_error_field<'a>(value: &'a Value, name: &str) -> Option<&'a Value> {
+    match value {
+        Value::Object(fields) => fields
+            .get(name)
+            .filter(|value| !value.is_null())
+            .or_else(|| {
+                fields
+                    .values()
+                    .find_map(|value| named_error_field(value, name))
+            }),
+        Value::Array(values) => values
+            .iter()
+            .find_map(|value| named_error_field(value, name)),
+        _ => None,
+    }
+}
+
+fn structured_rejection(value: &Value, status: Option<i64>) -> Option<&'static str> {
+    let code = error_code(value).unwrap_or_default();
+    // Event envelopes have their own type; inspect the nested API error first.
+    let code = value
+        .get("error")
+        .filter(|error| error.is_object())
+        .and_then(error_code)
+        .unwrap_or(code)
+        .to_ascii_lowercase();
+    let parameter = error_field(value, &["param", "parameter"])
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if [
+        "model_not_found",
+        "invalid_model",
+        "unsupported_model",
+        "unknown_model",
+    ]
+    .contains(&code.as_str())
+    {
+        return Some("model");
+    }
+    let rejected_setting = [
+        "invalid_request_error",
+        "invalid_parameter",
+        "invalid_value",
+        "unsupported_value",
+    ]
+    .contains(&code.as_str());
+    let invalid = matches!(status, Some(400 | 404 | 422)) || rejected_setting;
+    if invalid && !parameter.is_empty() {
+        return Some(
+            if parameter.contains("effort") || parameter.contains("variant") {
+                "effort"
+            } else if parameter.contains("model") {
+                "model"
+            } else {
+                "request settings"
+            },
+        );
+    }
+    if rejected_setting {
+        let message = error_field(value, &["message", "result"])
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        return Some(
+            if message.contains("effort") || message.contains("variant") {
+                "effort"
+            } else if message.contains("model") {
+                "model"
+            } else {
+                "request settings"
+            },
+        );
+    }
+    None
+}
+
+fn error_code(value: &Value) -> Option<&str> {
+    ["code", "type", "name"]
+        .iter()
+        .find_map(|name| named_error_field(value, name).and_then(Value::as_str))
+}
+
+#[cfg(test)]
+mod configuration_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_setting_errors_without_parameter_do_not_require_http_status() {
+        for code in [
+            "invalid_request_error",
+            "invalid_parameter",
+            "invalid_value",
+            "unsupported_value",
+        ] {
+            for status in [None, Some(400)] {
+                let mut stream = Stream::new(Provider::Codex);
+                let value = serde_json::json!({"type":"turn.failed","error":{
+                    "type":code,"status":status,"message":"max_tokens must be a positive integer"
+                }});
+                stream.feed(format!("{value}\n").as_bytes()).unwrap();
+                let rejection = stream.configuration_error.unwrap();
+                assert_eq!(rejection.0, "request settings");
+                assert!(
+                    rejection
+                        .1
+                        .contains("max_tokens must be a positive integer")
+                );
+                assert!(!stream.rate_limited);
+            }
+        }
+        let mut stream = Stream::new(Provider::Codex);
+        let value = serde_json::json!({"type":"turn.failed","error":{
+            "code":400,"type":"invalid_request_error","message":"max_tokens must be a positive integer"
+        }});
+        stream.feed(format!("{value}\n").as_bytes()).unwrap();
+        assert_eq!(stream.configuration_error.unwrap().0, "request settings");
+        for (message, setting) in [
+            ("Unsupported effort ultra", "effort"),
+            ("Unknown model foo", "model"),
+        ] {
+            let mut stream = Stream::new(Provider::Codex);
+            let value = serde_json::json!({"type":"turn.failed","error":{
+                "type":"invalid_request_error","message":message
+            }});
+            stream.feed(format!("{value}\n").as_bytes()).unwrap();
+            assert_eq!(stream.configuration_error.unwrap().0, setting);
+        }
+    }
+
+    #[test]
+    fn unrelated_not_found_and_server_or_limit_statuses_are_not_configuration() {
+        for status in [429, 503] {
+            let mut stream = Stream::new(Provider::Codex);
+            let value = serde_json::json!({"type":"turn.failed","error":{
+                "type":"invalid_request_error","status":status,"message":"model service unavailable"
+            }});
+            stream.feed(format!("{value}\n").as_bytes()).unwrap();
+            assert!(stream.configuration_error.is_none());
+            assert_eq!(stream.rate_limited, status == 429);
+        }
+        let mut stream = Stream::new(Provider::Codex);
+        let value = serde_json::json!({"type":"turn.failed","error":{
+            "type":"not_found","status":404,"message":"endpoint unavailable"
+        }});
+        stream.feed(format!("{value}\n").as_bytes()).unwrap();
+        assert!(stream.configuration_error.is_none());
+        assert!(!stream.rate_limited);
+    }
+
+    #[test]
+    fn structured_request_rejections_preserve_provider_details() {
+        for (provider, value, setting) in [
+            (
+                Provider::Codex,
+                serde_json::json!({"type":"turn.failed", "error":{"code":"model_not_found", "status":404,"message":"The model `typo` does not exist or you do not have access to it"}}),
+                "model",
+            ),
+            (
+                Provider::Claude,
+                serde_json::json!({"type":"result", "subtype":"error_during_execution", "is_error":true,"api_error_status":400,"error":{"type":"invalid_request_error","param":"model"},"result":"Rejected"}),
+                "model",
+            ),
+            (
+                Provider::OpenCode,
+                serde_json::json!({"type":"error","error":{"name":"APIError","data":{"statusCode":422,"code":"unsupported_value","param":"reasoning.effort","message":"bad setting"}}}),
+                "effort",
+            ),
+        ] {
+            let mut stream = Stream::new(provider);
+            stream.feed(format!("{value}\n").as_bytes()).unwrap();
+            let rejection = stream.configuration_error.unwrap();
+            assert_eq!(rejection.0, setting);
+            assert!(rejection.1.contains(if provider == Provider::Codex {
+                "model_not_found"
+            } else if provider == Provider::Claude {
+                "invalid_request_error"
+            } else {
+                "unsupported_value"
+            }));
+            assert!(!stream.rate_limited);
+        }
+    }
+
+    #[test]
+    fn access_wording_is_configuration_but_limits_and_transport_are_preserved() {
+        let mut stream = Stream::new(Provider::Codex);
+        stream.note_error("The model `typo` does not exist or you do not have access to it");
+        assert_eq!(stream.configuration_error.unwrap().0, "model");
+        for status in [429, 503] {
+            let mut stream = Stream::new(Provider::Codex);
+            let value = serde_json::json!({"type":"turn.failed", "error":{"status":status,"param":"model","message":"model service unavailable"}});
+            stream.feed(format!("{value}\n").as_bytes()).unwrap();
+            assert!(stream.configuration_error.is_none());
+            assert_eq!(stream.rate_limited, status == 429);
+            assert!(stream.failed);
+        }
+    }
+
+    #[test]
+    fn split_stderr_rejection_is_configuration_error() {
+        let mut stream = Stream::new(Provider::Codex);
+        stream.note_error("Error code: 400: Unsupported ");
+        assert!(stream.configuration_error.is_none());
+        stream.note_error("value 'hight' for model_reasoning_");
+        stream.note_error("effort\n");
+        assert_eq!(stream.configuration_error.as_ref().unwrap().0, "effort");
+        assert!(
+            stream
+                .configuration_error
+                .as_ref()
+                .unwrap()
+                .1
+                .contains("hight")
+        );
+    }
+
+    #[test]
+    fn claude_status_400_unknown_model_is_configuration_error() {
+        let mut stream = Stream::new(Provider::Claude);
+        stream.feed(b"{\"type\":\"result\",\"is_error\":true,\"subtype\":\"error_during_execution\",\"api_error_status\":400,\"result\":\"Unknown model foo\"}\n").unwrap();
+        assert_eq!(stream.configuration_error.as_ref().unwrap().0, "model");
     }
 }
 

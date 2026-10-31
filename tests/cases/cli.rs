@@ -7,6 +7,82 @@ use std::{
 
 const DEV: &str = env!("CARGO_BIN_EXE_ktask-dev");
 const PROD: &str = env!("CARGO_BIN_EXE_ktask");
+
+#[test]
+fn cli_rejects_hight_on_add_edit_defaults_and_import_without_writes() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let bad = json(
+        root,
+        &[
+            "model-default",
+            "execution",
+            "--provider",
+            "codex",
+            "--model",
+            "executor",
+            "--effort",
+            "hight",
+        ],
+        4,
+    )?;
+    let message = bad["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("execution")
+            && message.contains("hight")
+            && message.contains("accepted values")
+    );
+    let bad = json(
+        root,
+        &[
+            "add",
+            "--title",
+            "Bad",
+            "--goal",
+            "Goal",
+            "--criterion",
+            "Check",
+            "--model",
+            "execution=codex/executor",
+            "--effort",
+            "execution=hight",
+        ],
+        4,
+    )?;
+    assert!(bad["error"]["message"].as_str().unwrap().contains("hight"));
+    assert_eq!(json(root, &["list"], 0)?["data"]["count"], 0);
+    json(
+        root,
+        &[
+            "add",
+            "--title",
+            "Good",
+            "--goal",
+            "Goal",
+            "--criterion",
+            "Check",
+            "--model",
+            "execution=codex/executor",
+            "--effort",
+            "execution=high",
+        ],
+        0,
+    )?;
+    let bad = json(root, &["edit", "1", "--effort", "execution=hight"], 4)?;
+    assert!(bad["error"]["message"].as_str().unwrap().contains("hight"));
+    assert_eq!(
+        json(root, &["show", "1"], 0)?["data"]["definition"]["models"]["execution"]["effort"],
+        "high"
+    );
+    json(root, &["export", "tasks.tsv"], 0)?;
+    let path = root.join("tasks.tsv");
+    let text = std::fs::read_to_string(&path)?;
+    std::fs::write(&path, text.replacen("\thigh\t", "\thight\t", 1))?;
+    let bad = json(root, &["import", "tasks.tsv"], 4)?;
+    assert!(bad["error"]["message"].as_str().unwrap().contains("hight"));
+    assert_eq!(json(root, &["list"], 0)?["data"]["count"], 1);
+    Ok(())
+}
 fn process(binary: &str, root: &Path) -> Command {
     let mut command = Command::new(binary);
     command
@@ -22,6 +98,12 @@ fn process(binary: &str, root: &Path) -> Command {
     command
 }
 fn run(root: &Path, args: &[&str]) -> std::io::Result<Output> {
+    if args
+        .iter()
+        .any(|arg| matches!(*arg, "--model" | "--title" | "model-default" | "import"))
+    {
+        support::model_catalog(root)?;
+    }
     process(DEV, root).args(args).output()
 }
 fn json_result(output: Output, exit: i32) -> Result<Value> {
@@ -45,6 +127,13 @@ fn json_result(output: Output, exit: i32) -> Result<Value> {
     Ok(value)
 }
 fn json(root: &Path, args: &[&str], exit: i32) -> Result<Value> {
+    if exit != 2
+        && args
+            .iter()
+            .any(|arg| matches!(*arg, "add" | "edit" | "model-default" | "import"))
+    {
+        support::model_catalog(root)?;
+    }
     let output = process(DEV, root)
         .arg("--json")
         .args(args)
@@ -77,6 +166,7 @@ fn cli_remediate_json_returns_judgment_receipts_and_exit_four_for_noncurrent() -
     for action in ["repair", "revise", "insert", "escalate", "ask"] {
         let scratch = support::sandbox()?;
         let root = scratch.path();
+        support::model_catalog(root)?;
         support::empty_repository(root)?;
         let mut service = Service::open(
             Database::open_in(&root.join("state/ktask-dev"))?,
@@ -93,10 +183,10 @@ fn cli_remediate_json_returns_judgment_receipts_and_exit_four_for_noncurrent() -
             timeout_ms: Some(600_000),
             stage_timeout_ms: None,
         };
-        for model in &mut definition.models {
+        for (index, model) in definition.models.iter_mut().enumerate() {
             *model = Some(ModelConfig {
                 provider: "codex".into(),
-                model: "fixture-model".into(),
+                model: format!("fixture-{}", ktask_rs_mk3::application::ROLES[index]),
                 effort: Some("high".into()),
             });
         }
@@ -143,7 +233,7 @@ fn cli_remediate_json_returns_judgment_receipts_and_exit_four_for_noncurrent() -
                 serde_json::json!({"action":"repair","plan":"Repair the failing check","reason":"Task is sound"})
             }
             "revise" => {
-                serde_json::json!({"action":"revise","title":"Revised CLI task","goal":"Verify behavior","criteria":["Behavior passes"],"reason":"Clarify boundary"})
+                serde_json::json!({"action":"revise","title":"Revised CLI task","goal":"Verify behavior","criteria":["Behavior passes"],"models":{"review":{"provider":"codex","model":"review-fixed","effort":"high"}},"reason":"Clarify boundary"})
             }
             "insert" => {
                 serde_json::json!({"action":"insert","tasks":[{"title":"Repair via CLI","goal":"Fix the failure before retry.","criteria":["Check passes"]}],"reason":"The failed check needs a focused repair."})
@@ -269,6 +359,18 @@ fn verify_cli_judgment(
             let revision = task.revisions.last().unwrap();
             assert_eq!(revision.actor.as_deref(), Some("ai: judge"));
             assert_eq!(revision.definition.title, "Revised CLI task");
+            assert_eq!(
+                revision.definition.models[1].as_ref().unwrap().model,
+                "review-fixed"
+            );
+            assert_eq!(
+                revision.definition.models[1]
+                    .as_ref()
+                    .unwrap()
+                    .effort
+                    .as_deref(),
+                Some("high")
+            );
         }
         "ask" => assert_eq!(
             service.open_question(id)?.unwrap().1,
@@ -423,7 +525,7 @@ fn cli_models_drafts_approval_rejection_and_actor_attribution() -> Result {
             "--approval",
             "draft",
             "--model",
-            "execution=test/worker",
+            "execution=codex/worker",
             "--effort",
             "execution=high",
             "--attempt-limit",
@@ -453,7 +555,7 @@ fn cli_models_drafts_approval_rejection_and_actor_attribution() -> Result {
             "--approval",
             "draft",
             "--model",
-            "execution=test/worker",
+            "execution=codex/worker",
             "--effort",
             "execution=high",
         ],
@@ -491,11 +593,11 @@ fn cli_models_drafts_approval_rejection_and_actor_attribution() -> Result {
             "edit",
             "1",
             "--model",
-            "review=test/reviewer",
+            "review=codex/reviewer",
             "--model",
-            "validation=test/validator",
+            "validation=codex/validator",
             "--model",
-            "remediation=test/strong",
+            "remediation=codex/strong",
             "--effort",
             "execution=none",
         ],
@@ -505,7 +607,7 @@ fn cli_models_drafts_approval_rejection_and_actor_attribution() -> Result {
     for role in ["execution", "review", "validation", "remediation"] {
         assert_eq!(
             task["data"]["definition"]["models"][role]["provider"],
-            "test"
+            "codex"
         );
     }
     assert!(task["data"]["definition"]["models"]["execution"]["effort"].is_null());
@@ -796,13 +898,13 @@ fn cli_running_guards_and_failure_resolution_keep_attempts_immutable() -> Result
             "--criterion",
             "Check",
             "--model",
-            "execution=test/worker",
+            "execution=codex/worker",
             "--model",
-            "review=test/reviewer",
+            "review=codex/reviewer",
             "--model",
-            "validation=test/validator",
+            "validation=codex/validator",
             "--model",
-            "remediation=test/strong",
+            "remediation=codex/strong",
         ],
         0,
     )?;
@@ -841,7 +943,7 @@ fn cli_running_guards_and_failure_resolution_keep_attempts_immutable() -> Result
             "edit",
             "1",
             "--model",
-            "execution=test/strong",
+            "execution=codex/strong",
             "--effort",
             "execution=high",
         ],
@@ -892,6 +994,7 @@ fn cli_running_guards_and_failure_resolution_keep_attempts_immutable() -> Result
 fn self_host_script_configures_a_private_checkout_with_the_given_executable() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();
+    support::model_catalog(root)?;
     let project = root.join("project");
     std::fs::create_dir(&project)?;
     std::fs::create_dir(project.join("src"))?;
@@ -1000,6 +1103,7 @@ fn self_host_script_configures_a_private_checkout_with_the_given_executable() ->
 fn init_sets_up_new_projects_from_saved_defaults_and_their_own_files() -> Result {
     let sandbox = support::sandbox()?;
     let root = sandbox.path();
+    support::model_catalog(root)?;
     std::fs::create_dir(root.join("bin"))?;
     support::write_executable(&root.join("bin/codex"), "#!/bin/sh\nexit 0\n")?;
     let repository = |name: &str, files: &[(&str, &str)]| -> Result<String> {
@@ -1106,7 +1210,7 @@ fn init_sets_up_new_projects_from_saved_defaults_and_their_own_files() -> Result
         "{message}"
     );
     assert!(
-        message.contains("review model: Same as the execution model"),
+        message.contains("review model:") && message.contains("Same as the execution model"),
         "{message}"
     );
 
