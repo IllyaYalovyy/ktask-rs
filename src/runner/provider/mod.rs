@@ -57,6 +57,15 @@ pub enum Event {
 }
 
 impl Provider {
+    pub fn writable_network(self, enabled: bool) -> Result<()> {
+        if !enabled && self != Self::Codex {
+            return Err(Error::Conflict(format!(
+                "{} cannot enforce Agent network Off for writable workers; set Agent network On or choose Codex for execution and repair",
+                self.label()
+            )));
+        }
+        Ok(())
+    }
     pub fn parse(name: &str) -> Result<Self> {
         match name {
             "codex" => Ok(Self::Codex),
@@ -108,8 +117,7 @@ impl Provider {
             .ok_or_else(|| Error::Conflict(format!("{} auth home is not configured", self.label())))
     }
 
-    /// `network` lets a writable turn use the network. Only Codex sandboxes it; Claude Code
-    /// and OpenCode commands always have it.
+    /// `network` lets a writable turn use the network. Call `writable_network` before launch.
     pub fn launch(
         self,
         model: &ModelConfig,
@@ -123,6 +131,20 @@ impl Provider {
             Self::Codex => codex::launch(model, session, access, network, schema, prompt),
             Self::Claude => claude::launch(model, session, access, schema, prompt),
             Self::OpenCode => opencode::launch(model, session, access, schema, prompt),
+        }
+    }
+}
+
+#[cfg(test)]
+mod network_tests {
+    use super::Provider;
+
+    #[test]
+    fn offline_writable_workers_require_provider_enforcement() {
+        assert!(Provider::Codex.writable_network(false).is_ok());
+        for provider in [Provider::Claude, Provider::OpenCode] {
+            assert!(provider.writable_network(false).is_err());
+            assert!(provider.writable_network(true).is_ok());
         }
     }
 }

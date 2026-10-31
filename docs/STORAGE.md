@@ -180,6 +180,7 @@ erDiagram
     tasks o|--o{ attempt_delivery : "handoff_target"
     tasks o|--o{ attempt_delivery : "repair_origin_task"
     attempts ||--o{ attempt_steps : "attempt_id, project_id, task_id, revision"
+    attempt_steps o|--o{ attempt_steps : "reused_from_step_id"
     acceptance_criteria ||--o{ criterion_results : "task_id, revision, criterion_ordinal"
     attempt_steps ||--o{ criterion_results : "step_id, task_id, revision"
 ```
@@ -335,7 +336,7 @@ Durable phase within one attempt. Initial implementation is round zero; at most 
 
 Ordered phases inside an attempt. A completed assessment requesting fixes has state changes_requested; its provider call succeeded. Unmet criterion evidence uses needs_work, not a failed task. AI phases record session/provider/model and optional effort; tool checks record command context. Terminal steps require finish time. The two composite parent keys enforce exact revision/project references in criterion_results and model_calls; attempt_id/ordinal enforces phase order.
 
-Check counts sum completed Rust test-harness summaries in each retained transcript. All three counts are NULL when no supported summary was reported. Review and validation see the current run and the latest successful check from the checkpoint matching the attempt's base commit. Validation requests a repair when passed tests drop, ignored tests rise, or a previously counted check stops reporting counts.
+Check counts sum completed Rust test-harness summaries in an actual check's retained transcript. All three counts are NULL when no supported summary was reported. A reused check step copies the passing source step's counts and exit code, records its source step in `reused_from_step_id`, and names the source attempt, step and retained transcript in its report. Reuse requires the same `source_tree`, `check_name`, command, working directory and timeout; a changed tree or check reruns, and a failed result never supplies a passing reuse. Review and validation see the current step's counts and the latest successful check from the checkpoint matching the attempt's base commit. Validation requests a repair when passed tests drop, ignored tests rise, or a previously counted check stops reporting counts.
 
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
@@ -353,9 +354,12 @@ Check counts sum completed Rust test-harness summaries in each retained transcri
 | `effort` | TEXT | yes | Provider-supported effort; NULL means no effort setting, not an invented sentinel. |
 | `invocation` | TEXT | yes | start, resume, nudge; absent for checks. |
 | `project_check_id` | INTEGER | yes | Configured tool check, if applicable; actual command is also snapshotted. |
+| `check_name` | TEXT | yes | Check name snapshot for exact definition matching; NULL for historical V1 rows or AI phases. |
 | `command` | TEXT | yes | Shell command executed by the supervisor. |
 | `working_directory` | TEXT | yes | Working directory relative to the project root; validated by runner. |
 | `timeout_ms` | INTEGER | yes | Positive execution timeout. |
+| `source_tree` | TEXT | yes | Git tree fingerprint of the source verified by a stable check; NULL when no stable result was recorded. |
+| `reused_from_step_id` | INTEGER | yes | Source check step whose passing result was reused; NULL for actual runs and AI phases. |
 | `exit_code` | INTEGER | yes | Tool exit status; NULL if no exit was observed. |
 | `passed_count` | INTEGER | yes | Nonnegative passed test count parsed from the check transcript; NULL when no supported summary was found. |
 | `failed_count` | INTEGER | yes | Nonnegative failed test count, stored with passed and ignored counts. |
@@ -366,6 +370,7 @@ Check counts sum completed Rust test-harness summaries in each retained transcri
 
 - PK `(id)`.
 - FK `(project_check_id, project_id)` → `project_checks(id, project_id)`.
+- FK `(reused_from_step_id)` → `attempt_steps(id)`.
 - FK `(session_id, project_id, task_id, role, provider)` → `ai_sessions(id, project_id, task_id, role, provider)`.
 - FK `(attempt_id, project_id, task_id, revision)` → `attempts(id, project_id, task_id, revision)`.
 - Index `ix_steps_check`: `INDEX ix_steps_check ON attempt_steps(project_check_id)`.

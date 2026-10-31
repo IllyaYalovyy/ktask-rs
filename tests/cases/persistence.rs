@@ -3162,7 +3162,7 @@ fn failed_current_judgments_use_real_pty_apply_cancel_and_provider_errors() -> R
                 ),
                 (
                     "revise",
-                    serde_json::json!({"action":"revise","title":"Revised failed task","goal":"Prove the corrected behavior","criteria":["Correct behavior is verified"],"models":{"review":{"provider":"codex","model":"judge-review","effort":"high"}},"reason":"The original goal missed the boundary."}),
+                    serde_json::json!({"action":"revise","title":"Revised failed task","goal":"Prove the corrected behavior","criteria":["Correct behavior is verified"],"models":{"execution":null,"review":{"provider":"codex","model":"judge-review","effort":"high"},"validation":null,"remediation":null},"reason":"The original goal missed the boundary."}),
                     "Failure judgment · revise task",
                 ),
                 (
@@ -3424,7 +3424,7 @@ fn revised_failure_waits_for_approval_before_queue_continues() -> Result {
         let attempts_before = attempts_contents(root)?;
         provider_fixture(
             root,
-            serde_json::json!({"action":"revise","title":"Revised failed task","goal":"Prove the corrected behavior","criteria":["Correct behavior is verified"],"models":{"review":{"provider":"codex","model":"judge-review","effort":"high"}},"reason":"The original goal missed the boundary."}),
+            serde_json::json!({"action":"revise","title":"Revised failed task","goal":"Prove the corrected behavior","criteria":["Correct behavior is verified"],"models":{"execution":null,"review":{"provider":"codex","model":"judge-review","effort":"high"},"validation":null,"remediation":null},"reason":"The original goal missed the boundary."}),
             false,
         )?;
         let mut terminal = terminal(root)?;

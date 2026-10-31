@@ -6,7 +6,7 @@ CREATE TABLE projects (
     name TEXT NOT NULL UNIQUE CHECK (length(trim(name)) > 0),
     root_path BLOB NOT NULL UNIQUE CHECK (length(root_path) > 0),
     created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
-    -- Writable agent turns may use the network (Codex sandboxes it off otherwise).
+    -- Writable agent turns may use the network (offline mode requires provider enforcement).
     agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1))
 ) STRICT;
 
@@ -265,9 +265,12 @@ CREATE TABLE attempt_steps (
     effort TEXT CHECK (length(trim(effort)) > 0),
     invocation TEXT CHECK (invocation IN ('start', 'resume', 'nudge')),
     project_check_id INTEGER,
+    check_name TEXT,
     command TEXT,
     working_directory TEXT,
     timeout_ms INTEGER CHECK (timeout_ms > 0),
+    source_tree TEXT CHECK (source_tree IS NULL OR length(source_tree) IN (40,64)),
+    reused_from_step_id INTEGER REFERENCES attempt_steps(id),
     exit_code INTEGER,
     passed_count INTEGER CHECK (passed_count >= 0),
     failed_count INTEGER CHECK (failed_count >= 0),
@@ -288,7 +291,7 @@ CREATE TABLE attempt_steps (
                 AND provider IS NOT NULL AND length(trim(provider)) > 0
                 AND model IS NOT NULL AND length(trim(model)) > 0
                 AND invocation IS NOT NULL
-                AND project_check_id IS NULL AND command IS NULL AND working_directory IS NULL AND timeout_ms IS NULL AND exit_code IS NULL)
+                AND project_check_id IS NULL AND check_name IS NULL AND command IS NULL AND working_directory IS NULL AND timeout_ms IS NULL AND source_tree IS NULL AND reused_from_step_id IS NULL AND exit_code IS NULL)
         OR (role = 'check' AND session_id IS NULL AND provider IS NULL AND model IS NULL AND effort IS NULL AND invocation IS NULL
                 AND command IS NOT NULL AND length(trim(command)) > 0 AND working_directory IS NOT NULL AND timeout_ms IS NOT NULL))
 ) STRICT;

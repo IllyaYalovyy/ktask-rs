@@ -105,6 +105,29 @@ fn baseline(service: &Service, root: &Path, task: i64) -> Result<(), String> {
     Err("Uncommitted work outside this task; preserve or commit it before switching".into())
 }
 
+fn writable_network(report: &mut Readiness, service: &Service, provider: Option<Provider>) {
+    let network = service.agent_network().map_err(|e| e.to_string());
+    report.check(
+        &format!(
+            "Writable workers (execution and repair) · Agent network {} · {}",
+            if network.as_ref().is_ok_and(|enabled| *enabled) {
+                "On"
+            } else {
+                "Off"
+            },
+            provider.map_or("provider unset", |provider| provider.label())
+        ),
+        network.and_then(|enabled| {
+            provider.map_or(Ok(()), |provider| {
+                provider
+                    .writable_network(enabled)
+                    .map_err(|e| e.to_string())
+            })
+        }),
+        "Esc, 4 Config, e Preferences: Agent network On; or m Models: Codex execution",
+    );
+}
+
 pub(crate) fn inspect(app: &App) -> Readiness {
     let mut report = Readiness {
         lines: Vec::new(),
@@ -141,6 +164,12 @@ pub(crate) fn inspect(app: &App) -> Readiness {
             }
             Err(error) => report.check("Project setup", Err(error.to_string()), "u Refresh"),
         }
+        let provider = service.project_defaults().ok().and_then(|models| {
+            models[0]
+                .as_ref()
+                .and_then(|model| Provider::of(model).ok())
+        });
+        writable_network(&mut report, service, provider);
         return report;
     };
     let definition = task.execution_revision();
@@ -245,6 +274,10 @@ pub(crate) fn inspect(app: &App) -> Readiness {
         };
         report.check(&format!("{role} model"), valid, "m Models");
     }
+    let writable = definition.definition.models[0]
+        .as_ref()
+        .and_then(|model| Provider::of(model).ok());
+    writable_network(&mut report, service, writable);
     let mut providers: Vec<_> = definition
         .definition
         .models

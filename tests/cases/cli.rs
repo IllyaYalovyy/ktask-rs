@@ -233,7 +233,7 @@ fn cli_remediate_json_returns_judgment_receipts_and_exit_four_for_noncurrent() -
                 serde_json::json!({"action":"repair","plan":"Repair the failing check","reason":"Task is sound"})
             }
             "revise" => {
-                serde_json::json!({"action":"revise","title":"Revised CLI task","goal":"Verify behavior","criteria":["Behavior passes"],"models":{"review":{"provider":"codex","model":"review-fixed","effort":"high"}},"reason":"Clarify boundary"})
+                serde_json::json!({"action":"revise","title":"Revised CLI task","goal":"Verify behavior","criteria":["Behavior passes"],"models":{"execution":null,"review":{"provider":"codex","model":"review-fixed","effort":"high"},"validation":null,"remediation":null},"reason":"Clarify boundary"})
             }
             "insert" => {
                 serde_json::json!({"action":"insert","tasks":[{"title":"Repair via CLI","goal":"Fix the failure before retry.","criteria":["Check passes"]}],"reason":"The failed check needs a focused repair."})

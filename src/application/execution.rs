@@ -11,6 +11,12 @@ pub struct Check {
     pub directory: String,
     pub timeout_ms: i64,
 }
+pub struct ReusableCheck {
+    pub step: i64,
+    pub attempt: i64,
+    pub transcript: String,
+    pub counts: Option<CheckCounts>,
+}
 #[derive(Clone)]
 pub struct Run {
     pub attempt: i64,
@@ -697,12 +703,71 @@ impl Service {
         Ok(())
     }
     pub fn start_check(&self, run: &Run, check: &Check) -> Result<Step> {
-        self.db.connection().execute("INSERT INTO attempt_steps(attempt_id,project_id,task_id,revision,ordinal,role,state,project_check_id,command,working_directory,timeout_ms,started_at_ms) SELECT ?1,?2,?3,?4,coalesce(max(ordinal),0)+1,'check','running',?5,?6,?7,?8,?9 FROM attempt_steps WHERE attempt_id=?1", params![run.attempt,self.project_id,run.task,run.revision,check.id,check.command,check.directory,check.timeout_ms,now_ms()])?;
+        self.db.connection().execute("INSERT INTO attempt_steps(attempt_id,project_id,task_id,revision,ordinal,role,state,project_check_id,check_name,command,working_directory,timeout_ms,started_at_ms) SELECT ?1,?2,?3,?4,coalesce(max(ordinal),0)+1,'check','running',?5,?6,?7,?8,?9,?10 FROM attempt_steps WHERE attempt_id=?1", params![run.attempt,self.project_id,run.task,run.revision,check.id,check.name,check.command,check.directory,check.timeout_ms,now_ms()])?;
         Ok(Step {
             id: self.db.connection().last_insert_rowid(),
             session: None,
             provider_session: None,
         })
+    }
+    pub fn reusable_check(&self, check: &Check, tree: &str) -> Result<Option<ReusableCheck>> {
+        self.db.connection().query_row(
+            "SELECT s.id,s.attempt_id,a.relative_path,s.passed_count,s.failed_count,s.ignored_count,s.state,s.exit_code
+             FROM attempt_steps s LEFT JOIN artifacts a ON a.attempt_id=s.attempt_id
+               AND a.relative_path='evidence/attempt-'||s.attempt_id||'/step-'||s.id||'.log'
+               AND a.pruned_at_ms IS NULL AND a.pruning_requested_at_ms IS NULL
+             WHERE s.project_id=?1 AND s.role='check' AND s.reused_from_step_id IS NULL
+               AND s.project_check_id=?2 AND s.check_name=?3 AND s.command=?4
+               AND s.working_directory=?5 AND s.timeout_ms=?6 AND s.source_tree=?7
+               AND s.state IN ('succeeded','failed') ORDER BY s.id DESC LIMIT 1",
+            params![self.project_id,check.id,check.name,check.command,check.directory,check.timeout_ms,tree],
+            |r| {
+                let state: String = r.get(6)?;
+                let exit: Option<i32> = r.get(7)?;
+                let failed: Option<i64> = r.get(4)?;
+                let reusable = state == "succeeded" && exit == Some(0) && failed.unwrap_or(0) == 0;
+                if !reusable {
+                    return Ok(None);
+                }
+                let counts = match r.get::<_, Option<i64>>(3)? {
+                    Some(passed) => Some(CheckCounts {
+                        passed,
+                        failed: r.get(4)?,
+                        ignored: r.get(5)?,
+                    }),
+                    None => None,
+                };
+                Ok(Some(ReusableCheck {
+                    step: r.get(0)?,
+                    attempt: r.get(1)?,
+                    transcript: r.get::<_,Option<String>>(2)?.unwrap_or_default(),
+                    counts,
+                }))
+            },
+        ).optional().map(Option::flatten).map_err(Into::into)
+    }
+    pub fn reuse_check(
+        &self,
+        run: &Run,
+        check: &Check,
+        tree: &str,
+        source: &ReusableCheck,
+        transcript: &std::path::Path,
+    ) -> Result<()> {
+        let report = format!(
+            "Reused passing check from attempt #{} step #{} · transcript: {}",
+            source.attempt,
+            source.step,
+            transcript.display()
+        );
+        require(self.db.connection().execute(
+            "INSERT INTO attempt_steps(attempt_id,project_id,task_id,revision,ordinal,role,state,project_check_id,check_name,command,working_directory,timeout_ms,source_tree,reused_from_step_id,exit_code,passed_count,failed_count,ignored_count,started_at_ms,finished_at_ms,report)
+             SELECT ?1,?2,?3,?4,coalesce(max(ordinal),0)+1,'check','succeeded',?5,?6,?7,?8,?9,?10,?11,0,?12,?13,?14,?15,?15,?16 FROM attempt_steps WHERE attempt_id=?1",
+            params![run.attempt,self.project_id,run.task,run.revision,check.id,check.name,check.command,check.directory,check.timeout_ms,tree,source.step,source.counts.map(|c|c.passed),source.counts.map(|c|c.failed),source.counts.map(|c|c.ignored),now_ms(),report],
+        )? == 1, "Could not record reused check")
+    }
+    pub fn record_check_tree(&self, step: &Step, tree: &str) -> Result<()> {
+        require(self.db.connection().execute("UPDATE attempt_steps SET source_tree=?2 WHERE id=?1 AND role='check' AND state IN ('succeeded','failed')", params![step.id,tree])? == 1, "Check result changed before recording its source tree")
     }
     /// A check's verdict, exit status and test counts are recorded together, once.
     pub fn finish_check(

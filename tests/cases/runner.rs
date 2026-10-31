@@ -835,7 +835,7 @@ fn model_aliases_cannot_bypass_judge_separation_at_start_or_judge_revision() -> 
     let current = service.task(1)?.unwrap();
     let before = current.revisions.len();
     let judgment = serde_json::from_value(
-        serde_json::json!({"action":"revise","title":"Alias revision","goal":"Keep judge independent","criteria":["Distinct models"],"models":{"review":{"provider":"codex","model":"execution-alias","effort":null}},"reason":"Test exact alias identity"}),
+        serde_json::json!({"action":"revise","title":"Alias revision","goal":"Keep judge independent","criteria":["Distinct models"],"models":{"execution":null,"review":{"provider":"codex","model":"execution-alias","effort":null},"validation":null,"remediation":null},"reason":"Test exact alias identity"}),
     )?;
     let error = ktask_rs_mk3::runner::remediation::apply_judgment(
         &mut service,
@@ -1722,6 +1722,11 @@ case "$prompt" in *"Interactive Remediate action"*)
 esac
 case "$prompt" in *"You are the failure judge"*)
  printf '%s' "$prompt" > "$HOME/prompt-judge"
+ if [ '{mode}' = sequential-pr ]; then
+  case "$prompt" in *"passed tests dropped from 5 at the previous checkpoint to 4"*)
+   printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"repair\",\"plan\":\"Restore five passing tests and zero ignored tests\",\"reason\":\"Validation rejected the recorded test-count regression\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
+  esac
+ fi
  if [ '{mode}' = judge-error-once ] && [ ! -f "$HOME/judge-error" ]; then
   touch "$HOME/judge-error"
   printf '{{"type":"turn.completed","usage":{{}}}}\n'; exit 0
@@ -1730,7 +1735,7 @@ case "$prompt" in *"You are the failure judge"*)
  case "$prompt" in *"Human answer"*) judge_mode=normal;; esac
  case "$judge_mode" in
   judge-insert) if [ ! -f "$HOME/judge-inserted" ]; then touch "$HOME/judge-inserted"; printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"insert\",\"tasks\":[{{\"title\":\"Repair prerequisite\",\"goal\":\"Finish the preserved result\",\"criteria\":[\"result.txt contains verified\"]}}],\"reason\":\"Preserve the partial implementation before the repair\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; else printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"repair\",\"plan\":\"Verify the prerequisite and finish the original\",\"reason\":\"Prerequisite is complete\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; fi; exit 0;;
-  judge-revise|judge-revise-always) if [ '{mode}' = judge-revise-always ] || [ ! -f "$HOME/judge-revised" ]; then touch "$HOME/judge-revised"; printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"revise\",\"title\":\"Clarified task\",\"goal\":\"Do the clarified thing.\",\"criteria\":[\"Clarified check passes\"],\"reason\":\"The goal contradicted the criteria\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; else printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"repair\",\"plan\":\"Verify the revised task\",\"reason\":\"Revision is ready\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; fi; exit 0;;
+  judge-revise|judge-revise-always) if [ '{mode}' = judge-revise-always ] || [ ! -f "$HOME/judge-revised" ]; then touch "$HOME/judge-revised"; printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"revise\",\"title\":\"Clarified task\",\"goal\":\"Do the clarified thing.\",\"criteria\":[\"Clarified check passes\"],\"models\":null,\"reason\":\"The goal contradicted the criteria\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; else printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"repair\",\"plan\":\"Verify the revised task\",\"reason\":\"Revision is ready\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; fi; exit 0;;
   judge-ask) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"ask\",\"question\":\"Keep or drop the legacy export?\",\"reason\":\"Both readings satisfy the criteria\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
   *) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"repair\",\"plan\":\"Rerun the check after writing result.txt\",\"reason\":\"The check failed on a missing file\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
  esac;;
@@ -1781,13 +1786,17 @@ case '{mode}' in
    case "$prompt" in *"Final decision after"*) printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Mandatory proof is missing\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": false, \"evidence\": \"Required boundary behavior is not verified\"}}], \"findings\": [{{\"severity\": \"minor\", \"description\": \"result.txt:1: boundary case needs correction\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{}}}}'; exit 0;; esac
    if [ "$model" = review ]; then printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Mandatory proof is missing\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": false, \"evidence\": \"Required boundary behavior is not verified\"}}], \"findings\": [{{\"severity\": \"minor\", \"description\": \"result.txt:1: boundary case needs correction\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{}}}}'; exit 0; fi
   fi;;
- review-critical|review-minor|pause-tenth|review-nine)
+ review-critical|review-minor|pause-tenth|review-nine|reuse-unchanged|reuse-changed)
   case "$prompt" in *"Final decision after"*) printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Review findings to address\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": false, \"evidence\": \"Critical boundary case remains unhandled\"}}], \"findings\": [{{\"severity\": \"critical\", \"description\": \"result.txt:1: missing boundary handling produces incorrect results; implement the boundary case\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{"input_tokens": 100, "cached_input_tokens": 40, "output_tokens": 10}}}}'; exit 0;; esac
   if [ "$model" = review ]; then
    count=0; [ ! -f "$HOME/review-count" ] || count=$(cat "$HOME/review-count")
    count=$((count + 1)); printf '%s' "$count" > "$HOME/review-count"
+   if [ '{mode}' = reuse-unchanged ] || [ '{mode}' = reuse-changed ]; then
+    if [ "$count" = 1 ]; then printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Repair requested\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": false, \"evidence\": \"Review requested a repair\"}}], \"findings\": [{{\"severity\": \"critical\", \"description\": \"result.txt:1: repair the result and verify it\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{}}}}'; exit 0; fi
+   fi
    if [ '{mode}' = pause-tenth ] && [ "$count" = 11 ]; then touch "$HOME/tenth-review-started"; sleep 30; fi
-   if [ '{mode}' = review-nine ] && [ "$count" -gt 9 ]; then :
+   if [ '{mode}' = reuse-unchanged ] || [ '{mode}' = reuse-changed ]; then :
+   elif [ '{mode}' = review-nine ] && [ "$count" -gt 9 ]; then :
    elif [ '{mode}' = review-minor ]; then printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Review findings to address\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": true, \"evidence\": \"Optional naming polish\"}}], \"findings\": [{{\"severity\": \"minor\", \"description\": \"result.txt:1: optional naming polish\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{"input_tokens": 100, "cached_input_tokens": 40, "output_tokens": 10}}}}'; exit 0
    else printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Review findings to address\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": false, \"evidence\": \"Critical boundary case remains unhandled\"}}], \"findings\": [{{\"severity\": \"critical\", \"description\": \"result.txt:1: missing boundary handling produces incorrect results; implement the boundary case\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{"input_tokens": 100, "cached_input_tokens": 40, "output_tokens": 10}}}}'; exit 0
    fi
@@ -1842,9 +1851,9 @@ case '{mode}' in
  review-asks) case "$model" in review) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"blocked\",\"summary\":\"Need direction\",\"question\":\"Which content?\",\"criteria\":[]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;; esac;;
 esac
 if [ "$repair" = yes ]; then
- if [ '{mode}' = resolve-conflict ] || [ '{mode}' = resolve-conflict-pause ]; then printf 'remote\nverified\n' > result.txt; else printf 'verified\n' > result.txt; fi
+ if [ '{mode}' = resolve-conflict ] || [ '{mode}' = resolve-conflict-pause ]; then printf 'remote\nverified\n' > result.txt; elif [ '{mode}' = reuse-changed ]; then printf 'verified after repair\n' > result.txt; else printf 'verified\n' > result.txt; fi
 elif [ "$model" = execution ]; then
- if [ '{mode}' = sequential-pr ]; then n=0; [ ! -f "$HOME/pr-executions" ] || n=$(cat "$HOME/pr-executions"); n=$((n+1)); printf '%s' "$n" > "$HOME/pr-executions"; printf 'verified %s\n' "$n" > result.txt; else printf 'verified\n' > result.txt; fi
+ if [ '{mode}' = sequential-pr ]; then n=0; [ ! -f "$HOME/pr-executions" ] || n=$(cat "$HOME/pr-executions"); n=$((n+1)); printf '%s' "$n" > "$HOME/pr-executions"; printf 'verified %s\n' "$n" > result.txt; elif [ '{mode}' = attributes-checkpoint ]; then printf 'verified\n' > result.txt; printf '*.txt text=auto\n' > .gitattributes; else printf 'verified\n' > result.txt; fi
 fi
 printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"complete\",\"summary\":\"Verified result\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":true,\"evidence\":\"Inspected result.txt\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'
 "##
@@ -2737,11 +2746,97 @@ fn failed_check_transcript_is_retained_for_remediation() -> Result {
 }
 
 #[test]
+fn real_terminal_checkpoints_attribute_change_after_verified_checks() -> Result {
+    let f = Fixture::new()?;
+    f.provider("attributes-checkpoint")?;
+    fs::write(f.root.join("legacy.txt"), b"legacy\r\n")?;
+    f.git(&["add", "legacy.txt"])?;
+    f.git(&["commit", "-qm", "CRLF baseline"])?;
+    f.add("Checkpoint attribute change")?;
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 35)?;
+    t.screen("attribute task ready", |s| {
+        s.contains("Checkpoint attribute change") && s.contains("r Run queue")
+    })?;
+    t.send("r")?;
+    t.screen("attribute task left the queue", |s| {
+        s.contains("Queue complete") && s.contains("History 1")
+    })?;
+    t.send("3")?;
+    let screen = t.screen("attribute task checkpointed", |s| {
+        s.contains("DONE") && s.contains("Checkpoint attribute change")
+    })?;
+    println!("ATTRIBUTE CHECKPOINT PTY\n{screen}");
+    t.send("q")?;
+    t.finish()?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    let verified: String = f.db()?.connection().query_row(
+        "SELECT source_tree FROM attempt_steps WHERE role='check' ORDER BY id DESC LIMIT 1",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(f.git(&["rev-parse", "HEAD^{tree}"])?.trim(), verified);
+    let blob = Command::new("git")
+        .arg("-C")
+        .arg(&f.root)
+        .args(["show", "HEAD:legacy.txt"])
+        .output()?;
+    assert!(blob.status.success());
+    assert_eq!(blob.stdout, b"legacy\r\n");
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn real_terminal_checkpoints_sparse_checkout_after_verified_checks() -> Result {
+    let f = Fixture::new()?;
+    f.provider("normal")?;
+    fs::create_dir(f.root.join("kept"))?;
+    fs::create_dir(f.root.join("excluded"))?;
+    fs::write(f.root.join("kept/visible.txt"), "baseline\n")?;
+    fs::write(f.root.join("excluded/hidden.txt"), "preserved\n")?;
+    f.git(&["add", "--all"])?;
+    f.git(&["commit", "-qm", "sparse baseline"])?;
+    f.git(&["sparse-checkout", "set", "--cone", "--sparse-index", "kept"])?;
+    assert!(!f.root.join("excluded/hidden.txt").exists());
+    f.add("Checkpoint sparse worktree")?;
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 35)?;
+    t.screen("sparse task ready", |s| {
+        s.contains("Checkpoint sparse worktree") && s.contains("r Run queue")
+    })?;
+    t.send("r")?;
+    t.screen("sparse task left the queue", |s| {
+        s.contains("Queue complete") && s.contains("History 1")
+    })?;
+    t.send("3")?;
+    let screen = t.screen("sparse task checkpointed", |s| {
+        s.contains("DONE") && s.contains("Checkpoint sparse worktree")
+    })?;
+    println!("SPARSE CHECKPOINT PTY\n{screen}");
+    t.send("q")?;
+    t.finish()?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    let verified: String = f.db()?.connection().query_row(
+        "SELECT source_tree FROM attempt_steps WHERE role='check' ORDER BY id DESC LIMIT 1",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(f.git(&["rev-parse", "HEAD^{tree}"])?.trim(), verified);
+    assert_eq!(
+        f.git(&["show", "HEAD:excluded/hidden.txt"])?.trim(),
+        "preserved"
+    );
+    assert!(!f.root.join("excluded/hidden.txt").exists());
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
 fn real_binary_records_check_counts_and_rejects_regression_at_validation() -> Result {
     let f = Fixture::new()?;
+    f.provider("sequential-pr")?;
     f.ok(&[
         "check-set", "build", "--command",
-        "if [ ! -f \"$HOME/count-baseline\" ]; then touch \"$HOME/count-baseline\"; printf 'test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'; printf 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'; elif [ ! -f \"$HOME/count-regressed\" ]; then touch \"$HOME/count-regressed\"; printf 'test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out\\n'; printf 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'; else printf 'test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'; printf 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'; fi; test -f result.txt",
+        "case \"$(cat result.txt)\" in 'verified 2') printf 'test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out\\n'; printf 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n';; *) printf 'test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'; printf 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n';; esac",
     ])?;
     f.add("Baseline counts")?;
     f.ok(&["run", "--one"])?;
@@ -2762,13 +2857,54 @@ fn real_binary_records_check_counts_and_rejects_regression_at_validation() -> Re
     f.add("Regressed counts")?;
     f.ok(&["run", "--one"])?;
     let second = f.ok(&["show", "2"])?;
-    assert_eq!(second["status"], "succeeded");
+    let db = f.db()?;
+    let workflow_output: Vec<(i64, String, String)> = db.connection().prepare(
+        "SELECT sequence,stream,content FROM attempt_output WHERE attempt_id=(SELECT id FROM attempts WHERE task_id=2) ORDER BY sequence")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let judge_prompt = fs::read_to_string(f.scratch.path().join("prompt-judge"))
+        .unwrap_or_else(|err| format!("<judge prompt unavailable: {err}>"));
+    assert_eq!(
+        second["status"], "succeeded",
+        "task={second}; output={workflow_output:?}; judge_prompt={judge_prompt}"
+    );
+    assert!(
+        judge_prompt.contains("passed tests dropped from 5 at the previous checkpoint to 4"),
+        "repair was not triggered by validation's count regression: {judge_prompt}; output={workflow_output:?}"
+    );
     let steps = second["attempts"][0]["steps"].as_array().unwrap();
     let check_counts = steps
         .iter()
         .filter(|step| step["role"] == "check")
         .map(|step| step["counts"].clone())
         .collect::<Vec<_>>();
+    let check_trees: Vec<(String, Option<i64>)> = db.connection().prepare(
+        "SELECT source_tree,reused_from_step_id FROM attempt_steps WHERE role='check' ORDER BY id")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let (first_head, second_base): (String, String) = db.connection().query_row(
+        "SELECT first.head_commit,second.base_commit FROM attempts first JOIN attempts second ON second.task_id=2 WHERE first.task_id=1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(
+        check_trees.len(),
+        3,
+        "phases={steps:?}; trees={check_trees:?}; baseline={first_head} -> {second_base}; counts={check_counts:?}; output={workflow_output:?}; judge_prompt={judge_prompt}"
+    );
+    assert_ne!(
+        check_trees[0].0, check_trees[1].0,
+        "first and regressed source must differ"
+    );
+    assert_ne!(
+        check_trees[1].0, check_trees[2].0,
+        "repair must change source again"
+    );
+    assert!(check_trees.iter().all(|(_, reused)| reused.is_none()));
+    assert_eq!(
+        first_head, second_base,
+        "checkpoint must be the regression baseline"
+    );
     assert_eq!(
         check_counts[0],
         serde_json::json!({"passed": 4, "failed": 0, "ignored": 1})
@@ -2780,7 +2916,7 @@ fn real_binary_records_check_counts_and_rejects_regression_at_validation() -> Re
     let rejected = steps
         .iter()
         .find(|step| step["role"] == "validation" && step["state"] == "changes_requested")
-        .unwrap();
+        .unwrap_or_else(|| panic!("validation rejection missing; phases={steps:?}; trees={check_trees:?}; baseline={first_head}; counts={check_counts:?}"));
     let report = rejected["report"].as_str().unwrap();
     assert!(
         report.contains("passed tests dropped from 5 at the previous checkpoint to 4"),
@@ -2907,6 +3043,7 @@ fn read_only_judges_cannot_change_source_evidence_configuration_or_supervisor() 
 #[test]
 fn missing_counts_after_a_counted_checkpoint_request_validation_repair() -> Result {
     let f = Fixture::new()?;
+    f.provider("sequential-pr")?;
     f.ok(&[
         "check-set", "build", "--command",
         "if [ ! -f \"$HOME/count-baseline\" ]; then touch \"$HOME/count-baseline\"; printf 'test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'; elif [ ! -f \"$HOME/count-missing\" ]; then touch \"$HOME/count-missing\"; printf 'check succeeded without a test summary\\n'; else printf 'test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'; fi; test -f result.txt",
@@ -2939,7 +3076,7 @@ fn plain_show_retains_ordered_check_counts_after_logs_are_truncated() -> Result 
     f.provider("noisy-review-once")?;
     f.ok(&[
         "check-set", "build", "--command",
-        "if [ ! -f \"$HOME/count-first\" ]; then touch \"$HOME/count-first\"; passed=3; else passed=5; fi; printf 'test result: ok. %s passed; 0 failed; 1 ignored; 0 measured; 0 filtered out\\n' \"$passed\"; test -f result.txt",
+        "printf 'run\\n' >> \"$HOME/check-runs\"; if [ ! -f \"$HOME/count-first\" ]; then touch \"$HOME/count-first\"; passed=3; else passed=5; fi; printf 'test result: ok. %s passed; 0 failed; 1 ignored; 0 measured; 0 filtered out\\n' \"$passed\"; test -f result.txt",
     ])?;
     f.ok(&[
         "check-set",
@@ -2964,11 +3101,36 @@ fn plain_show_retains_ordered_check_counts_after_logs_are_truncated() -> Result 
         ["build", {"passed": 3, "failed": 0, "ignored": 1}],
         ["zero\t\u{1b}", {"passed": 0, "failed": 0, "ignored": 0}],
         ["uncounted", null],
-        ["build", {"passed": 5, "failed": 0, "ignored": 1}],
+        ["build", {"passed": 3, "failed": 0, "ignored": 1}],
         ["zero\t\u{1b}", {"passed": 0, "failed": 0, "ignored": 0}],
         ["uncounted", null]
     ]);
     assert_eq!(serde_json::to_value(checks)?, expected_counts);
+    assert_eq!(
+        fs::read_to_string(f.scratch.path().join("check-runs"))?
+            .lines()
+            .count(),
+        1
+    );
+    let db = f.db()?;
+    let reused: Vec<(i64, i64)> = db.connection().prepare(
+        "SELECT s.id,s.reused_from_step_id FROM attempt_steps s WHERE s.role='check' AND s.reused_from_step_id IS NOT NULL ORDER BY s.id")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    assert_eq!(reused.len(), 3);
+    assert!(reused.iter().all(|(step, source)| source < step));
+    assert!(
+        attempt["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|step| step["role"] == "check")
+            .skip(3)
+            .all(|step| step["report"]
+                .as_str()
+                .unwrap()
+                .contains("Reused passing check from attempt #"))
+    );
     let logs = attempt["logs"].as_array().unwrap();
     assert_eq!(logs.len(), 2000);
     assert!(logs.iter().all(|line| {
@@ -2988,7 +3150,7 @@ fn plain_show_retains_ordered_check_counts_after_logs_are_truncated() -> Result 
             "build: 3 passed, 0 failed, 1 ignored",
             "zero\\t\\u{1b}: 0 passed, 0 failed, 0 ignored",
             "uncounted: test counts unavailable",
-            "build: 5 passed, 0 failed, 1 ignored",
+            "build: 3 passed, 0 failed, 1 ignored",
             "zero\\t\\u{1b}: 0 passed, 0 failed, 0 ignored",
             "uncounted: test counts unavailable",
         ]
@@ -4505,6 +4667,135 @@ fn agent_network_reaches_only_project_turns_that_change_the_project() -> Result 
         fs::read_to_string(&network)?,
         "execution on\nreview off\nvalidation off\n"
     );
+    Ok(())
+}
+
+#[test]
+fn check_runs_once_for_unchanged_repair_and_again_for_changed_repair() -> Result {
+    for (mode, expected) in [("reuse-unchanged", 1), ("reuse-changed", 2)] {
+        let f = Fixture::new()?;
+        f.provider(mode)?;
+        f.ok(&[
+            "check-set",
+            "build",
+            "--command",
+            "printf 'run\\n' >> \"$HOME/check-runs\"; printf 'source check transcript\\n'; test -f result.txt",
+        ])?;
+        f.add("Reuse stable check proof")?;
+        f.ok(&["run", "--one"])?;
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("check-runs"))?
+                .lines()
+                .count(),
+            expected,
+            "{mode}"
+        );
+        let shown = f.ok(&["show", "1"])?;
+        let checks: Vec<_> = shown["attempts"][0]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|step| step["role"] == "check")
+            .collect();
+        assert_eq!(checks.len(), 2, "{mode}");
+        if expected == 1 {
+            assert!(
+                checks[1]["report"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Reused passing check from attempt #")
+            );
+            let db = f.db()?;
+            let (source, reused): (i64, i64) = db.connection().query_row(
+                "SELECT first.id,second.reused_from_step_id FROM attempt_steps first JOIN attempt_steps second ON second.attempt_id=first.attempt_id AND second.id>first.id WHERE first.role='check' AND second.role='check' ORDER BY second.id LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            assert_eq!(source, reused);
+            for role in ["review", "validation"] {
+                let prompt = fs::read_to_string(f.scratch.path().join(format!("prompt-{role}")))?;
+                let evidence = prompt
+                    .lines()
+                    .find_map(|line| line.strip_prefix("Supervisor check evidence: "))
+                    .expect("reused check evidence in reviewer prompt");
+                let evidence: Value = serde_json::from_str(evidence)?;
+                assert_eq!(evidence["reused_from_step"], source, "{role}");
+                let path = Path::new(evidence["transcript"].as_str().unwrap());
+                assert!(path.is_absolute(), "{role}: {}", path.display());
+                let transcript = Command::new("cat")
+                    .arg(path)
+                    .current_dir(&f.root)
+                    .output()?;
+                assert!(transcript.status.success(), "{role}: {}", path.display());
+                assert!(
+                    String::from_utf8_lossy(&transcript.stdout).contains("source check transcript"),
+                    "{role}"
+                );
+                assert!(
+                    checks[1]["report"]
+                        .as_str()
+                        .unwrap()
+                        .contains(path.to_str().unwrap())
+                );
+                let logged: i64 = db.connection().query_row(
+                    "SELECT count(*) FROM attempt_output WHERE attempt_id=1 AND stream='system' AND instr(content,'reused passing result')>0 AND instr(content,?1)>0",
+                    [path.to_str().unwrap()],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(logged, 1, "{role}");
+            }
+        } else {
+            assert!(!checks[1]["report"].as_str().unwrap().contains("Reused"));
+        }
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn changed_check_definition_reruns_on_the_same_tree() -> Result {
+    let f = Fixture::new()?;
+    let first = "printf 'first\\n' >> \"$HOME/check-runs\"; test -f result.txt";
+    let second = "printf 'second\\n' >> \"$HOME/check-runs\"; test -f result.txt";
+    f.ok(&["check-set", "build", "--command", first])?;
+    f.add("First task")?;
+    f.ok(&["run", "--one"])?;
+    f.ok(&["check-set", "build", "--command", second])?;
+    f.add("Second task")?;
+    f.ok(&["run", "--one"])?;
+    assert_eq!(
+        fs::read_to_string(f.scratch.path().join("check-runs"))?,
+        "first\nsecond\n"
+    );
+    let db = f.db()?;
+    let trees: Vec<String> = db
+        .connection()
+        .prepare("SELECT source_tree FROM attempt_steps WHERE role='check' ORDER BY id")?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    assert_eq!(trees.len(), 2);
+    assert_eq!(trees[0], trees[1]);
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn failed_check_on_unchanged_tree_is_run_again() -> Result {
+    let f = Fixture::new()?;
+    f.fail_first_check()?;
+    f.add("Recover failed check")?;
+    f.ok(&["run", "--one"])?;
+    let db = f.db()?;
+    let steps: Vec<(String, String, Option<i64>)> = db.connection().prepare(
+        "SELECT state,source_tree,reused_from_step_id FROM attempt_steps WHERE role='check' ORDER BY id")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0].0, "failed");
+    assert_eq!(steps[1].0, "succeeded");
+    assert_eq!(steps[0].1, steps[1].1);
+    assert!(steps[1].2.is_none());
+    f.no_scratch()?;
     Ok(())
 }
 

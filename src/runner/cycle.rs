@@ -50,7 +50,7 @@ pub(super) fn run(
                     previous.context
                 ));
                 progress.evidence = format!(
-                    "{}\nRechecking retained work after supervisor handoff; previous passes are not current proof.",
+                    "{}\nRechecking retained work after supervisor handoff; previous passes need a matching verified tree and check definition before reuse.",
                     progress.context
                 );
             }
@@ -65,19 +65,27 @@ pub(super) fn run(
         if matches!(
             progress.phase.as_str(),
             "review" | "validate" | "decide" | "complete"
-        ) && ctx
-            .workspace
-            .fingerprint(&ctx.paths.cache.join("workers"))?
-            != progress.verified_tree
-        {
-            progress.phase = "check".into();
-            progress.evidence = format!(
-                "{}\nWorktree changed since verification; regenerate all check, review and validation evidence.",
-                progress.context
-            );
-            progress.verified_tree.clear();
-            service.output(run, "system", "Worktree changed since verification · rerunning checks, review and validation; repair count retained")?;
-            service.save_progress(run, &progress)?;
+        ) {
+            let observed = ctx
+                .workspace
+                .fingerprint(&ctx.paths.cache.join("workers"))?;
+            if observed != progress.verified_tree {
+                let paths = if progress.verified_tree.is_empty() {
+                    "unavailable (no verified tree recorded)".into()
+                } else {
+                    ctx.workspace
+                        .tree_difference(&progress.verified_tree, &observed)?
+                };
+                let change = format!(
+                    "Worktree changed since verification · expected tree {}; observed tree {observed}; differing paths: {paths} · rerunning checks, review and validation; repair count retained",
+                    progress.verified_tree
+                );
+                progress.phase = "check".into();
+                progress.evidence = format!("{}\n{change}", progress.context);
+                progress.verified_tree.clear();
+                service.output(run, "system", &change)?;
+                service.save_progress(run, &progress)?;
+            }
         }
         let answers = service.answers(run)?;
         let attempts_used = service
@@ -103,11 +111,12 @@ pub(super) fn run(
             "check" => {
                 let workers = ctx.paths.cache.join("workers");
                 let before = ctx.workspace.fingerprint(&workers)?;
-                match checks::run(service, run, ctx, checks)? {
+                match checks::run(service, run, ctx, checks, &before)? {
                     Outcome::Passed(evidence) => {
                         let after = ctx.workspace.fingerprint(&workers)?;
                         if before != after {
-                            Outcome::Changes { report: "Supervisor checks changed the worktree; their results do not verify a stable source state. Make verification read-only with respect to project source.".into(), critical: true }
+                            let paths = ctx.workspace.tree_difference(&before, &after)?;
+                            Outcome::Changes { report: format!("Worktree changed during supervisor checks; their results do not verify a stable source state. Expected tree {before}; observed tree {after}; differing paths: {paths}. Make verification read-only with respect to project source."), critical: true }
                         } else {
                             let original_base = service.attempt_base(run.task)?.ok_or_else(|| {
                                 Error::Conflict("Attempt has no recorded baseline".into())

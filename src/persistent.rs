@@ -743,11 +743,11 @@ impl App {
                 format!(
                     "Title: {title}\nGoal: {goal}\nCriteria: {}\nModel changes: {}\nReason: {reason}\n\nApply creates an AI judge revision. Cancel changes nothing.",
                     criteria.join("; "),
-                    if models.is_empty() {
+                    if models.effective().next().is_none() {
                         "none".into()
                     } else {
                         models
-                            .iter()
+                            .effective()
                             .map(|(role, model)| {
                                 format!(
                                     "{role}: {}/{} · {}",

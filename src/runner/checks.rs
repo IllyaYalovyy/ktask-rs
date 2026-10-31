@@ -16,11 +16,54 @@ pub(super) fn run(
     run: &Run,
     ctx: &mut Context<'_>,
     checks: &[Check],
+    tree: &str,
 ) -> Result<Outcome> {
     let mut evidence = String::new();
-    for check in checks {
+    for (index, check) in checks.iter().enumerate() {
+        let observed = ctx
+            .workspace
+            .fingerprint(&ctx.paths.cache.join("workers"))?;
+        if observed != tree {
+            let paths = ctx.workspace.tree_difference(tree, &observed)?;
+            let when = if index == 0 {
+                "before the first check launched"
+            } else {
+                "after an earlier check, before the next check launched"
+            };
+            return Ok(Outcome::Changes {
+                report: format!(
+                    "Worktree changed {when}; check {} cannot verify a stable source state. Expected tree {tree}; observed tree {observed}; differing paths: {paths}. Make verification read-only with respect to project source.",
+                    check.name
+                ),
+                critical: true,
+            });
+        }
+        if let Some(source) = service.reusable_check(check, tree)? {
+            let transcript = ctx.paths.state.join(&source.transcript);
+            if !source.transcript.is_empty() && transcript.is_file() {
+                service.reuse_check(run, check, tree, &source, &transcript)?;
+                service.output(
+                run,
+                "system",
+                &format!(
+                    "Check {}: reused passing result from attempt #{} step #{} · transcript: {}",
+                    check.name, source.attempt, source.step, transcript.display()
+                ),
+            )?;
+                evidence.push_str(&format!(
+                    "\nSupervisor check evidence: {}",
+                    serde_json::json!({
+                        "name": check.name, "command": check.command, "exit_code": 0,
+                        "transcript": transcript, "reused_from_attempt": source.attempt,
+                        "reused_from_step": source.step, "current_counts": source.counts,
+                        "previous_checkpoint_counts": service.previous_check_counts(run, check.id)?,
+                    })
+                ));
+                continue;
+            }
+        }
         for recheck in 0..=2 {
-            let (outcome, path, counts) = run_one(service, run, ctx, check)?;
+            let (outcome, path, counts) = run_one(service, run, ctx, check, tree)?;
             match outcome {
                 Outcome::Passed(_) => {
                     evidence.push_str(&format!(
@@ -59,6 +102,7 @@ fn run_one(
     run: &Run,
     ctx: &mut Context<'_>,
     check: &Check,
+    tree: &str,
 ) -> Result<(Outcome, PathBuf, Option<CheckCounts>)> {
     let step = service.start_check(run, check)?;
     let cwd = ctx.workspace.root.join(&check.directory).canonicalize()?;
@@ -119,6 +163,14 @@ fn run_one(
         Outcome::Failed(_, report) => service.finish_check(&step, false, report, exit, counts)?,
         // A paused check ends with its attempt.
         _ => {}
+    }
+    if matches!(outcome, Outcome::Passed(_) | Outcome::Failed(_, _))
+        && ctx
+            .workspace
+            .fingerprint(&ctx.paths.cache.join("workers"))?
+            == tree
+    {
+        service.record_check_tree(&step, tree)?;
     }
     if let Some(counts) = counts {
         service.output(

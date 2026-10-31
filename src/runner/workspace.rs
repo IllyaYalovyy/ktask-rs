@@ -1,8 +1,11 @@
 use crate::storage::{Error, Result};
 use std::{
+    collections::HashSet,
     fs::File,
+    io::Write,
+    os::unix::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
 };
 
 /// Subjects of the commits ktask makes: a reviewed and validated attempt, and unfinished work
@@ -191,34 +194,176 @@ impl Workspace {
         if index.exists() {
             std::fs::copy(index, scratch.path().join("index"))?;
         }
-        let mut tree = String::new();
-        for args in [&["add", "--all"][..], &["write-tree"][..]] {
-            let output = Command::new("git")
-                .arg("-C")
-                .arg(&self.root)
-                .args([
-                    "-c",
-                    "core.hooksPath=/dev/null",
-                    "-c",
-                    "core.fsmonitor=false",
-                ])
-                .args(args)
-                .env("GIT_INDEX_FILE", scratch.path().join("index"))
-                .env("TMPDIR", scratch.path())
-                .output()?;
-            if !output.status.success() {
-                return Err(Error::Conflict(format!(
-                    "Cannot fingerprint worktree: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                )));
-            }
-            tree = String::from_utf8(output.stdout)
-                .map_err(std::io::Error::other)?
-                .trim()
-                .into();
-        }
+        let tree = self.stage_tree(Some(&scratch.path().join("index")), Some(scratch.path()))?;
         scratch.close()?;
         Ok(tree)
+    }
+    fn git_for_index(
+        &self,
+        index: Option<&Path>,
+        scratch: Option<&Path>,
+        args: &[&str],
+    ) -> Command {
+        let mut command = Command::new("git");
+        command
+            .arg("-C")
+            .arg(&self.root)
+            .args([
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "core.fsmonitor=false",
+            ])
+            .args(args);
+        if let Some(index) = index {
+            command.env("GIT_INDEX_FILE", index);
+        }
+        if let Some(scratch) = scratch {
+            command.env("TMPDIR", scratch);
+        }
+        command
+    }
+    fn git_output(mut command: Command, input: Option<&[u8]>, action: &str) -> Result<Vec<u8>> {
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        if input.is_some() {
+            command.stdin(Stdio::piped());
+        }
+        let mut child = command.spawn()?;
+        let written = input.map_or(Ok(()), |input| child.stdin.take().unwrap().write_all(input));
+        let output = child.wait_with_output()?;
+        written?;
+        if !output.status.success() {
+            return Err(Error::Conflict(format!(
+                "Cannot {action}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(output.stdout)
+    }
+    /// Stage current bytes using Git's ordinary clean-filter behavior. Git can
+    /// trust stale index stat data after a rapid same-size edit; raw blob hashes
+    /// identify only those entries that need their content staged explicitly.
+    fn stage_tree(&self, index: Option<&Path>, scratch: Option<&Path>) -> Result<String> {
+        Self::git_output(
+            self.git_for_index(index, scratch, &["add", "--all"]),
+            None,
+            "stage worktree",
+        )?;
+        let listing = Self::git_output(
+            self.git_for_index(index, scratch, &["ls-files", "--stage", "-z", "--sparse"]),
+            None,
+            "list staged files",
+        )?;
+        let flags = Self::git_output(
+            self.git_for_index(index, scratch, &["ls-files", "-t", "-z", "--sparse"]),
+            None,
+            "read staged file flags",
+        )?;
+        let excluded: HashSet<&[u8]> = flags
+            .split(|byte| *byte == 0)
+            .filter_map(|record| record.strip_prefix(b"S "))
+            .collect();
+        for record in listing
+            .split(|byte| *byte == 0)
+            .filter(|record| !record.is_empty())
+        {
+            let tab = record
+                .iter()
+                .position(|byte| *byte == b'\t')
+                .ok_or_else(|| Error::Conflict("Invalid staged file record".into()))?;
+            let header = std::str::from_utf8(&record[..tab]).map_err(std::io::Error::other)?;
+            let mut fields = header.split_whitespace();
+            let (Some(mode), Some(staged_oid), Some("0")) =
+                (fields.next(), fields.next(), fields.next())
+            else {
+                continue;
+            };
+            if mode == "160000" || mode == "040000" {
+                continue;
+            }
+            let path = PathBuf::from(std::ffi::OsString::from_vec(record[tab + 1..].to_vec()));
+            let file = self.root.join(&path);
+            let metadata = match std::fs::symlink_metadata(&file) {
+                Ok(metadata) => metadata,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound
+                        && excluded.contains(path.as_os_str().as_bytes()) =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
+            let link = metadata.file_type().is_symlink();
+            let link_target = if link {
+                Some(std::fs::read_link(&file)?)
+            } else {
+                None
+            };
+            let raw = if let Some(target) = &link_target {
+                Self::git_output(
+                    self.git_for_index(index, scratch, &["hash-object", "--no-filters", "--stdin"]),
+                    Some(target.as_os_str().as_bytes()),
+                    "hash symlink",
+                )?
+            } else {
+                let mut command =
+                    self.git_for_index(index, scratch, &["hash-object", "--no-filters", "--"]);
+                command.arg(&path);
+                Self::git_output(command, None, "hash worktree file")?
+            };
+            if raw.strip_suffix(b"\n").unwrap_or(&raw) == staged_oid.as_bytes() {
+                continue;
+            }
+            let converted = if let Some(target) = &link_target {
+                Self::git_output(
+                    self.git_for_index(
+                        index,
+                        scratch,
+                        &["hash-object", "-w", "--no-filters", "--stdin"],
+                    ),
+                    Some(target.as_os_str().as_bytes()),
+                    "stage symlink target",
+                )?
+            } else {
+                let mut command =
+                    self.git_for_index(index, scratch, &["hash-object", "-w", "--path"]);
+                command.arg(&path).arg("--").arg(&path);
+                Self::git_output(command, None, "stage changed file")?
+            };
+            let converted =
+                std::str::from_utf8(converted.strip_suffix(b"\n").unwrap_or(&converted))
+                    .map_err(std::io::Error::other)?;
+            if converted != staged_oid {
+                let mut entry = format!("{mode} {converted}\t").into_bytes();
+                entry.extend_from_slice(path.as_os_str().as_bytes());
+                entry.push(0);
+                Self::git_output(
+                    self.git_for_index(index, scratch, &["update-index", "-z", "--index-info"]),
+                    Some(&entry),
+                    "update changed file",
+                )?;
+            }
+        }
+        let tree = Self::git_output(
+            self.git_for_index(index, scratch, &["write-tree"]),
+            None,
+            "write staged tree",
+        )?;
+        Ok(String::from_utf8(tree)
+            .map_err(std::io::Error::other)?
+            .trim()
+            .to_owned())
+    }
+    pub fn tree_difference(&self, expected: &str, observed: &str) -> Result<String> {
+        let paths = git(
+            &self.root,
+            &["diff", "--name-status", "--no-renames", expected, observed],
+        )?;
+        if paths.is_empty() {
+            Ok("none (tree identities differ without a path diff)".into())
+        } else {
+            Ok(paths)
+        }
     }
     /// The review of an attempt that started at `attempt_base` covers its own work and any
     /// unfinished work committed without review since the last checkpoint, which every
@@ -280,20 +425,17 @@ impl Workspace {
         if allow_amend
             && git(&self.root, &["log", "-1", "--format=%s"])? == CHECKPOINT.format(task, attempt)
         {
-            if self.clean()? {
-                if git(&self.root, &["rev-parse", "HEAD^{tree}"])? == verified_tree {
-                    return self.head();
-                }
-            } else {
-                git(&self.root, &["add", "--all"])?;
-                if git(&self.root, &["write-tree"])? != verified_tree {
-                    return Err(Error::Conflict(
-                        "Worktree changed after validation; verification must run again".into(),
-                    ));
-                }
-                self.git_commit(&["commit", "--amend", "--no-edit", "--reset-author"])?;
+            let staged = self.stage_tree(None, None)?;
+            if staged != verified_tree {
+                return Err(Error::Conflict(
+                    "Worktree changed after validation; verification must run again".into(),
+                ));
+            }
+            if staged == git(&self.root, &["rev-parse", "HEAD^{tree}"])? {
                 return self.head();
             }
+            self.git_commit(&["commit", "--amend", "--no-edit", "--reset-author"])?;
+            return self.head();
         }
         self.commit(
             expected_head,
@@ -310,23 +452,17 @@ impl Workspace {
                 "Agent changed HEAD; preserve work and inspect before continuing".into(),
             ));
         }
-        if !self.clean()? {
-            git(&self.root, &["add", "--all"])?;
-            if let Some(expected) = verified_tree
-                && git(&self.root, &["write-tree"])? != expected
-            {
-                return Err(Error::Conflict(
-                    "Worktree changed after validation; work retained, verification must run again"
-                        .into(),
-                ));
-            }
-            self.git_commit(&["commit", "-m", message])?;
-        } else if let Some(expected) = verified_tree
-            && git(&self.root, &["rev-parse", "HEAD^{tree}"])? != expected
+        let staged = self.stage_tree(None, None)?;
+        if let Some(expected) = verified_tree
+            && staged != expected
         {
             return Err(Error::Conflict(
-                "Worktree changed after validation; verification must run again".into(),
+                "Worktree changed after validation; work retained, verification must run again"
+                    .into(),
             ));
+        }
+        if staged != git(&self.root, &["rev-parse", "HEAD^{tree}"])? {
+            self.git_commit(&["commit", "-m", message])?;
         }
         self.head()
     }
@@ -411,6 +547,219 @@ mod reset_fingerprint_tests {
         assert_eq!(std::fs::read(root.join(".git/index"))?, staged_index);
         std::fs::write(root.join("new.txt"), "newer bytes\n")?;
         assert_ne!(workspace.reset_fingerprint()?, saved);
+        Ok(())
+    }
+
+    #[test]
+    fn same_size_edit_with_preserved_mtime_changes_fingerprint_without_changing_real_index()
+    -> Result<()> {
+        let project = tempfile::Builder::new()
+            .prefix("ktask-fingerprint-test-")
+            .tempdir()?;
+        let root = project.path();
+        run(root, &["init", "-q"]);
+        run(root, &["config", "core.trustctime", "false"]);
+        let file = root.join("result.txt");
+        std::fs::write(&file, "verified 1\n")?;
+        let original_mtime = std::time::UNIX_EPOCH + std::time::Duration::from_secs(946_684_800);
+        std::fs::File::options()
+            .write(true)
+            .open(&file)?
+            .set_times(std::fs::FileTimes::new().set_modified(original_mtime))?;
+        run(root, &["add", "result.txt"]);
+        run(
+            root,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-qm",
+                "baseline",
+            ],
+        );
+        let baseline = git(root, &["rev-parse", "HEAD^{tree}"])?;
+        let head = git(root, &["rev-parse", "HEAD"])?;
+        run(root, &["config", "user.name", "Test"]);
+        run(root, &["config", "user.email", "test@example.com"]);
+        let real_index = std::fs::read(root.join(".git/index"))?;
+        std::fs::write(&file, "verified 2\n")?;
+        std::fs::File::options()
+            .write(true)
+            .open(&file)?
+            .set_times(std::fs::FileTimes::new().set_modified(original_mtime))?;
+        let workspace = Workspace::acquire(root)?;
+        let first = workspace.reset_fingerprint()?;
+        assert_ne!(first, baseline, "same-size edit must be hashed");
+        assert_eq!(workspace.reset_fingerprint()?, first);
+        assert_eq!(std::fs::read(root.join(".git/index"))?, real_index);
+        let committed = workspace.checkpoint(1, 1, &head, &first, false)?;
+        assert_eq!(workspace.head()?, committed);
+        assert_eq!(git(root, &["rev-parse", "HEAD^{tree}"])?, first);
+        assert_eq!(git(root, &["show", "HEAD:result.txt"])?, "verified 2");
+        Ok(())
+    }
+
+    #[test]
+    fn attributes_change_keeps_ordinary_crlf_blobs_through_checkpoint_and_amendment() -> Result<()>
+    {
+        let project = tempfile::Builder::new()
+            .prefix("ktask-attributes-test-")
+            .tempdir()?;
+        let repo = project.path().join("repo");
+        std::fs::create_dir(&repo)?;
+        let root = repo.as_path();
+        run(root, &["init", "-q"]);
+        run(root, &["config", "user.name", "Test"]);
+        run(root, &["config", "user.email", "test@example.com"]);
+        run(root, &["config", "core.autocrlf", "false"]);
+        std::fs::write(root.join("source.txt"), b"original\r\n")?;
+        run(root, &["add", "source.txt"]);
+        run(root, &["commit", "-qm", "baseline"]);
+        let workspace = Workspace::acquire(root)?;
+        let base = workspace.head()?;
+
+        std::fs::write(root.join(".gitattributes"), "*.txt text=auto\n")?;
+        let index_before = std::fs::read(root.join(".git/index"))?;
+        let tree = workspace.fingerprint(project.path())?;
+        assert_eq!(std::fs::read(root.join(".git/index"))?, index_before);
+        let committed = workspace.checkpoint(1, 1, &base, &tree, false)?;
+        assert_eq!(git(root, &["rev-parse", "HEAD^{tree}"])?, tree);
+        let committed_blob = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["show", "HEAD:source.txt"])
+            .output()?;
+        assert!(committed_blob.status.success());
+        assert_eq!(committed_blob.stdout, b"original\r\n");
+        assert_eq!(std::fs::read(root.join("source.txt"))?, b"original\r\n");
+
+        std::fs::write(
+            root.join(".gitattributes"),
+            "*.txt text=auto\n# unchanged source\n",
+        )?;
+        let index_before = std::fs::read(root.join(".git/index"))?;
+        let amended_tree = workspace.fingerprint(project.path())?;
+        assert_eq!(std::fs::read(root.join(".git/index"))?, index_before);
+        let amended = workspace.checkpoint(1, 1, &committed, &amended_tree, true)?;
+        assert_ne!(amended, committed);
+        assert_eq!(git(root, &["rev-parse", "HEAD^{tree}"])?, amended_tree);
+        let amended_blob = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["show", "HEAD:source.txt"])
+            .output()?;
+        assert!(amended_blob.status.success());
+        assert_eq!(amended_blob.stdout, b"original\r\n");
+
+        assert_eq!(
+            workspace.checkpoint(1, 1, &amended, &amended_tree, true)?,
+            amended
+        );
+        assert_eq!(
+            workspace.checkpoint(2, 1, &amended, &amended_tree, false)?,
+            amended
+        );
+        std::fs::write(root.join("source.txt"), b"changed!\r\n")?;
+        assert!(
+            workspace
+                .checkpoint(1, 1, &amended, &amended_tree, true)
+                .unwrap_err()
+                .to_string()
+                .contains("Worktree changed after validation")
+        );
+        Ok(())
+    }
+
+    fn sparse_project(sparse_index: bool) -> Result<(tempfile::TempDir, PathBuf)> {
+        let project = tempfile::Builder::new()
+            .prefix("ktask-sparse-test-")
+            .tempdir()?;
+        let repo = project.path().join("repo");
+        std::fs::create_dir(&repo)?;
+        run(&repo, &["init", "-q"]);
+        run(&repo, &["config", "user.name", "Test"]);
+        run(&repo, &["config", "user.email", "test@example.com"]);
+        std::fs::create_dir(repo.join("kept"))?;
+        std::fs::create_dir(repo.join("excluded"))?;
+        std::fs::write(repo.join("kept/visible.txt"), "first\n")?;
+        std::fs::write(repo.join("excluded/hidden.txt"), "preserved\n")?;
+        std::fs::write(repo.join("excluded/line\nbreak.txt"), "also preserved\n")?;
+        run(&repo, &["add", "--all"]);
+        run(&repo, &["commit", "-qm", "baseline"]);
+        run(
+            &repo,
+            &[
+                "sparse-checkout",
+                "set",
+                "--cone",
+                if sparse_index {
+                    "--sparse-index"
+                } else {
+                    "--no-sparse-index"
+                },
+                "kept",
+            ],
+        );
+        let entries = git(&repo, &["ls-files", "--stage", "--sparse"])?;
+        assert!(
+            entries.contains(if sparse_index {
+                "excluded/"
+            } else {
+                "excluded/hidden.txt"
+            }),
+            "{entries}"
+        );
+        Ok((project, repo))
+    }
+
+    fn assert_excluded_blobs(root: &Path) -> Result<()> {
+        assert_eq!(
+            git(root, &["show", "HEAD:excluded/hidden.txt"])?,
+            "preserved"
+        );
+        assert_eq!(
+            git(root, &["show", "HEAD:excluded/line\nbreak.txt"])?,
+            "also preserved"
+        );
+        assert!(!root.join("excluded/hidden.txt").exists());
+        assert!(!root.join("excluded/line\nbreak.txt").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn sparse_checkout_preserves_absent_blobs_with_ordinary_and_sparse_indexes() -> Result<()> {
+        for sparse_index in [false, true] {
+            let (project, repo) = sparse_project(sparse_index)?;
+            let root = repo.as_path();
+            assert_excluded_blobs(root)?;
+            let workspace = Workspace::acquire(root)?;
+            let base = workspace.head()?;
+            let baseline = git(root, &["rev-parse", "HEAD^{tree}"])?;
+            let real_index = std::fs::read(root.join(".git/index"))?;
+            assert_eq!(workspace.fingerprint(project.path())?, baseline);
+            assert_eq!(workspace.fingerprint(project.path())?, baseline);
+            assert_eq!(std::fs::read(root.join(".git/index"))?, real_index);
+            assert_excluded_blobs(root)?;
+
+            std::fs::write(root.join("kept/visible.txt"), "second\n")?;
+            let tree = workspace.fingerprint(project.path())?;
+            assert_ne!(tree, baseline);
+            assert_eq!(workspace.fingerprint(project.path())?, tree);
+            assert_eq!(std::fs::read(root.join(".git/index"))?, real_index);
+            let committed = workspace.checkpoint(1, 1, &base, &tree, false)?;
+            assert_eq!(git(root, &["rev-parse", "HEAD^{tree}"])?, tree);
+            assert_excluded_blobs(root)?;
+
+            std::fs::write(root.join("kept/visible.txt"), "third\n")?;
+            let amended_tree = workspace.fingerprint(project.path())?;
+            assert_ne!(amended_tree, tree);
+            let amended = workspace.checkpoint(1, 1, &committed, &amended_tree, true)?;
+            assert_ne!(amended, committed);
+            assert_eq!(git(root, &["rev-parse", "HEAD^{tree}"])?, amended_tree);
+            assert_excluded_blobs(root)?;
+        }
         Ok(())
     }
 

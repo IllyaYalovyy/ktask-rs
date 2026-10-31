@@ -79,6 +79,7 @@ impl Fixture {
         let path = self.scratch.path().join("bin").join(provider);
         support::write_executable(&path, script)?;
         self.mode(mode)?;
+        self.ok(&["init", "--agent-network", "on"])?;
         for role in ["execution", "review", "validation", "remediation"] {
             let model = if provider == "opencode" {
                 format!("test/{role}")
@@ -395,6 +396,63 @@ fn real_tui_runs_a_claude_task_by_keyboard_and_mouse() -> Result {
         );
         t.send("q")?;
         t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn offline_claude_is_blocked_and_explained_in_readiness_and_configuration() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.agent("claude", CLAUDE, "normal")?;
+        f.ok(&["init", "--agent-network", "off"])?;
+        f.add("Offline Claude")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 40)?;
+        t.screen("offline current", |s| {
+            s.contains("Offline Claude") && s.contains("u Readiness")
+        })?;
+        if mouse {
+            t.click("u Readiness")?;
+        } else {
+            t.send("u")?;
+        }
+        let readiness = t.screen("offline writable readiness", |s| {
+            s.contains("BLOCK · Writable workers")
+                && s.contains("Claude Code cannot enforce Agent network Off")
+                && s.contains("4 Config, e Preferences")
+        })?;
+        println!("OFFLINE READINESS mouse={mouse}\n{readiness}");
+        t.send("\x1b")?;
+        t.screen("readiness closed", |s| !s.contains("Execution readiness"))?;
+        if mouse {
+            t.click("4 Config")?;
+            t.screen("configuration view", |s| s.contains("Storage: SQLite"))?;
+            t.click("e Preferences")?;
+        } else {
+            t.send("4")?;
+            t.send("e")?;
+        }
+        let config = t.screen("offline network configuration", |s| {
+            s.contains("Agent network") && s.contains("cannot enforce Off")
+        })?;
+        println!("OFFLINE CONFIGURATION mouse={mouse}\n{config}");
+        t.send("\x03")?;
+        t.finish()?;
+        let result = f.process().args(["--json", "run", "--one"]).output()?;
+        assert!(!result.status.success());
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("cannot enforce Agent network Off"),
+            "stdout: {} stderr: {}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr),
+        );
+        assert!(
+            f.ok(&["show", "1"])?["attempts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
         f.no_scratch()?;
     }
     Ok(())

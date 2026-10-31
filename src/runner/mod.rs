@@ -108,7 +108,11 @@ fn preflight(service: &Service, definition: &crate::application::Definition) -> 
         })?;
         service.validate_judge_model(definition, index)?;
         model.validate_for_role(role)?;
-        Provider::of(model)?.executable()?;
+        let provider = Provider::of(model)?;
+        provider.executable()?;
+        if index == 0 {
+            provider.writable_network(service.agent_network()?)?;
+        }
     }
     sandbox::available()
 }
@@ -860,6 +864,9 @@ fn ai_turn(
     );
     let access = Access::for_role(configured);
     let network = access == Access::Write && service.agent_network()?;
+    if access == Access::Write {
+        provider.writable_network(network)?;
+    }
     let launch = provider.launch(
         model,
         step.provider_session.as_deref(),
