@@ -515,6 +515,9 @@ impl App {
         }
     }
     fn view_key(&mut self, code: KeyCode) -> Option<Action> {
+        if code == KeyCode::Char('p') && self.view != View::Current {
+            return self.enabled(Action::Pause).then_some(Action::Pause);
+        }
         match self.view {
             View::Current => match code {
                 KeyCode::Char('u') => Some(Action::Readiness),

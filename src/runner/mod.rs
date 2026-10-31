@@ -598,6 +598,39 @@ pub fn supervisor_alive(service: &Service) -> Result<bool> {
     Workspace::supervisor_alive(&service.project_root()?)
 }
 
+/// How long `stop` waits for a paused runner to finish worker shutdown and cleanup.
+pub const STOP_PATIENCE: Duration = Duration::from_secs(120);
+
+/// Pauses whatever the project's runner is doing and waits until the runner has exited.
+/// None when no runner was running; otherwise the task it paused, if it paused one.
+pub fn stop(service: &mut Service, patience: Duration) -> Result<Option<Option<i64>>> {
+    if !supervisor_alive(service)? {
+        return Ok(None);
+    }
+    // A runner between tasks or already finishing has nothing to pause; it exits by itself.
+    let paused = match service.current_task()? {
+        Some(task) => match service.request_pause(VersionedTask {
+            id: task.id,
+            version: task.version,
+        }) {
+            Ok(()) => Some(task.id),
+            Err(Error::Conflict(_)) => None,
+            Err(error) => return Err(error),
+        },
+        None => None,
+    };
+    let deadline = Instant::now() + patience;
+    while supervisor_alive(service)? {
+        if Instant::now() >= deadline {
+            return Err(Error::Conflict(
+                "The runner has not exited yet; check ktask current, then run stop again".into(),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Ok(Some(paused))
+}
+
 /// Called after a committed answer, approval or Human acknowledgment. The
 /// conditional state change elects one window to launch the next supervisor.
 pub fn continue_after_intervention(service: &mut Service, paths: &Paths) -> Result<bool> {

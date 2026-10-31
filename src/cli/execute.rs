@@ -426,6 +426,7 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
             )?))
         }
         Command::FollowUp { .. } => unreachable!("worker callback dispatch"),
+        Command::Stop { .. } => unreachable!("stop dispatch covers several projects"),
         Command::Edit {
             target: input,
             pending,

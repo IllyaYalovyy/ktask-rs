@@ -74,7 +74,7 @@ fn start_and_pause_reset_worker(
         t.send("p")?;
     }
     let paused = t.screen("real worker paused and released", |s| {
-        s.contains("PAUSED · supervisor absent") && s.contains("P Reset to pending")
+        s.contains("PAUSED · runner stopped") && s.contains("P Reset to pending")
     })?;
     println!("RESET PAUSED mouse={mouse}\n{paused}");
     f.guardian_finished()?;
@@ -2214,7 +2214,7 @@ fn pause_at_tenth_review_resumes_the_phase_without_an_eleventh_repair() -> Resul
         println!(
             "TENTH REVIEW PAUSED mouse={mouse}\n{}",
             t.screen("paused", |s| {
-                s.contains("PAUSED · supervisor absent") && s.contains("r Resume")
+                s.contains("PAUSED · runner stopped") && s.contains("r Resume")
             })?
         );
         f.provider("review-critical")?;
@@ -2414,7 +2414,7 @@ fn changing_source_while_review_is_paused_invalidates_saved_proof() -> Result {
     );
     t.click("p Pause")?;
     t.screen("paused", |s| {
-        s.contains("PAUSED · supervisor absent") && s.contains("r Resume")
+        s.contains("PAUSED · runner stopped") && s.contains("r Resume")
     })?;
     fs::write(f.root.join("result.txt"), "unverified change\n")?;
     fs::write(f.root.join(".gitignore"), "included.secret\n")?;
@@ -3240,7 +3240,7 @@ fn paused_repair_resumes_its_reserved_round_and_same_attempt() -> Result {
         println!(
             "REPAIR PAUSED mouse={mouse}\n{}",
             t.screen("repair paused", |s| s.contains("[r Resume]")
-                && s.contains("PAUSED · supervisor absent"))?
+                && s.contains("PAUSED · runner stopped"))?
         );
         let before = f.ok(&["show", "1"])?;
         let attempt = before["attempts"][0]["id"].clone();
@@ -3880,7 +3880,7 @@ fn real_tui_runner_mouse_pause_keyboard_resume_and_live_history() -> Result {
     t.click("p Pause")?;
     println!(
         "PAUSED\n{}",
-        t.screen("paused", |s| s.contains("PAUSED · supervisor absent")
+        t.screen("paused", |s| s.contains("PAUSED · runner stopped")
             && s.contains("[r Resume]")
             && !s.contains("[R Recover]"))?
     );
@@ -4510,7 +4510,7 @@ fn live_usage_keeps_step_and_pause_visible_at_minimum_size() -> Result {
             t.send("p")?;
         }
         let paused = t.screen("paused live usage", |s| {
-            s.contains("PAUSED · supervisor absent")
+            s.contains("PAUSED · runner stopped")
         })?;
         println!("LIVE USAGE PAUSED 70x22 mouse={mouse}\n{paused}");
         run.0.wait()?;
@@ -5865,7 +5865,7 @@ fn real_tui_pause_during_connection_recovery_stops_queue() -> Result {
         println!(
             "RETRY PAUSED mouse={mouse}\n{}",
             t.screen("paused", |s| s.contains("PAUSED")
-                && s.contains("supervisor absent"))?
+                && s.contains("runner stopped"))?
         );
         let task = f.ok(&["show", "1"])?;
         assert_eq!(task["attempts_used"], 0);
@@ -6930,7 +6930,7 @@ fn real_tui_check_launch_failure_pause_cancels_backoff_and_resumes_same_attempt(
         println!(
             "CHECK LAUNCH PAUSED mouse={mouse}\n{}",
             t.screen("paused launch retries", |s| s.contains("PAUSED")
-                && s.contains("supervisor absent")
+                && s.contains("runner stopped")
                 && s.contains("r Resume"))?
         );
         let first = f.ok(&["show", "1"])?;
@@ -7368,6 +7368,86 @@ fn many_projects_streaming_output_at_once_all_finish() -> Result {
 }
 
 #[test]
+fn stop_ends_runners_gracefully_from_the_cli_and_any_tui_screen() -> Result {
+    let f = Fixture::new()?;
+    let second = f.second_project("second")?;
+    f.provider("overlap")?;
+    f.add("Alpha task")?;
+    f.ok_in(
+        &second,
+        &[
+            "add",
+            "--title",
+            "Beta task",
+            "--goal",
+            "Create result.txt containing verified",
+            "--criterion",
+            "result.txt contains verified",
+        ],
+    )?;
+    assert_eq!(f.ok(&["stop"])?["stopped"], serde_json::json!([]));
+    f.ok(&["run", "--background"])?;
+    f.ok_in(&second, &["run", "--background"])?;
+    support::eventually("both executions running", || {
+        let started =
+            fs::read_to_string(f.scratch.path().join("overlap-started")).unwrap_or_default();
+        Ok((started.lines().count() == 2).then_some(()))
+    })?;
+    // One command stops every runner; it returns only after each one has exited.
+    let stopped = f.ok(&["stop", "--all"])?["stopped"].clone();
+    assert_eq!(stopped.as_array().unwrap().len(), 2, "{stopped}");
+    assert!(
+        stopped
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["paused_task"].is_i64())
+    );
+    f.supervisor_stopped()?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "paused");
+    assert_eq!(f.ok_in(&second, &["current"])?["status"], "paused");
+    fs::write(f.scratch.path().join("release"), "go")?;
+    f.ok(&["run"])?;
+    f.ok_in(&second, &["run"])?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    assert_eq!(f.ok_in(&second, &["current"])?, Value::Null);
+    f.no_scratch()?;
+
+    // In the TUI, Pause stops the runner from Queue too, not only from Current.
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("overlap")?;
+        f.add("Pause from Queue")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
+        t.screen("ready", |s| s.contains("r Run queue"))?;
+        t.send("r")?;
+        t.screen("running", |s| s.contains("RUNNING · supervisor alive"))?;
+        if mouse {
+            t.click("2 Queue")?;
+        } else {
+            t.send("2")?;
+        }
+        let queue = t.screen("queue offers pause", |s| {
+            shows_view(s, "Queue") && s.contains("p Pause")
+        })?;
+        println!("QUEUE WHILE RUNNING mouse={mouse}\n{queue}");
+        if mouse {
+            t.click("p Pause")?;
+        } else {
+            t.send("p")?;
+        }
+        f.supervisor_stopped()?;
+        let paused = t.screen("paused from queue", |s| s.contains("Current #1 · PAUSED"))?;
+        println!("PAUSED FROM QUEUE mouse={mouse}\n{paused}");
+        assert_eq!(f.ok(&["show", "1"])?["status"], "paused");
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
 fn two_projects_run_at_once_and_stay_separate() -> Result {
     let f = Fixture::new()?;
     let second = f.second_project("second")?;
@@ -7411,7 +7491,7 @@ fn two_projects_run_at_once_and_stay_separate() -> Result {
     println!(
         "SECOND PAUSED\n{}",
         b.screen("second paused", |s| {
-            s.contains("PAUSED · supervisor absent")
+            s.contains("PAUSED · runner stopped")
                 && s.contains("r Resume")
                 && s.contains("Paused; worker stopped, Resume continues the same attempt")
         })?

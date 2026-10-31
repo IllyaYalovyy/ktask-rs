@@ -274,6 +274,17 @@ impl Service {
         tx.commit()?;
         Ok(())
     }
+    /// Every registered project root in this instance, oldest first.
+    pub fn project_roots(db: &Database) -> Result<Vec<PathBuf>> {
+        let mut statement = db
+            .connection()
+            .prepare("SELECT root_path FROM projects ORDER BY id")?;
+        let roots = statement
+            .query_map([], |r| r.get::<_, Vec<u8>>(0))?
+            .map(|bytes| Ok(PathBuf::from(OsString::from_vec(bytes?))))
+            .collect::<Result<_>>()?;
+        Ok(roots)
+    }
     pub fn project_root(&self) -> Result<PathBuf> {
         let bytes = self.db.connection().query_row(
             "SELECT root_path FROM projects WHERE id = ?1",

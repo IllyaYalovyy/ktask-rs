@@ -247,7 +247,9 @@ and the next task; Current shows the goal, proof required, and the active superv
 In queue mode, answering a question, approving current, or acknowledging Human work continues
 automatically. A saved intervention stays saved if starting fails; the footer explains the blocker.
 **Pause** stops/reaps workers before recording paused state; **Run/resume** retains the attempt
-and compatible session. Closing the TUI does not stop the supervisor. Check, review and
+and compatible session. Closing the TUI does not stop the supervisor (the background runner):
+press `p` on any screen, or run `ktask stop` (`ktask stop --all` for every project, for example
+before `make install`); it returns once the runner has exited. Start it again with `r` or `ktask run`. Check, review and
 validation findings stay in the same attempt for a read-only judge, fix, and regenerated proof;
 the ten-round limit applies. A terminal failed attempt opens a separately recorded repair attempt.
 Two optional time limits, both off by default (Models, or `--task-limit` / `--stage-limit` with

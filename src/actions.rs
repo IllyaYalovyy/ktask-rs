@@ -105,8 +105,9 @@ impl App {
             Action::Reopen => {
                 self.service.is_some() && self.view == View::History && selected.is_some()
             }
+            // A live run can be stopped from every screen, not only Current.
             Action::Pause => {
-                self.view == View::Current
+                (self.view == View::Current || self.service.is_some())
                     && current.is_some_and(|t| {
                         t.status() == Status::Running
                             || (self.service.is_some() && t.status() == Status::Waiting)

@@ -184,6 +184,16 @@ pub enum Command {
         #[command(flatten)]
         target: Target,
     },
+    /// Stop this project's runner gracefully and wait until it has exited.
+    ///
+    /// Pauses what the runner is doing (its attempt resumes with run), then waits for worker
+    /// shutdown and cleanup. With --all, stops the runner of every project in this instance,
+    /// for example before reinstalling. Start again with run, or r in the TUI.
+    Stop {
+        /// Stop the runner of every project in this instance.
+        #[arg(long)]
+        all: bool,
+    },
     /// End the current attempt and return the same task to editable pending work.
     /// Resume keeps the old attempt; reset requires an explicit later Run.
     ResetToPending {

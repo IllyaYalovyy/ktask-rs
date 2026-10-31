@@ -50,6 +50,7 @@ TYPICAL SESSION
   ktask --json events --after 0        # progress feed; pass next_after on the next call
   ktask --json show 12                 # full record: revisions, attempts, steps, usage
   ktask --json pause 12                # stop after the worker is cleaned up; run resumes
+  ktask stop [--all]                   # stop this (or every) project's runner; waits until it exits
   ktask --json reset-to-pending 12 --confirm  # end attempt, edit task, then Run afresh
   Foreground run (no --background) blocks until the queue is done or something needs
   the owner, then prints why it stopped. A detached runner logs to

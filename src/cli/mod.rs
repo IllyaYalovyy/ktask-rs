@@ -215,6 +215,9 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         );
     }
     let paths = instance.paths()?;
+    if let Command::Stop { all } = command {
+        return emit(stop(&paths, &root, *all)?, cli.json);
+    }
     let creates_project = matches!(
         command,
         Command::Add(_)
@@ -518,6 +521,59 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         }
     }
     emit(reply, cli.json)
+}
+
+/// Stops this project's runner, or with `all` every project's, and says what each one did.
+fn stop(
+    paths: &crate::instance::Paths,
+    root: &std::path::Path,
+    all: bool,
+) -> Result<output::Reply> {
+    let Some(db) = Database::open_existing(paths)? else {
+        return Ok(output::Reply {
+            data: json!({"stopped":[]}),
+            text: "No runner is running\n".into(),
+        });
+    };
+    let roots = if all {
+        Service::project_roots(&db)?
+    } else {
+        vec![root.to_path_buf()]
+    };
+    drop(db);
+    let (mut stopped, mut text) = (Vec::new(), String::new());
+    for root in roots {
+        let db = Database::open_existing(paths)?
+            .ok_or_else(|| Failure::missing("Project database disappeared"))?;
+        let Some(mut service) = Service::find(db, &root)? else {
+            return Err(Failure::missing(
+                "This directory is not a registered project; use add first",
+            ));
+        };
+        let Some(paused) = crate::runner::stop(&mut service, crate::runner::STOP_PATIENCE)? else {
+            continue;
+        };
+        text.push_str(&match paused {
+            Some(id) => format!(
+                "{}: runner stopped; #{id} paused, run resumes it\n",
+                service.project_name
+            ),
+            None => format!("{}: runner stopped\n", service.project_name),
+        });
+        stopped.push(json!({"project":service.project_name,"paused_task":paused}));
+    }
+    if stopped.is_empty() {
+        text = if all {
+            "No runner is running\n"
+        } else {
+            "No runner is running for this project\n"
+        }
+        .into();
+    }
+    Ok(output::Reply {
+        data: json!({"stopped":stopped}),
+        text,
+    })
 }
 
 fn validate(cli: &Cli) -> Result<()> {

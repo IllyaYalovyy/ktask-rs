@@ -134,6 +134,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             ) {
             if app.supervisor_alive {
                 " · supervisor alive"
+            } else if t.status() == Status::Paused {
+                // Pause stops the runner on purpose; "absent" would read like a crash.
+                " · runner stopped"
             } else {
                 " · supervisor absent"
             }
@@ -380,6 +383,9 @@ fn controls(app: &App) -> Vec<(&'static str, Action)> {
         ],
         View::About => vec![("Esc Back", Action::Back)],
     };
+    if app.view != View::Current {
+        controls.insert(0, ("p Pause", Action::Pause));
+    }
     controls.retain(|(_, action)| {
         app.enabled(*action)
             || (app.service.is_some()

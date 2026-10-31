@@ -87,7 +87,7 @@ exec /usr/bin/git "$@"
         }
         println!(
             "DELIVERY PAUSED mouse={mouse}\n{}",
-            t.screen("paused", |s| s.contains("PAUSED · supervisor absent")
+            t.screen("paused", |s| s.contains("PAUSED · runner stopped")
                 && s.contains("r Resume"))?
         );
         fs::write(f.scratch.path().join("release-fetch"), "")?;
