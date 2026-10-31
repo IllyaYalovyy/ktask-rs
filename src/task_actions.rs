@@ -48,6 +48,13 @@ impl App {
                 &limits::label(current),
             ));
         }
+        if self.service.is_some() {
+            fields.push(Field::choice(
+                "Project defaults",
+                &["Keep task settings", "Apply current project defaults"],
+                "Keep task settings",
+            ));
+        }
         self.dialog = Some(Dialog::new(
             DialogKind::Models(task.id),
             "Task models and limits",

@@ -12,6 +12,716 @@ use std::{
 const BIN: &str = env!("CARGO_BIN_EXE_ktask-dev");
 
 #[test]
+fn reset_to_pending_in_real_pty_preserves_attempt_and_uses_corrected_defaults() -> Result {
+    // The provider responses are synthetic. The private project's supervisor, worker,
+    // checks, persistence, pause/reset, and terminal input all execute for real.
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("slow-review")?;
+        f.add("Reset invalid effort")?;
+        f.add("Later queued work")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 40)?;
+        let evidence = start_and_pause_reset_worker(&f, &mut t, mouse)?;
+        reset_and_correct_task(&f, &mut t, mouse, &evidence)?;
+        run_reset_task_and_inspect_history(&f, &mut t, mouse)?;
+        verify_reset_attempts(&f, mouse, evidence)?;
+    }
+    Ok(())
+}
+
+struct ResetEvidence {
+    before: Value,
+    attempt: i64,
+    old_steps: Value,
+    old_usage: Value,
+    old_session: i64,
+    old_output: Vec<(i64, String, String)>,
+    old_artifacts: Vec<(PathBuf, Vec<u8>)>,
+    progress: (String, String),
+}
+
+fn start_and_pause_reset_worker(
+    f: &Fixture,
+    t: &mut Terminal,
+    mouse: bool,
+) -> Result<ResetEvidence> {
+    t.screen("pending current", |s| s.contains("Reset invalid effort"))?;
+    if mouse {
+        t.click("r Run queue")?;
+    } else {
+        t.send("r")?;
+    }
+    support::eventually("real review worker entered", || {
+        Ok(f.scratch
+            .path()
+            .join("review-started")
+            .exists()
+            .then_some(()))
+    })?;
+    let running = t.screen("execution and checks reached review", |s| {
+        s.contains("RUNNING · supervisor alive") && s.contains("Step: Review")
+    })?;
+    println!("RESET REAL WORK BEFORE PAUSE mouse={mouse}\n{running}");
+    assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
+    // Reproduce an invalid stored setting only after the worker has made progress.
+    f.db()?.connection().execute(
+        "UPDATE revision_models SET effort='hight' WHERE task_id=1 AND revision=1 AND role='review'",
+        [],
+    )?;
+    if mouse {
+        t.click("p Pause")?;
+    } else {
+        t.send("p")?;
+    }
+    let paused = t.screen("real worker paused and released", |s| {
+        s.contains("PAUSED · supervisor absent") && s.contains("P Reset to pending")
+    })?;
+    println!("RESET PAUSED mouse={mouse}\n{paused}");
+    f.guardian_finished()?;
+    f.supervisor_stopped()?;
+    let before = f.ok(&["show", "1"])?;
+    let attempt = before["attempts"][0]["id"].as_i64().unwrap();
+    let old_steps = before["attempts"][0]["steps"].clone();
+    assert!(
+        old_steps
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["role"] == "execution" && s["state"] == "succeeded")
+    );
+    assert!(
+        old_steps
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["role"] == "check" && s["state"] == "succeeded")
+    );
+    let old_usage = before["attempts"][0]["role_usage"].clone();
+    let db = f.db()?;
+    let old_session: i64 = db.connection().query_row(
+        "SELECT session_id FROM attempt_steps WHERE attempt_id=?1 AND role='execution'",
+        [attempt],
+        |r| r.get(0),
+    )?;
+    let tokens: (i64, i64, i64) = db.connection().query_row(
+        "SELECT input_tokens,cache_read_tokens,output_tokens FROM model_calls WHERE session_id=?1",
+        [old_session],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    assert_eq!(tokens, (60, 40, 10));
+    let old_output = db.connection().prepare(
+        "SELECT sequence,stream,content FROM attempt_output WHERE attempt_id=?1 ORDER BY sequence",
+    )?.query_map([attempt], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?)))?.collect::<std::result::Result<Vec<_>,_>>()?;
+    assert!(!old_output.is_empty());
+    let old_artifacts = db
+        .connection()
+        .prepare("SELECT relative_path FROM artifacts WHERE attempt_id=?1 ORDER BY id")?
+        .query_map([attempt], |r| r.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(|relative| {
+            let path = f.scratch.path().join("state/ktask-dev").join(relative);
+            fs::read(&path).map(|bytes| (path, bytes))
+        })
+        .collect::<std::io::Result<Vec<_>>>()?;
+    assert!(!old_artifacts.is_empty(), "real check transcript recorded");
+    let progress: (String, String) = db.connection().query_row(
+        "SELECT phase,evidence FROM attempt_progress WHERE attempt_id=?1",
+        [attempt],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    assert_eq!(progress.0, "review");
+    drop(db);
+    Ok(ResetEvidence {
+        before,
+        attempt,
+        old_steps,
+        old_usage,
+        old_session,
+        old_output,
+        old_artifacts,
+        progress,
+    })
+}
+
+fn reset_and_correct_task(
+    f: &Fixture,
+    t: &mut Terminal,
+    mouse: bool,
+    evidence: &ResetEvidence,
+) -> Result {
+    let edit = f
+        .process()
+        .args(["--json", "edit", "1", "--goal", "blocked while paused"])
+        .output()?;
+    assert_eq!(edit.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&edit.stderr).contains("Reset to pending"));
+    assert_reset_edit_guidance(t, mouse, "paused")?;
+    if mouse {
+        t.click("P Reset to pending")?;
+    } else {
+        t.send("P")?;
+    }
+    println!(
+        "RESET CONFIRMATION mouse={mouse}\n{}",
+        t.screen("reset confirmation", |s| {
+            s.contains("< No >") && s.contains("Resume continues")
+        })?
+    );
+    if mouse {
+        t.click("No")?;
+        t.screen("reset selected", |s| s.contains("< Reset to pending >"))?;
+        t.click("Apply")?;
+    } else {
+        t.send(" \r")?;
+    }
+    let pending = t.screen("pending after reset", |s| {
+        s.contains("Current #1 · PENDING")
+    })?;
+    println!("RESET PENDING mouse={mouse}\n{pending}");
+    let reset = f.ok(&["show", "1"])?;
+    assert_eq!(reset["id"], evidence.before["id"]);
+    assert_eq!(reset["attempts"][0]["state"], "interrupted");
+    assert_eq!(reset["attempts"][0]["steps"], evidence.old_steps);
+    assert_eq!(reset["attempts"][0]["role_usage"], evidence.old_usage);
+    assert_eq!(reset["attempts_used"], 0);
+    assert_eq!(
+        f.db()?.connection().query_row(
+            "SELECT state FROM ai_sessions WHERE id=?1",
+            [evidence.old_session],
+            |r| r.get::<_, String>(0)
+        )?,
+        "closed"
+    );
+    f.provider("normal")?;
+    if mouse {
+        t.click("c Models")?;
+    } else {
+        t.send("c")?;
+    }
+    let preview = t.screen("defaults preview", |s| {
+        s.contains("Effective defaults preview")
+            && s.contains("Execution: codex/execution")
+            && s.contains("Review: codex/review")
+            && s.contains("Validation: codex/validation")
+            && s.contains("Remediation: codex/remediation")
+            && s.contains("hight")
+    })?;
+    println!("RESET DEFAULTS mouse={mouse}\n{preview}");
+    if mouse {
+        t.click("Fields +")?;
+        t.screen("model field page advanced", |s| {
+            s.contains("Remediation effort (blank = none)")
+        })?;
+        t.click("Fields +")?;
+        t.screen("defaults field visible", |s| {
+            s.contains("Keep task settings")
+        })?;
+        t.click("Keep task settings")?;
+    } else {
+        t.send(&"\t".repeat(11))?;
+        t.send(" ")?;
+    }
+    println!(
+        "RESET DEFAULTS SELECTED mouse={mouse}\n{}",
+        t.screen("defaults selected", |s| {
+            s.contains("< Apply current project defaults >")
+        })?
+    );
+    if mouse {
+        t.click("Apply")?;
+    } else {
+        t.send("\r")?;
+    }
+    t.screen("corrected settings", |s| {
+        s.contains("Current #1 · PENDING") && !s.contains("Task models and limits")
+    })?;
+    assert_eq!(
+        f.ok(&["show", "1"])?["definition"]["models"]["review"]["effort"],
+        Value::Null
+    );
+    f.ok(&[
+        "edit",
+        "1",
+        "--goal",
+        "Keep preserved result.txt and verify the revised reset goal",
+    ])?;
+    // Queue mode remains paused through reset and model editing. Neither this task
+    // nor its successor may start until a deliberate Run command.
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
+        1
+    );
+    assert!(
+        f.ok(&["show", "2"])?["attempts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+        "execution\nreview\n"
+    );
+    assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
+    Ok(())
+}
+
+fn run_reset_task_and_inspect_history(f: &Fixture, t: &mut Terminal, mouse: bool) -> Result {
+    if mouse {
+        // Staging the retained work changes the index, not the preserved source.
+        // The actual Run must accept it without treating it as unrelated work.
+        f.git(&["add", "result.txt"])?;
+        t.click("r Run queue")?;
+    } else {
+        t.send("r")?;
+    }
+    println!(
+        "RESET EXPLICIT RUN COMPLETE mouse={mouse}\n{}",
+        t.screen("new attempt completed", |s| s.contains("Queue complete."))?
+    );
+    if mouse {
+        t.click("3 History")?;
+    } else {
+        t.send("3")?;
+    }
+    t.screen("completed task history", |s| shows_view(s, "History"))?;
+    t.send("/Reset invalid effort\r")?;
+    t.screen("reset task selected in history", |s| {
+        s.contains("History · 1 shown / 2 total")
+    })?;
+    if mouse {
+        t.click("Enter Details")?;
+    } else {
+        t.send("\r")?;
+    }
+    t.screen("fresh attempt in history", |s| s.contains("Attempt 2 / 2"))?;
+    if mouse {
+        t.click("Prev attempt")?;
+    } else {
+        t.send("[")?;
+    }
+    let history = t.screen("reset attempt remains terminal in history", |s| {
+        s.contains("Attempt 1 / 2") && s.contains("interrupted") && s.contains("Reset to pending")
+    })?;
+    println!("RESET HISTORY TERMINAL ATTEMPT mouse={mouse}\n{history}");
+    assert!(!history.contains("Task abandoned"));
+    t.send("\x1b")?;
+    t.screen("history closed details", |s| !s.contains("Attempt 1 / 2"))?;
+    t.send("q")?;
+    t.finish()?;
+    Ok(())
+}
+
+fn verify_reset_attempts(f: &Fixture, mouse: bool, evidence: ResetEvidence) -> Result {
+    let ResetEvidence {
+        before,
+        attempt,
+        old_steps,
+        old_usage,
+        old_session,
+        old_output,
+        old_artifacts,
+        progress,
+    } = evidence;
+    let after = f.ok(&["show", "1"])?;
+    assert_eq!(after["id"], before["id"]);
+    assert_eq!(after["attempts"].as_array().unwrap().len(), 2);
+    assert_eq!(after["attempts"][0]["state"], "interrupted");
+    assert_eq!(after["attempts"][0]["steps"], old_steps);
+    assert_eq!(after["attempts"][0]["role_usage"], old_usage);
+    assert_eq!(after["attempts"][1]["state"], "succeeded");
+    // Task 2 overwrites the execution prompt, so the provider keeps task 1's
+    // fresh execution prompt separately for this revised-goal assertion.
+    assert!(
+        fs::read_to_string(f.scratch.path().join("reset-revised-prompt"))?
+            .contains("Keep preserved result.txt and verify the revised reset goal")
+    );
+    let fresh = after["attempts"][1]["id"].as_i64().unwrap();
+    let db = f.db()?;
+    let (invocation, new_session): (String,i64) = db.connection().query_row("SELECT invocation,session_id FROM attempt_steps WHERE attempt_id=?1 AND role='execution' ORDER BY ordinal LIMIT 1", [fresh], |r| Ok((r.get(0)?,r.get(1)?)))?;
+    assert_eq!(invocation, "start");
+    assert_ne!(new_session, old_session);
+    for role in ["execution", "check", "review", "validation"] {
+        assert_eq!(db.connection().query_row("SELECT count(*) FROM attempt_steps WHERE attempt_id=?1 AND role=?2 AND state='succeeded' AND effort IS NULL", rusqlite::params![fresh,role], |r| r.get::<_,i64>(0))?, 1, "fresh {role} proof");
+    }
+    for (sequence, stream, content) in old_output {
+        assert_eq!(
+            db.connection().query_row(
+                "SELECT stream,content FROM attempt_output WHERE attempt_id=?1 AND sequence=?2",
+                rusqlite::params![attempt, sequence],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            )?,
+            (stream, content)
+        );
+    }
+    assert_eq!(
+        db.connection().query_row(
+            "SELECT phase,evidence FROM attempt_progress WHERE attempt_id=?1",
+            [attempt],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        )?,
+        progress
+    );
+    assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
+    for (path, bytes) in old_artifacts {
+        assert_eq!(fs::read(path)?, bytes, "old check transcript preserved");
+    }
+    println!(
+        "RESET PROOF mouse={mouse}: old attempt {attempt}, fresh attempt {fresh}; old steps, output, usage, progress and work retained; new session {new_session} differs from {old_session}; fresh execution/check/review/validation succeeded"
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+fn assert_reset_edit_guidance(t: &mut Terminal, mouse: bool, state: &str) -> Result {
+    for view in ["2", "1"] {
+        t.send(view)?;
+        t.screen("live edit target", |s| {
+            if view == "1" {
+                s.contains("Task brief · Enter")
+            } else {
+                shows_view(s, "Queue")
+            }
+        })?;
+        for key in ["e", "c"] {
+            // Clear the previous status so each action must produce fresh guidance.
+            t.send("v")?;
+            t.screen("unavailable approval", |s| s.contains("Unavailable here"))?;
+            if mouse {
+                t.click(if key == "e" { "e Edit" } else { "c Models" })?;
+            } else {
+                t.send(key)?;
+            }
+            let blocked = t.screen("live editing guidance", |s| {
+                s.contains("Task is live; use Reset to pending before editing models or the task")
+            })?;
+            println!(
+                "RESET BLOCKED EDIT state={state} view={view} key={key} mouse={mouse}\n{blocked}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn waiting_reset_guidance_and_question_retention_in_real_pty() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("question")?;
+        f.add("Reset waiting question")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 40)?;
+        t.screen("waiting fixture ready", |s| {
+            s.contains("Reset waiting question")
+        })?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        println!(
+            "RESET WAITING mouse={mouse}\n{}",
+            t.screen("real question waiting", |s| {
+                s.contains("QUESTION · supervisor absent") && s.contains("P Reset to pending")
+            })?
+        );
+        let old = f.ok(&["show", "1"])?;
+        assert_reset_edit_guidance(&mut t, mouse, "waiting")?;
+        if mouse {
+            t.click("P Reset to pending")?;
+        } else {
+            t.send("P")?;
+        }
+        t.screen("waiting reset confirmation", |s| {
+            s.contains("< No >") && s.contains("Resume continues")
+        })?;
+        if mouse {
+            t.click("No")?;
+            t.screen("waiting reset selected", |s| {
+                s.contains("< Reset to pending >")
+            })?;
+            t.click("Apply")?;
+        } else {
+            t.send(" \r")?;
+        }
+        println!(
+            "RESET WAITING NOW PENDING mouse={mouse}\n{}",
+            t.screen("waiting reset pending", |s| {
+                s.contains("Current #1 · PENDING") && !s.contains("Question from the worker")
+            })?
+        );
+        let after = f.ok(&["show", "1"])?;
+        assert_eq!(after["id"], old["id"]);
+        assert_eq!(after["attempts"][0]["id"], old["attempts"][0]["id"]);
+        assert_eq!(after["attempts"][0]["steps"], old["attempts"][0]["steps"]);
+        assert_eq!(after["attempts"][0]["state"], "interrupted");
+        assert_eq!(
+            f.db()?
+                .connection()
+                .query_row("SELECT prompt,state FROM questions", [], |r| Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?
+                )))?,
+            ("Which content?".into(), "cancelled".into())
+        );
+        f.ok(&["delete", "1"])?;
+        println!(
+            "RESET DELETED CURRENT mouse={mouse}\n{}",
+            t.screen("reset deleted from queue", |s| {
+                s.contains("Queue 0 · History 0")
+            })?
+        );
+        assert_eq!(f.ok(&["show", "1"])?["status"], "deleted");
+        f.ok(&["restore", "1"])?;
+        println!(
+            "RESET RESTORED CURRENT mouse={mouse}\n{}",
+            t.screen("reset restored pending", |s| {
+                s.contains("Current #1 · PENDING")
+            })?
+        );
+        // Supply an explicitly synthetic planner definition through the same shared
+        // application command used by the CLI/TUI, then inspect its persisted result.
+        let mut service = ktask_rs_mk3::application::Service::find(f.db()?, &f.root)?.unwrap();
+        let restored = service.task(1)?.unwrap();
+        let mut subtask = restored.definition().definition.clone();
+        subtask.title = "Replacement after reset".into();
+        service.apply_breakdown(
+            ktask_rs_mk3::application::VersionedTask {
+                id: 1,
+                version: restored.version,
+            },
+            &[subtask],
+            "Synthetic planner fixture after reset",
+            true,
+        )?;
+        if mouse {
+            t.click("3 History")?;
+        } else {
+            t.send("3")?;
+        }
+        let history = t.screen("reset superseded history", |s| {
+            shows_view(s, "History")
+                && s.contains("REPLACED")
+                && s.contains("Reset waiting question")
+        })?;
+        println!("RESET SUPERSEDED HISTORY mouse={mouse}\n{history}");
+        assert_eq!(f.ok(&["show", "1"])?["status"], "superseded");
+        assert!(
+            !history
+                .lines()
+                .any(|line| line.contains("#1") && line.contains("PENDING"))
+        );
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn reset_to_pending_mouse_control_confirms_without_starting_work() -> Result {
+    use ktask_rs_mk3::storage::execution::StartAttempt;
+    let f = Fixture::new()?;
+    f.add("Mouse reset")?;
+    let mut db = f.db()?;
+    let attempt = db.start_attempt(StartAttempt {
+        task_id: 1,
+        expected_version: 1,
+        execution_token: "mouse-reset",
+        now_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis() as i64,
+    })?;
+    db.connection()
+        .execute("UPDATE attempts SET state='paused' WHERE id=?1", [attempt])?;
+    db.connection().execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) SELECT project_id,task_id,id,started_at_ms,'supervisor.released','info','Fixture handoff' FROM attempts WHERE id=?1", [attempt])?;
+    drop(db);
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+    t.screen("paused mouse current", |s| {
+        s.contains("Current #1 · PAUSED") && s.contains("[P Reset to pending]")
+    })?;
+    t.click("P Reset to pending")?;
+    t.screen("mouse reset confirmation", |s| {
+        s.contains("Reset to pending") && s.contains("< No >")
+    })?;
+    t.click("No")?;
+    t.screen("reset selected", |s| s.contains("< Reset to pending >"))?;
+    t.click("Apply")?;
+    let pending = t.screen("mouse reset pending", |s| {
+        s.contains("Current #1 · PENDING") && !s.contains("< Reset to pending >")
+    })?;
+    println!("MOUSE RESET PENDING\n{pending}");
+    assert_eq!(
+        f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
+        1
+    );
+    fs::write(f.root.join("unrelated.txt"), "later user change\n")?;
+    let blocked = f.process().args(["--json", "run", "--one"]).output()?;
+    assert_eq!(blocked.status.code(), Some(4));
+    assert!(
+        String::from_utf8_lossy(&blocked.stderr)
+            .contains("Worktree changed after Reset to pending")
+    );
+    assert_eq!(
+        f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
+        1
+    );
+    t.send("q")?;
+    t.finish()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn reset_running_worker_reaps_before_editable_pending_and_stops_queue() -> Result {
+    let f = Fixture::new()?;
+    f.provider("usage-live")?;
+    f.add("Running reset")?;
+    f.ok(&["run", "--background"])?;
+    f.state("running")?;
+    support::eventually("provider entered", || {
+        Ok(f.scratch
+            .path()
+            .join("provider-invocations")
+            .exists()
+            .then_some(()))
+    })?;
+    let reset = f.ok(&[
+        "reset-to-pending",
+        "1",
+        "--confirm",
+        "--reason",
+        "Correct setup",
+    ])?;
+    assert_eq!(reset["action"], "reset_to_pending");
+    f.state("ready")?;
+    let shown = f.ok(&["show", "1"])?;
+    assert_eq!(shown["attempts"][0]["state"], "interrupted");
+    assert!(
+        shown["attempts"][0]["outcome"]
+            .as_str()
+            .unwrap()
+            .contains("Correct setup")
+    );
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
+        1
+    );
+    f.ok(&["edit", "1", "--goal", "Corrected setup"])?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn running_current_mouse_reset_waits_for_worker_cleanup_in_real_pty() -> Result {
+    let f = Fixture::new()?;
+    f.provider("usage-live")?;
+    f.add("Running PTY reset")?;
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 105, 31)?;
+    t.screen("ready current", |s| {
+        s.contains("Running PTY reset") && s.contains("PENDING")
+    })?;
+    t.send("r")?;
+    let running = t.screen("running reset control", |s| {
+        s.contains("Current #1 · RUNNING") && s.contains("[P Reset to pending]")
+    })?;
+    println!("RUNNING RESET\n{running}");
+    t.click("P Reset to pending")?;
+    t.screen("running reset confirmation", |s| {
+        s.contains("Reset to pending") && s.contains("worker must stop")
+    })?;
+    t.send(" \r")?;
+    let stopped = t.screen("worker reaped and pending", |s| {
+        s.contains("Current #1 · PENDING") && s.contains("[e Edit]")
+    })?;
+    println!("RUNNING RESET STOPPED\n{stopped}");
+    t.send("q")?;
+    t.finish()?;
+    let shown = f.ok(&["show", "1"])?;
+    assert_eq!(shown["attempts"][0]["state"], "interrupted");
+    assert_eq!(shown["attempts"].as_array().unwrap().len(), 1);
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn reset_refuses_unconfirmed_worker_cleanup_and_keeps_attempt_locked() -> Result {
+    use ktask_rs_mk3::storage::execution::StartAttempt;
+    let f = Fixture::new()?;
+    f.add("Cleanup gate")?;
+    let mut db = f.db()?;
+    let attempt = db.start_attempt(StartAttempt {
+        task_id: 1,
+        expected_version: 1,
+        execution_token: "cleanup-reset",
+        now_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis() as i64,
+    })?;
+    db.connection()
+        .execute("UPDATE attempts SET state='paused' WHERE id=?1", [attempt])?;
+    drop(db);
+    fs::write(
+        f.root.join(".git/ktask-worker.lock"),
+        "unconfirmed guardian cleanup\n",
+    )?;
+    let output = f
+        .process()
+        .args(["--json", "reset-to-pending", "1", "--confirm"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cleanup confirmation"));
+    let shown = f.ok(&["show", "1"])?;
+    assert_eq!(shown["status"], "paused");
+    assert_eq!(shown["attempts"][0]["state"], "paused");
+    assert_eq!(shown["version"], 2);
+    Ok(())
+}
+
+#[test]
+fn reset_accepts_waiting_failed_and_interrupted_current_without_losing_history() -> Result {
+    use ktask_rs_mk3::storage::execution::StartAttempt;
+    for state in ["waiting", "failed", "interrupted"] {
+        let f = Fixture::new()?;
+        f.add("Reset state")?;
+        let mut db = f.db()?;
+        let started = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis() as i64;
+        let attempt = db.start_attempt(StartAttempt {
+            task_id: 1,
+            expected_version: 1,
+            execution_token: "state-reset",
+            now_ms: started,
+        })?;
+        if state == "waiting" {
+            db.connection().execute("UPDATE attempts SET state='waiting',wait_reason='question',waiting_since_ms=?2 WHERE id=?1", rusqlite::params![attempt,started])?;
+            db.connection().execute("INSERT INTO questions(attempt_id,prompt,state,created_at_ms) VALUES (?1,'Which setting?','open',?2)", rusqlite::params![attempt,started])?;
+            db.connection().execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (1,1,?1,?2,'supervisor.released','info','Fixture handoff')", rusqlite::params![attempt,started])?;
+        } else {
+            db.connection().execute("UPDATE attempts SET state=?2,finished_at_ms=?3,outcome='prior result',failure_category=?4,report='prior result' WHERE id=?1", rusqlite::params![attempt,state,started,if state == "failed" { "configuration" } else { "interrupted" }])?;
+        }
+        drop(db);
+        f.ok(&["reset-to-pending", "1", "--confirm"])?;
+        let shown = f.ok(&["show", "1"])?;
+        assert_eq!(shown["status"], "ready", "{state}");
+        assert_eq!(shown["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            shown["attempts"][0]["state"],
+            if state == "waiting" {
+                "interrupted"
+            } else {
+                state
+            }
+        );
+        assert_eq!(shown["attempts_used"], 0);
+        f.ok(&["edit", "1", "--goal", "Corrected goal"])?;
+    }
+    Ok(())
+}
+
+#[test]
 fn native_model_metadata_is_exact_and_missing_metadata_is_actionable() -> Result {
     let f = Fixture::new()?;
     let catalog = f.scratch.path().join("state/ktask-dev/model-catalog.json");
@@ -943,6 +1653,9 @@ if [ '{mode}' = check-launch-failure ]; then
 fi
 prompt=$(cat)
 printf '%s' "$prompt" > "$HOME/prompt-$model"
+case "$prompt" in *"Keep preserved result.txt and verify the revised reset goal"*)
+ if [ "$model" = execution ]; then printf '%s' "$prompt" > "$HOME/reset-revised-prompt"; fi;;
+esac
 if [ "$model" = review ] && [ ! -f "$HOME/first-review-prompt" ]; then printf '%s' "$prompt" > "$HOME/first-review-prompt"; fi
 if [ "$model" = validation ] && [ ! -f "$HOME/first-validation-prompt" ]; then printf '%s' "$prompt" > "$HOME/first-validation-prompt"; fi
 case "$prompt" in *"Repair plan from the failure judge"*) printf '%s' "$prompt" > "$HOME/prompt-repair-worker";; esac
@@ -2777,7 +3490,10 @@ fn real_tui_shows_the_open_question_and_abandons_by_keyboard_and_mouse() -> Resu
             println!("ATTEMPT DROPPED (mouse={mouse})\n{interrupted}");
             assert!(interrupted.contains("Abandoned: Not worth answering"));
             assert!(interrupted.contains("[t Retry]") && interrupted.contains("[x Abandon]"));
-            assert!(interrupted.contains("Failed · t Retry · d Remediate · x Abandon"));
+            assert!(
+                interrupted
+                    .contains("Failed · t Retry · P Reset to pending · d Remediate · x Abandon")
+            );
             assert!(!interrupted.contains("Question from the worker"));
             t.send("o")?;
             t.screen("raw log", |s| {

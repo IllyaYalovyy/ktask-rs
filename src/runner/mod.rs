@@ -293,6 +293,12 @@ fn run_inner(
         )?;
         preflight(service, &task.execution_revision().definition)?;
         let base = workspace.head()?;
+        if let Some(saved) = service.reset_worktree(task.id)? {
+            require(
+                workspace.clean()? || workspace.reset_fingerprint()? == saved,
+                "Worktree changed after Reset to pending; preserve or commit the new changes before Run so unrelated work is not included",
+            )?;
+        }
         require(
             workspace.clean()?
                 || service.pending_delivery_handoff(task.id)?
@@ -1382,6 +1388,83 @@ pub fn abandon(
     service.abandon_run(target, reason)
 }
 
+/// Pause a live worker, wait for cleanup, then serialize reset against another runner.
+pub fn reset_to_pending(
+    service: &mut Service,
+    target: crate::application::VersionedTask,
+    reason: &str,
+) -> Result<()> {
+    let task = service
+        .current_task()?
+        .ok_or_else(|| Error::Conflict("No current task".into()))?;
+    require(
+        task.id == target.id && task.version == target.version,
+        "Task changed; refresh before Reset to pending",
+    )?;
+    let original_attempt = task.attempts.last().map(|attempt| attempt.id);
+    let mut pause_cursor = None;
+    if matches!(task.status.as_str(), "running" | "waiting") && supervisor_alive(service)? {
+        service.request_pause(target)?;
+        pause_cursor = original_attempt
+            .map(|attempt| service.pause_cursor(attempt))
+            .transpose()?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while supervisor_alive(service)? {
+            require(
+                std::time::Instant::now() < deadline,
+                "Worker cleanup did not finish; task remains locked. Retry Reset to pending after cleanup",
+            )?;
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+    let workspace = Workspace::acquire(&service.project_root()?)?;
+    let version = checked_reset_version(service, target, original_attempt, pause_cursor)?;
+    service.reset_to_pending(
+        crate::application::VersionedTask {
+            id: target.id,
+            version,
+        },
+        reason,
+        &workspace.reset_fingerprint()?,
+    )
+}
+
+/// Recheck the original caller after worker cleanup. Only that worker's one
+/// recorded pause transition may advance the version reset is allowed to use.
+fn checked_reset_version(
+    service: &mut Service,
+    target: VersionedTask,
+    original_attempt: Option<i64>,
+    pause_cursor: Option<i64>,
+) -> Result<i64> {
+    let current = service
+        .current_task()?
+        .ok_or_else(|| Error::Conflict("No current task".into()))?;
+    require(
+        current.id == target.id && current.attempts.last().map(|a| a.id) == original_attempt,
+        "Current task or attempt changed before Reset to pending",
+    )?;
+    let version = if current.version == target.version {
+        target.version
+    } else {
+        let attempt =
+            original_attempt.ok_or_else(|| Error::Conflict("Reset attempt changed".into()))?;
+        let verified_pause = pause_cursor
+            .map(|cursor| service.verified_pause_after(attempt, cursor))
+            .transpose()?
+            .unwrap_or(false);
+        require(
+            verified_pause
+                && current.version == target.version + 1
+                && current.status == "paused"
+                && current.attempts.last().is_some_and(|a| a.state == "paused"),
+            "Task changed while stopping its worker; refresh before Reset to pending",
+        )?;
+        current.version
+    };
+    Ok(version)
+}
+
 /// Give up on the whole task; it moves to History as cancelled with its attempts intact.
 pub fn abandon_task(
     service: &mut Service,
@@ -1471,4 +1554,59 @@ pub fn background(
             )
         })?
         .map_err(Error::Conflict)
+}
+
+#[cfg(test)]
+mod reset_version_tests {
+    use super::*;
+    use crate::storage::Database;
+    use rusqlite::params;
+
+    #[test]
+    fn answer_after_captured_reset_target_cannot_be_adopted() -> Result<()> {
+        let parent = tempfile::Builder::new()
+            .prefix("ktask-reset-race-")
+            .tempdir()?;
+        let scratch = crate::scratch::Scratch::new(parent.path())?;
+        let root = scratch.path().to_path_buf();
+        let state = root.join("state");
+        let db = Database::open_in(&state)?;
+        db.connection().execute(
+            "INSERT INTO projects(name,root_path,created_at_ms) VALUES ('race',?1,100)",
+            [root.as_os_str().as_encoded_bytes()],
+        )?;
+        let project = db.connection().last_insert_rowid();
+        db.connection().execute("INSERT INTO tasks(project_id,order_key,lifecycle,origin,created_at_ms,updated_at_ms) VALUES (?1,'1','ready','human',100,100)",[project])?;
+        let task = db.connection().last_insert_rowid();
+        db.connection().execute("INSERT INTO task_revisions(task_id,revision,lifecycle,kind,title,goal,created_by_kind,created_by,created_at_ms,decided_at_ms,decided_by_kind,decided_by) VALUES (?1,1,'ready','ai','Task','Goal','human','owner',100,100,'human','owner')",[task])?;
+        db.connection().execute("INSERT INTO attempts(project_id,task_id,revision,number,state,execution_token,started_at_ms,wait_reason,waiting_since_ms) VALUES (?1,?2,1,1,'waiting','old-worker',101,'question',102)",params![project,task])?;
+        let attempt = db.connection().last_insert_rowid();
+        db.connection().execute("INSERT INTO questions(attempt_id,prompt,state,created_at_ms) VALUES (?1,'What next?','open',102)",[attempt])?;
+        db.connection()
+            .execute("UPDATE tasks SET row_version=2 WHERE id=?1", [task])?;
+        drop(db);
+        let mut reset_service = Service::find(Database::open_in(&state)?, &root)?.expect("project");
+        let mut intervening_service =
+            Service::find(Database::open_in(&state)?, &root)?.expect("project");
+        let captured = reset_service.current_task()?.expect("current");
+        let target = VersionedTask {
+            id: task,
+            version: captured.version,
+        };
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        let answer_gate = Arc::clone(&gate);
+        let answer = std::thread::spawn(move || {
+            answer_gate.wait();
+            intervening_service.answer(target, "Proceed")
+        });
+        gate.wait();
+        answer.join().expect("answer thread")?;
+        assert!(checked_reset_version(&mut reset_service, target, Some(attempt), None).is_err());
+        let latest = reset_service.current_task()?.expect("current");
+        assert_eq!(latest.version, target.version + 1);
+        assert_eq!(latest.status, "waiting");
+        drop(reset_service);
+        scratch.close()?;
+        Ok(())
+    }
 }

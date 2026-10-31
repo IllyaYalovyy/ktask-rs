@@ -1,4 +1,5 @@
 use crate::support::{self, Result};
+use ktask_rs_mk3::application::{Definition, Kind, Service, VersionedTask, execution::Run};
 use ktask_rs_mk3::storage::{Database, execution::StartAttempt, ordering};
 use rusqlite::{Connection, params};
 use std::{
@@ -35,6 +36,289 @@ pub(super) fn task(db: &Connection, project: i64, key: &str) -> rusqlite::Result
 
 pub(super) fn scalar(db: &Connection, sql: &str) -> rusqlite::Result<i64> {
     db.query_row(sql, [], |r| r.get(0))
+}
+
+#[test]
+fn reset_cancels_failed_attempt_question_and_terminal_lifecycle_wins() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path().canonicalize()?;
+    let mut db = Database::open_in(&root.join("state"))?;
+    db.connection().execute(
+        "INSERT INTO projects(name,root_path,created_at_ms) VALUES ('reset',?1,100)",
+        [root.as_os_str().as_encoded_bytes()],
+    )?;
+    let project = db.connection().last_insert_rowid();
+    let id = task(db.connection(), project, "1")?;
+    let attempt = db.start_attempt(StartAttempt {
+        task_id: id,
+        expected_version: 1,
+        execution_token: "failed-reset",
+        now_ms: 101,
+    })?;
+    db.connection().execute(
+        "UPDATE attempts SET state='failed',failure_category='configuration',finished_at_ms=102,outcome='invalid settings' WHERE id=?1",
+        [attempt],
+    )?;
+    db.connection().execute(
+        "INSERT INTO questions(attempt_id,prompt,state,created_at_ms) VALUES (?1,'Retained question','open',102)",
+        [attempt],
+    )?;
+    let mut service = Service::find(db, &root)?.expect("registered project");
+    service.reset_to_pending(VersionedTask { id, version: 2 }, "edit settings", "tree")?;
+    assert!(service.open_question(id)?.is_none());
+    let mut db = Database::open_in(&root.join("state"))?;
+    assert_eq!(
+        scalar(
+            db.connection(),
+            "SELECT count(*) FROM questions WHERE state='cancelled' AND resolved_at_ms IS NOT NULL"
+        )?,
+        1
+    );
+    assert_eq!(
+        db.connection()
+            .query_row("SELECT status FROM task_details WHERE id=?1", [id], |r| {
+                r.get::<_, String>(0)
+            })?,
+        "ready"
+    );
+    let fresh = service.task(id)?.expect("reset task");
+    let new_attempt = db.start_attempt(StartAttempt {
+        task_id: id,
+        expected_version: fresh.version,
+        execution_token: "fresh-run",
+        now_ms: 103,
+    })?;
+    db.connection().execute(
+        "UPDATE attempts SET state='failed',failure_category='agent',finished_at_ms=104,outcome='Needs answer' WHERE id=?1",
+        [new_attempt],
+    )?;
+    db.connection().execute(
+        "INSERT INTO questions(attempt_id,prompt,state,created_at_ms) VALUES (?1,'New question','open',104)",
+        [new_attempt],
+    )?;
+    assert_eq!(
+        service.open_question(id)?.expect("new question").1,
+        "New question"
+    );
+    let failed = service.task(id)?.expect("failed task");
+    service.answer(
+        VersionedTask {
+            id,
+            version: failed.version,
+        },
+        "New answer",
+    )?;
+    assert!(service.open_question(id)?.is_none());
+    let answered = service.task(id)?.expect("answered task");
+    service.reset_to_pending(
+        VersionedTask {
+            id,
+            version: answered.version,
+        },
+        "edit again",
+        "tree",
+    )?;
+    let current = service.task(id)?.expect("reset task");
+    service.delete(VersionedTask {
+        id,
+        version: current.version,
+    })?;
+    assert_eq!(
+        db.connection()
+            .query_row("SELECT status FROM task_details WHERE id=?1", [id], |r| {
+                r.get::<_, String>(0)
+            })?,
+        "deleted"
+    );
+    let deleted = service.task(id)?.expect("deleted task");
+    assert!(
+        service
+            .delete(VersionedTask {
+                id,
+                version: deleted.version
+            })
+            .is_err()
+    );
+    service.restore(VersionedTask {
+        id,
+        version: deleted.version,
+    })?;
+    assert_eq!(
+        db.connection()
+            .query_row("SELECT status FROM task_details WHERE id=?1", [id], |r| {
+                r.get::<_, String>(0)
+            })?,
+        "ready"
+    );
+    let restored = service.task(id)?.expect("restored task");
+    service.apply_breakdown(
+        VersionedTask {
+            id,
+            version: restored.version,
+        },
+        &[Definition {
+            title: "Follow-up".into(),
+            goal: "Finish remaining work".into(),
+            kind: Kind::Ai,
+            criteria: vec!["Done".into()],
+            models: [None, None, None, None],
+            attempt_limit: None,
+            timeout_ms: None,
+            stage_timeout_ms: None,
+        }],
+        "Break down reset work",
+        true,
+    )?;
+    assert_eq!(
+        db.connection()
+            .query_row("SELECT status FROM task_details WHERE id=?1", [id], |r| {
+                r.get::<_, String>(0)
+            })?,
+        "superseded"
+    );
+    Ok(())
+}
+
+#[test]
+fn reset_successor_keeps_fresh_worker_phase_through_delivery_handoff() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path().canonicalize()?;
+    let mut db = Database::open_in(&root.join("state"))?;
+    db.connection().execute(
+        "INSERT INTO projects(name,root_path,created_at_ms) VALUES ('handoff',?1,100)",
+        [root.as_os_str().as_encoded_bytes()],
+    )?;
+    let project = db.connection().last_insert_rowid();
+    let id = task(db.connection(), project, "1")?;
+    let old = db.start_attempt(StartAttempt {
+        task_id: id,
+        expected_version: 1,
+        execution_token: "old",
+        now_ms: 101,
+    })?;
+    db.connection()
+        .execute("UPDATE attempts SET state='paused' WHERE id=?1", [old])?;
+    db.connection().execute(
+        "INSERT INTO attempt_progress(attempt_id,repair_round,phase,context,evidence,verified_tree) VALUES (?1,4,'review','Prior findings','old proof','old tree')",
+        [old],
+    )?;
+    db.connection().execute(
+        "INSERT INTO attempt_delivery(attempt_id,mode,remote,destination_url,base_branch,stage,checkpoint_head) VALUES (?1,'local','','','main','integrating',?2)",
+        params![old, "a".repeat(40)],
+    )?;
+    let mut service = Service::find(db, &root)?.expect("registered project");
+    service.reset_to_pending(VersionedTask { id, version: 2 }, "change task", "tree")?;
+    let mut db = Database::open_in(&root.join("state"))?;
+    let successor = db.start_attempt(StartAttempt {
+        task_id: id,
+        expected_version: 3,
+        execution_token: "new",
+        now_ms: 103,
+    })?;
+    let run = Run {
+        attempt: successor,
+        task: id,
+        revision: 1,
+        token: "new".into(),
+        definition: Definition {
+            title: "Task title".into(),
+            goal: "Changed goal".into(),
+            kind: Kind::Ai,
+            criteria: vec!["Done".into()],
+            models: [None, None, None, None],
+            attempt_limit: None,
+            timeout_ms: None,
+            stage_timeout_ms: None,
+        },
+        active_ms: 0,
+    };
+    assert!(service.claim_delivery_handoff(&run)?);
+    let progress = service.progress(&run)?.expect("reset progress");
+    assert_eq!((progress.round, progress.phase.as_str()), (4, "implement"));
+    assert!(progress.evidence.is_empty());
+    assert!(progress.verified_tree.is_empty());
+    service.reset_delivery_verification(&run, &"b".repeat(40), "rebase finished")?;
+    assert_eq!(
+        service.progress(&run)?.expect("reconciled progress").phase,
+        "implement"
+    );
+    Ok(())
+}
+
+#[test]
+fn concurrent_answer_and_reset_serialize_and_old_supervisor_cannot_resume() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path().canonicalize()?;
+    let state = root.join("state");
+    let mut db = Database::open_in(&state)?;
+    db.connection().execute(
+        "INSERT INTO projects(name,root_path,created_at_ms) VALUES ('race',?1,100)",
+        [root.as_os_str().as_encoded_bytes()],
+    )?;
+    let id = task(db.connection(), db.connection().last_insert_rowid(), "1")?;
+    let attempt = db.start_attempt(StartAttempt {
+        task_id: id,
+        expected_version: 1,
+        execution_token: "old-supervisor",
+        now_ms: 101,
+    })?;
+    db.connection().execute("UPDATE attempts SET state='waiting',wait_reason='question',waiting_since_ms=102 WHERE id=?1",[attempt])?;
+    db.connection().execute("INSERT INTO questions(attempt_id,prompt,state,created_at_ms) VALUES (?1,'What next?','open',102)",[attempt])?;
+    drop(db);
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let mut reset_service = Service::find(Database::open_in(&state)?, &root)?.expect("project");
+    let mut answer_service = Service::find(Database::open_in(&state)?, &root)?.expect("project");
+    let reset_barrier = barrier.clone();
+    let reset = thread::spawn(move || {
+        reset_barrier.wait();
+        reset_service
+            .reset_to_pending(VersionedTask { id, version: 2 }, "race", "tree")
+            .is_ok()
+    });
+    let answer_barrier = barrier.clone();
+    let answer = thread::spawn(move || {
+        answer_barrier.wait();
+        answer_service
+            .answer(VersionedTask { id, version: 2 }, "Proceed")
+            .is_ok()
+    });
+    barrier.wait();
+    let reset_won = reset.join().expect("reset thread");
+    let answer_won = answer.join().expect("answer thread");
+    assert_ne!(
+        reset_won, answer_won,
+        "exactly one versioned command must win"
+    );
+    let mut service = Service::find(Database::open_in(&state)?, &root)?.expect("project");
+    if answer_won {
+        let current = service.task(id)?.expect("task");
+        service.reset_to_pending(
+            VersionedTask {
+                id,
+                version: current.version,
+            },
+            "after answer",
+            "tree",
+        )?;
+    }
+    assert_eq!(service.task(id)?.expect("task").status, "ready");
+    assert!(service.open_question(id)?.is_none());
+    let mut db = Database::open_in(&state)?;
+    let version =
+        db.connection()
+            .query_row("SELECT row_version FROM tasks WHERE id=?1", [id], |r| {
+                r.get(0)
+            })?;
+    assert!(
+        db.resume_attempt(StartAttempt {
+            task_id: id,
+            expected_version: version,
+            execution_token: "old-supervisor",
+            now_ms: 105
+        })
+        .is_err()
+    );
+    Ok(())
 }
 
 #[test]

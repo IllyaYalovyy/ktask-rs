@@ -148,6 +148,15 @@ impl Workspace {
     pub fn clean(&self) -> Result<bool> {
         Ok(git(&self.root, &["status", "--porcelain"])?.is_empty())
     }
+    /// Canonical tree identity of the current bytes and modes, independent of
+    /// whether a change is staged. The caller holds the workspace lease.
+    pub fn reset_fingerprint(&self) -> Result<String> {
+        // Scratch sweeps its root for abandoned run directories. Give it an
+        // owned private root so a normal launch with TMPDIR=/tmp cannot sweep
+        // another application's directories.
+        let root = tempfile::Builder::new().prefix("ktask-reset-").tempdir()?;
+        self.fingerprint(root.path())
+    }
     /// Hash the exact tracked/untracked content a checkpoint would include, without
     /// changing the user's index. Git's tree identity includes paths, modes and bytes.
     pub fn fingerprint(&self, scratch_root: &Path) -> Result<String> {
@@ -328,5 +337,60 @@ impl Workspace {
             ));
         }
         self.head()
+    }
+}
+
+#[cfg(test)]
+mod reset_fingerprint_tests {
+    use super::*;
+
+    fn run(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn staging_same_bytes_keeps_reset_identity_and_new_edit_changes_it() -> Result<()> {
+        let project = tempfile::Builder::new()
+            .prefix("ktask-reset-test-")
+            .tempdir()?;
+        let root = project.path();
+        run(root, &["init", "-q"]);
+        std::fs::write(root.join("tracked.txt"), "baseline\n")?;
+        run(root, &["add", "tracked.txt"]);
+        run(
+            root,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-qm",
+                "baseline",
+            ],
+        );
+        let workspace = Workspace::acquire(root)?;
+        std::fs::write(root.join("tracked.txt"), "reset bytes\n")?;
+        std::fs::write(root.join("new.txt"), "new bytes\n")?;
+        let saved = workspace.reset_fingerprint()?;
+        let index_before = std::fs::read(root.join(".git/index"))?;
+        run(root, &["add", "tracked.txt", "new.txt"]);
+        let staged_index = std::fs::read(root.join(".git/index"))?;
+        assert_ne!(index_before, staged_index);
+        assert_eq!(workspace.reset_fingerprint()?, saved);
+        assert_eq!(std::fs::read(root.join(".git/index"))?, staged_index);
+        std::fs::write(root.join("new.txt"), "newer bytes\n")?;
+        assert_ne!(workspace.reset_fingerprint()?, saved);
+        Ok(())
     }
 }

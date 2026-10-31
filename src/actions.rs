@@ -141,6 +141,21 @@ impl App {
                     && self.service.is_some()
                     && current.is_some_and(|t| abandonable(t.status()))
             }
+            Action::ResetToPending => {
+                self.view == View::Current
+                    && self.service.is_some()
+                    && current.is_some_and(|t| {
+                        matches!(
+                            t.status(),
+                            Status::Running
+                                | Status::Paused
+                                | Status::Waiting
+                                | Status::Question
+                                | Status::Failed
+                                | Status::Interrupted
+                        )
+                    })
+            }
             Action::Output => {
                 self.view == View::Current
                     && current.is_some_and(|t| {
@@ -187,6 +202,22 @@ impl App {
                 matches!(self.view, View::Queue | View::History)
             }
             _ => true,
+        }
+    }
+
+    fn unavailable_message(&self, action: Action) -> &'static str {
+        if matches!(action, Action::Edit | Action::Models)
+            && self.service.is_some()
+            && self.selected_task().is_some_and(|task| {
+                matches!(
+                    task.status(),
+                    Status::Running | Status::Paused | Status::Waiting | Status::Question
+                )
+            })
+        {
+            "Task is live; use Reset to pending before editing models or the task"
+        } else {
+            "Unavailable here · only the current task can execute; running work and History are read-only"
         }
     }
 
@@ -244,7 +275,7 @@ impl App {
             return;
         }
         if !self.enabled(action) {
-            self.message("Unavailable here · only the current task can execute; running work and History are read-only");
+            self.message(self.unavailable_message(action));
             return;
         }
         let had_dialog = self.dialog.is_some();
@@ -415,6 +446,7 @@ impl App {
             Action::Abandon => {
                 self.message("Abandon applies to stored tasks only");
             }
+            Action::ResetToPending => self.message("Reset to pending applies to stored tasks only"),
             Action::Inspect | Action::InspectSection(_) => {
                 if let Some(task) = self.selected_task() {
                     let index = self
@@ -723,7 +755,7 @@ impl App {
         self.dialog = Some(Dialog::new(
             DialogKind::Help,
             "Keyboard help",
-            "1 Current  2 Queue  3 History  4 Config  5 About\nTab / Shift-Tab: next / previous screen\nClick tabs, rows, buttons, and fields; wheel scrolls.\nDrag body text to select; click Copy or press F6 for OSC 52.\nCtrl-Shift-C copies selection when terminal reports modifiers.\nF2 selects a text pane; F2 again moves to the next pane.\nShift-arrows extend selection; Enter copies; Esc clears.\nF7 releases mouse capture for native terminal selection.\nCurrent: r run/resume, p pause, t retry, d remediate\nCurrent: R recover abandoned, x abandon task, z resolve failed\nCurrent: c models/limits; v approve; n reject\nCurrent: y acknowledge Human, w answer AI\nCurrent: o toggles report / raw log; l all events\nQueue: a add, i insert, e edit, d delete/abandon, u undo\nQueue: m move, b break down, o import, x export\nQueue: c models/limits; v approve; n reject\nQueue/History: / search, f filter, Esc clear\nHistory: V reviews, F failures for selected task\nj/k or arrows: move/scroll; PgUp/PgDn: page\nHome/End: first/last; End follows current output\nEnter: inspect selected task; [ / ]: inspect attempts\nDetails: s summary, v reviews, f failures, g results, o output, t transcripts\nDetails: n/p step, Left/Right section, < / > evidence page\ns: project statistics; ?: help; q: quit\nForms: Tab/arrows focus; Space cycles choices\nForms: Ctrl-A clears field; Ctrl-S/Enter applies\nEsc cancels dialogs/search; Ctrl-C copies selection or quits\nSearch: Enter applies; Esc restores previous query\nAll tasks, models, runs, and files are simulated.",
+            "1 Current  2 Queue  3 History  4 Config  5 About\nTab / Shift-Tab: next / previous screen\nClick tabs, rows, buttons, and fields; wheel scrolls.\nDrag body text to select; click Copy or press F6 for OSC 52.\nCtrl-Shift-C copies selection when terminal reports modifiers.\nF2 selects a text pane; F2 again moves to the next pane.\nShift-arrows extend selection; Enter copies; Esc clears.\nF7 releases mouse capture for native terminal selection.\nCurrent: r run/resume, p pause, P Reset to pending, t retry, d remediate\nCurrent: R recover abandoned, x abandon task, z resolve failed\nCurrent: c models/limits; v approve; n reject\nCurrent: y acknowledge Human, w answer AI\nCurrent: o toggles report / raw log; l all events\nQueue: a add, i insert, e edit, d delete/abandon, u undo\nQueue: m move, b break down, o import, x export\nQueue: c models/limits; v approve; n reject\nQueue/History: / search, f filter, Esc clear\nHistory: V reviews, F failures for selected task\nj/k or arrows: move/scroll; PgUp/PgDn: page\nHome/End: first/last; End follows current output\nEnter: inspect selected task; [ / ]: inspect attempts\nDetails: s summary, v reviews, f failures, g results, o output, t transcripts\nDetails: n/p step, Left/Right section, < / > evidence page\ns: project statistics; ?: help; q: quit\nForms: Tab/arrows focus; Space cycles choices\nForms: Ctrl-A clears field; Ctrl-S/Enter applies\nEsc cancels dialogs/search; Ctrl-C copies selection or quits\nSearch: Enter applies; Esc restores previous query\nAll tasks, models, runs, and files are simulated.",
             vec![],
         ));
     }
@@ -1404,6 +1436,9 @@ impl App {
         match dialog.kind.clone() {
             DialogKind::Task { id, insert } => self.save_task(dialog, id, insert)?,
             DialogKind::Abandon(_) => return Err("Abandon applies to stored tasks only".into()),
+            DialogKind::ResetToPending(_) => {
+                return Err("Reset to pending applies to stored tasks only".into());
+            }
             DialogKind::Recover => return Err("Recover applies to stored tasks only".into()),
             DialogKind::Delete(id) => {
                 let pos = self

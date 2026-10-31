@@ -73,6 +73,8 @@ CREATE TABLE tasks (
     origin_attempt_id INTEGER,
     recovery_root_id INTEGER REFERENCES tasks(id),
     automatic_replans INTEGER NOT NULL DEFAULT 0 CHECK (automatic_replans BETWEEN 0 AND 10),
+    reset_pending INTEGER NOT NULL DEFAULT 0 CHECK (reset_pending IN (0, 1)),
+    reset_worktree TEXT,
     row_version INTEGER NOT NULL DEFAULT 1 CHECK (row_version > 0),
     created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
     updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
@@ -213,7 +215,8 @@ CREATE TABLE attempt_progress (
     phase TEXT NOT NULL CHECK (phase IN ('implement','judge','replanned','fix','integrate','check','review','validate','decide','complete')),
     context TEXT NOT NULL DEFAULT '',
     evidence TEXT NOT NULL DEFAULT '',
-    verified_tree TEXT NOT NULL DEFAULT ''
+    verified_tree TEXT NOT NULL DEFAULT '',
+    reset_fresh INTEGER NOT NULL DEFAULT 0 CHECK (reset_fresh IN (0,1))
 ) STRICT;
 
 -- Provider session != worker process != attempt. Waiting may have no process at all.
@@ -421,8 +424,9 @@ SELECT t.*, r.revision, r.lifecycle AS revision_lifecycle,
     draft.revision AS pending_revision, draft.title AS pending_title, draft.goal AS pending_goal,
     a.id AS latest_attempt_id, a.state AS attempt_state, a.revision AS attempt_revision,
     a.wait_reason, a.waiting_since_ms, a.resume_at_ms, a.active_ms,
-    CASE WHEN a.state IN ('running', 'paused', 'waiting') THEN a.state
-         WHEN t.lifecycle <> 'ready' THEN t.lifecycle
+    CASE WHEN t.lifecycle <> 'ready' THEN t.lifecycle
+         WHEN a.state IN ('running', 'paused', 'waiting') THEN a.state
+         WHEN t.reset_pending = 1 THEN 'ready'
          WHEN a.state IS NOT NULL THEN a.state ELSE 'ready' END AS status,
     (SELECT count(*) FROM attempts spent WHERE spent.task_id = t.id
         AND (spent.state = 'succeeded' OR (spent.state = 'failed'

@@ -29,6 +29,14 @@ The displayed status combines task readiness/resolution with attempt state; it i
 a second stored lifecycle. Running is pinned by the attempt. Otherwise current is the first
 unfinished task in execution order: failure blocks later work, but insertion before non-running
 current can make remediation current. New/unapproved current is never silently skipped.
+Reset to pending sets `tasks.reset_pending` and interrupts an open attempt in one
+version-checked transaction after worker cleanup. The view displays ready until an
+explicit new Run clears the flag; attempts, evidence, and workspace changes remain.
+Reset closes the task's open provider sessions while retaining their records.
+The reset records the worktree fingerprint; a new uncommitted change before Run blocks
+execution so the next attempt does not sweep unrelated user work into its commit.
+The new attempt begins with fresh execution (or the required repair judge after failure),
+retaining the repair count and context while clearing proof for the edited revision.
 
 Planner/remediator work uses ordinary tasks, not proposal tables. Approval is a human or AI
 decision on the revision. An override/skip/supersede resolves the task without rewriting its
@@ -317,6 +325,7 @@ Durable phase within one attempt. Initial implementation is round zero; at most 
 | `context` | TEXT | no | Current findings and authorized repair plan. |
 | `evidence` | TEXT | no | Current round's assessments and durable transcript references. |
 | `verified_tree` | TEXT | no | Git tree fingerprint binding the retained proof to source content. |
+| `reset_fresh` | INTEGER | no | Marks a new attempt after Reset to pending so delivery recovery preserves its fresh worker/judge phase; stored only on this attempt. |
 
 - PK `(attempt_id)`.
 - FK `(attempt_id)` → `attempts(id)`.
@@ -742,6 +751,8 @@ Stable task identity, readiness, and final resolution. Execution status exists o
 | `origin_attempt_id` | INTEGER | yes | Source attempt for a worker draft; required only when origin is worker. |
 | `recovery_root_id` | INTEGER | yes | Original task whose automatic replan budget this prerequisite shares. |
 | `automatic_replans` | INTEGER | no | Number of automatic judge handoffs for the recovery root, at most ten. |
+| `reset_pending` | INTEGER | no | Explicit reset makes current editable and requires a fresh Run; cleared when a new attempt starts. |
+| `reset_worktree` | TEXT | yes | Worktree fingerprint at reset; a fresh Run blocks new uncommitted changes. |
 | `row_version` | INTEGER | no | Positive optimistic concurrency version, default 1. |
 | `created_at_ms` | INTEGER | no | Creation time. |
 | `updated_at_ms` | INTEGER | no | Last command time; not before creation. |

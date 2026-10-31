@@ -8,6 +8,10 @@ fn checked(tx: &Transaction<'_>, project: i64, target: VersionedTask) -> Result<
 }
 fn editable(lifecycle: &str, status: &str) -> Result<()> {
     require(
+        !matches!(status, "paused" | "waiting"),
+        "Task is live; use Reset to pending before editing",
+    )?;
+    require(
         matches!(lifecycle, "new" | "ready")
             && matches!(
                 status,
@@ -498,6 +502,19 @@ impl Service {
         actor: &Actor,
         reason: Option<&str>,
     ) -> Result<()> {
+        let status: Option<String> = self
+            .db
+            .connection()
+            .query_row(
+                "SELECT status FROM task_details WHERE project_id=?1 AND id=?2 AND row_version=?3",
+                params![self.project_id, target.id, target.version],
+                |r| r.get(0),
+            )
+            .optional()?;
+        require(
+            !matches!(status.as_deref(), Some("paused" | "waiting")),
+            "Task is live; use Reset to pending before editing",
+        )?;
         self.validate_definition_models(definition)?;
         let tx = self
             .db
@@ -511,8 +528,11 @@ impl Service {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         require(
-            !matches!(status.as_str(), "failed" | "interrupted" | "cancelled")
-                || old_kind == definition.kind.as_str(),
+            !tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM attempts WHERE task_id=?1)",
+                [target.id],
+                |r| r.get::<_, bool>(0),
+            )? || old_kind == definition.kind.as_str(),
             "Keep the kind of an attempted task",
         )?;
         let now = now_ms();

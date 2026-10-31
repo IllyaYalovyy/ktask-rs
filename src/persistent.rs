@@ -370,6 +370,18 @@ impl App {
                 self.open_abandon(id);
                 return true;
             }
+            Action::ResetToPending => {
+                let id = self.current().expect("enabled current").id;
+                let mut dialog = Dialog::new(
+                    DialogKind::ResetToPending(id),
+                    "Reset to pending",
+                    "This ends the current attempt, preserves its work and history, and makes this task editable. Resume continues the same attempt; Reset requires a fresh Run. If running, its worker must stop and be reaped first.",
+                    vec![Field::choice("Confirm", &["No", "Reset to pending"], "No")],
+                );
+                dialog.expected = self.target(id).ok();
+                self.dialog = Some(dialog);
+                return true;
+            }
             Action::Delete
                 if self
                     .selected_task()
@@ -787,6 +799,7 @@ impl App {
             | DialogKind::Models(id)
             | DialogKind::Resolve(id)
             | DialogKind::Abandon(id)
+            | DialogKind::ResetToPending(id)
             | DialogKind::Reject(id) => Some(id),
             DialogKind::RemediationReview { id, .. } => Some(id),
             _ => None,
@@ -839,7 +852,16 @@ impl App {
                             .unwrap_or(""),
                     );
                 }
-                dialog.body = "Use provider/model: codex/…, claude/sonnet, opencode/vendor/model; blank means unconfigured.\nSave approves a new revision. No provider calls are made.".into();
+                let defaults = self
+                    .service
+                    .as_ref()
+                    .unwrap()
+                    .defaults()
+                    .unwrap_or(std::array::from_fn(|_| None));
+                let preview = defaults_preview(&defaults);
+                dialog.body = format!(
+                    "Use provider/model: codex/…, claude/sonnet, opencode/vendor/model; blank means unconfigured.\nApply current project defaults replaces all four role settings on Save. Effective defaults preview:\n{preview}\nSave approves a new revision."
+                );
             }
             DialogKind::Config => {
                 dialog.body = "Mouse preference applies to this session.\nTask models and limits are saved per revision. Agents run in a separate supervisor.".into();
@@ -963,7 +985,7 @@ impl App {
                 }
             }
             DialogKind::Help => {
-                dialog.body = dialog.body.replace("All tasks, models, runs, and files are simulated.", "Changes save immediately. Run starts the configured agents in a background supervisor; Pause stops it.\nChecks, review and validation gate success. Review findings enter the normal fix loop, with up to ten repair rounds before critical findings need a decision.\nx abandons a waiting attempt without spending budget. Break down uses the planning model.");
+                dialog.body = dialog.body.replace("All tasks, models, runs, and files are simulated.", "Changes save immediately. Run starts the configured agents in a background supervisor; Pause stops it.\nResume continues the paused or waiting attempt and its provider session. P Reset to pending ends it, preserves work and evidence, and requires an explicit new Run. Edit models after reset to preview and apply current project defaults.\nChecks, review and validation gate success. Review findings enter the normal fix loop, with up to ten repair rounds before critical findings need a decision.\nx Abandon moves the task to History. Break down uses the planning model.");
             }
             _ => {}
         }
@@ -1091,6 +1113,17 @@ impl App {
                 }
                 .map_err(|e| e.to_string())?;
             }
+            DialogKind::ResetToPending(_) => {
+                if dialog.value(0) != "Reset to pending" {
+                    return Ok(false);
+                }
+                crate::runner::reset_to_pending(
+                    self.service.as_mut().unwrap(),
+                    target()?,
+                    "Owner reset current to pending",
+                )
+                .map_err(|e| e.to_string())?;
+            }
             DialogKind::Task { id, insert } => {
                 let mut definition = if let Some(id) = id {
                     self.stored
@@ -1171,13 +1204,29 @@ impl App {
                     .find(|r| r.lifecycle == "draft" && r.number > task.definition().number)
                     .unwrap_or_else(|| task.definition());
                 let mut definition = revision.definition.clone();
-                for (i, model) in definition.models.iter_mut().enumerate() {
-                    *model =
-                        ModelConfig::from_fields(dialog.value(i * 2), dialog.value(i * 2 + 1))?;
+                if dialog.value(11) != "Apply current project defaults" {
+                    for (i, model) in definition.models.iter_mut().enumerate() {
+                        *model =
+                            ModelConfig::from_fields(dialog.value(i * 2), dialog.value(i * 2 + 1))?;
+                    }
                 }
                 definition.attempt_limit = limit(dialog.value(8))?;
                 definition.timeout_ms = crate::application::limits::parse(dialog.value(9))?;
                 definition.stage_timeout_ms = crate::application::limits::parse(dialog.value(10))?;
+                if dialog.value(11) == "Apply current project defaults" {
+                    let defaults = self
+                        .service
+                        .as_ref()
+                        .unwrap()
+                        .defaults()
+                        .map_err(|e| e.to_string())?;
+                    if !dialog.body.contains(&defaults_preview(&defaults)) {
+                        return Err(
+                            "Project defaults changed; reopen Models to preview them again".into(),
+                        );
+                    }
+                    definition.models = defaults;
+                }
                 self.service
                     .as_mut()
                     .unwrap()
@@ -1292,6 +1341,27 @@ impl App {
         }
         Ok(true)
     }
+}
+
+fn defaults_preview(defaults: &[Option<ModelConfig>; 4]) -> String {
+    model::ROLES
+        .iter()
+        .zip(defaults.iter())
+        .map(|(role, value)| {
+            format!(
+                "{role}: {}",
+                value
+                    .as_ref()
+                    .map_or("unconfigured".to_owned(), |m| format!(
+                        "{}/{} · effort {}",
+                        m.provider,
+                        m.model,
+                        m.effort.as_deref().unwrap_or("none")
+                    ))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn set_new_task_execution_model(

@@ -25,6 +25,7 @@ pub enum DialogKind {
     Breakdown(usize),
     Answer(usize),
     Abandon(usize),
+    ResetToPending(usize),
     Recover,
     Readiness,
     Import,

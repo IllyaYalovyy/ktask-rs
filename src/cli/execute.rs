@@ -270,6 +270,26 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
                 text: "Pause requested; worker shutdown pending\n".into(),
             })
         }
+        Command::ResetToPending {
+            target: input,
+            confirm,
+            reason,
+        } => {
+            if !confirm {
+                return Err(Failure::usage(
+                    "Reset to pending needs --confirm; it ends the current attempt and requires a fresh Run",
+                ));
+            }
+            let (_, target) = target(service, input)?;
+            crate::runner::reset_to_pending(service, target, reason)?;
+            Ok(Reply {
+                data: json!({"action":"reset_to_pending","id":target.id}),
+                text: format!(
+                    "Task #{} reset to pending; edit it, then Run explicitly\n",
+                    target.id
+                ),
+            })
+        }
         Command::Abandon {
             target: input,
             reason,
@@ -543,6 +563,32 @@ fn edit(service: &mut Service, input: &Target, pending: bool, changes: &Changes)
         selected
     };
     let mut d = revision.definition.clone();
+    if changes.preview_project_defaults {
+        let defaults = service.defaults()?;
+        return Ok(Reply {
+            data: json!({"action":"preview_project_defaults","id":target.id,"models":app::ROLES.iter().zip(defaults.iter()).map(|(role, model)| (*role, model)).collect::<std::collections::BTreeMap<_, _>>()}),
+            text: app::ROLES
+                .iter()
+                .zip(defaults.iter())
+                .map(|(role, model)| {
+                    format!(
+                        "{role}: {}\n",
+                        model
+                            .as_ref()
+                            .map_or("unconfigured".to_owned(), |m| format!(
+                                "{}/{} effort {}",
+                                m.provider,
+                                m.model,
+                                m.effort.as_deref().unwrap_or("none")
+                            ))
+                    )
+                })
+                .collect(),
+        });
+    }
+    if changes.apply_project_defaults {
+        d.models = service.defaults()?;
+    }
     if let Some(title) = &changes.title {
         d.title.clone_from(title);
     }

@@ -50,13 +50,14 @@ TYPICAL SESSION
   ktask --json events --after 0        # progress feed; pass next_after on the next call
   ktask --json show 12                 # full record: revisions, attempts, steps, usage
   ktask --json pause 12                # stop after the worker is cleaned up; run resumes
+  ktask --json reset-to-pending 12 --confirm  # end attempt, edit task, then Run afresh
   Foreground run (no --background) blocks until the queue is done or something needs
   the owner, then prints why it stopped. A detached runner logs to
   <state>/runner-<project id>.log (see --paths).
 
 STATUS VALUES ("status" in list, show and current)
   new             no approved revision yet: approve it, or edit --approval ready
-  ready           queued
+  ready           queued or Reset to pending; editable, explicit Run starts a new attempt
   running         an attempt is executing
   paused          paused by the owner; run resumes the same attempt
   waiting         a provider usage limit (wait_reason "rate_limit", resume_at_ms), or an
@@ -79,6 +80,13 @@ WHEN EXECUTION STOPS ON A FAILED TASK
     ktask breakdown ID [--apply]               split it into ordered subtasks
     ktask resolve ID --outcome failed-skipped --reason '...'   move on
     ktask abandon ID --reason '...'            give up; the task goes to History
+    ktask reset-to-pending ID --confirm          keep task/history/work; edit, then Run
+  Resume continues the paused or waiting attempt and its provider session. Reset to pending
+  interrupts it without spending attempt budget, preserves evidence and workspace changes,
+  and requires a new Run. A running worker is stopped and reaped first. New uncommitted
+  source changes after Reset block Run until preserved or committed. Editing a paused
+  or waiting task requires Reset to pending. Use edit ID --preview-project-defaults to
+  inspect all four effective role settings; edit ID --apply-project-defaults copies them.
 
 OUTPUT CONTRACT
   Without --json, output is human text and may change. With --json, stdout carries one

@@ -24,6 +24,8 @@
 - Current waits on a question → the question is shown on screen with Answer first; Abandon gives up on the task (History, cancelled) or drops only the waiting or paused attempt without spending budget.
 - Current failed and not worth more attempts → Abandon on Current, or Delete on it in Queue, moves it to History as cancelled with its attempts and evidence; Resolve records it as done or superseded instead.
 - Run current → continue the queue by default, with Run one available explicitly; see the mode, goal, current phase and next task; pause → see it paused with progress retained and no later task started; resume → continue the same task.
+- Reset to pending from running, paused, waiting, failed or interrupted Current → confirm; stop and reap any worker; interrupt the open attempt with a reset reason; retain its work, output, usage and evidence. The same task remains in place and becomes editable. Resume keeps the current attempt and provider session; Reset requires an explicit Run to start a fresh attempt, even in queue mode.
+- Edit models after Reset → preview the current project defaults for execution, review, validation and remediation, then choose Apply current project defaults. Reset alone keeps the task's settings.
 - From Queue, press r or use its Run control to start the current task, regardless of which row is selected; the selected row remains a browsing selection.
 - Retry failed current → start a new attempt on that task, preserving previous attempts and their evidence.
 - Inspect failure → the stronger remediation model judges the evidence and repairs within the task by default → revise, escalate, or insert prerequisites only when the evidence warrants it; ask the owner only for a consequential product decision and require approval only by policy.
@@ -34,7 +36,7 @@
 - Complete current → move it to History and show the next pending task as current; when none remain, show queue complete.
 - Search or filter Queue → select a matching task → read its details; no matches offers clearing the search/filter.
 - Add a task → save → see it appended and selected; cancel leaves Queue unchanged.
-- Edit a pending task or failed current → save updated details or cancel unchanged; running/paused tasks and History remain read-only.
+- Edit a pending task or failed current → save updated details or cancel unchanged; running, paused and waiting tasks and History remain read-only. A paused or waiting edit points to Reset to pending.
 - Delete a pending task → confirm removal → see the updated queue; undo restores it, while cancel changes nothing.
 - Reorder or insert pending work → choose an execution position → see the new order; show neighboring task IDs even when filtered. Insertion before current is allowed unless it is running; never insert into History.
 - Acknowledge a current Human task → record completion and advance; until acknowledged, execution waits.

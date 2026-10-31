@@ -359,7 +359,17 @@ fn controls(app: &App) -> Vec<(&'static str, Action)> {
         ],
         View::About => vec![("Esc Back", Action::Back)],
     };
-    controls.retain(|(_, action)| app.enabled(*action));
+    controls.retain(|(_, action)| {
+        app.enabled(*action)
+            || (app.service.is_some()
+                && matches!(action, Action::Edit | Action::Models)
+                && app.selected_task().is_some_and(|task| {
+                    matches!(
+                        task.status(),
+                        Status::Running | Status::Paused | Status::Waiting | Status::Question
+                    )
+                }))
+    });
     controls
 }
 
@@ -379,8 +389,15 @@ fn current_controls(app: &App) -> Vec<(&'static str, Action)> {
             (run, Action::Run),
             ("x Abandon", Action::Abandon),
         ],
-        Some(Status::Running) => vec![("p Pause", Action::Pause)],
-        Some(Status::Paused) => vec![(run, Action::Run), ("x Abandon", Action::Abandon)],
+        Some(Status::Running) => vec![
+            ("p Pause", Action::Pause),
+            ("P Reset to pending", Action::ResetToPending),
+        ],
+        Some(Status::Paused) => vec![
+            (run, Action::Run),
+            ("P Reset to pending", Action::ResetToPending),
+            ("x Abandon", Action::Abandon),
+        ],
         Some(s) if s.failed() => vec![
             ("t Retry", Action::Retry),
             ("d Remediate", Action::Diagnose),
@@ -402,6 +419,13 @@ fn current_controls(app: &App) -> Vec<(&'static str, Action)> {
             .any(|(_, action)| matches!(action, Action::Pause))
     {
         controls.insert(0, ("p Pause", Action::Pause));
+    }
+    if app.enabled(Action::ResetToPending)
+        && !controls
+            .iter()
+            .any(|(_, action)| matches!(action, Action::ResetToPending))
+    {
+        controls.insert(0, ("P Reset to pending", Action::ResetToPending));
     }
     if matches!(status, Some(s) if s.failed()) {
         controls.extend([("v Approve", Action::Approve), ("n Reject", Action::Reject)]);
@@ -1007,11 +1031,11 @@ fn situation(app: &App, task: &crate::presentation::Task) -> (String, Color) {
             BAD,
         ),
         Status::Question if app.enabled(Action::Run) => (
-            "Answer saved · r Resume continues the same attempt".into(),
+            "Answer saved · r Resume continues the same attempt · P Reset to pending".into(),
             OK,
         ),
         Status::Question => (
-            format!("The worker needs your answer · w Answer{abandon}"),
+            format!("The worker needs your answer · w Answer · P Reset to pending{abandon}"),
             WARN,
         ),
         Status::Waiting
@@ -1021,25 +1045,40 @@ fn situation(app: &App, task: &crate::presentation::Task) -> (String, Color) {
                 .is_some_and(|s| s.state == "paused") =>
         {
             (
-                format!("Provider limit{} · paused · r Resume{abandon}", until(task)),
+                format!(
+                    "Provider limit{} · paused · r Resume · P Reset to pending{abandon}",
+                    until(task)
+                ),
                 WARN,
             )
         }
         Status::Waiting if app.supervisor_alive => (
-            format!("Provider limit{} · resumes by itself{abandon}", until(task)),
+            format!(
+                "Provider limit{} · resumes by itself · P Reset to pending{abandon}",
+                until(task)
+            ),
             WARN,
         ),
         Status::Waiting => (
-            format!("Provider limit{} · r Resume{abandon}", until(task)),
+            format!(
+                "Provider limit{} · r Resume · P Reset to pending{abandon}",
+                until(task)
+            ),
             WARN,
         ),
-        Status::Running if app.service.is_some() => {
-            (format!("{} · p Pause", active_phase(task)), ACCENT)
-        }
+        Status::Running if app.service.is_some() => (
+            format!("{} · p Pause · P Reset to pending", active_phase(task)),
+            ACCENT,
+        ),
         Status::Running => ("Running (simulated) · p Pause".into(), ACCENT),
-        Status::Paused => (format!("Paused · r Resume{abandon}"), WARN),
+        Status::Paused => (
+            format!("Paused · r Resume · P Reset to pending{abandon}"),
+            WARN,
+        ),
         s if s.failed() => (
-            format!("Failed · t Retry · d Remediate{abandon} · z Resolve as done"),
+            format!(
+                "Failed · t Retry · P Reset to pending · d Remediate{abandon} · z Resolve as done"
+            ),
             BAD,
         ),
         Status::Pending if human => ("Human task · y Acknowledge when it is done".into(), MUTED),
@@ -1521,6 +1560,9 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         .len()
         .min((inner.height.saturating_sub(5) / 2) as usize)
         .max(1);
+    if matches!(dialog.kind, DialogKind::Models(_)) && app.service.is_some() {
+        dialog.field_capacity = dialog.field_capacity.min(7);
+    }
     if dialog.focus < dialog.field_offset {
         dialog.field_offset = dialog.focus;
     }

@@ -184,6 +184,18 @@ pub enum Command {
         #[command(flatten)]
         target: Target,
     },
+    /// End the current attempt and return the same task to editable pending work.
+    /// Resume keeps the old attempt; reset requires an explicit later Run.
+    ResetToPending {
+        #[command(flatten)]
+        target: Target,
+        /// Confirm stopping the attempt and requiring a fresh Run.
+        #[arg(long)]
+        confirm: bool,
+        /// Recorded on the interrupted attempt and task event.
+        #[arg(long, default_value = "Owner reset current to pending", value_parser = nonempty)]
+        reason: String,
+    },
     /// Answer the question a waiting or failed current asked (attempt "question").
     ///
     /// An active queue session continues automatically; otherwise run resumes it.
@@ -454,6 +466,12 @@ pub struct Add {
 
 #[derive(Args, Default)]
 pub struct Changes {
+    /// Copy the current project model and effort defaults into a new task revision.
+    #[arg(long)]
+    pub apply_project_defaults: bool,
+    /// Show each effective project default without changing the task.
+    #[arg(long, conflicts_with = "apply_project_defaults")]
+    pub preview_project_defaults: bool,
     /// New title.
     #[arg(long, value_parser = nonempty)]
     pub title: Option<String>,

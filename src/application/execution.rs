@@ -174,6 +174,71 @@ impl Service {
         tx.commit()?;
         Ok(())
     }
+    /// End the open attempt and leave the same current task editable. The workspace lease
+    /// must already be held, including confirmation that its worker has been reaped.
+    pub fn reset_to_pending(
+        &mut self,
+        target: VersionedTask,
+        reason: &str,
+        worktree: &str,
+    ) -> Result<()> {
+        require(!reason.trim().is_empty(), "A reset reason is required")?;
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (status, attempt) = current_status(&tx, self.project_id, target)?;
+        require(
+            matches!(
+                status.as_str(),
+                "paused" | "waiting" | "failed" | "interrupted"
+            ),
+            "Reset to pending requires a stopped current attempt; refresh the task",
+        )?;
+        let now = now_ms();
+        if matches!(status.as_str(), "paused" | "waiting") {
+            let attempt =
+                attempt.ok_or_else(|| Error::Conflict("Current has no open attempt".into()))?;
+            interrupt(
+                &tx,
+                self.project_id,
+                target.id,
+                attempt,
+                now,
+                &format!("Reset to pending: {reason}"),
+            )?;
+        }
+        // Terminal failures can also retain an unanswered question. A new Run must
+        // never inherit it from the attempt being reset.
+        if let Some(attempt) = attempt {
+            tx.execute("UPDATE questions SET state='cancelled',resolved_at_ms=?2 WHERE attempt_id=?1 AND state='open'", params![attempt,now])?;
+        }
+        // Keep any unclaimed delivery work, but force the successor to recheck it
+        // against the current source before publication.
+        if let Some(attempt) = attempt {
+            tx.execute("UPDATE attempt_delivery SET handoff_target=?2,repair_origin_task=coalesce(repair_origin_task,?2),restart_sync=1 WHERE attempt_id=?1 AND stage<>'work' AND handoff_claimed_by IS NULL", params![attempt,target.id])?;
+        }
+        tx.execute("UPDATE ai_sessions SET state='closed' WHERE project_id=?1 AND task_id=?2 AND state='open'", params![self.project_id,target.id])?;
+        tx.execute(
+            "UPDATE tasks SET reset_pending=1,reset_worktree=?2 WHERE id=?1",
+            params![target.id, worktree],
+        )?;
+        tx.execute("UPDATE execution_sessions SET state='paused',reason='Reset to pending; explicit Run required',updated_at_ms=?2 WHERE project_id=?1", params![self.project_id,now])?;
+        event(
+            &tx,
+            self.project_id,
+            target.id,
+            now,
+            "task.reset_pending",
+            &format!("Reset to pending: {reason}"),
+        )?;
+        bump(&tx, target, now)?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn reset_worktree(&self, task: i64) -> Result<Option<String>> {
+        self.db.connection().query_row("SELECT reset_worktree FROM tasks WHERE project_id=?1 AND id=?2 AND reset_pending=1", params![self.project_id,task], |r| r.get(0)).optional().map(|value| value.flatten()).map_err(Into::into)
+    }
     /// Give up on current: any paused or waiting attempt is interrupted without spending
     /// budget, and the task moves to History as cancelled with its attempts and evidence.
     /// The caller must hold the runner lease.
@@ -453,6 +518,14 @@ impl Service {
             [attempt],
             |r| r.get(0),
         )?)
+    }
+    /// A single worker-stop transition after this reset's pause request is the
+    /// only version change reset may adopt from its original caller.
+    pub fn verified_pause_after(&self, attempt: i64, pause_cursor: i64) -> Result<bool> {
+        let paused: bool = self.db.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE attempt_id=?1 AND kind='attempt.paused' AND id>?2)",
+            params![attempt,pause_cursor], |row| row.get(0))?;
+        Ok(paused && self.supervisor_released(attempt)?)
     }
     pub fn open_question(&self, task: i64) -> Result<Option<(i64, String)>> {
         Ok(self.db.connection().query_row("SELECT q.id,q.prompt FROM questions q JOIN attempts a ON a.id=q.attempt_id WHERE a.project_id=?1 AND a.task_id=?2 AND q.state='open' ORDER BY q.id DESC LIMIT 1", params![self.project_id,task], |r| Ok((r.get(0)?,r.get(1)?))).optional()?)
@@ -864,7 +937,11 @@ fn interrupt(
     now: i64,
     reason: &str,
 ) -> Result<()> {
-    let report = format!("Abandoned: {reason}");
+    let report = if reason.starts_with("Reset to pending: ") {
+        reason.to_owned()
+    } else {
+        format!("Abandoned: {reason}")
+    };
     require(tx.execute("UPDATE attempts SET state='interrupted',finished_at_ms=?2,outcome=?3,failure_category='interrupted',report=?3,wait_reason=NULL,waiting_since_ms=NULL,resume_at_ms=NULL WHERE id=?1 AND state IN ('paused','waiting')", params![attempt,now,report])? == 1, "Attempt changed; refresh the task")?;
     tx.execute("UPDATE questions SET state='cancelled',resolved_at_ms=?2 WHERE attempt_id=?1 AND state='open'", params![attempt,now])?;
     tx.execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'attempt.interrupted','info',?5)", params![project,task,attempt,now,report])?;
