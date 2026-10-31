@@ -140,7 +140,27 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         } else {
             ""
         };
-        format!("Current #{} · {}{supervisor}", t.id, t.status().label())
+        let time = t
+            .attempts
+            .last()
+            .filter(|_| {
+                matches!(
+                    t.status(),
+                    Status::Running
+                        | Status::Paused
+                        | Status::Waiting
+                        | Status::Question
+                        | Status::Abandoned
+                )
+            })
+            .map_or(String::new(), |a| {
+                format!(" · {}", history_time(a.elapsed_ms))
+            });
+        format!(
+            "Current #{} · {}{supervisor}{time}",
+            t.id,
+            t.status().label()
+        )
     });
     frame.render_widget(
         Paragraph::new(vec![
@@ -542,15 +562,11 @@ fn current_usage_lines(
 ) -> Vec<Line<'static>> {
     match (persistent, attempt) {
         (true, Some(attempt)) => vec![
-            Line::raw(shortened(
-                &format!(
-                    "Active {} · Wait {} ms",
-                    attempt.elapsed_ms, attempt.waiting_ms
-                ),
-                width,
-            )),
+            Line::raw(shortened(&attempt_time(attempt), width)),
             Line::raw(if attempt.usage_tokens.chars().count() <= width {
                 attempt.usage_tokens.clone()
+            } else if attempt.usage_tokens_short.chars().count() <= width {
+                attempt.usage_tokens_short.clone()
             } else if attempt.usage_tokens.contains('?') {
                 "Tokens ? · Enter: details".to_owned()
             } else {
@@ -1376,11 +1392,10 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                     .enumerate()
                     .map(|(i, a)| {
                         format!(
-                            "\nAttempt {} · {} · active {} ms · waiting {} ms\n{}",
+                            "\nAttempt {} · {} · {}\n{}",
                             i + 1,
                             a.state.label(),
-                            a.elapsed_ms,
-                            a.waiting_ms,
+                            attempt_time(a),
                             a.usage
                         )
                     })
@@ -1862,15 +1877,19 @@ fn role_models(settings: &crate::presentation::Settings) -> String {
 }
 
 fn history_time(ms: u64) -> String {
-    let seconds = ms / 1_000;
-    if seconds < 60 {
-        format!("{:.1}s", ms as f64 / 1_000.0)
-    } else if seconds < 3_600 {
-        format!("{}m{:02}s", seconds / 60, seconds % 60)
-    } else if seconds < 86_400 {
-        format!("{}h{:02}m", seconds / 3_600, seconds % 3_600 / 60)
+    crate::application::limits::elapsed(ms.min(i64::MAX as u64) as i64)
+}
+
+/// "Active 39m 12s", adding the waiting time only when there was some.
+fn attempt_time(attempt: &crate::presentation::Attempt) -> String {
+    let active = history_time(attempt.elapsed_ms);
+    if attempt.waiting_ms == 0 {
+        format!("Active {active}")
     } else {
-        format!("{}d{:02}h", seconds / 86_400, seconds % 86_400 / 3_600)
+        format!(
+            "Active {active} · waited {}",
+            history_time(attempt.waiting_ms)
+        )
     }
 }
 

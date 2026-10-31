@@ -639,10 +639,12 @@ fn stats(service: &mut Service) -> Result<Reply> {
     Ok(Reply {
         data: json!({"queue":snapshot.queue.len(),"history":snapshot.history.len(),"succeeded":succeeded,"attempts":timing.attempts,"failed_attempts":failed,"active_ms":active_ms,"waiting_ms":waiting_ms,"recorded_cost_microusd":cost,"usage":usage}),
         text: format!(
-            "Queue: {}\nHistory: {}\nSucceeded: {succeeded}\nAttempts: {}\nFailed attempts: {failed}\nActive ms: {active_ms}\nWaiting ms: {waiting_ms}\nProject usage: {}\nRecorded cost (micro-USD): {}\n",
+            "Queue: {}\nHistory: {}\nSucceeded: {succeeded}\nAttempts: {}\nFailed attempts: {failed}\nActive: {}\nWaiting: {}\nProject usage: {}\nRecorded cost (micro-USD): {}\n",
             snapshot.queue.len(),
             snapshot.history.len(),
             timing.attempts,
+            crate::application::limits::elapsed(active_ms),
+            crate::application::limits::elapsed(waiting_ms),
             usage.label(),
             cost.map_or("unknown".into(), |n| n.to_string())
         ),

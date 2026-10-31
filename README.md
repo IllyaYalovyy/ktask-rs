@@ -59,8 +59,8 @@ Validation judges the evidence: every configured check ran and exited zero, noth
 ignored, removed or weakened, and each criterion has proof. Both read; neither runs anything.
 
 A failed attempt is judged before the next one starts. The failure judge reads the evidence in
-a read-only turn of the remediation model and returns one decision: a repair plan for the next
-worker, a rewritten task when the definition itself is wrong, prerequisite tasks inserted before
+a read-only turn of the remediation model and returns one decision: a repair plan, which the
+execution model applies in its resumed implementation session, a rewritten task when the definition itself is wrong, prerequisite tasks inserted before
 it, an escalated execution model, or a product question for the owner. Anything but a repair ends
 that attempt as interrupted, spending no budget, and the queue continues on the new plan.
 Forms support paste, cursor editing, `Ctrl-A` to clear, `Ctrl-S` to apply, and `Esc` to cancel.
@@ -171,8 +171,10 @@ ktask model-default review --provider codex --model gpt-6-astra --effort high --
 # likewise validation and remediation
 ```
 
-Review, validation and remediation must use a model different from (and stronger than)
-execution. Then, in each project (a Git repository root with at least one commit):
+Review, validation and remediation (the failure judge that plans each repair) must use a model
+different from (and stronger than) execution; the execution model applies the repair plans in its
+own session, so a fix does not start cold. Workers run focused tests; the supervisor's full check
+run is the gate that reviewers read. Then, in each project (a Git repository root with at least one commit):
 
 ```sh
 cd ~/src/my-project

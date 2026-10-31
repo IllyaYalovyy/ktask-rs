@@ -164,6 +164,8 @@ pub struct Attempt {
     pub waiting_ms: u64,
     pub usage: String,
     pub usage_tokens: String,
+    /// The same counts for narrow screens, cache reads and writes together.
+    pub usage_tokens_short: String,
     pub usage_cost: String,
 }
 impl Attempt {
@@ -190,6 +192,7 @@ impl Attempt {
             waiting_ms: 0,
             usage: String::new(),
             usage_tokens: String::new(),
+            usage_tokens_short: String::new(),
             usage_cost: String::new(),
         }
     }

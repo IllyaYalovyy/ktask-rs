@@ -435,13 +435,13 @@ impl App {
                     DialogKind::Stats,
                     "Project statistics · SQLite",
                     &format!(
-                        "Queue: {}\nHistory: {}\nAttempts: {} ({} failed/interrupted)\nActive time: {} ms\nWaiting time: {} ms\nProject usage: {}\nHuman acknowledgments do not create AI attempts.",
+                        "Queue: {}\nHistory: {}\nAttempts: {} ({} failed/interrupted)\nActive time: {}\nWaiting time: {}\nProject usage: {}\nHuman acknowledgments do not create AI attempts.",
                         self.queue.len(),
                         self.history.len(),
                         timing.attempts,
                         timing.failed,
-                        timing.active_ms,
-                        timing.waiting_ms,
+                        crate::application::limits::elapsed(timing.active_ms),
+                        crate::application::limits::elapsed(timing.waiting_ms),
                         usage.label()
                     ),
                     vec![],
@@ -989,16 +989,16 @@ impl App {
                         .find(|revision| revision.number == record.revision)
                         .unwrap_or_else(|| task.definition());
                     dialog.body.push_str(&format!(
-                        "\n\nAttempt inputs: revision {} · session {}\n{}\nActive {} ms · waiting {} ms\nUsage: {}\n{}\n\n{overview}",
+                        "\n\nAttempt inputs: revision {} · session {}\n{}\nActive {} · waiting {}\nUsage: {}\n{}\n\n{overview}",
                         record.revision,
                         record
                             .session
                             .map_or("not recorded".into(), |id| id.to_string()),
                         revision_overview(revision),
-                        record.active_ms,
-                        record.waiting_ms,
+                        crate::application::limits::elapsed(record.active_ms),
+                        crate::application::limits::elapsed(record.waiting_ms),
                         record.usage.label(),
-                        record.role_usage.iter().map(|role| format!("{} {} / {}: {} · provider elapsed {} ms", role.role, role.model, role.effort.as_deref().unwrap_or("none"), role.totals.label(), role.provider_elapsed_ms)).collect::<Vec<_>>().join("\n"),
+                        record.role_usage.iter().map(|role| format!("{} {} / {}: {} · provider time {}", role.role, role.model, role.effort.as_deref().unwrap_or("none"), role.totals.label(), crate::application::limits::elapsed(role.provider_elapsed_ms))).collect::<Vec<_>>().join("\n"),
                     ));
                 } else {
                     dialog.body = format!("{overview}\nNo attempt evidence recorded.");
@@ -1454,16 +1454,38 @@ fn cost_label(cost: Option<i64>) -> String {
         format!("${:.6}", n as f64 / 1_000_000.0)
     })
 }
-/// "?" when nothing was reported, otherwise "980", "99k" or "4.8M".
-fn compact(value: Option<i64>) -> String {
-    match value {
-        None => "?".into(),
-        Some(n) if n < 1_000 => n.to_string(),
-        Some(n) if n < 1_000_000 => format!("{}k", n / 1_000),
-        Some(n) if n < 10_000_000 => format!("{:.1}M", n as f64 / 1_000_000.0),
-        Some(n) if n < 1_000_000_000 => format!("{}M", n / 1_000_000),
-        Some(n) => format!("{}G", n / 1_000_000_000),
+
+/// "Tokens 380k new · 14M cached · 36k out", naming cache writes only when there are some.
+fn token_line(usage: &crate::application::usage_report::UsageTotals) -> String {
+    use crate::application::usage_report::count;
+    if usage.input.is_none() && usage.cache_read.is_none() && usage.output.is_none() {
+        return "Tokens none reported yet".into();
     }
+    let written = match usage.cache_write {
+        Some(n) if n > 0 => format!(" · {} cache written", count(Some(n))),
+        _ => String::new(),
+    };
+    format!(
+        "Tokens {} new · {} cached{written} · {} out",
+        count(usage.input),
+        count(usage.cache_read),
+        count(usage.output)
+    )
+}
+
+/// "in 380k, cache 14M, out 36k": fits the narrowest Status box; details keep the split.
+fn short_token_line(usage: &crate::application::usage_report::UsageTotals) -> String {
+    use crate::application::usage_report::count;
+    let cache = match (usage.cache_read, usage.cache_write) {
+        (Some(read), Some(written)) => Some(read.saturating_add(written)),
+        (read, written) => read.or(written),
+    };
+    format!(
+        "in {}, cache {}, out {}",
+        count(usage.input),
+        count(cache),
+        count(usage.output)
+    )
 }
 
 fn status(value: &str) -> Result<Status, String> {
@@ -1521,8 +1543,10 @@ fn project_revision(revision: &domain::Revision) -> Result<model::Revision, Stri
         repaired: false,
     })
 }
-fn step_label(role: &str) -> &'static str {
-    match role {
+/// An execution step after the failure judge's plan in the same attempt is a repair.
+fn step_label(steps: &[domain::Step], index: usize) -> &'static str {
+    match steps[index].role.as_str() {
+        "execution" if steps[..index].iter().any(|s| s.role == "remediation") => "Repair",
         "execution" => "Execution",
         "check" => "Checks",
         "review" => "Review",
@@ -1571,7 +1595,10 @@ fn report_text(attempt: &domain::Attempt) -> String {
                 step.state.as_str()
             }
         };
-        text.push_str(&format!("{} · {state}: {finding}", step_label(&step.role)));
+        text.push_str(&format!(
+            "{} · {state}: {finding}",
+            step_label(&attempt.steps, i)
+        ));
     }
     text
 }
@@ -1621,7 +1648,7 @@ fn project_task(task: &domain::Task) -> Result<model::Task, String> {
                         } else {
                             s.state.clone()
                         };
-                        (step_label(&s.role).to_owned(), state)
+                        (step_label(&a.steps, i).to_owned(), state)
                     })
                     .collect(),
                 step: 0,
@@ -1629,13 +1656,8 @@ fn project_task(task: &domain::Task) -> Result<model::Task, String> {
                 elapsed_ms: a.active_ms as u64,
                 waiting_ms: a.waiting_ms as u64,
                 usage: a.usage.label(),
-                usage_tokens: format!(
-                    "I {} R {} W {} O {}",
-                    compact(a.usage.input),
-                    compact(a.usage.cache_read),
-                    compact(a.usage.cache_write),
-                    compact(a.usage.output)
-                ),
+                usage_tokens: token_line(&a.usage),
+                usage_tokens_short: short_token_line(&a.usage),
                 usage_cost: format!("Cost {}", a.usage.cost_label()),
             })
         })
@@ -1748,22 +1770,22 @@ fn task_overview(task: &domain::Task) -> String {
     }
     for (index, attempt) in task.attempts.iter().enumerate() {
         body.push_str(&format!(
-            "\nAttempt {} · revision {} · {} · active {} ms · waiting {} ms\nUsage: {}",
+            "\nAttempt {} · revision {} · {} · active {} · waiting {}\nUsage: {}",
             index + 1,
             attempt.revision,
             attempt.state,
-            attempt.active_ms,
-            attempt.waiting_ms,
+            crate::application::limits::elapsed(attempt.active_ms),
+            crate::application::limits::elapsed(attempt.waiting_ms),
             attempt.usage.label()
         ));
         for role in &attempt.role_usage {
             body.push_str(&format!(
-                "\n{} {} / {}: {} · provider elapsed {} ms",
+                "\n{} {} / {}: {} · provider time {}",
                 role.role,
                 role.model,
                 role.effort.as_deref().unwrap_or("none"),
                 role.totals.label(),
-                role.provider_elapsed_ms
+                crate::application::limits::elapsed(role.provider_elapsed_ms)
             ));
         }
     }

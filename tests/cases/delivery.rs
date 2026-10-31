@@ -354,8 +354,8 @@ fn conflict_judge_revise_and_insert_transfer_integration_ownership() -> Result {
         f.provider(mode)?;
         let path = f.scratch.path().join("bin/codex");
         let script = fs::read_to_string(&path)?.replace(
-            "else printf 'verified\\n' > result.txt; fi;; esac",
-            "else printf 'remote\\nverified\\n' > result.txt; fi;; esac",
+            "else printf 'verified\\n' > result.txt; fi\nelif",
+            "else printf 'remote\\nverified\\n' > result.txt; fi\nelif",
         );
         support::write_executable(&path, script)?;
         f.ok(&["delivery", "--mode", "direct"])?;

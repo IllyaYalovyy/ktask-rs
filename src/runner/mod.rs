@@ -780,15 +780,22 @@ fn ai_turn(
     evidence: &str,
     nudge: Option<&str>,
 ) -> Result<Outcome> {
+    let configured = agent::model_role(role);
     let index = crate::application::ROLES
         .iter()
-        .position(|r| *r == role)
+        .position(|r| *r == configured)
         .expect("role");
     let model = run.definition.models[index]
         .as_ref()
         .expect("preflight models");
     let provider = Provider::of(model)?;
-    let step = service.start_ai_step(run, role, model, &provider.auth_scope()?, nudge.is_some())?;
+    let step = service.start_ai_step(
+        run,
+        configured,
+        model,
+        &provider.auth_scope()?,
+        nudge.is_some(),
+    )?;
     service.output(
         run,
         "system",
@@ -817,7 +824,7 @@ fn ai_turn(
         },
         |question| agent::nudge(role, question),
     );
-    let access = Access::for_role(role);
+    let access = Access::for_role(configured);
     let network = access == Access::Write && service.agent_network()?;
     let launch = provider.launch(
         model,
@@ -844,8 +851,15 @@ fn ai_turn(
         token: run.token.clone(),
     });
     let mut stream = provider::Stream::new(provider);
-    if let Some(outcome) = provider_turn(service, run, &step, ctx, &invocation, &mut stream, role)?
-    {
+    if let Some(outcome) = provider_turn(
+        service,
+        run,
+        &step,
+        ctx,
+        &invocation,
+        &mut stream,
+        configured,
+    )? {
         return Ok(outcome);
     }
     let mut assessment = match agent::assessment(&stream, run.definition.criteria.len()) {

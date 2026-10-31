@@ -56,7 +56,7 @@ impl UsageTotals {
 
     pub fn label(&self) -> String {
         fn number(value: Option<i64>) -> String {
-            value.map_or("unknown".into(), |n| n.to_string())
+            value.map_or("unknown".into(), grouped)
         }
         let unreported = if self.unreported_calls > 0 && self.input.is_some() {
             format!(" (+{} call(s) unreported)", self.unreported_calls)
@@ -142,4 +142,54 @@ pub fn project(db: &Connection, project: i64) -> Result<UsageTotals> {
         total.add(row?);
     }
     Ok(total)
+}
+
+/// A token count as people read it: "?" when unreported, otherwise "980", "99k" or "4.8M".
+pub fn count(value: Option<i64>) -> String {
+    match value {
+        None => "?".into(),
+        Some(n) if n < 1_000 => n.to_string(),
+        Some(n) if n < 1_000_000 => format!("{}k", n / 1_000),
+        Some(n) if n < 10_000_000 => format!("{:.1}M", n as f64 / 1_000_000.0),
+        Some(n) if n < 1_000_000_000 => format!("{}M", n / 1_000_000),
+        Some(n) => format!("{}G", n / 1_000_000_000),
+    }
+}
+
+/// An exact count with thousands separators: "14,081,664".
+pub fn grouped(n: i64) -> String {
+    let digits = n.unsigned_abs().to_string();
+    let mut text = String::with_capacity(digits.len() + digits.len() / 3 + 1);
+    if n < 0 {
+        text.push('-');
+    }
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            text.push(',');
+        }
+        text.push(digit);
+    }
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counts_read_compactly_and_exactly() {
+        for (n, short, exact) in [
+            (0, "0", "0"),
+            (980, "980", "980"),
+            (36_898, "36k", "36,898"),
+            (4_812_345, "4.8M", "4,812,345"),
+            (14_081_664, "14M", "14,081,664"),
+            (246_913_578_024, "246G", "246,913,578,024"),
+            (-1_200, "-1200", "-1,200"),
+        ] {
+            assert_eq!(count(Some(n)), short);
+            assert_eq!(grouped(n), exact);
+        }
+        assert_eq!(count(None), "?");
+    }
 }

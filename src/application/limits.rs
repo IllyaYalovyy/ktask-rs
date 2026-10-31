@@ -31,6 +31,17 @@ pub fn label(limit: Option<i64>) -> String {
     parts.join(" ")
 }
 
+/// Elapsed time as people read it: "45s", "39m 12s", "2h 05m" or "1d 3h".
+pub fn elapsed(ms: i64) -> String {
+    let s = ms.max(0) / 1000;
+    match s {
+        0..60 => format!("{s}s"),
+        60..3_600 => format!("{}m {:02}s", s / 60, s % 60),
+        3_600..86_400 => format!("{}h {:02}m", s / 3_600, s % 3_600 / 60),
+        _ => format!("{}d {}h", s / 86_400, s % 86_400 / 3_600),
+    }
+}
+
 /// Inverse of [`label`]; also accepts compact forms such as "30m", "6h" or "90s".
 pub fn parse(text: &str) -> Result<Option<i64>, String> {
     let text = text.trim();
@@ -77,6 +88,20 @@ pub fn choices(current: Option<i64>, standard: i64) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn elapsed_reads_as_hours_minutes_and_seconds() {
+        for (ms, text) in [
+            (-5, "0s"),
+            (999, "0s"),
+            (45_000, "45s"),
+            (2_352_110, "39m 12s"),
+            (7_500_000, "2h 05m"),
+            (97_200_000, "1d 3h"),
+        ] {
+            assert_eq!(elapsed(ms), text);
+        }
+    }
 
     #[test]
     fn labels_round_trip_and_compact_forms_parse() {

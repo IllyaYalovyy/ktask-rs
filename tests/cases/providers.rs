@@ -171,7 +171,7 @@ fn claude_runs_every_role_with_read_only_judges_session_reuse_and_uncached_usage
             "execution",
             "review",
             "remediation",
-            "remediation",
+            "execution",
             "review",
             "validation"
         ]
@@ -194,9 +194,12 @@ fn claude_runs_every_role_with_read_only_judges_session_reuse_and_uncached_usage
         );
     }
     f.judges_wrote_nothing(2)?;
-    // The second review resumes the first review's session.
+    // The second review resumes the first review's session, and the repair resumes the
+    // implementation session instead of starting cold.
     assert_eq!(review.1, "");
     assert!(review_again.1.starts_with("claude-review-"), "{calls:?}");
+    assert_eq!(execution.1, "");
+    assert!(repair.1.starts_with("claude-execution-"), "{calls:?}");
     let usage = f.usage()?;
     assert_eq!(usage.len(), 6);
     for (role, counts) in usage {
@@ -208,8 +211,8 @@ fn claude_runs_every_role_with_read_only_judges_session_reuse_and_uncached_usage
             [],
             |r| r.get::<_, i64>(0)
         )?,
-        5,
-        "execution, review, judge, repair and validation sessions"
+        4,
+        "execution (resumed by the repair), review, judge and validation sessions"
     );
     f.no_scratch()?;
     Ok(())

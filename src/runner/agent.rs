@@ -346,6 +346,11 @@ pub fn nudge(role: &str, question: &str) -> String {
 Return the required structured response."
     )
 }
+/// The configured role whose model and session run a turn. A repair applies the failure
+/// judge's plan in the execution session, which already knows the change.
+pub fn model_role(turn: &'static str) -> &'static str {
+    if turn == "repair" { "execution" } else { turn }
+}
 pub fn prompt(
     run: &Run,
     role: &str,
@@ -360,19 +365,19 @@ pub fn prompt(
         "validation" => {
             "Independently validate that the objective was achieved as written, not a narrower version of it, and that the evidence is complete: every configured supervisor check ran and exited 0 (see the supervisor check evidence and transcripts in Context), no test was skipped, ignored, removed or weakened compared with the baseline, and every acceptance criterion has concrete proof in the transcripts, rendered screens or repository. Compare current_counts with previous_checkpoint_counts for each check: fewer passed tests, more ignored tests, or missing current counts after a counted checkpoint require repair. Your sandbox is read-only by design: you cannot build, run tests, or edit files, and you must not ask to. Do not trust executor claims; fail unmet criteria or missing evidence, naming exactly what is missing."
         }
-        "remediation" => {
-            "Use the failure judgment and evidence to repair the task end to end. Resolve implementation details yourself, preserve useful work, and implement the smallest sound repair without narrowing the goal. Run relevant checks."
+        "repair" => {
+            "Apply the failure judge's repair plan in Context to the current worktree. Fix every finding it lists with the smallest sound change, without narrowing the goal, and preserve useful work. Resolve implementation details yourself."
         }
         _ => {
-            "Own this high-level task end to end: inspect the repository, infer the necessary implementation details, choose a sound design, implement it, and run relevant checks. Keep planning brief and inside this execution; no separate specification or breakdown is required. Make routine engineering decisions autonomously, stay within the goal and constraints, and report consequential assumptions with evidence. Preserve unrelated work."
+            "Own this high-level task end to end: inspect the repository, infer the necessary implementation details, choose a sound design and implement it. Keep planning brief and inside this execution; no separate specification or breakdown is required. Make routine engineering decisions autonomously, stay within the goal and constraints, and report consequential assumptions with evidence. Preserve unrelated work."
         }
     };
     let checks = if matches!(role, "review" | "validation") {
         ""
     } else {
-        "Run the project's checks and test suite yourself, including tests that start the project's own binaries in private sandboxes; that needs no permission. "
+        "After your turn the supervisor runs the project's full checks, records their transcripts and hands them to independent reviewers; that run is the gate. Run only focused builds, lints and tests for what you change, including tests that start the project's own binaries in private sandboxes (that needs no permission). Run the full suite only to reproduce a failing supervisor check. Do not review or validate your own work; independent judges do. "
     };
-    let callback = if matches!(role, "execution" | "remediation") {
+    let callback = if matches!(role, "execution" | "repair") {
         format!(
             "\nIf you discover separate follow-up work, file a draft with the supervisor's exact executable: '{}' --project '{}' --worker-token '{}' follow-up --title TITLE --goal GOAL --criterion CRITERION (repeat --criterion as needed). This callback can only create a draft linked to task #{} and attempt #{}; do not run other supervisor commands.\n",
             supervisor.display().to_string().replace('\'', "'\\''"),

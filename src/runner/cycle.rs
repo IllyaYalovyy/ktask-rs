@@ -91,7 +91,7 @@ pub(super) fn run(
                 run,
                 ctx,
                 if progress.phase == "fix" {
-                    "remediation"
+                    "repair"
                 } else {
                     "execution"
                 },

@@ -576,14 +576,14 @@ fn history_rows_show_attempts_total_time_and_cost_by_keyboard_and_mouse() -> Res
             known
                 .split_whitespace()
                 .collect::<Vec<_>>()
-                .ends_with(&["1", "2.5s", "$0.000300"]),
+                .ends_with(&["1", "2s", "$0.000300"]),
             "{known}"
         );
         assert!(
             unknown
                 .split_whitespace()
                 .collect::<Vec<_>>()
-                .ends_with(&["2", "6.1s", "unknown"]),
+                .ends_with(&["2", "6s", "unknown"]),
             "{unknown}"
         );
         quit(&mut t)?;
@@ -617,7 +617,7 @@ fn recorded_usage_is_visible_in_current_details_history_and_statistics() -> Resu
     )?;
     // Validation reported no input, cache write or cost: what the review reported still shows.
     let current = t.screen("current recorded usage", |s| {
-        s.contains("I 10 R 15 W 0 O 7") && s.contains("Cost $0.000100")
+        s.contains("Tokens 10 new · 15 cached · 7 out") && s.contains("Cost $0.000100")
     })?;
     println!("USAGE CURRENT\n{current}");
     let details = key(&mut t, "\r", "Task details / attempts")?;
@@ -701,8 +701,14 @@ fn exact_large_tokens_expand_by_keyboard_and_mouse_at_both_sizes() -> Result {
                 cols,
                 rows,
             )?;
+            // The short form fits from 100 columns; narrower screens point to the details.
+            let tokens = if cols >= 100 {
+                "in 246G, cache 372G, out 153G"
+            } else {
+                "Tokens · Enter: details"
+            };
             let current = t.screen("compact large tokens", |s| {
-                s.contains("I 246G R 197G W 175G O 153G") && s.contains("Current #1")
+                s.contains(tokens) && s.contains("Current #1")
             })?;
             println!("LARGE USAGE CURRENT {cols}x{rows} mouse={mouse}\n{current}");
             if mouse {
@@ -713,10 +719,10 @@ fn exact_large_tokens_expand_by_keyboard_and_mouse_at_both_sizes() -> Result {
             let details = t.screen("attempt details", |s| s.contains("Task details / attempts"))?;
             println!("LARGE USAGE DETAILS FIRST {cols}x{rows} mouse={mouse}\n{details}");
             for needle in [
-                "246913578024",
-                "197530864218",
-                "175308642196",
-                "153086421974",
+                "246,913,578,024",
+                "197,530,864,218",
+                "175,308,642,196",
+                "153,086,421,974",
             ] {
                 let exact = scroll_usage(&mut t, mouse, needle)?;
                 println!("LARGE USAGE DETAILS EXACT {needle} {cols}x{rows} mouse={mouse}\n{exact}");
@@ -738,10 +744,10 @@ fn exact_large_tokens_expand_by_keyboard_and_mouse_at_both_sizes() -> Result {
                 s.contains("Project statistics")
             })?;
             for needle in [
-                "246913578024",
-                "197530864218",
-                "175308642196",
-                "153086421974",
+                "246,913,578,024",
+                "197,530,864,218",
+                "175,308,642,196",
+                "153,086,421,974",
             ] {
                 let stats = scroll_usage(&mut t, mouse, needle)?;
                 println!("LARGE USAGE STATS {needle} {cols}x{rows} mouse={mouse}\n{stats}");
@@ -790,10 +796,10 @@ fn exact_large_tokens_expand_by_keyboard_and_mouse_at_both_sizes() -> Result {
             let details = t.screen("history details", |s| s.contains("Task details / attempts"))?;
             println!("LARGE USAGE HISTORY DETAILS FIRST {cols}x{rows} mouse={mouse}\n{details}");
             for needle in [
-                "246913578024",
-                "197530864218",
-                "175308642196",
-                "153086421974",
+                "246,913,578,024",
+                "197,530,864,218",
+                "175,308,642,196",
+                "153,086,421,974",
             ] {
                 let exact = scroll_usage(&mut t, mouse, needle)?;
                 println!(
@@ -920,7 +926,7 @@ fn running_step_and_token_expansion_stay_visible_at_minimum_size() -> Result {
         let screen = t.screen("minimum running step and exact token path", |s| {
             s.contains("Current #1 · ABANDONED")
                 && s.contains("Step: Execution")
-                && s.contains("I 123G R 98G W 87G O 76G")
+                && s.contains("in 123G, cache 186G, out 76G")
                 && s.contains("Run")
         })?;
         println!("RUNNING USAGE MINIMUM mouse={mouse}\n{screen}");
@@ -931,7 +937,7 @@ fn running_step_and_token_expansion_stay_visible_at_minimum_size() -> Result {
         }
         let details = t.screen("running details", |s| s.contains("Task details / attempts"))?;
         println!("RUNNING USAGE DETAILS MINIMUM mouse={mouse}\n{details}");
-        let exact = scroll_usage(&mut t, mouse, "123456789012")?;
+        let exact = scroll_usage(&mut t, mouse, "123,456,789,012")?;
         println!("RUNNING USAGE EXACT MINIMUM mouse={mouse}\n{exact}");
         quit(&mut t)?;
     }

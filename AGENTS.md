@@ -6,7 +6,8 @@
   merely because implementation details are unspecified. Preserve the full goal and acceptance bar.
 
 - The normal lifecycle is implement → review → fix → validate within one attempt. Use
-  Sol for implementation and Astra for review, remediation and validation in this project.
+  Sol for implementation and Astra for review, remediation (the failure judge) and validation in
+  this project. Sol applies each repair plan in its resumed implementation session.
   Findings are changes requested, not task failures. Persist phase and the ten-repair-round
   limit across pause/resume. Each repair starts with a read-only judge and regenerates proof.
   Only unresolved critical findings after ten rounds require escalation; minor findings may

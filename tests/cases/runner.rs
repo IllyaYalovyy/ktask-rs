@@ -1658,7 +1658,8 @@ case "$prompt" in *"Keep preserved result.txt and verify the revised reset goal"
 esac
 if [ "$model" = review ] && [ ! -f "$HOME/first-review-prompt" ]; then printf '%s' "$prompt" > "$HOME/first-review-prompt"; fi
 if [ "$model" = validation ] && [ ! -f "$HOME/first-validation-prompt" ]; then printf '%s' "$prompt" > "$HOME/first-validation-prompt"; fi
-case "$prompt" in *"Repair plan from the failure judge"*) printf '%s' "$prompt" > "$HOME/prompt-repair-worker";; esac
+repair=no
+case "$prompt" in *"Apply the failure judge's repair plan"*) repair=yes; printf '%s' "$prompt" > "$HOME/prompt-repair-worker";; esac
 [ -n "$session" ] || session="session-$model-$$"
 printf '{{"type":"thread.started","thread_id":"%s"}}\n' "$session"
 printf '%s\n' "$model" >> "$HOME/provider-invocations"
@@ -1689,7 +1690,7 @@ if [ '{mode}' = noisy-review-once ] && [ "$model" = review ]; then
   i=$((i + 1))
  done
 fi
-if [ '{mode}' = resolve-conflict-pause ] && [ "$model" = remediation ] && [ ! -f "$HOME/conflict-repair-released" ]; then
+if [ '{mode}' = resolve-conflict-pause ] && [ "$repair" = yes ] && [ ! -f "$HOME/conflict-repair-released" ]; then
  touch "$HOME/conflict-repair-started"
  sleep 30
 fi
@@ -1763,7 +1764,7 @@ case '{mode}' in
  review-once|noisy-review-once) if [ "$model" = review ] && [ ! -f "$HOME/review-failed" ]; then touch "$HOME/review-failed"; printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"failed\",\"summary\":\"result.txt:1: missing edge-case handling; repair and prove the boundary.\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":false,\"evidence\":\"Boundary case fails\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0; fi;;
  transient) if [ ! -f "$HOME/transport-retried" ]; then touch "$HOME/transport-retried"; printf '{{"type":"turn.failed","error":{{"message":"connection reset"}}}}\n'; exit 2; fi;;
  fail-first-attempt) if [ "$(wc -l < "$HOME/provider-invocations")" -le 3 ]; then printf '{{"type":"turn.completed","usage":{{}}}}\n'; exit 0; fi;;
- slow-repair) if [ "$model" = remediation ]; then touch "$HOME/repair-started"; sleep 30; fi;;
+ slow-repair) if [ "$repair" = yes ]; then touch "$HOME/repair-started"; sleep 30; fi;;
  slow-review) if [ "$model" = review ]; then touch "$HOME/review-started"; sleep 30; fi;;
  slow) sleep 3;;
  usage-live) if [ "$model" = execution ]; then sleep 30; fi;;
@@ -1788,7 +1789,11 @@ case '{mode}' in
  ask-once) case "$prompt" in *"You returned blocked"*) :;; *) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"blocked\",\"summary\":\"Need direction\",\"question\":\"Which content?\",\"criteria\":[]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;; esac;;
  review-asks) case "$model" in review) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"blocked\",\"summary\":\"Need direction\",\"question\":\"Which content?\",\"criteria\":[]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;; esac;;
 esac
-case "$model" in execution) if [ '{mode}' = sequential-pr ]; then n=0; [ ! -f "$HOME/pr-executions" ] || n=$(cat "$HOME/pr-executions"); n=$((n+1)); printf '%s' "$n" > "$HOME/pr-executions"; printf 'verified %s\n' "$n" > result.txt; else printf 'verified\n' > result.txt; fi;; remediation) if [ '{mode}' = resolve-conflict ] || [ '{mode}' = resolve-conflict-pause ]; then printf 'remote\nverified\n' > result.txt; else printf 'verified\n' > result.txt; fi;; esac
+if [ "$repair" = yes ]; then
+ if [ '{mode}' = resolve-conflict ] || [ '{mode}' = resolve-conflict-pause ]; then printf 'remote\nverified\n' > result.txt; else printf 'verified\n' > result.txt; fi
+elif [ "$model" = execution ]; then
+ if [ '{mode}' = sequential-pr ]; then n=0; [ ! -f "$HOME/pr-executions" ] || n=$(cat "$HOME/pr-executions"); n=$((n+1)); printf '%s' "$n" > "$HOME/pr-executions"; printf 'verified %s\n' "$n" > result.txt; else printf 'verified\n' > result.txt; fi
+fi
 printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"complete\",\"summary\":\"Verified result\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":true,\"evidence\":\"Inspected result.txt\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'
 "##
         );
@@ -2143,7 +2148,7 @@ fn review_cycles_accept_only_minor_findings_after_ten_repairs_in_real_tui() -> R
                     [],
                     |r| r.get::<_, i64>(0)
                 )?,
-                20
+                10
             );
             assert!(
                 task["attempts"][0]["steps"]
@@ -2235,7 +2240,7 @@ fn pause_at_tenth_review_resumes_the_phase_without_an_eleventh_repair() -> Resul
                 [],
                 |r| r.get::<_, i64>(0)
             )?,
-            1
+            11
         );
         assert_eq!(
             db.connection().query_row(
@@ -2243,7 +2248,7 @@ fn pause_at_tenth_review_resumes_the_phase_without_an_eleventh_repair() -> Resul
                 [],
                 |r| r.get::<_, i64>(0)
             )?,
-            20
+            10
         );
         assert_eq!(
             db.connection()
@@ -2478,7 +2483,7 @@ fn failed_repair_judge_is_repeated_before_a_retry_worker_runs() -> Result {
             "execution",
             "remediation",
             "remediation",
-            "remediation",
+            "execution",
             "review",
             "validation"
         ]
@@ -2627,8 +2632,8 @@ fn reviewers_receive_current_proof_and_authorized_repair_context() -> Result {
         fs::read_to_string(&failed_artifact)?,
         "previous failed check\n"
     );
-    let remediation = fs::read_to_string(f.scratch.path().join("prompt-remediation"))?;
-    let writable_checks = "Run the project's checks and test suite yourself";
+    let remediation = fs::read_to_string(f.scratch.path().join("prompt-repair-worker"))?;
+    let writable_checks = "Run only focused builds, lints and tests for what you change";
     assert!(remediation.contains(writable_checks));
     assert!(remediation.contains(failed_artifact.to_str().unwrap()));
     assert!(remediation.contains("Check exited 7"));
@@ -2778,7 +2783,7 @@ fn failing_tests_block_acceptance_even_when_the_check_exits_zero() -> Result {
             "execution",
             "check",
             "remediation",
-            "remediation",
+            "execution",
             "check",
             "review",
             "validation"
@@ -3062,8 +3067,8 @@ fn check_failure_is_real_and_remediation_stays_with_current() -> Result {
             [],
             |r| r.get::<_, i64>(0)
         )?,
-        // Ten repair rounds, each with a read-only judge and one worker.
-        20
+        // Ten repair rounds: a read-only judge plans each, and the execution session repairs.
+        10
     );
     let worker_prompt = fs::read_to_string(f.scratch.path().join("prompt-repair-worker"))?;
     assert!(
@@ -3223,7 +3228,7 @@ fn paused_repair_resumes_its_reserved_round_and_same_attempt() -> Result {
             s.contains("RUNNING · supervisor alive")
                 && s.contains("p Pause")
                 && s.contains("Attempt 1")
-                && s.contains("Step: Remediation")
+                && s.contains("Step: Repair")
         })?;
         println!("REPAIR RUNNING mouse={mouse}\n{running}");
         if mouse {
@@ -3254,7 +3259,7 @@ fn paused_repair_resumes_its_reserved_round_and_same_attempt() -> Result {
         assert_eq!(after["lifecycle"], "succeeded");
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-            "execution\nremediation\nremediation\nremediation\nreview\nvalidation\n"
+            "execution\nremediation\nexecution\nexecution\nreview\nvalidation\n"
         );
         t.send("q")?;
         t.finish()?;
@@ -3359,7 +3364,7 @@ fn reviewer_that_keeps_asking_stops_the_task_without_a_question_or_budget() -> R
     assert_eq!(
         fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
         format!(
-            "execution\n{reviews}remediation\nremediation\n{reviews}remediation\nremediation\n{reviews}"
+            "execution\n{reviews}remediation\nexecution\n{reviews}remediation\nexecution\n{reviews}"
         )
     );
     let stopped = String::from_utf8_lossy(&output.stderr);
@@ -4090,7 +4095,7 @@ fn failed_attempts_are_repaired_automatically_and_real_stops_show_a_red_banner()
         assert_eq!(f.ok(&["show", "2"])?["lifecycle"], "succeeded");
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-            "execution\nexecution\nexecution\nremediation\nremediation\nreview\nvalidation\nexecution\nreview\nvalidation\n"
+            "execution\nexecution\nexecution\nremediation\nexecution\nreview\nvalidation\nexecution\nreview\nvalidation\n"
         );
         t.send("q")?;
         t.finish()?;
@@ -4494,7 +4499,7 @@ fn live_usage_keeps_step_and_pause_visible_at_minimum_size() -> Result {
         let screen = t.screen("live usage and execution control", |s| {
             s.contains("RUNNING · supervisor alive")
                 && s.contains("Step: Execution")
-                && s.contains("I 123G R 98G W 87G O 76G")
+                && s.contains("in 123G, cache 186G, out 76G")
                 && s.contains("p Pause")
         })?;
         println!("LIVE USAGE 70x22 mouse={mouse}\n{screen}");
@@ -5294,7 +5299,7 @@ fn real_tui_recovers_connection_and_checks_then_continues_queue() -> Result {
         assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-            "execution\nexecution\nremediation\nremediation\nreview\nvalidation\nexecution\nreview\nvalidation\n"
+            "execution\nexecution\nremediation\nexecution\nreview\nvalidation\nexecution\nreview\nvalidation\n"
         );
         assert!(f.git(&["status", "--porcelain"])?.is_empty());
         t.send("q")?;
@@ -6129,7 +6134,7 @@ fn real_tui_individual_check_timeout_remains_separate_from_task_deadline() -> Re
         assert_eq!(failed["attempts"].as_array().unwrap().len(), 3);
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-            "execution\nremediation\nremediation\nremediation\nremediation\n"
+            "execution\nremediation\nexecution\nremediation\nexecution\n"
         );
         assert!(
             f.ok(&["show", "2"])?["attempts"]
@@ -6480,7 +6485,7 @@ fn detached_runner_survives_launching_cli_and_keeps_stderr() -> Result {
     f.add("Detached task")?;
     let provider = f.scratch.path().join("bin/codex");
     let original = fs::read_to_string(&provider)?;
-    let anchor = "case \"$model\" in execution)";
+    let anchor = "if [ \"$repair\" = yes ]; then\n if";
     assert_eq!(
         original.matches(anchor).count(),
         1,
@@ -6659,7 +6664,7 @@ fn review_failure_is_judged_repaired_and_queue_continues_automatically() -> Resu
         assert_eq!(f.ok(&["show", "2"])?["lifecycle"], "succeeded");
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-            "execution\nreview\nremediation\nremediation\nreview\nvalidation\nexecution\nreview\nvalidation\n"
+            "execution\nreview\nremediation\nexecution\nreview\nvalidation\nexecution\nreview\nvalidation\n"
         );
         f.no_scratch()?;
     }
@@ -6694,7 +6699,7 @@ fn review_converges_after_nine_repairs_with_a_single_attempt_budget() -> Result 
             [],
             |r| r.get::<_, i64>(0)
         )?,
-        18
+        9
     );
     assert_eq!(db.connection().query_row("SELECT count(*) FROM attempt_steps WHERE attempt_id=1 AND role='review' AND state='changes_requested'", [], |r| r.get::<_,i64>(0))?, 9);
     assert_eq!(
@@ -7143,7 +7148,7 @@ fn real_tui_check_launch_backoff_deadline_survives_restart_and_requires_explicit
         assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-            "execution\nremediation\nremediation\nreview\nvalidation\nexecution\nreview\nvalidation\n"
+            "execution\nremediation\nexecution\nreview\nvalidation\nexecution\nreview\nvalidation\n"
         );
         let judge_prompt = fs::read_to_string(f.scratch.path().join("prompt-judge"))?;
         assert!(judge_prompt.contains("You are the failure judge"));
