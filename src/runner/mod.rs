@@ -3,6 +3,7 @@ pub(crate) mod callback;
 mod checks;
 mod cycle;
 mod delivery;
+mod failure_summary;
 mod output;
 pub(crate) mod process;
 pub(crate) mod provider;
@@ -370,13 +371,24 @@ fn run_inner(
             earlier_task_ms: service.earlier_task_active_ms(&run)?,
         };
 
+        // A task's own first attempt, or a retry after a red start, begins from a verified
+        // green state. Inserted prerequisite tasks exist to repair, so they start at once.
+        let fresh_start = task.origin_task_id.is_none()
+            && task.attempts.last().is_none_or(|a| {
+                a.state == "failed"
+                    && a.outcome
+                        .as_deref()
+                        .is_some_and(|o| o.starts_with(crate::application::stop::BASELINE_RED))
+            });
+        let verify_first = fresh_start && service.check_before_task()? && workspace.clean()?;
         // Only an attempt that directly follows a failure is a repair; a judge-replanned
         // attempt ends as interrupted, so the next one starts fresh on the new plan.
-        let repair = task.attempts.last().is_some_and(|a| {
-            a.state == "failed"
-                || (matches!(a.state.as_str(), "paused" | "waiting")
-                    && a.steps.iter().any(|step| step.role == "remediation"))
-        });
+        let repair = !fresh_start
+            && task.attempts.last().is_some_and(|a| {
+                a.state == "failed"
+                    || (matches!(a.state.as_str(), "paused" | "waiting")
+                        && a.steps.iter().any(|step| step.role == "remediation"))
+            });
         service.output(
             &run,
             "system",
@@ -411,7 +423,7 @@ fn run_inner(
                     !checks.is_empty(),
                     "Configure at least one enabled project check",
                 )?;
-                cycle::run(service, &run, &mut context, &checks, repair)
+                cycle::run(service, &run, &mut context, &checks, repair, verify_first)
             });
             let result = match result {
                 Ok(Outcome::Failed("transport" | "environment" | "protocol", message))
@@ -946,8 +958,8 @@ fn ai_turn(
             .iter()
             .any(|f| f.severity == agent::Severity::Critical)
         || assessment.outcome == "failed";
-    let needs_work =
-        critical || !assessment.findings.is_empty() || assessment.outcome == "changes_requested";
+    // Minor findings are recorded with the accepted result; only critical ones cost a round.
+    let needs_work = critical;
     for criterion in &assessment.criteria {
         service.criterion(
             run,
@@ -1010,10 +1022,13 @@ fn provider_turn(
             ),
             None => Outcome::Failed(
                 "transport",
-                format!(
-                    "{} exited {code}; see stored output",
-                    stream.provider.label()
-                ),
+                match stream.error_summary() {
+                    Some(error) => format!("{} exited {code}: {error}", stream.provider.label()),
+                    None => format!(
+                        "{} exited {code} without an error message; see stored output",
+                        stream.provider.label()
+                    ),
+                },
             ),
         },
         Finish::Stopped(outcome) => outcome,
@@ -1105,11 +1120,11 @@ fn judge_once(
     let mut prompt = agent::judge_prompt(run, &evidence);
     let mut schema = agent::judge_schema();
     if normal_cycle {
-        prompt.push_str("\nThis is a normal review/fix round within the same active task, not a failed task. Revalidate the current findings; preserve the goal and useful work. Prefer repair. You may revise the task or insert prerequisites only if needed, retaining the full goal and acceptance bar. The repair counter follows the original task across automatic revisions and prerequisite handoffs. Do not ask the owner or escalate models during these rounds; unresolved critical findings are escalated only after ten repair rounds.");
+        prompt.push_str("\nThis is a normal review/fix round within the same active task, not a failed task. Revalidate the current findings; preserve the goal and useful work. Plan fixes only for critical findings and drop minor ones. Cost to result matters most, then time: prefer repair while the worker is converging, but escalate to a stronger execution model or effort when the evidence shows it is not (for example a critical finding it already failed to fix, or a defect beyond its reach). You may revise the task or insert prerequisites only if needed, retaining the full goal and acceptance bar. The repair counter follows the original task across automatic revisions, escalations and prerequisite handoffs. Do not ask the owner during these rounds.");
         schema["properties"]["judgment"]["anyOf"]
             .as_array_mut()
             .expect("judge alternatives")
-            .truncate(3);
+            .retain(|choice| choice["properties"]["action"]["enum"][0] != "ask");
     }
     let launch = provider.launch(
         model,
@@ -1152,22 +1167,16 @@ fn judge_once(
             return Ok(Outcome::Failed("protocol", e.to_string()));
         }
     };
-    if normal_cycle
-        && !matches!(
-            judgment,
-            agent::Judgment::Repair { .. }
-                | agent::Judgment::Revise { .. }
-                | agent::Judgment::Insert { .. }
-        )
-    {
-        let message = "Fix planner must repair, revise or insert during the normal ten-round cycle; owner escalation waits for the final critical decision";
+    if normal_cycle && matches!(judgment, agent::Judgment::Ask { .. }) {
+        let message = "Fix planner must repair, revise, insert or escalate during the normal ten-round cycle; owner questions wait for the final critical decision";
         service.finish_step(&step, false, message)?;
         return Ok(Outcome::Failed("protocol", message.into()));
     }
     let (summary, outcome) = match judgment {
+        // The first line is the judge's reason, shown to the owner as the round's why.
         agent::Judgment::Repair { plan, reason } => (
             format!("Repair: {reason}\nAuthorized repair plan:\n{plan}"),
-            Outcome::Passed(plan),
+            Outcome::Passed(format!("{}\n{plan}", reason.replace('\n', " "))),
         ),
         agent::Judgment::Ask { question, reason } => {
             service.finish_step(&step, false, &format!("Owner decision needed: {reason}"))?;

@@ -6,6 +6,8 @@ CREATE TABLE projects (
     name TEXT NOT NULL UNIQUE CHECK (length(trim(name)) > 0),
     root_path BLOB NOT NULL UNIQUE CHECK (length(root_path) > 0),
     created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+    -- A task starts only after the project checks pass on its clean starting commit.
+    check_before_task INTEGER NOT NULL DEFAULT 1 CHECK (check_before_task IN (0, 1)),
     -- Writable agent turns may use the network (offline mode requires provider enforcement).
     agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1))
 ) STRICT;
@@ -225,11 +227,13 @@ CREATE UNIQUE INDEX ux_running_attempt_project ON attempts(project_id) WHERE sta
 CREATE TABLE attempt_progress (
     attempt_id INTEGER PRIMARY KEY REFERENCES attempts(id),
     repair_round INTEGER NOT NULL DEFAULT 0 CHECK (repair_round BETWEEN 0 AND 10),
-    phase TEXT NOT NULL CHECK (phase IN ('implement','judge','replanned','fix','integrate','check','review','validate','decide','complete')),
+    phase TEXT NOT NULL CHECK (phase IN ('baseline','implement','judge','replanned','fix','integrate','check','review','validate','decide','complete')),
     context TEXT NOT NULL DEFAULT '',
     evidence TEXT NOT NULL DEFAULT '',
     verified_tree TEXT NOT NULL DEFAULT '',
-    reset_fresh INTEGER NOT NULL DEFAULT 0 CHECK (reset_fresh IN (0,1))
+    reset_fresh INTEGER NOT NULL DEFAULT 0 CHECK (reset_fresh IN (0,1)),
+    -- One readable line: why the current fix round runs (failing check or judge's reason).
+    why TEXT NOT NULL DEFAULT ''
 ) STRICT;
 
 -- Provider session != worker process != attempt. Waiting may have no process at all.

@@ -660,6 +660,29 @@ fn current_step_line(
     ))
 }
 
+/// Why the running fix round exists, wrapped onto at most two lines; Activity keeps it all.
+fn why_lines(task: &crate::presentation::Task, width: usize) -> Vec<Line<'static>> {
+    let Some(why) = task
+        .attempts
+        .last()
+        .and_then(|a| a.report.lines().find(|line| line.starts_with("Why: ")))
+    else {
+        return Vec::new();
+    };
+    let mut first = clip(why, width);
+    if first.len() < why.len()
+        && let Some(space) = first.rfind(' ')
+    {
+        first.truncate(space);
+    }
+    let rest = why[first.len()..].trim_start();
+    let mut lines = vec![Line::styled(first.clone(), Style::new().fg(WARN))];
+    if !rest.is_empty() {
+        lines.push(Line::styled(shortened(rest, width), Style::new().fg(WARN)));
+    }
+    lines
+}
+
 fn current_summary_height(height: u16) -> u16 {
     if height >= 25 {
         15
@@ -744,11 +767,13 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
     let model_index = match phase.or(role) {
         Some("Review") => 1,
         Some("Validate" | "Critical findings need a decision" | "Validation") => 2,
-        Some("Plan fixes" | "Fix" | "Remediation") => 3,
+        // The judge plans with the remediation model; the worker fixes with the execution model.
+        Some("Plan fixes" | "Remediation") => 3,
         _ => 0,
     };
     let model = &settings.models[model_index];
     lines.extend(current_step_line(task, app.service.is_some(), inner));
+    lines.extend(why_lines(task, inner));
     match status {
         Status::Waiting => {
             let seconds = attempt.and_then(|a| a.resume_at).map_or(0, |at| {

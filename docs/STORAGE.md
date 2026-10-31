@@ -323,11 +323,12 @@ Durable phase within one attempt. Initial implementation is round zero; at most 
 | --- | --- | --- | --- |
 | `attempt_id` | INTEGER | no | Owning attempt. |
 | `repair_round` | INTEGER | no | Zero for implementation, then 1 through 10. |
-| `phase` | TEXT | no | implement, judge, replanned, fix, integrate, check, review, validate, decide, complete. |
+| `phase` | TEXT | no | baseline (checks on the clean starting commit), implement, judge, replanned, fix, integrate, check, review, validate, decide, complete. |
 | `context` | TEXT | no | Current findings and authorized repair plan. |
 | `evidence` | TEXT | no | Current round's assessments and durable transcript references. |
 | `verified_tree` | TEXT | no | Git tree fingerprint binding the retained proof to source content. |
 | `reset_fresh` | INTEGER | no | Marks a new attempt after Reset to pending so delivery recovery preserves its fresh worker/judge phase; stored only on this attempt. |
+| `why` | TEXT | no | One readable line on why the current fix round runs: the failing check and its first error, the reviewer's summary, or the judge's reason. Empty outside a fix round. |
 
 - PK `(attempt_id)`.
 - FK `(attempt_id)` → `attempts(id)`.
@@ -631,6 +632,7 @@ Registered checkout. Names and canonical native root paths are independently uni
 | `name` | TEXT | no | Nonblank name. |
 | `root_path` | BLOB | no | Canonical native absolute path bytes (not necessarily UTF-8). |
 | `created_at_ms` | INTEGER | no | Creation time. |
+| `check_before_task` | INTEGER | no | 1 (default) runs the project checks on a task's clean starting commit before its first agent turn; a red start stops the task without spending tokens. 0 skips that run. |
 | `agent_network` | INTEGER | no | 1 lets writable agent turns use the network; 0 (default) leaves Codex's sandbox without it. |
 
 - PK `(id)`.

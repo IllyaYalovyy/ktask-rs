@@ -1572,7 +1572,23 @@ impl Fixture {
                 role,
             ])?;
         }
+        f.skip_starting_checks(&f.root)?;
         Ok(f)
+    }
+    /// The fixture check passes only once a worker writes result.txt, so a red start would
+    /// stop every task; the starting-check tests switch it back on.
+    fn skip_starting_checks(&self, project: &Path) -> Result {
+        let o = self
+            .process_in(project)
+            .args(["--json", "init", "--check-before-task", "off"])
+            .output()?;
+        // init saves the setting first; exit 4 only reports readiness gaps some tests create.
+        assert!(
+            matches!(o.status.code(), Some(0 | 4)),
+            "{}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        Ok(())
     }
     /// Another Git project, set up like the first, in the same ktask instance.
     fn second_project(&self, name: &str) -> Result<PathBuf> {
@@ -1608,6 +1624,7 @@ impl Fixture {
             ];
             self.ok_in(&root, &args)?;
         }
+        self.skip_starting_checks(&root)?;
         Ok(root)
     }
     fn git(&self, args: &[&str]) -> Result<String> {
@@ -1708,10 +1725,11 @@ printf '%s' "$prompt" > "$HOME/prompt-$model"
 case "$prompt" in *"Keep preserved result.txt and verify the revised reset goal"*)
  if [ "$model" = execution ]; then printf '%s' "$prompt" > "$HOME/reset-revised-prompt"; fi;;
 esac
+if [ "$model" = review ] && [ -f "$HOME/first-review-prompt" ] && [ ! -f "$HOME/second-review-prompt" ]; then printf '%s' "$prompt" > "$HOME/second-review-prompt"; fi
 if [ "$model" = review ] && [ ! -f "$HOME/first-review-prompt" ]; then printf '%s' "$prompt" > "$HOME/first-review-prompt"; fi
 if [ "$model" = validation ] && [ ! -f "$HOME/first-validation-prompt" ]; then printf '%s' "$prompt" > "$HOME/first-validation-prompt"; fi
 repair=no
-case "$prompt" in *"Apply the failure judge's repair plan"*) repair=yes; printf '%s' "$prompt" > "$HOME/prompt-repair-worker";; esac
+case "$prompt" in *"Fix what Context reports"*) repair=yes; printf '%s' "$prompt" > "$HOME/prompt-repair-worker";; esac
 [ -n "$session" ] || session="session-$model-$$"
 printf '{{"type":"thread.started","thread_id":"%s"}}\n' "$session"
 printf '%s\n' "$model" >> "$HOME/provider-invocations"
@@ -1740,12 +1758,23 @@ case "$prompt" in *"You are the failure judge"*)
   *) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"repair\",\"plan\":\"Rerun the check after writing result.txt\",\"reason\":\"The check failed on a missing file\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
  esac;;
 esac
+reviews_failed=0; [ ! -f "$HOME/reviews-failed" ] || reviews_failed=$(cat "$HOME/reviews-failed")
+review_failures=1; [ ! -s "$HOME/fail-first-review" ] || review_failures=$(cat "$HOME/fail-first-review")
+if [ "$model" = review ] && [ -f "$HOME/fail-first-review" ] && [ "$reviews_failed" -lt "$review_failures" ]; then
+ printf '%s' $((reviews_failed + 1)) > "$HOME/reviews-failed"
+ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"changes_requested\",\"summary\":\"result.txt:1: boundary case is wrong\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":false,\"evidence\":\"Boundary case fails\"}}],\"findings\":[{{\"severity\":\"critical\",\"description\":\"result.txt:1: boundary case is wrong\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'
+ exit 0
+fi
 if [ '{mode}' = noisy-review-once ] && [ "$model" = review ]; then
  i=0
  while [ "$i" -lt 2100 ]; do
   printf '{{"type":"item.completed","item":{{"type":"command_execution","command":"late output","aggregated_output":"late output %s","exit_code":0}}}}\n' "$i"
   i=$((i + 1))
  done
+fi
+if [ '{mode}' = hold-repair ] && [ "$repair" = yes ]; then
+ touch "$HOME/repair-started"
+ until [ -f "$HOME/repair-released" ]; do sleep 0.05; done
 fi
 if [ '{mode}' = resolve-conflict-pause ] && [ "$repair" = yes ] && [ ! -f "$HOME/conflict-repair-released" ]; then
  touch "$HOME/conflict-repair-started"
@@ -1919,6 +1948,18 @@ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":
         Ok(())
     }
     /// A project check that fails exactly once, so the next attempt goes through the judge.
+    /// The first review returns one critical finding, so the read-only judge plans a fix.
+    fn fail_first_review(&self) -> Result {
+        self.fail_reviews(1)
+    }
+    /// The first `count` reviews each return one critical finding.
+    fn fail_reviews(&self, count: u32) -> Result {
+        fs::write(
+            self.scratch.path().join("fail-first-review"),
+            count.to_string(),
+        )?;
+        Ok(())
+    }
     fn fail_first_check(&self) -> Result {
         let marker = self.scratch.path().join("check-ran");
         let command = format!(
@@ -2136,7 +2177,7 @@ fn worker_callback_files_only_linked_drafts_and_terminal_shows_both_links() -> R
 }
 
 #[test]
-fn review_cycles_accept_only_minor_findings_after_ten_repairs_in_real_tui() -> Result {
+fn review_rounds_repair_only_critical_findings_in_real_tui() -> Result {
     for (mouse, cols, rows) in [(false, 70, 22), (true, 120, 30)] {
         for critical in [false, true] {
             let f = Fixture::new()?;
@@ -2178,7 +2219,8 @@ fn review_cycles_accept_only_minor_findings_after_ten_repairs_in_real_tui() -> R
                 [],
                 |r| r.get(0),
             )?;
-            assert_eq!(round, 10);
+            // Minor findings never cost a round; critical ones get all ten.
+            assert_eq!(round, if critical { 10 } else { 0 });
             assert_eq!(
                 db.connection().query_row(
                     "SELECT count(*) FROM attempts WHERE state='failed'",
@@ -2209,15 +2251,26 @@ fn review_cycles_accept_only_minor_findings_after_ten_repairs_in_real_tui() -> R
                     [],
                     |r| r.get::<_, i64>(0)
                 )?,
-                10
+                if critical { 10 } else { 0 }
             );
-            assert!(
-                task["attempts"][0]["steps"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|s| s["role"] == "review" && s["state"] == "changes_requested")
-            );
+            let steps = task["attempts"][0]["steps"].as_array().unwrap();
+            if critical {
+                assert!(
+                    steps
+                        .iter()
+                        .any(|s| s["role"] == "review" && s["state"] == "changes_requested")
+                );
+            } else {
+                let review = steps.iter().find(|s| s["role"] == "review").unwrap();
+                assert_eq!(review["state"], "succeeded", "{review}");
+                assert!(
+                    review["report"]
+                        .as_str()
+                        .unwrap()
+                        .contains("Minor: result.txt:1: optional naming polish"),
+                    "the accepted minor finding stays recorded: {review}"
+                );
+            }
             if critical {
                 assert!(
                     task["attempts"][0]["outcome"]
@@ -2523,7 +2576,7 @@ fn changing_source_while_review_is_paused_invalidates_saved_proof() -> Result {
 fn failed_repair_judge_is_repeated_before_a_retry_worker_runs() -> Result {
     let f = Fixture::new()?;
     f.provider("judge-error-once")?;
-    f.fail_first_check()?;
+    f.fail_first_review()?;
     f.add("Retry the failed judge before repairing")?;
     let output = f.process().args(["run", "--one"]).output()?;
     assert_eq!(output.status.code(), Some(0));
@@ -2542,6 +2595,7 @@ fn failed_repair_judge_is_repeated_before_a_retry_worker_runs() -> Result {
         roles.lines().collect::<Vec<_>>(),
         [
             "execution",
+            "review",
             "remediation",
             "remediation",
             "execution",
@@ -2571,46 +2625,27 @@ fn automatic_revisions_cannot_reset_the_ten_round_budget() -> Result {
     f.state("failed")?;
     let task = f.ok(&["show", "1"])?;
     assert_eq!(task["selected_revision"], 11);
-    assert_eq!(task["attempts_used"], 0);
-    assert_eq!(task["attempts"].as_array().unwrap().len(), 11);
+    // Only the attempt whose worker spent ten rounds on the red check used coding budget.
+    assert_eq!(task["attempts_used"], 1);
+    // That attempt, ten revised attempts, and the one that exhausted automatic recovery.
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 12);
     let db = f.db()?;
+    let count = |sql: &str| db.connection().query_row(sql, [], |r| r.get::<_, i64>(0));
+    assert_eq!(count("SELECT automatic_replans FROM tasks WHERE id=1")?, 10);
+    assert_eq!(count("SELECT max(repair_round) FROM attempt_progress")?, 10);
+    // The worker got its ten rounds on the failing check and no more after any revision.
     assert_eq!(
-        db.connection()
-            .query_row("SELECT automatic_replans FROM tasks WHERE id=1", [], |r| {
-                r.get::<_, i64>(0)
-            })?,
-        10
+        count("SELECT count(*) FROM attempt_steps WHERE role='execution'")?,
+        11
     );
+    // The judge decides only after those rounds: eleven revisions, none of them a worker.
     assert_eq!(
-        db.connection()
-            .query_row("SELECT max(repair_round) FROM attempt_progress", [], |r| {
-                r.get::<_, i64>(0)
-            })?,
-        1
-    );
-    assert_eq!(
-        db.connection().query_row(
-            "SELECT count(*) FROM attempt_steps WHERE role='execution'",
-            [],
-            |r| r.get::<_, i64>(0)
-        )?,
-        1
-    );
-    assert_eq!(
-        db.connection().query_row(
-            "SELECT count(*) FROM attempt_steps WHERE role='remediation'",
-            [],
-            |r| r.get::<_, i64>(0)
-        )?,
+        count("SELECT count(*) FROM attempt_steps WHERE role='remediation'")?,
         11
     );
     assert_eq!(
-        db.connection().query_row(
-            "SELECT count(*) FROM attempts WHERE state='failed'",
-            [],
-            |r| r.get::<_, i64>(0)
-        )?,
-        1
+        count("SELECT count(*) FROM attempts WHERE state='failed'")?,
+        2
     );
     f.no_scratch()?;
     Ok(())
@@ -2636,7 +2671,9 @@ fn check_evidence_preserves_unicode_split_across_pipe_reads() -> Result {
             .prepare("SELECT relative_path,size_bytes FROM artifacts ORDER BY attempt_id")?
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        assert_eq!(artifacts.len(), if exit_code == 0 { 1 } else { 11 });
+        // A red check runs eleven times in the first attempt (ten worker rounds), then once
+        // after the judged repair in each of the two later attempts.
+        assert_eq!(artifacts.len(), if exit_code == 0 { 1 } else { 13 });
         for (relative, size) in artifacts {
             let text =
                 fs::read_to_string(f.scratch.path().join("state/ktask-dev").join(&relative))?;
@@ -2697,7 +2734,7 @@ fn reviewers_receive_current_proof_and_authorized_repair_context() -> Result {
     let writable_checks = "Run only focused builds, lints and tests for what you change";
     assert!(remediation.contains(writable_checks));
     assert!(remediation.contains(failed_artifact.to_str().unwrap()));
-    assert!(remediation.contains("Check exited 7"));
+    assert!(remediation.contains("Check build failed (exit 7)\nprevious failed check"));
     for role in ["review", "validation"] {
         let prompt = fs::read_to_string(f.scratch.path().join(format!("prompt-{role}")))?;
         assert!(prompt.contains(artifact.to_str().unwrap()));
@@ -2707,9 +2744,11 @@ fn reviewers_receive_current_proof_and_authorized_repair_context() -> Result {
         assert!(!prompt.contains(writable_checks));
         assert!(!prompt.contains("Previous attempt:"));
         assert!(prompt.contains("scope only; not proof of current success"));
-        assert!(prompt.contains("Repair plan from the failure judge"));
+        // A red check went straight back to the worker; no judge planned this round.
+        assert!(prompt.contains("Supervisor checks failed, repair round 1/10"));
+        assert!(!prompt.contains("Repair plan from the failure judge"));
         assert!(prompt.contains(failed_artifact.to_str().unwrap()));
-        assert!(prompt.contains("Check exited 7"));
+        assert!(prompt.contains("Check build failed (exit 7)"));
     }
     let execution = fs::read_to_string(f.scratch.path().join("prompt-execution"))?;
     assert!(execution.contains(writable_checks));
@@ -2970,13 +3009,12 @@ fn failing_tests_block_acceptance_even_when_the_check_exits_zero() -> Result {
         [
             "execution",
             "check",
-            "remediation",
             "execution",
             "check",
             "review",
             "validation"
         ],
-        "the failing summary sends the attempt back for repair before any review"
+        "the failing summary goes straight back to the worker, without a judge or review"
     );
     let checks: Vec<_> = steps.iter().filter(|s| s["role"] == "check").collect();
     assert_eq!(checks[0]["state"], "failed");
@@ -2986,7 +3024,8 @@ fn failing_tests_block_acceptance_even_when_the_check_exits_zero() -> Result {
     );
     let report = checks[0]["report"].as_str().unwrap();
     assert!(
-        report.contains("exited 0 but its test summary reports 1 failed"),
+        report
+            .contains("Check build exited 0 but its tests failed · 3 passed, 1 failed, 0 ignored"),
         "{report}"
     );
     assert_eq!(checks[1]["state"], "succeeded");
@@ -3267,7 +3306,9 @@ fn check_failure_is_real_and_remediation_stays_with_current() -> Result {
     assert_eq!(failed.status.code(), Some(4));
     let task = f.ok(&["show", "1"])?;
     assert_eq!(task["status"], "failed");
-    assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+    // Three coding attempts: ten worker rounds, then one judged repair per later attempt.
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 3);
+    assert_eq!(task["attempts_used"], 3);
     assert!(
         f.ok(&["show", "2"])?["attempts"]
             .as_array()
@@ -3275,14 +3316,26 @@ fn check_failure_is_real_and_remediation_stays_with_current() -> Result {
             .is_empty()
     );
     let db = f.db()?;
+    let count = |sql: &str| db.connection().query_row(sql, [], |r| r.get::<_, i64>(0));
+    // The red check went straight back to the worker ten times, with no judge.
     assert_eq!(
-        db.connection().query_row(
-            "SELECT count(*) FROM attempt_steps WHERE role='remediation'",
-            [],
-            |r| r.get::<_, i64>(0)
-        )?,
-        // Ten repair rounds: a read-only judge plans each, and the execution session repairs.
-        10
+        count("SELECT count(*) FROM attempt_steps WHERE attempt_id=1 AND role='execution'")?,
+        11
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM attempt_steps WHERE attempt_id=1 AND role='remediation'")?,
+        0
+    );
+    // Only then did the failure judge decide, once per repair attempt.
+    assert_eq!(
+        count("SELECT count(*) FROM attempt_steps WHERE role='remediation'")?,
+        2
+    );
+    assert!(
+        f.ok(&["show", "1"])?["attempts"][0]["outcome"]
+            .as_str()
+            .unwrap()
+            .starts_with("Checks still fail after 10 repair rounds\nCheck build failed (exit 7)")
     );
     let worker_prompt = fs::read_to_string(f.scratch.path().join("prompt-repair-worker"))?;
     assert!(
@@ -3296,7 +3349,7 @@ fn check_failure_is_real_and_remediation_stays_with_current() -> Result {
 #[test]
 fn failure_judge_can_rewrite_the_task_without_spending_budget() -> Result {
     let f = Fixture::new()?;
-    f.fail_first_check()?;
+    f.fail_first_review()?;
     f.add("Contradictory task")?;
     f.provider("judge-revise")?;
     let output = f.process().args(["run"]).output()?;
@@ -3340,21 +3393,25 @@ fn failure_judge_can_rewrite_the_task_without_spending_budget() -> Result {
 fn judge_evidence_stays_within_the_provider_input_limit() -> Result {
     let f = Fixture::new()?;
     f.provider("judge")?;
-    let marker = f.scratch.path().join("check-ran");
+    // Two critical reviews in one attempt: the second judge reads a 1.5 MB check transcript
+    // recorded after the first judge's decision.
+    f.fail_reviews(2)?;
+    let counter = f.scratch.path().join("check-runs");
     let command = format!(
-        "test -f '{0}' || {{ : > '{0}'; echo 'first check fails'; exit 7; }}; test -f '{0}-second' || {{ : > '{0}-second'; head -c 1500000 /dev/zero | tr '\\0' x; echo; echo 'second check fails'; exit 7; }}",
-        marker.display()
+        "test -f result.txt || exit 1; n=$(cat '{0}' 2>/dev/null || echo 0); n=$((n + 1)); echo $n > '{0}'; if [ $n = 2 ]; then head -c 1500000 /dev/zero | tr '\\0' x; echo; echo 'second check passes'; fi",
+        counter.display()
     );
     f.ok(&["check-set", "build", "--command", &command])?;
-    f.add("Noisy failure")?;
+    f.add("Noisy evidence")?;
     f.ok(&["run"])?;
     assert_eq!(f.ok(&["show", "1"])?["lifecycle"], "succeeded");
     let prompt = fs::read_to_string(f.scratch.path().join("prompt-judge"))?;
     assert!(prompt.contains("You are the failure judge"));
     assert!(
-        prompt.contains("second check fails"),
-        "the failure itself survives trimming"
+        prompt.contains("second check passes"),
+        "the latest check output survives trimming"
     );
+    assert!(prompt.contains("result.txt:1: boundary case is wrong"));
     assert!(prompt.contains("Authorized repair plan:\nRerun the check after writing result.txt"));
     assert!(prompt.contains("Recorded judgment output:\n{\"judgment\":"));
     assert!(
@@ -3368,7 +3425,7 @@ fn judge_evidence_stays_within_the_provider_input_limit() -> Result {
 #[test]
 fn failure_judge_asks_the_owner_only_as_a_product_question() -> Result {
     let f = Fixture::new()?;
-    f.fail_first_check()?;
+    f.fail_first_review()?;
     f.add("Ambiguous task")?;
     f.fail_provider()?;
     f.provider("judge-ask")?;
@@ -3426,7 +3483,7 @@ fn paused_repair_resumes_its_reserved_round_and_same_attempt() -> Result {
     for mouse in [false, true] {
         let f = Fixture::new()?;
         f.provider("slow-repair")?;
-        f.fail_first_check()?;
+        f.fail_first_review()?;
         f.add("Pause and resume repair")?;
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
         t.screen("ready", |s| s.contains("r Run queue"))?;
@@ -3473,7 +3530,7 @@ fn paused_repair_resumes_its_reserved_round_and_same_attempt() -> Result {
         assert_eq!(after["lifecycle"], "succeeded");
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-            "execution\nremediation\nexecution\nexecution\nreview\nvalidation\n"
+            "execution\nreview\nremediation\nexecution\nexecution\nreview\nvalidation\n"
         );
         t.send("q")?;
         t.finish()?;
@@ -5697,7 +5754,8 @@ fn real_tui_recovers_connection_and_checks_then_continues_queue() -> Result {
         assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-            "execution\nexecution\nremediation\nexecution\nreview\nvalidation\nexecution\nreview\nvalidation\n"
+            // Connection retry, implementation, then the red check straight back to the worker.
+            "execution\nexecution\nexecution\nreview\nvalidation\nexecution\nreview\nvalidation\n"
         );
         assert!(f.git(&["status", "--porcelain"])?.is_empty());
         t.send("q")?;
@@ -6339,7 +6397,7 @@ fn real_tui_current_run_mode_control_changes_saved_single_preference() -> Result
 #[test]
 fn automatic_prerequisite_preserves_work_and_original_repair_round() -> Result {
     let f = Fixture::new()?;
-    f.fail_first_check()?;
+    f.fail_first_review()?;
     f.add("Original with useful unfinished work")?;
     f.ok(&["edit", "1", "--timeout-ms", "unlimited"])?;
     f.provider("judge-insert")?;
@@ -6360,10 +6418,11 @@ fn automatic_prerequisite_preserves_work_and_original_repair_round() -> Result {
         "Project Author <project@example.com>",
         "Project Author <project@example.com>",
     )?;
-    // The preserved implementation was committed without review. Both the prerequisite's
-    // review and the resumed original's review must still cover it, from the first baseline.
+    // The preserved implementation was committed before its review passed. Both the
+    // prerequisite's review (the second) and the resumed original's review must still cover
+    // it, from the first baseline.
     let baseline = f.git(&["rev-list", "--max-parents=0", "HEAD"])?;
-    for prompt in ["first-review-prompt", "prompt-review"] {
+    for prompt in ["second-review-prompt", "prompt-review"] {
         let prompt = fs::read_to_string(f.scratch.path().join(prompt))?;
         let scope = &prompt[prompt.find("Review scope").expect("review scope")..];
         assert!(
@@ -7937,6 +7996,156 @@ fn two_projects_run_at_once_and_stay_separate() -> Result {
         t.send("q")?;
         t.finish()?;
     }
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn red_start_stops_before_any_agent_and_a_green_retry_runs_the_task() -> Result {
+    let f = Fixture::new()?;
+    let on = f
+        .process()
+        .args(["--json", "init", "--check-before-task", "on"])
+        .output()?;
+    assert!(matches!(on.status.code(), Some(0 | 4)));
+    f.add("Start only from a green commit")?;
+    assert_eq!(f.process().args(["run"]).output()?.status.code(), Some(4));
+    f.state("failed")?;
+    assert!(
+        !f.scratch.path().join("provider-invocations").exists(),
+        "no agent may run, and no tokens be spent, on a red start"
+    );
+    let task = f.ok(&["show", "1"])?;
+    let attempt = &task["attempts"][0];
+    assert_eq!(attempt["failure_category"], "environment");
+    let outcome = attempt["outcome"].as_str().unwrap();
+    assert!(
+        outcome.starts_with("Checks fail before any work started\nCheck build failed (exit 1)"),
+        "{outcome}"
+    );
+    assert_eq!(
+        task["attempts_used"], 0,
+        "a red start spends no coding budget"
+    );
+
+    // The owner makes the starting commit green; Retry checks it again and then works.
+    fs::write(f.root.join("result.txt"), "green\n")?;
+    f.git(&["add", "result.txt"])?;
+    f.git(&["commit", "-qm", "make checks pass"])?;
+    f.ok(&["run"])?;
+    f.state("succeeded")?;
+    assert!(
+        !f.scratch.path().join("prompt-judge").exists(),
+        "a red start is not a failure to judge"
+    );
+    let db = f.db()?;
+    let roles: Vec<String> = db
+        .connection()
+        .prepare("SELECT role FROM attempt_steps WHERE attempt_id=2 ORDER BY ordinal")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    assert_eq!(
+        roles,
+        ["check", "execution", "check", "review", "validation"]
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn failing_checks_return_to_the_worker_with_their_errors_and_no_judge() -> Result {
+    let f = Fixture::new()?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        r#"test -f result.txt || exit 1; if [ -f ../check-failed-once ]; then echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out'; exit 0; fi; touch ../check-failed-once; printf "test demo::adds ... FAILED\nthread 'demo::adds' (7) panicked at src/demo.rs:3:5:\nexpected 2, got 3\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n"; exit 101"#,
+    ])?;
+    f.add("Fix failing tests without a judge")?;
+    f.ok(&["run"])?;
+    f.state("succeeded")?;
+    assert!(
+        !f.scratch.path().join("prompt-judge").exists(),
+        "a failing check needs no judgment"
+    );
+    let repair = fs::read_to_string(f.scratch.path().join("prompt-repair-worker"))?;
+    assert!(repair.contains("Supervisor checks failed, repair round 1/10"));
+    assert!(repair.contains("Check build failed (exit 101) · 0 passed, 1 failed, 0 ignored"));
+    assert!(repair.contains("test demo::adds ... FAILED"));
+    assert!(repair.contains("panicked at src/demo.rs:3:5: expected 2, got 3"));
+    assert!(repair.contains("Never skip, weaken or delete a test"));
+    let db = f.db()?;
+    let steps: Vec<(String, String, String)> = db
+        .connection()
+        .prepare("SELECT role,state,coalesce(report,'') FROM attempt_steps ORDER BY ordinal")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let roles: Vec<&str> = steps.iter().map(|(role, ..)| role.as_str()).collect();
+    assert_eq!(
+        roles,
+        [
+            "execution",
+            "check",
+            "execution",
+            "check",
+            "review",
+            "validation"
+        ]
+    );
+    let failed = &steps[1];
+    assert_eq!(failed.1, "failed");
+    assert!(
+        failed.2.contains("test demo::adds ... FAILED"),
+        "{}",
+        failed.2
+    );
+    assert!(failed.2.contains("expected 2, got 3"), "{}", failed.2);
+    let why: String = db.connection().query_row(
+        "SELECT message FROM events WHERE kind='workflow.progress' AND message LIKE '%Why:%' ORDER BY id LIMIT 1",
+        [],
+        |r| r.get(0),
+    )?;
+    assert!(
+        why.contains("Workflow · Fix · repair round 1/10\nWhy: Check build failed (exit 101)"),
+        "{why}"
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn a_running_fix_round_shows_why_in_status_and_activity() -> Result {
+    let f = Fixture::new()?;
+    f.provider("hold-repair")?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        r#"test -f result.txt || exit 1; [ -f "$HOME/check-failed-once" ] && exit 0; touch "$HOME/check-failed-once"; printf "test demo::adds ... FAILED\nthread 'demo::adds' (7) panicked at src/demo.rs:3:5:\nexpected 2, got 3\n"; exit 101"#,
+    ])?;
+    f.add("Show why the round runs")?;
+    let mut runner = Running(f.process().args(["run", "--one"]).spawn()?);
+    support::eventually("repair worker", || {
+        Ok(f.scratch
+            .path()
+            .join("repair-started")
+            .exists()
+            .then_some(()))
+    })?;
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 40)?;
+    let screen = t.screen("why in status", |s| {
+        s.contains("Why: Check build failed (exit 101) ·")
+    })?;
+    println!("WHY ON CURRENT\n{screen}");
+    assert!(
+        screen.contains("Model codex/execution"),
+        "the worker fixes with the execution model"
+    );
+    fs::write(f.scratch.path().join("repair-released"), "")?;
+    assert!(runner.0.wait()?.success());
+    f.state("succeeded")?;
+    t.send("q")?;
+    t.finish()?;
     f.no_scratch()?;
     Ok(())
 }

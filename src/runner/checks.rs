@@ -1,5 +1,6 @@
 use super::{
-    Context, Finish, Outcome, execute, operational_backoff, process::Invocation, test_summary,
+    Context, Finish, Outcome, execute, failure_summary, operational_backoff, process::Invocation,
+    test_summary,
 };
 use crate::{
     application::{
@@ -77,7 +78,7 @@ pub(super) fn run(
                     break;
                 }
                 Outcome::Failed(category, message) => {
-                    let message = format!("{message}; supervisor transcript: {}", path.display());
+                    let message = format!("{message}\nFull log: {}", path.display());
                     if category == "environment" && recheck < 2 {
                         service.output(run, "system", &format!(
                             "Check infrastructure failed · automatic retry {}/2 after {}s · transcript retained; Pause cancels",
@@ -153,8 +154,19 @@ fn run_one(
     )?;
     let (outcome, exit, counts) = match finish? {
         Finish::Exited(code) => {
-            let counts = test_summary::parse(&String::from_utf8_lossy(&std::fs::read(&path)?));
-            (verdict(code, counts), Some(code), counts)
+            let transcript = String::from_utf8_lossy(&std::fs::read(&path)?).into_owned();
+            let counts = test_summary::parse(&transcript);
+            let outcome = match verdict(&check.name, code, counts) {
+                Outcome::Failed(category, headline) => Outcome::Failed(
+                    category,
+                    format!(
+                        "{headline}\n{}",
+                        failure_summary::summarize(&transcript).join("\n")
+                    ),
+                ),
+                passed => passed,
+            };
+            (outcome, Some(code), counts)
         }
         Finish::Stopped(outcome) => (outcome, None, None),
     };
@@ -187,17 +199,20 @@ fn run_one(
 
 /// A check passes only when it exits 0 and its own test summaries report no failed test, so a
 /// wrapper that hides the test runner's exit status cannot turn failing tests into a pass.
-fn verdict(code: i32, counts: Option<CheckCounts>) -> Outcome {
+fn verdict(name: &str, code: i32, counts: Option<CheckCounts>) -> Outcome {
+    let tally = counts.map_or(String::new(), |c| {
+        format!(
+            " · {} passed, {} failed, {} ignored",
+            c.passed, c.failed, c.ignored
+        )
+    });
     match counts {
         _ if code != 0 => {
-            Outcome::Failed("check", format!("Check exited {code}; see stored output"))
+            Outcome::Failed("check", format!("Check {name} failed (exit {code}){tally}"))
         }
         Some(counts) if counts.failed > 0 => Outcome::Failed(
             "check",
-            format!(
-                "Check exited 0 but its test summary reports {} failed test(s); see stored output",
-                counts.failed
-            ),
+            format!("Check {name} exited 0 but its tests failed{tally}"),
         ),
         _ => Outcome::Passed("Check exited 0".into()),
     }
@@ -217,7 +232,8 @@ mod tests {
 
     #[test]
     fn any_reported_failure_fails_the_check() {
-        let failed = |code, counts| matches!(verdict(code, counts), Outcome::Failed("check", _));
+        let failed =
+            |code, counts| matches!(verdict("build", code, counts), Outcome::Failed("check", _));
         assert!(
             failed(0, counts(7, 1, 1)),
             "exit 0 cannot hide a failed test"

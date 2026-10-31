@@ -1546,8 +1546,15 @@ fn project_revision(revision: &domain::Revision) -> Result<model::Revision, Stri
 /// An execution step after the failure judge's plan in the same attempt is a repair.
 fn step_label(steps: &[domain::Step], index: usize) -> &'static str {
     match steps[index].role.as_str() {
-        "execution" if steps[..index].iter().any(|s| s.role == "remediation") => "Repair",
+        "execution"
+            if steps[..index]
+                .iter()
+                .any(|s| matches!(s.role.as_str(), "remediation" | "execution")) =>
+        {
+            "Repair"
+        }
         "execution" => "Execution",
+        "check" if !steps[..index].iter().any(|s| s.role == "execution") => "Starting checks",
         "check" => "Checks",
         "review" => "Review",
         "validation" => "Validation",

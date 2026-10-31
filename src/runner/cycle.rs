@@ -5,6 +5,7 @@ use crate::{
         Service,
         execution::{Check, Run},
         progress::{Progress, REPAIR_ROUNDS},
+        stop::{BASELINE_RED, CHECKS_STILL_FAIL},
     },
     storage::{Error, Result},
 };
@@ -16,6 +17,7 @@ pub(super) fn run(
     ctx: &mut Context<'_>,
     checks: &[Check],
     repair: bool,
+    verify_first: bool,
 ) -> Result<Outcome> {
     let mut progress = match service.progress(run)? {
         Some(saved) => saved,
@@ -24,16 +26,25 @@ pub(super) fn run(
                 .task(run.task)?
                 .and_then(|t| t.attempts.iter().rev().find_map(|a| a.outcome.clone()))
                 .unwrap_or_default();
-            let previous = service.prior_progress(run)?;
+            // A verified fresh start owes nothing to an earlier attempt that never began work.
+            let previous = service.prior_progress(run)?.filter(|_| !verify_first);
             let round = previous.as_ref().map_or(0, |p| p.round);
             let mut progress = Progress {
                 round,
-                phase: if repair { "judge" } else { "implement" }.into(),
+                phase: if verify_first {
+                    "baseline"
+                } else if repair {
+                    "judge"
+                } else {
+                    "implement"
+                }
+                .into(),
                 context: format!(
                     "Prior failure context (scope only; not proof of current success): {prior}"
                 ),
                 evidence: String::new(),
                 verified_tree: String::new(),
+                why: String::new(),
             };
             if let Some(previous) = previous {
                 progress.phase = if repair || previous.phase == "replanned" {
@@ -106,6 +117,12 @@ pub(super) fn run(
                 &format!("{}\nRecorded answers:\n{answers}", progress.context),
             )?,
             "integrate" => super::delivery::continue_integration(service, run, ctx)?,
+            "baseline" => {
+                let tree = ctx
+                    .workspace
+                    .fingerprint(&ctx.paths.cache.join("workers"))?;
+                checks::run(service, run, ctx, checks, &tree)?
+            }
             "judge" if progress.round == 0 => judge(service, run, ctx)?,
             "judge" => judge_attempt(service, run, ctx, run.attempt)?,
             "check" => {
@@ -151,6 +168,27 @@ pub(super) fn run(
             }
             _ => return Err(Error::Conflict("Unknown workflow phase".into())),
         };
+        if progress.phase == "baseline" {
+            match outcome {
+                Outcome::Passed(_) => {
+                    service.output(
+                        run,
+                        "system",
+                        "Starting state verified: every check passes before work begins",
+                    )?;
+                    progress.phase = "implement".into();
+                    service.save_progress(run, &progress)?;
+                    continue;
+                }
+                Outcome::Failed("check", report) | Outcome::Changes { report, .. } => {
+                    return Ok(Outcome::Failed(
+                        "environment",
+                        format!("{BASELINE_RED}\n{report}"),
+                    ));
+                }
+                other => return Ok(other),
+            }
+        }
         match outcome {
             Outcome::Passed(report) => match progress.phase.as_str() {
                 "implement" | "fix" => {
@@ -174,13 +212,16 @@ pub(super) fn run(
                     progress.verified_tree.clear();
                 }
                 "judge" => {
+                    let (reason, plan) = report.split_once('\n').unwrap_or((&report, ""));
+                    progress.why = reason.to_owned();
                     progress
                         .context
-                        .push_str(&format!("\nRepair plan from the failure judge:\n{report}"));
+                        .push_str(&format!("\nRepair plan from the failure judge:\n{plan}"));
                     progress.phase = "fix".into();
                 }
                 "check" => {
                     progress.evidence.push_str(&report);
+                    progress.why.clear();
                     progress.phase = "review".into();
                 }
                 "review" => {
@@ -222,13 +263,18 @@ pub(super) fn run(
                     request_fixes(service, run, &mut progress, &report)?;
                 }
             }
+            // A failing check needs no judgment: its summary goes straight to the worker.
+            // After ten rounds the attempt fails and the failure judge decides what next.
             Outcome::Failed("check", report) => {
                 if progress.round == REPAIR_ROUNDS {
-                    return Ok(escalation(&format!(
-                        "Required supervisor check still fails: {report}"
-                    )));
+                    return Ok(Outcome::Failed(
+                        "check",
+                        format!(
+                            "{CHECKS_STILL_FAIL} after {REPAIR_ROUNDS} repair rounds\n{report}"
+                        ),
+                    ));
                 }
-                request_fixes(service, run, &mut progress, &report)?;
+                fix_checks(service, run, &mut progress, &report)?;
             }
             other => return Ok(other),
         }
@@ -248,12 +294,44 @@ pub(super) fn request_fixes(
         progress.round,
     );
     progress.phase = "judge".into();
+    progress.why = finding_headline(report);
     service.output(
         run,
         "system",
         &format!(
-            "Changes requested · planning fix round {}/{REPAIR_ROUNDS} · task remains in progress",
-            progress.round,
+            "Changes requested · planning fix round {}/{REPAIR_ROUNDS} · {}",
+            progress.round, progress.why,
+        ),
+    )
+}
+
+/// The reviewer's own summary of a recorded assessment, or the report's first line.
+fn finding_headline(report: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(report)
+        .ok()
+        .and_then(|value| value["assessment"]["summary"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| report.to_owned())
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn fix_checks(service: &Service, run: &Run, progress: &mut Progress, report: &str) -> Result<()> {
+    progress.round += 1;
+    progress.context = format!(
+        "Supervisor checks failed, repair round {}/{REPAIR_ROUNDS}. Make every check pass by fixing the cause; never skip, weaken or delete a test. Preserve useful work and the full goal.\nPrior failure context (scope only; not proof of current success):\n{report}",
+        progress.round,
+    );
+    progress.phase = "fix".into();
+    progress.why = report.lines().take(2).collect::<Vec<_>>().join(" · ");
+    let headline = report.lines().next().unwrap_or(report);
+    service.output(
+        run,
+        "system",
+        &format!(
+            "{headline} · worker fixing, round {}/{REPAIR_ROUNDS}",
+            progress.round
         ),
     )
 }

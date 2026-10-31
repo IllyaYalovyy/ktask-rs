@@ -131,6 +131,11 @@ pub enum Command {
         /// dependencies. Codex otherwise runs them without network. Unchanged when omitted.
         #[arg(long, value_enum)]
         agent_network: Option<Switch>,
+        /// Run the project checks on a task's clean starting commit before any agent works,
+        /// and stop without spending tokens when they fail. On by default. Unchanged when
+        /// omitted.
+        #[arg(long, value_enum)]
+        check_before_task: Option<Switch>,
     },
     /// Show stored output and what retention would remove; --apply removes it.
     ///

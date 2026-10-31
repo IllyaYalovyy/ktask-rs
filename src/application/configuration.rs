@@ -181,6 +181,21 @@ impl Service {
         )?;
         Ok(())
     }
+    /// Whether a task's first attempt runs the project checks before any agent works.
+    pub fn check_before_task(&self) -> Result<bool> {
+        Ok(self.db.connection().query_row(
+            "SELECT check_before_task FROM projects WHERE id=?1",
+            [self.project_id],
+            |r| r.get(0),
+        )?)
+    }
+    pub fn set_check_before_task(&mut self, enabled: bool) -> Result<()> {
+        self.db.connection().execute(
+            "UPDATE projects SET check_before_task=?2 WHERE id=?1",
+            params![self.project_id, enabled],
+        )?;
+        Ok(())
+    }
     pub fn project_checks(&self) -> Result<Vec<ProjectCheck>> {
         checks(self.db.connection(), self.project_id)
     }

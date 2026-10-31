@@ -659,19 +659,33 @@ fn a_new_project_is_set_up_from_readiness_and_later_projects_start_with_its_defa
         let saved = at(&project)?.project_defaults()?;
         open(&mut t, mouse, "u", "u Readiness", "OK · Project setup")?;
 
-        // Agent network is a project preference.
+        // Agent network and the check before each task are project preferences.
         t.send("\x1b")?;
         t.screen("readiness closed", |s| !s.contains("Execution readiness"))?;
         open(&mut t, mouse, "4", "4 Config", "Storage: SQLite")?;
         open(&mut t, mouse, "e", "e Preferences", "Project preferences")?;
+        assert!(at(&project)?.check_before_task()?, "on by default");
         if mouse {
             t.click_after("Agent network", "< Off >")?;
+            t.click_after("Check before task", "< On >")?;
         } else {
-            t.send("\t\t\t ")?;
+            t.send("\t\t\t \t ")?;
         }
-        screen(&t, "< On >")?;
+        // A field's value is the line after its own label (help text mentions both names).
+        let choice = |s: &str, label: &str| -> String {
+            s.lines()
+                .skip_while(|line| !line.split('│').any(|cell| cell.trim() == label))
+                .nth(1)
+                .unwrap_or_default()
+                .to_owned()
+        };
+        t.screen("both switches flipped", |s| {
+            choice(s, "Agent network").contains("< On >")
+                && choice(s, "Check before task").contains("< Off >")
+        })?;
         apply(&mut t, mouse)?;
         assert!(at(&project)?.agent_network()?);
+        assert!(!at(&project)?.check_before_task()?);
         quit(&mut t)?;
 
         // A project registered later starts with the defaults saved for new projects.
@@ -679,6 +693,7 @@ fn a_new_project_is_set_up_from_readiness_and_later_projects_start_with_its_defa
         std::fs::create_dir(&later)?;
         assert_eq!(at(&later)?.project_defaults()?, saved);
         assert!(!at(&later)?.agent_network()?);
+        assert!(at(&later)?.check_before_task()?);
     }
     Ok(())
 }

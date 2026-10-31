@@ -58,6 +58,16 @@ fast, independent and intact, no scope creep, and the code at least as clean as 
 Validation judges the evidence: every configured check ran and exited zero, nothing was skipped,
 ignored, removed or weakened, and each criterion has proof. Both read; neither runs anything.
 
+Checks are mechanical and cost no tokens. Before a task's first agent turn the supervisor runs
+the project checks on its clean starting commit; a red start stops the task at once and shows
+the failing tests. A check that fails after work goes straight back to the worker with its
+failing test names, panic or assertion messages and compiler errors, read from the transcript
+without a model; the same summary is the failure's recorded reason. Review and validation block
+only on critical findings, judged by their impact on correctness, behavior, performance or
+maintainability; minor findings are recorded and never cost a fix round. `ktask stats` reports
+cost to result (time, new and cached tokens, repair rounds) per delivered task by execution
+model.
+
 A failed attempt is judged before the next one starts. The failure judge reads the evidence in
 a read-only turn of the remediation model and returns one decision: a repair plan, which the
 execution model applies in its resumed implementation session, a rewritten task when the definition itself is wrong, prerequisite tasks inserted before
@@ -189,7 +199,9 @@ of `cargo test`, pytest, unittest (and Django), Jest, Vitest, Mocha and `node --
 reported failed test fails the check even when the command exits 0, and fewer passing or more
 ignored tests than at the previous checkpoint block validation. Other runners, such as
 `go test`, are judged by exit code alone. `--agent-network on` lets Codex agents that change the project use the network,
-for example to install dependencies; it is off by default. `init` exits 4 and lists each fix
+for example to install dependencies; it is off by default. `--check-before-task off` skips the
+checks on a task's starting commit (on by default; Configuration → Preferences has the same
+switch). `init` exits 4 and lists each fix
 when the project still cannot run tasks. The TUI covers the same setup: in a new project
 **u Readiness** lists what is missing, with **c Checks** (the first check is prefilled with
 the detected command), **d Defaults** (choose "New projects: Start with these" to save them
@@ -249,9 +261,11 @@ automatically. A saved intervention stays saved if starting fails; the footer ex
 **Pause** stops/reaps workers before recording paused state; **Run/resume** retains the attempt
 and compatible session. Closing the TUI does not stop the supervisor (the background runner):
 press `p` on any screen, or run `ktask stop` (`ktask stop --all` for every project, for example
-before `make install`); it returns once the runner has exited. Start it again with `r` or `ktask run`. Check, review and
-validation findings stay in the same attempt for a read-only judge, fix, and regenerated proof;
-the ten-round limit applies. A terminal failed attempt opens a separately recorded repair attempt.
+before `make install`); it returns once the runner has exited. Start it again with `r` or `ktask run`. A failing check
+returns to the worker directly; critical review and validation findings go to a read-only judge
+that plans the fix or escalates the execution model. Each fix round shows a one-line **Why:** in
+Status and Activity, and regenerates proof; the ten-round limit applies, then the failure judge
+decides. A terminal failed attempt opens a separately recorded repair attempt.
 Two optional time limits, both off by default (Models, or `--task-limit` / `--stage-limit` with
 `off`, `on` or a duration such as `45m`): the **task limit** (6 h when on) caps active time across
 all attempts; the **stage limit** (30 min when on) caps one agent turn and restarts with every

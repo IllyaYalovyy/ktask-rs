@@ -37,7 +37,7 @@ pub(super) fn parse(transcript: &str) -> Option<CheckCounts> {
 }
 
 /// The line without terminal colour codes or trailing whitespace.
-fn plain(line: &str) -> Cow<'_, str> {
+pub(super) fn plain(line: &str) -> Cow<'_, str> {
     let line = line.trim_end();
     if !line.contains('\x1b') {
         return Cow::Borrowed(line);

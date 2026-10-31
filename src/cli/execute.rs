@@ -135,6 +135,7 @@ fn init(
     check_name: &str,
     timeout_ms: i64,
     agent_network: Option<Switch>,
+    check_before_task: Option<Switch>,
 ) -> Result<Reply> {
     let root = service.project_root()?;
     let check_source = if let Some(command) = check_command {
@@ -151,6 +152,9 @@ fn init(
     if let Some(switch) = agent_network {
         service.set_agent_network(matches!(switch, Switch::On))?;
     }
+    if let Some(switch) = check_before_task {
+        service.set_check_before_task(matches!(switch, Switch::On))?;
+    }
     let checks = service.checks()?;
     let models: Vec<(&str, Option<String>)> = app::configuration::MODEL_ROLES
         .iter()
@@ -158,6 +162,7 @@ fn init(
         .map(|(role, model)| (*role, model.map(|m| format!("{}/{}", m.provider, m.model))))
         .collect();
     let network = service.agent_network()?;
+    let verify_first = service.check_before_task()?;
     let problems = crate::runner::setup::problems(service)?;
     let mut text = format!("Project {} at {}\n", service.project_name, root.display());
     for check in &checks {
@@ -178,8 +183,9 @@ fn init(
         ));
     }
     text.push_str(&format!(
-        "Agent network: {}\n",
-        if network { "on" } else { "off" }
+        "Agent network: {}\nCheck before each task: {}\n",
+        if network { "on" } else { "off" },
+        if verify_first { "on" } else { "off" }
     ));
     if !problems.is_empty() {
         let missing = problems
@@ -198,6 +204,7 @@ fn init(
         data: json!({
             "project": service.project_name, "root": root, "checks": checks,
             "check_source": check_source, "agent_network": network,
+            "check_before_task": verify_first,
             "models": models.into_iter().map(|(role, model)| (role.to_owned(), json!(model)))
                 .collect::<serde_json::Map<_, _>>(),
         }),
@@ -255,12 +262,14 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
             check_name,
             check_timeout_ms,
             agent_network,
+            check_before_task,
         } => init(
             service,
             check_command.as_deref(),
             check_name,
             *check_timeout_ms,
             *agent_network,
+            *check_before_task,
         ),
         Command::Pause { target: input } => {
             let (_, target) = target(service, input)?;
@@ -637,17 +646,33 @@ fn stats(service: &mut Service) -> Result<Reply> {
     let waiting_ms = timing.waiting_ms;
     let usage = service.project_usage()?;
     let cost = usage.cost_microusd;
+    let delivered = service.delivered_by_model()?;
+    let mut text = format!(
+        "Queue: {}\nHistory: {}\nSucceeded: {succeeded}\nAttempts: {}\nFailed attempts: {failed}\nActive: {}\nWaiting: {}\nProject usage: {}\nRecorded cost (micro-USD): {}\n",
+        snapshot.queue.len(),
+        snapshot.history.len(),
+        timing.attempts,
+        crate::application::limits::elapsed(active_ms),
+        crate::application::limits::elapsed(waiting_ms),
+        usage.label(),
+        cost.map_or("unknown".into(), |n| n.to_string())
+    );
+    if !delivered.is_empty() {
+        text.push_str("Cost to result, average per delivered task, by execution model:\n");
+    }
+    for model in &delivered {
+        text.push_str(&format!(
+            "  {}: {} task(s) · {} · {} new tokens · {} cached · {:.1} repair rounds\n",
+            output::safe(&model.model),
+            model.tasks,
+            crate::application::limits::elapsed(model.active_ms),
+            crate::application::usage_report::count(Some(model.new_tokens)),
+            crate::application::usage_report::count(Some(model.cached_tokens)),
+            model.repair_rounds,
+        ));
+    }
     Ok(Reply {
-        data: json!({"queue":snapshot.queue.len(),"history":snapshot.history.len(),"succeeded":succeeded,"attempts":timing.attempts,"failed_attempts":failed,"active_ms":active_ms,"waiting_ms":waiting_ms,"recorded_cost_microusd":cost,"usage":usage}),
-        text: format!(
-            "Queue: {}\nHistory: {}\nSucceeded: {succeeded}\nAttempts: {}\nFailed attempts: {failed}\nActive: {}\nWaiting: {}\nProject usage: {}\nRecorded cost (micro-USD): {}\n",
-            snapshot.queue.len(),
-            snapshot.history.len(),
-            timing.attempts,
-            crate::application::limits::elapsed(active_ms),
-            crate::application::limits::elapsed(waiting_ms),
-            usage.label(),
-            cost.map_or("unknown".into(), |n| n.to_string())
-        ),
+        data: json!({"queue":snapshot.queue.len(),"history":snapshot.history.len(),"succeeded":succeeded,"attempts":timing.attempts,"failed_attempts":failed,"active_ms":active_ms,"waiting_ms":waiting_ms,"recorded_cost_microusd":cost,"usage":usage,"delivered_by_model":delivered}),
+        text,
     })
 }

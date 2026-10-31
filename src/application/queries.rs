@@ -83,6 +83,9 @@ impl Service {
     pub fn project_usage(&self) -> Result<super::usage_report::UsageTotals> {
         super::usage_report::project(self.db.connection(), self.project_id)
     }
+    pub fn delivered_by_model(&self) -> Result<Vec<super::usage_report::DeliveredByModel>> {
+        super::usage_report::delivered_by_model(self.db.connection(), self.project_id)
+    }
     pub fn project_timing(&self) -> Result<ProjectTiming> {
         let db = self.db.connection();
         let mut timing = ProjectTiming {

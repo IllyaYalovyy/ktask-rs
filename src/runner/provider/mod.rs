@@ -239,6 +239,24 @@ impl Stream {
         }
     }
 
+    /// The provider's last error message, in its own words, for the failure reason.
+    /// Providers nest error JSON inside JSON strings, so quotes are unescaped first.
+    pub fn error_summary(&self) -> Option<String> {
+        const KEY: &str = "\"message\":\"";
+        let mut context = self.error_context.trim().to_owned();
+        if context.is_empty() {
+            return None;
+        }
+        while context.contains("\\\"") {
+            context = context.replace("\\\"", "\"");
+        }
+        let message = context.rfind(KEY).map_or(context.as_str(), |start| {
+            let rest = &context[start + KEY.len()..];
+            &rest[..rest.find('"').unwrap_or(rest.len())]
+        });
+        Some(message.chars().take(400).collect())
+    }
+
     pub fn note_error(&mut self, text: &str) {
         if let Ok(value) = serde_json::from_str::<Value>(text) {
             let status = error_field(
@@ -525,6 +543,24 @@ mod configuration_tests {
             }));
             assert!(!stream.rate_limited);
         }
+    }
+
+    #[test]
+    fn rejected_request_reports_the_providers_own_message() {
+        let mut stream = Stream::new(Provider::Codex);
+        assert_eq!(stream.error_summary(), None);
+        let inner = r#"{"type":"error","error":{"message":"Invalid schema for response_format 'codex_output_schema': Missing 'models'.","type":"invalid_request_error","code":"invalid_json_schema"},"status":400}"#;
+        let events = format!(
+            "{}\n{}\n",
+            serde_json::json!({"type":"error","message":inner}),
+            serde_json::json!({"type":"turn.failed","error":{"message":inner}}),
+        );
+        stream.feed(events.as_bytes()).unwrap();
+        assert!(stream.configuration_error.is_none());
+        assert_eq!(
+            stream.error_summary().as_deref(),
+            Some("Invalid schema for response_format 'codex_output_schema': Missing 'models'.")
+        );
     }
 
     #[test]

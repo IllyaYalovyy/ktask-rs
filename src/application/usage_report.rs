@@ -144,6 +144,53 @@ pub fn project(db: &Connection, project: i64) -> Result<UsageTotals> {
     Ok(total)
 }
 
+/// What delivering one task cost, averaged per execution model over every attempt of each
+/// delivered task: the measure for choosing the execution model.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct DeliveredByModel {
+    /// provider/model of the last execution turn of each delivered task.
+    pub model: String,
+    pub tasks: i64,
+    pub active_ms: i64,
+    /// Uncached input plus output tokens.
+    pub new_tokens: i64,
+    pub cached_tokens: i64,
+    pub repair_rounds: f64,
+}
+
+pub fn delivered_by_model(db: &Connection, project: i64) -> Result<Vec<DeliveredByModel>> {
+    let mut stmt = db.prepare_cached(
+        "WITH delivered AS (
+             SELECT t.id FROM tasks t WHERE t.project_id=?1
+             AND EXISTS (SELECT 1 FROM attempts a WHERE a.task_id=t.id AND a.state='succeeded')),
+         per_task AS (
+             SELECT
+                 (SELECT coalesce(sum(a.active_ms),0) FROM attempts a WHERE a.task_id=d.id) AS active_ms,
+                 (SELECT coalesce(sum(m.input_tokens),0)+coalesce(sum(m.output_tokens),0)
+                    FROM model_calls m WHERE m.task_id=d.id) AS new_tokens,
+                 (SELECT coalesce(sum(m.cache_read_tokens),0) FROM model_calls m WHERE m.task_id=d.id) AS cached,
+                 (SELECT coalesce(max(p.repair_round),0) FROM attempt_progress p
+                    JOIN attempts a ON a.id=p.attempt_id WHERE a.task_id=d.id) AS rounds,
+                 (SELECT m.provider || '/' || m.model FROM model_calls m
+                    WHERE m.task_id=d.id AND m.role='execution' ORDER BY m.id DESC LIMIT 1) AS model
+             FROM delivered d)
+         SELECT coalesce(model,'unknown'), count(*), CAST(avg(active_ms) AS INTEGER),
+                CAST(avg(new_tokens) AS INTEGER), CAST(avg(cached) AS INTEGER), avg(rounds)
+         FROM per_task GROUP BY 1 ORDER BY 2 DESC, 1",
+    )?;
+    let rows = stmt.query_map(params![project], |r| {
+        Ok(DeliveredByModel {
+            model: r.get(0)?,
+            tasks: r.get(1)?,
+            active_ms: r.get(2)?,
+            new_tokens: r.get(3)?,
+            cached_tokens: r.get(4)?,
+            repair_rounds: r.get(5)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 /// A token count as people read it: "?" when unreported, otherwise "980", "99k" or "4.8M".
 pub fn count(value: Option<i64>) -> String {
     match value {

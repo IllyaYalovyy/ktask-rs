@@ -10,6 +10,10 @@ const INFRASTRUCTURE_STREAK: usize = 3;
 pub const STAGE_LIMIT: &str = "Stage time limit reached";
 /// Failed attempts in a row before stopping, even when the attempt budget is unlimited.
 const FAILURE_STREAK: usize = 5;
+/// How an attempt that found the project's checks failing before any work began is reported.
+pub const BASELINE_RED: &str = "Checks fail before any work started";
+/// How an attempt whose worker could not make the checks pass is reported.
+pub const CHECKS_STILL_FAIL: &str = "Checks still fail";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stop {
@@ -41,7 +45,13 @@ pub fn unresolvable(task: &Task) -> Option<Stop> {
             .count()
     };
     let active_ms: i64 = task.attempts.iter().map(|a| a.active_ms).sum();
-    let (unresolved, next) = if outcome.starts_with("Critical findings remain after") {
+    let (unresolved, next) = if outcome.starts_with(BASELINE_RED) {
+        (
+            "The starting commit is already red, so no agent ran and no tokens were spent."
+                .to_owned(),
+            "Fix the failing checks (or d Remediate), then t Retry",
+        )
+    } else if outcome.starts_with("Critical findings remain after") {
         (
             "Ten repair rounds left critical findings; what to accept or change is your decision."
                 .to_owned(),

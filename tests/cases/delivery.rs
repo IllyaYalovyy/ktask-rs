@@ -450,6 +450,7 @@ fn changed_delivery_policy_never_publishes_a_failed_local_tasks_unreviewed_basel
                 context: "Retained local task".into(),
                 evidence: String::new(),
                 verified_tree: String::new(),
+                why: String::new(),
             },
         )?;
         fs::write(f.root.join("result.txt"), "useful retained edit\n")?;

@@ -167,12 +167,9 @@ impl App {
             }
             _ => {
                 let saved = self.load_preferences()?;
-                let network = self
-                    .service
-                    .as_ref()
-                    .ok_or("SQLite mode required")?
-                    .agent_network()
-                    .map_err(|e| e.to_string())?;
+                let service = self.service.as_ref().ok_or("SQLite mode required")?;
+                let network = service.agent_network().map_err(|e| e.to_string())?;
+                let verify_first = service.check_before_task().map_err(|e| e.to_string())?;
                 let fields = vec![
                     Field::choice(
                         "Mouse",
@@ -202,11 +199,16 @@ impl App {
                         &["Off", "On"],
                         if network { "On" } else { "Off" },
                     ),
+                    Field::choice(
+                        "Check before task",
+                        &["On", "Off"],
+                        if verify_first { "On" } else { "Off" },
+                    ),
                 ];
                 Dialog::new(
                     DialogKind::Preferences(saved),
                     "Project preferences",
-                    "Saved per project in this instance. Keyboard stays available.\nThis policy controls new breakdown and repair tasks.\nRun mode applies to the next Run/resume/retry.\nAgent network applies to execution and repair workers. On permits network access with Codex, Claude Code and OpenCode. Off is enforced by Codex; Claude Code and OpenCode cannot enforce Off, so their writable turns are blocked.",
+                    "Saved per project in this instance. Keyboard stays available.\nThis policy controls new breakdown and repair tasks.\nRun mode applies to the next Run/resume/retry.\nAgent network applies to execution and repair workers. On permits network access with Codex, Claude Code and OpenCode. Off is enforced by Codex; Claude Code and OpenCode cannot enforce Off, so their writable turns are blocked.\nCheck before task runs the project checks on a task's clean starting commit; a red start stops it before any tokens are spent.",
                     fields,
                 )
             }
@@ -397,6 +399,9 @@ impl App {
                     .map_err(|e| e.to_string())?;
                 service
                     .set_agent_network(dialog.value(3) == "On")
+                    .map_err(|e| e.to_string())?;
+                service
+                    .set_check_before_task(dialog.value(4) == "On")
                     .map_err(|e| e.to_string())?;
                 self.use_preferences(&saved);
             }
