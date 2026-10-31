@@ -43,7 +43,9 @@ pub fn empty_repository(root: &Path) -> Result {
         "--allow-empty",
         "-qm",
         "baseline",
-    ])
+    ])?;
+    git(&["config", "user.name", "Test"])?;
+    git(&["config", "user.email", "test@example.com"])
 }
 
 /// Tests run on parallel threads, and a child that another thread starts holds copies of

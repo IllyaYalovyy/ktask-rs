@@ -50,6 +50,13 @@ pub fn problems(service: &Service) -> Result<Vec<Problem>> {
             "commit them, or list build output in .gitignore",
         );
     }
+    if super::workspace::git_identity(&root).is_err() {
+        problem(
+            "Git commit identity".into(),
+            "Git user.name and user.email must be configured for this project".into(),
+            super::workspace::GIT_IDENTITY_FIX,
+        );
+    }
     if service.checks()?.is_empty() {
         problem(
             "Project check".into(),

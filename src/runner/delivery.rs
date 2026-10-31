@@ -73,6 +73,7 @@ fn command(
     executable: &str,
     args: &[&str],
 ) -> DeliveryResult<CommandResult> {
+    let identity = super::workspace::git_identity(&ctx.workspace.root)?;
     let invocation = Invocation {
         executable: PathBuf::from(executable),
         args: args.iter().map(|s| (*s).to_owned()).collect(),
@@ -87,8 +88,8 @@ fn command(
             ("GIT_CONFIG_VALUE_0".into(), "/dev/null".into()),
             ("GIT_CONFIG_KEY_1".into(), "commit.gpgsign".into()),
             ("GIT_CONFIG_VALUE_1".into(), "false".into()),
-            ("GIT_COMMITTER_NAME".into(), "ktask".into()),
-            ("GIT_COMMITTER_EMAIL".into(), "ktask@localhost".into()),
+            ("GIT_COMMITTER_NAME".into(), identity.name),
+            ("GIT_COMMITTER_EMAIL".into(), identity.email),
         ],
         cwd: ctx.workspace.root.clone(),
         prompt: String::new(),

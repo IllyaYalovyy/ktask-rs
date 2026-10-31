@@ -69,6 +69,28 @@ pub struct Workspace {
     pub worker_lock: PathBuf,
     _lease: File,
 }
+pub const GIT_IDENTITY_FIX: &str =
+    "git config user.name 'Your Name' && git config user.email 'you@example.com'";
+
+/// Resolve Git's effective project configuration, including local and included config.
+/// Do not allow Git's fallback hostname identity to author supervisor commits.
+pub struct GitIdentity {
+    pub name: String,
+    pub email: String,
+}
+
+pub fn git_identity(root: &Path) -> Result<GitIdentity> {
+    let name = git(root, &["config", "--get", "user.name"]);
+    let email = git(root, &["config", "--get", "user.email"]);
+    match (name, email) {
+        (Ok(name), Ok(email)) if !name.is_empty() && !email.is_empty() => {
+            Ok(GitIdentity { name, email })
+        }
+        _ => Err(Error::Conflict(format!(
+            "Git commit identity is not configured for this project; run {GIT_IDENTITY_FIX}"
+        ))),
+    }
+}
 pub fn git(root: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .arg("-C")
@@ -269,22 +291,7 @@ impl Workspace {
                         "Worktree changed after validation; verification must run again".into(),
                     ));
                 }
-                git(
-                    &self.root,
-                    &[
-                        "-c",
-                        "user.name=ktask",
-                        "-c",
-                        "user.email=ktask@localhost",
-                        "-c",
-                        "commit.gpgsign=false",
-                        "-c",
-                        "core.hooksPath=/dev/null",
-                        "commit",
-                        "--amend",
-                        "--no-edit",
-                    ],
-                )?;
+                self.git_commit(&["commit", "--amend", "--no-edit", "--reset-author"])?;
                 return self.head();
             }
         }
@@ -313,22 +320,7 @@ impl Workspace {
                         .into(),
                 ));
             }
-            git(
-                &self.root,
-                &[
-                    "-c",
-                    "user.name=ktask",
-                    "-c",
-                    "user.email=ktask@localhost",
-                    "-c",
-                    "commit.gpgsign=false",
-                    "-c",
-                    "core.hooksPath=/dev/null",
-                    "commit",
-                    "-m",
-                    message,
-                ],
-            )?;
+            self.git_commit(&["commit", "-m", message])?;
         } else if let Some(expected) = verified_tree
             && git(&self.root, &["rev-parse", "HEAD^{tree}"])? != expected
         {
@@ -337,6 +329,32 @@ impl Workspace {
             ));
         }
         self.head()
+    }
+    fn git_commit(&self, args: &[&str]) -> Result<()> {
+        let identity = git_identity(&self.root)?;
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.root)
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
+            .args(args)
+            .env("GIT_AUTHOR_NAME", &identity.name)
+            .env("GIT_AUTHOR_EMAIL", &identity.email)
+            .env("GIT_COMMITTER_NAME", &identity.name)
+            .env("GIT_COMMITTER_EMAIL", &identity.email)
+            .output()?;
+        if !output.status.success() {
+            return Err(Error::Conflict(format!(
+                "git {}: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -379,6 +397,8 @@ mod reset_fingerprint_tests {
                 "baseline",
             ],
         );
+        run(root, &["config", "user.name", "Test"]);
+        run(root, &["config", "user.email", "test@example.com"]);
         let workspace = Workspace::acquire(root)?;
         std::fs::write(root.join("tracked.txt"), "reset bytes\n")?;
         std::fs::write(root.join("new.txt"), "new bytes\n")?;
@@ -391,6 +411,41 @@ mod reset_fingerprint_tests {
         assert_eq!(std::fs::read(root.join(".git/index"))?, staged_index);
         std::fs::write(root.join("new.txt"), "newer bytes\n")?;
         assert_ne!(workspace.reset_fingerprint()?, saved);
+        Ok(())
+    }
+
+    #[test]
+    fn amended_checkpoint_uses_current_project_author_and_committer() -> Result<()> {
+        let private = tempfile::Builder::new()
+            .prefix("ktask-identity-test-")
+            .tempdir()?;
+        let root = private.path().join("project");
+        std::fs::create_dir(&root)?;
+        run(&root, &["init", "-q"]);
+        run(&root, &["config", "user.name", "First Author"]);
+        run(&root, &["config", "user.email", "first@example.com"]);
+        std::fs::write(root.join("tracked.txt"), "baseline\n")?;
+        run(&root, &["add", "tracked.txt"]);
+        run(&root, &["commit", "-qm", "baseline"]);
+        let workspace = Workspace::acquire(&root)?;
+        let base = workspace.head()?;
+        std::fs::write(root.join("tracked.txt"), "first version\n")?;
+        let tree = workspace.fingerprint(private.path())?;
+        let first = workspace.checkpoint(1, 1, &base, &tree, false)?;
+        assert_eq!(
+            git(&root, &["log", "-1", "--format=%an <%ae>|%cn <%ce>"])?,
+            "First Author <first@example.com>|First Author <first@example.com>"
+        );
+        run(&root, &["config", "user.name", "Current Author"]);
+        run(&root, &["config", "user.email", "current@example.com"]);
+        std::fs::write(root.join("tracked.txt"), "verified amendment\n")?;
+        let tree = workspace.fingerprint(private.path())?;
+        let amended = workspace.checkpoint(1, 1, &first, &tree, true)?;
+        assert_ne!(amended, first);
+        assert_eq!(
+            git(&root, &["log", "-1", "--format=%an <%ae>|%cn <%ce>"])?,
+            "Current Author <current@example.com>|Current Author <current@example.com>"
+        );
         Ok(())
     }
 }

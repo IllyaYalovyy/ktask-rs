@@ -1208,6 +1208,11 @@ fn direct_delivery_pushes_only_verified_checkpoint_to_bare_remote() -> Result {
         .output()?;
     assert!(pushed.status.success());
     assert_eq!(local.trim(), String::from_utf8(pushed.stdout)?.trim());
+    f.assert_commit_identity(
+        "ktask: task #1",
+        "Project Author <project@example.com>",
+        "Project Author <project@example.com>",
+    )?;
     assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
     Ok(())
 }
@@ -1293,7 +1298,29 @@ if [ ! -f "$HOME/remote-advanced" ]; then
 fi"#,
     ])?;
     f.add("Rebase remote advance")?;
-    let run = f.process().args(["run", "--one"]).output()?;
+    support::write_executable(
+        &f.scratch.path().join("bin/git"),
+        r#"#!/bin/sh
+case " $* " in
+  *" fetch "*)
+    if [ -f "$HOME/remote-advanced" ]; then
+      /usr/bin/git -C "$PWD" config user.name 'Rebase Committer'
+      /usr/bin/git -C "$PWD" config user.email 'rebase@example.com'
+    fi;;
+  *" rebase "*)
+    /usr/bin/git "$@" || exit $?
+    /usr/bin/git -C "$PWD" log -1 --format='%an <%ae>|%cn <%ce>' > "$HOME/rebase-identity"
+    exit 0;;
+esac
+exec /usr/bin/git "$@"
+"#,
+    )?;
+    let run = f
+        .process()
+        .env("GIT_AUTHOR_NAME", "Inherited Author")
+        .env("GIT_AUTHOR_EMAIL", "inherited@example.com")
+        .args(["run", "--one"])
+        .output()?;
     if !run.status.success() {
         let db = f.db()?;
         let mut stmt = db
@@ -1315,6 +1342,15 @@ fi"#,
     }
     assert!(run.status.success());
     assert!(f.root.join("remote.txt").exists());
+    assert_eq!(
+        fs::read_to_string(f.scratch.path().join("rebase-identity"))?.trim(),
+        "Project Author <project@example.com>|Rebase Committer <rebase@example.com>"
+    );
+    f.assert_commit_identity(
+        "ktask: task #1",
+        "Project Author <project@example.com>",
+        "Rebase Committer <rebase@example.com>",
+    )?;
     let checked:i64=f.db()?.connection().query_row("SELECT count(*) FROM attempt_steps WHERE role='check' AND attempt_id=(SELECT id FROM attempts WHERE task_id=1)",[],|r|r.get(0))?;
     assert!(
         checked >= 2,
@@ -1522,6 +1558,8 @@ impl Fixture {
             "-qm",
             "baseline",
         ])?;
+        f.git(&["config", "user.name", "Project Author"])?;
+        f.git(&["config", "user.email", "project@example.com"])?;
         f.provider("normal")?;
         f.ok(&["check-set", "build", "--command", "test -f result.txt"])?;
         for role in ["execution", "review", "validation", "remediation"] {
@@ -1553,6 +1591,8 @@ impl Fixture {
             "-qm",
             "baseline",
         ])?;
+        git(&["config", "user.name", "Project Author"])?;
+        git(&["config", "user.email", "project@example.com"])?;
         self.ok_in(
             &root,
             &["check-set", "build", "--command", "test -f result.txt"],
@@ -1572,6 +1612,17 @@ impl Fixture {
     }
     fn git(&self, args: &[&str]) -> Result<String> {
         self.git_in(&self.root, args)
+    }
+    fn assert_commit_identity(&self, subject: &str, author: &str, committer: &str) -> Result {
+        let history = self.git(&["log", "--format=%an <%ae>|%cn <%ce>|%s"])?;
+        let line = history
+            .lines()
+            .find(|line| line.contains(subject))
+            .ok_or_else(|| format!("missing commit {subject}: {history}"))?;
+        let mut fields = line.split('|');
+        assert_eq!(fields.next(), Some(author), "{line}");
+        assert_eq!(fields.next(), Some(committer), "{line}");
+        Ok(())
     }
     fn git_in(&self, project: &Path, args: &[&str]) -> Result<String> {
         let o = Command::new("git")
@@ -4922,6 +4973,61 @@ fn readiness_lists_independent_blockers_and_recovers_stale_worker() -> Result {
 }
 
 #[test]
+fn missing_project_git_identity_blocks_init_readiness_and_run_before_attempt() -> Result {
+    let f = Fixture::new()?;
+    f.add("Needs a commit identity")?;
+    f.git(&["config", "--unset", "user.name"])?;
+    f.git(&["config", "--unset", "user.email"])?;
+    let fix = "git config user.name 'Your Name' && git config user.email 'you@example.com'";
+    let init = f.process().args(["--json", "init"]).output()?;
+    assert!(!init.status.success());
+    assert!(
+        String::from_utf8_lossy(&init.stderr).contains(fix),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 160, 38)?;
+    terminal.screen("current task", |s| s.contains("Needs a commit identity"))?;
+    terminal.send("u")?;
+    let screen = terminal.screen("missing Git identity", |s| {
+        s.contains("Execution readiness")
+    })?;
+    println!("MISSING IDENTITY SCREEN\n{screen}");
+    assert!(screen.contains("git config user.name"), "{screen}");
+    terminal.send("\x1b")?;
+    terminal.screen("readiness closed", |s| !s.contains("Execution readiness"))?;
+    terminal.send("q")?;
+    terminal.finish()?;
+    let run = f.process().args(["--json", "run", "--one"]).output()?;
+    assert!(!run.status.success());
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains(fix),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let attempts: i64 =
+        f.db()?
+            .connection()
+            .query_row("SELECT count(*) FROM attempts", [], |r| r.get(0))?;
+    assert_eq!(attempts, 0);
+    f.git(&["config", "user.name", "Project Author"])?;
+    f.git(&["config", "user.email", "project@example.com"])?;
+    let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 160, 38)?;
+    terminal.screen("current task", |s| s.contains("Needs a commit identity"))?;
+    terminal.send("u")?;
+    let screen = terminal.screen("resolved Git identity", |s| {
+        s.contains("Execution readiness")
+    })?;
+    println!("RESOLVED IDENTITY SCREEN\n{screen}");
+    assert!(screen.contains("OK · Commit identity"), "{screen}");
+    terminal.send("\x1b")?;
+    terminal.screen("readiness closed", |s| !s.contains("Execution readiness"))?;
+    terminal.send("q")?;
+    terminal.finish()?;
+    Ok(())
+}
+
+#[test]
 fn readiness_recovers_worker_marker_on_failed_current_without_losing_attempt() -> Result {
     for mouse in [false, true] {
         let f = Fixture::new()?;
@@ -5958,6 +6064,11 @@ fn automatic_prerequisite_preserves_work_and_original_repair_round() -> Result {
         preservation.contains("preserve unfinished task #1, attempt #1"),
         "{preservation}"
     );
+    f.assert_commit_identity(
+        "ktask: preserve unfinished task #1",
+        "Project Author <project@example.com>",
+        "Project Author <project@example.com>",
+    )?;
     // The preserved implementation was committed without review. Both the prerequisite's
     // review and the resumed original's review must still cover it, from the first baseline.
     let baseline = f.git(&["rev-list", "--max-parents=0", "HEAD"])?;

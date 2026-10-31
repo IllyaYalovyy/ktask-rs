@@ -165,6 +165,7 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
         &service.project_root()?,
         options.recover && options.confirm_worker_cleanup,
     )?;
+    workspace::git_identity(&workspace.root)?;
     let mut owns_session = false;
     let result = run_inner(service, paths, options, &workspace, &mut owns_session);
     if !owns_session {
@@ -1529,7 +1530,9 @@ pub fn background(
     queue: bool,
     continue_session: bool,
 ) -> Result<()> {
-    drop(Workspace::acquire(&service.project_root()?)?);
+    let workspace = Workspace::acquire(&service.project_root()?)?;
+    workspace::git_identity(&workspace.root)?;
+    drop(workspace);
     require(
         !service.checks()?.is_empty(),
         "Configure an enabled check in Configuration > Checks (or CLI check-set)",

@@ -47,6 +47,21 @@ impl Readiness {
     }
 }
 
+fn commit_identity(report: &mut Readiness, root: &Path) {
+    match crate::runner::workspace::git_identity(root) {
+        Ok(identity) => report.check(
+            &format!("Commit identity: {} <{}>", identity.name, identity.email),
+            Ok(()),
+            "",
+        ),
+        Err(_) => report.check(
+            "Git commit identity",
+            Err("Git user.name and user.email must be configured for this project".into()),
+            crate::runner::workspace::GIT_IDENTITY_FIX,
+        ),
+    }
+}
+
 fn ownership(common: &Path, name: &str, description: &str, marker: bool) -> Result<(), String> {
     let path = common.join(name);
     let file = match File::open(&path) {
@@ -101,6 +116,9 @@ pub(crate) fn inspect(app: &App) -> Readiness {
         return report;
     };
     let Some(task) = app.current().and_then(|task| app.stored.get(&task.id)) else {
+        if let Ok(root) = service.project_root() {
+            commit_identity(&mut report, &root);
+        }
         // No task yet: report what the project itself still needs.
         match crate::runner::setup::problems(service) {
             Ok(problems) if problems.is_empty() => report
@@ -108,6 +126,9 @@ pub(crate) fn inspect(app: &App) -> Readiness {
                 .push("OK · Project setup: checks and model defaults are ready; add a task".into()),
             Ok(problems) => {
                 for problem in problems {
+                    if problem.item == "Git commit identity" {
+                        continue;
+                    }
                     let action = if problem.item == "Project check" {
                         "c Checks"
                     } else if problem.item.ends_with(" model") {
@@ -247,6 +268,7 @@ pub(crate) fn inspect(app: &App) -> Readiness {
     );
     match root {
         Ok(root) => {
+            commit_identity(&mut report, &root);
             let common = git(
                 &root,
                 &["rev-parse", "--path-format=absolute", "--git-common-dir"],
