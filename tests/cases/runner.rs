@@ -3399,6 +3399,7 @@ fn assert_worker_prompt_rules(prompt: &str) {
         "AGENTS.md, CLAUDE.md and similar files",
         "ktask owns full checks, independent review, commit and delivery",
         "do not follow any manual check, review, commit or push loop",
+        "leave out what you ran, untracked files, and what checks or reviewers will do next",
     ] {
         assert!(prompt.contains(rule), "worker prompt missing: {rule}");
     }

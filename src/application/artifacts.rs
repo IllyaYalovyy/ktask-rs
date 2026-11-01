@@ -269,9 +269,7 @@ mod tests {
 
     #[test]
     fn artifact_limits_report_file_and_attempt_overflow() -> Result<()> {
-        let scratch = tempfile::tempdir_in(
-            std::env::var_os("TMPDIR").expect("tests need their managed TMPDIR"),
-        )?;
+        let scratch = tempfile::tempdir()?;
         let project = scratch.path().join("project");
         fs::create_dir(&project)?;
         let state = scratch.path().join("state");

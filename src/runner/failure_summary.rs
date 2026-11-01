@@ -14,16 +14,32 @@ const TAIL_LINES: usize = 15;
 /// The failure lines of `transcript`, or its last lines when none is recognised.
 pub(super) fn summarize(transcript: &str) -> Vec<String> {
     let lines: Vec<String> = transcript.lines().map(|l| plain(l).into_owned()).collect();
+    let failed: Vec<&str> = lines
+        .iter()
+        .filter_map(|l| failed_rust_test(l.trim()))
+        .collect();
+    // Whether the current libtest output block belongs to a failed test.
+    let mut block: Option<bool> = None;
     let mut kept: Vec<String> = Vec::new();
     for (index, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
+        if let Some(test) = output_block(trimmed) {
+            block = Some(failed.contains(&test));
+            continue;
+        }
+        if matches!(trimmed, "successes:" | "failures:") || trimmed.starts_with("test result:") {
+            block = None;
+        }
+        if block == Some(false) {
+            continue;
+        }
         let following = lines[index + 1..]
             .iter()
             .map(|l| l.trim())
             .take_while(|l| !l.is_empty() && !l.starts_with("note:"));
         if trimmed.contains("panicked at") {
-            // The panic message follows on its own lines.
-            let message: Vec<&str> = following.take(2).collect();
+            // The message follows; `assert_eq!` adds its `left:` and `right:` lines.
+            let message: Vec<&str> = following.take(3).collect();
             keep(
                 &mut kept,
                 &[trimmed]
@@ -32,7 +48,7 @@ pub(super) fn summarize(transcript: &str) -> Vec<String> {
                     .collect::<Vec<_>>()
                     .join(" "),
             );
-        } else if is_error(trimmed) {
+        } else if is_error(trimmed) || (block == Some(true) && trimmed.starts_with("Error: ")) {
             let location = following.take(2).find(|l| l.starts_with("--> "));
             keep(
                 &mut kept,
@@ -76,8 +92,18 @@ fn is_error(line: &str) -> bool {
 
 /// `test name ... FAILED` (Rust) or `FAILED path::name` (pytest).
 fn is_failed_test(line: &str) -> bool {
-    (line.starts_with("test ") && line.ends_with(" ... FAILED"))
+    failed_rust_test(line).is_some()
         || (line.starts_with("FAILED ") && !line.starts_with("FAILED."))
+}
+
+fn failed_rust_test(line: &str) -> Option<&str> {
+    line.strip_prefix("test ")?.strip_suffix(" ... FAILED")
+}
+
+/// The test whose captured output starts at this libtest header. `--show-output` prints
+/// passing tests' output too; their deliberate panics and screens are not failures.
+fn output_block(line: &str) -> Option<&str> {
+    line.strip_prefix("---- ")?.strip_suffix(" stdout ----")
 }
 
 fn shorten(line: &str) -> String {
@@ -113,6 +139,56 @@ make: *** [Makefile:9: check] Error 101";
             [
                 "test cli::args::tests::every_visible_command_and_argument_has_help ... FAILED",
                 "thread 'cli::args::tests::every_visible_command_and_argument_has_help' (1350260) panicked at src/cli/args.rs:644:9: missing help: [\"ktask artifact --id\"]",
+            ]
+        );
+    }
+
+    #[test]
+    fn output_shown_for_passing_tests_is_not_a_failure() {
+        let transcript = "\
+test cleanup::unwinds ... ok
+test runner::retries ... ok
+test docs::schema ... FAILED
+test cli::lists ... FAILED
+
+successes:
+
+---- cleanup::unwinds stdout ----
+
+thread 'cleanup::unwinds' (7) panicked at tests/cases/cleanup.rs:74:9:
+simulated test failure
+│Checks ✗ failed ││test demo::adds ... FAILED
+---- runner::retries stdout ----
+FAILED WORKER RETRIED mouse=false
+
+successes:
+    cleanup::unwinds
+    runner::retries
+
+failures:
+
+---- docs::schema stdout ----
+thread 'docs::schema' (9) panicked at tests/cases/docs.rs:91:9:
+assertion `left == right` failed
+  left: 2
+ right: 3
+
+---- cli::lists stdout ----
+screen line
+Error: \"task 1 not listed\"
+
+failures:
+    docs::schema
+    cli::lists
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s";
+        assert_eq!(
+            summarize(transcript),
+            [
+                "test docs::schema ... FAILED",
+                "test cli::lists ... FAILED",
+                "thread 'docs::schema' (9) panicked at tests/cases/docs.rs:91:9: assertion `left == right` failed left: 2 right: 3",
+                "Error: \"task 1 not listed\"",
             ]
         );
     }
