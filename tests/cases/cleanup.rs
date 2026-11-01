@@ -143,6 +143,64 @@ fn cleanup_ignores_unmanaged_files_and_does_not_follow_symlinks() -> Result {
     Ok(())
 }
 
+#[test]
+fn ordinary_startup_retries_reclaimed_trees_and_file_count_plateaus() -> Result {
+    let sandbox = support::sandbox()?;
+    let root = sandbox.path().join("scratch");
+    fs::create_dir(&root)?;
+    let outside = sandbox.path().join("outside");
+    fs::create_dir(&outside)?;
+    fs::write(outside.join("keep"), "unrelated")?;
+    std::os::unix::fs::symlink(&outside, root.join(".reclaimed-123-run-ABCDEF"))?;
+    let unrelated = root.join(".reclaimed-user-not-worker");
+    fs::create_dir(&unrelated)?;
+    fs::write(unrelated.join("keep"), "user")?;
+    let stranded = root.join(".reclaimed-123-run-GHIJKL");
+    fs::create_dir(&stranded)?;
+    fs::write(stranded.join("partial"), "interrupted unlink")?;
+    let live = Scratch::new(&root)?;
+    fs::write(live.path().join("keep"), "live")?;
+    assert!(!stranded.exists());
+    for _ in 0..100 {
+        let scratch = Scratch::new(&root)?;
+        fs::write(scratch.path().join("temporary"), "work")?;
+        scratch.close()?;
+        assert_eq!(fs::read_dir(&root)?.count(), 4); // lock, live, symlink, unrelated
+    }
+    println!(
+        "100 ordinary scratch cycles: four stable root entries including one live owner and two unrelated entries"
+    );
+    assert_eq!(fs::read_to_string(live.path().join("keep"))?, "live");
+    assert_eq!(fs::read_to_string(outside.join("keep"))?, "unrelated");
+    assert_eq!(fs::read_to_string(unrelated.join("keep"))?, "user");
+    live.close()?;
+    Ok(())
+}
+
+#[test]
+fn reclamation_error_keeps_original_tree_for_a_later_startup() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = support::sandbox()?;
+    let root = sandbox.path().join("scratch");
+    fs::create_dir(&root)?;
+    let stranded = root.join(".reclaimed-123-run-ABCDEF");
+    let protected = stranded.join("protected");
+    fs::create_dir_all(&protected)?;
+    fs::write(protected.join("file"), "retry me")?;
+    fs::set_permissions(&protected, fs::Permissions::from_mode(0o000))?;
+    let first = Scratch::new(&root)?;
+    assert!(
+        stranded.exists(),
+        "failed deletion must retain its retryable name"
+    );
+    first.close()?;
+    fs::set_permissions(&protected, fs::Permissions::from_mode(0o700))?;
+    let second = Scratch::new(&root)?;
+    assert!(!stranded.exists());
+    second.close()?;
+    Ok(())
+}
+
 // Runs only when the crash-recovery test explicitly launches this test executable.
 #[test]
 fn scratch_owner_process() -> Result {

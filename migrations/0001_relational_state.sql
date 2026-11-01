@@ -408,10 +408,35 @@ CREATE TABLE output_pruning (
     size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0)
 ) STRICT;
 
+-- Bytes removed in bounded batches before an attempt's output is fully pruned.
+CREATE TABLE output_pruning_progress (
+    attempt_id INTEGER PRIMARY KEY REFERENCES attempts(id),
+    size_bytes INTEGER NOT NULL DEFAULT 0 CHECK (size_bytes >= 0),
+    removed_records INTEGER NOT NULL DEFAULT 0 CHECK (removed_records >= 0)
+) STRICT;
+
+-- Attempts already admitted to retention remain eligible for directory cleanup
+-- if the retention policy changes before cleanup finishes.
+CREATE TABLE evidence_cleanup_admissions (
+    attempt_id INTEGER PRIMARY KEY REFERENCES attempts(id),
+    admitted_at_ms INTEGER NOT NULL CHECK (admitted_at_ms >= 0)
+) STRICT;
+
 CREATE TABLE project_retention (
     project_id INTEGER PRIMARY KEY REFERENCES projects(id),
     days INTEGER NOT NULL CHECK (days BETWEEN 0 AND 365000),
     version INTEGER NOT NULL CHECK (version > 0)
+) STRICT;
+
+-- A bounded pass over closed attempts can resume without revisiting the same
+-- preserved directories on every storage cleanup.
+CREATE TABLE evidence_sweep (
+    project_id INTEGER PRIMARY KEY REFERENCES projects(id),
+    last_attempt_id INTEGER NOT NULL DEFAULT 0 CHECK (last_attempt_id >= 0),
+    active_attempt_id INTEGER NOT NULL DEFAULT 0 CHECK (active_attempt_id >= 0),
+    last_step_id INTEGER NOT NULL DEFAULT 0 CHECK (last_step_id >= 0),
+    last_artifact_id INTEGER NOT NULL DEFAULT 0 CHECK (last_artifact_id >= 0),
+    dirty INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0,1))
 ) STRICT;
 
 -- Interactive read-only providers retain evidence without creating execution attempts.
@@ -451,6 +476,30 @@ CREATE TABLE artifact_reservations (
     source_tree TEXT NOT NULL CHECK (length(source_tree) IN (40,64)),
     created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0)
 ) STRICT;
+
+-- Eligibility can change behind a bounded sweep cursor between Storage applies.
+-- Mark that pass stale; the next sweep restarts at the oldest attempt.
+CREATE TRIGGER evidence_sweep_task_closed AFTER UPDATE OF closed_at_ms ON tasks
+WHEN OLD.closed_at_ms IS NOT NEW.closed_at_ms
+BEGIN
+    UPDATE evidence_sweep SET dirty=1 WHERE project_id=NEW.project_id;
+END;
+CREATE TRIGGER evidence_sweep_reservation_released AFTER DELETE ON artifact_reservations
+BEGIN
+    UPDATE evidence_sweep SET dirty=1 WHERE project_id=(SELECT project_id FROM attempts WHERE id=OLD.attempt_id);
+END;
+CREATE TRIGGER evidence_sweep_admitted AFTER INSERT ON evidence_cleanup_admissions
+BEGIN
+    UPDATE evidence_sweep SET dirty=1 WHERE project_id=(SELECT project_id FROM attempts WHERE id=NEW.attempt_id);
+END;
+CREATE TRIGGER evidence_sweep_policy_added AFTER INSERT ON project_retention
+BEGIN
+    UPDATE evidence_sweep SET dirty=1 WHERE project_id=NEW.project_id;
+END;
+CREATE TRIGGER evidence_sweep_policy_changed AFTER UPDATE OF days,version ON project_retention
+BEGIN
+    UPDATE evidence_sweep SET dirty=1 WHERE project_id=NEW.project_id;
+END;
 
 CREATE INDEX ix_tasks_history ON tasks(project_id, closed_at_ms DESC, id DESC);
 CREATE INDEX ix_tasks_origin ON tasks(origin_task_id, order_key) WHERE origin_task_id IS NOT NULL;

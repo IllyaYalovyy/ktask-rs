@@ -20,7 +20,7 @@ pub(super) fn read_output_range(
     limit: usize,
 ) -> Result<OutputSlice> {
     let bytes: Vec<u8> = db.query_row(
-        "SELECT substr(CAST(content AS BLOB),?3,?4) FROM attempt_output WHERE attempt_id=?1 AND sequence=?2",
+        "SELECT coalesce(substr(CAST(content AS BLOB),?3,?4),x'') FROM attempt_output WHERE attempt_id=?1 AND sequence=?2",
         params![attempt, sequence, offset.saturating_add(1) as i64, limit.saturating_add(3) as i64],
         |row| row.get(0),
     )?;

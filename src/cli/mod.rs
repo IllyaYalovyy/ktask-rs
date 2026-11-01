@@ -385,10 +385,12 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
     }
     if let Command::Storage { apply } = command {
         let preview = service.storage_preview()?;
-        if *apply {
-            service.cleanup_storage(&preview)?;
-        }
-        let text = format!(
+        let cleanup = if *apply {
+            Some(service.cleanup_storage(&preview)?)
+        } else {
+            None
+        };
+        let mut text = format!(
             "Storage: {} bytes retained; {} bytes eligible across {} attempt(s){}\n{}",
             preview.usage_bytes,
             preview.reclaimable_bytes,
@@ -407,9 +409,21 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
                 ))
                 .collect::<String>()
         );
+        if let Some(receipt) = &cleanup {
+            text.push_str(&format!(
+                "Processed {} attempt(s), {} bytes{}\n",
+                receipt.attempts,
+                receipt.bytes,
+                if receipt.batch_limit_reached {
+                    "; batch limit reached, repeat to continue"
+                } else {
+                    ""
+                }
+            ));
+        }
         return emit(
             output::Reply {
-                data: json!({"applied":apply,"preview":preview}),
+                data: json!({"applied":apply,"preview":preview,"cleanup":cleanup}),
                 text,
             },
             cli.json,

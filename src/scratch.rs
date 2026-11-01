@@ -25,9 +25,7 @@ impl Scratch {
     /// For interactive startup: abandoned scratch, which can hold many thousands of
     /// files, is deleted in the background so the screen appears at once.
     pub fn new_in_background(root: &Path) -> io::Result<Self> {
-        let (scratch, mut abandoned) = Self::claim(root)?;
-        // Also finish deletions that an earlier process did not live to complete.
-        abandoned.extend(entries(root, RECLAIMED)?);
+        let (scratch, abandoned) = Self::claim(root)?;
         std::thread::spawn(move || delete_all(&abandoned));
         Ok(scratch)
     }
@@ -38,7 +36,10 @@ impl Scratch {
         sweep.lock()?;
         // Creation and sweeping share this lock, so an owner cannot be collected
         // in the short interval between creating its directory and locking its lease.
-        let abandoned = set_aside_abandoned(root)?;
+        // Both ordinary workers and the interactive process retry interrupted deletion.
+        // Collect these under the sweep lock so a newly renamed run is included once.
+        let mut abandoned = reclaimed_entries(root)?;
+        abandoned.extend(set_aside_abandoned(root)?);
         let dir = Builder::new().prefix("run-").tempdir_in(root)?;
         let lease = open_lock(&dir.path().join(".lease"))?;
         lease.lock()?;
@@ -92,6 +93,28 @@ fn open_lock(path: &Path) -> io::Result<File> {
 
 const RECLAIMED: &str = ".reclaimed-";
 
+fn reclaimed_entries(root: &Path) -> io::Result<Vec<PathBuf>> {
+    Ok(entries(root, RECLAIMED)?
+        .into_iter()
+        .filter(|path| {
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                return false;
+            };
+            let Some((owner, run)) = name
+                .strip_prefix(RECLAIMED)
+                .and_then(|name| name.split_once("-run-"))
+            else {
+                return false;
+            };
+            owner
+                .split('-')
+                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+                && !run.is_empty()
+                && run.bytes().all(|b| b.is_ascii_alphanumeric())
+        })
+        .collect())
+}
+
 fn entries(root: &Path, prefix: &str) -> io::Result<Vec<PathBuf>> {
     let mut found = Vec::new();
     for entry in fs::read_dir(root)? {
@@ -119,7 +142,18 @@ fn set_aside_abandoned(root: &Path) -> io::Result<Vec<PathBuf>> {
                     .file_name()
                     .expect("run directory name")
                     .to_string_lossy();
-                let aside = root.join(format!("{RECLAIMED}{}-{name}", std::process::id()));
+                let mut sequence = 0_u64;
+                let aside = loop {
+                    let candidate = root.join(format!(
+                        "{RECLAIMED}{}-{sequence}-{name}",
+                        std::process::id()
+                    ));
+                    match fs::symlink_metadata(&candidate) {
+                        Ok(_) => sequence += 1,
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => break candidate,
+                        Err(error) => return Err(error),
+                    }
+                };
                 match fs::rename(&path, &aside) {
                     Ok(()) => abandoned.push(aside),
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -133,9 +167,13 @@ fn set_aside_abandoned(root: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(abandoned)
 }
 
-/// Best effort: what remains is retried by the next interactive startup.
+/// Best effort: report failures and leave the original name for the next startup.
 fn delete_all(paths: &[PathBuf]) {
     for path in paths {
-        let _ = fs::remove_dir_all(path);
+        if let Err(error) = fs::remove_dir_all(path)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            eprintln!("scratch reclamation failed for {}: {error}", path.display());
+        }
     }
 }

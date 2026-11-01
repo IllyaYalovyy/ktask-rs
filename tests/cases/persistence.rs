@@ -2739,8 +2739,10 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
         fs::read_to_string(project_file)?,
         "project files must survive"
     );
-    assert!(!artifact_dir.join("step-777.log").exists());
-    assert!(!artifact_dir.join("step-778.log").exists());
+    assert!(
+        !artifact_dir.exists(),
+        "pruned attempt left empty evidence directories"
+    );
     let mut service = self::service(root)?;
     assert!(service.task(closed_id)?.unwrap().attempts[0].output_pruned);
     assert!(!service.task(unresolved_id)?.unwrap().attempts[0].output_pruned);
@@ -2809,6 +2811,522 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
     assert_eq!(self::service(root)?.retention_policy()?.days, 5);
     let policy = cli(&["retention", "7", "--if-version", "3"])?;
     assert_eq!(policy["data"]["retention"]["days"], 7);
+    Ok(())
+}
+
+fn drain_empty_evidence(service: &mut Service, evidence: &Path) -> Result {
+    for _ in 0..20 {
+        if fs::read_dir(evidence)?.count() == 0 {
+            return Ok(());
+        }
+        let pending = service.storage_preview()?;
+        service.cleanup_storage(&pending)?;
+    }
+    assert_eq!(
+        fs::read_dir(evidence)?.count(),
+        0,
+        "cleanup did not converge"
+    );
+    Ok(())
+}
+
+#[test]
+fn repeated_retention_removes_files_and_empty_directories_but_preserves_unresolved_evidence()
+-> Result {
+    let sandbox = support::sandbox()?;
+    let root = sandbox.path();
+    let state = root.join("state/ktask-dev");
+    let evidence = state.join("evidence");
+    let mut service = self::service(root)?;
+    let policy = service.retention_policy()?;
+    service.set_retention(policy, 0)?;
+    drop(service);
+    let mut closed_attempts = Vec::new();
+    for cycle in 0..3 {
+        let mut last_attempt = (0, 0);
+        for _ in 0..24 {
+            let (task, attempt) = failed_task(root)?;
+            let mut service = self::service(root)?;
+            let target = target(&mut service, task)?;
+            service.mark_done(target, "Closed after review")?;
+            drop(service);
+            let db = Database::open_in(&state)?;
+            let steps = db
+                .connection()
+                .prepare("SELECT id FROM attempt_steps WHERE attempt_id=?1 ORDER BY id")?
+                .query_map([attempt], |r| r.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let artifact_step = steps[0];
+            let empty_step = steps[1];
+            last_attempt = (attempt, empty_step);
+            closed_attempts.push((attempt, empty_step));
+            let directory = evidence.join(format!("attempt-{attempt}/step-{artifact_step}"));
+            fs::create_dir_all(&directory)?;
+            let transcript = directory.join("file-1-0");
+            fs::write(&transcript, "recorded evidence")?;
+            // A rejected publication can leave a step directory with no artifact row.
+            fs::create_dir(evidence.join(format!("attempt-{attempt}/step-{empty_step}")))?;
+            db.connection().execute("INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms) VALUES (?1,'check','text/plain',?2,17,1)", rusqlite::params![attempt,format!("evidence/attempt-{attempt}/step-{artifact_step}/file-1-0")])?;
+        }
+        let mut service = self::service(root)?;
+        let preview = service.storage_preview()?;
+        assert_eq!(preview.candidates.len(), 24, "cycle {cycle}");
+        service.cleanup_storage(&preview)?;
+        drain_empty_evidence(&mut service, &evidence)?;
+        println!(
+            "cycle {cycle}: evidence entries after pruning={}",
+            fs::read_dir(&evidence)?.count()
+        );
+        assert_eq!(
+            fs::read_dir(&evidence)?.count(),
+            0,
+            "cycle {cycle}: evidence files or directories remain"
+        );
+        // A crash may leave empty publication directories after the artifact
+        // metadata has already been pruned. The next empty preview still sweeps.
+        let interrupted = evidence.join(format!(
+            "attempt-{}/step-{}",
+            last_attempt.0, last_attempt.1
+        ));
+        fs::create_dir_all(&interrupted)?;
+        let empty_preview = service.storage_preview()?;
+        assert!(empty_preview.candidates.is_empty());
+        service.cleanup_storage(&empty_preview)?;
+        drain_empty_evidence(&mut service, &evidence)?;
+        println!(
+            "cycle {cycle}: evidence entries after interrupted publication cleanup={}",
+            fs::read_dir(&evidence)?.count()
+        );
+        assert_eq!(
+            fs::read_dir(&evidence)?.count(),
+            0,
+            "cycle {cycle}: interrupted publication remained"
+        );
+    }
+    // Empty directories with no artifact rows require a bounded history sweep.
+    for (attempt, step) in &closed_attempts {
+        fs::create_dir_all(evidence.join(format!("attempt-{attempt}/step-{step}")))?;
+    }
+    let db = Database::open_in(&state)?;
+    db.connection().execute("UPDATE evidence_sweep SET last_attempt_id=0,active_attempt_id=0,last_step_id=0,last_artifact_id=0", [])?;
+    drop(db);
+    let mut service = self::service(root)?;
+    let empty_preview = service.storage_preview()?;
+    service.cleanup_storage(&empty_preview)?;
+    println!(
+        "bounded sweep first pass: evidence entries={}",
+        fs::read_dir(&evidence)?.count()
+    );
+    let first_pass = fs::read_dir(&evidence)?.count();
+    assert!((1..72).contains(&first_pass));
+    drain_empty_evidence(&mut service, &evidence)?;
+    println!(
+        "bounded sweep second pass: evidence entries={}",
+        fs::read_dir(&evidence)?.count()
+    );
+    assert_eq!(fs::read_dir(&evidence)?.count(), 0);
+    drop(service);
+    for cycle in 0..3 {
+        let mut service = self::service(root)?;
+        let task = service.create(&[runnable(&format!("Paused success {cycle}"))], None, true)?[0];
+        let start = target(&mut service, task)?;
+        let run = service.begin_run(
+            start,
+            &format!("success-token-{cycle}"),
+            "fixture-base",
+            false,
+        )?;
+        service.finish_run(&run, "paused", None, "Paused for later work", None)?;
+        let transcript = evidence.join(format!("attempt-{}/step-999.log", run.attempt));
+        fs::create_dir_all(transcript.parent().unwrap())?;
+        fs::write(&transcript, "retained while paused")?;
+        let db = Database::open_in(&state)?;
+        db.connection().execute("INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms) VALUES (?1,'paused check','text/plain',?2,21,1)", rusqlite::params![run.attempt,format!("evidence/attempt-{}/step-999.log",run.attempt)])?;
+        assert!(service.storage_preview()?.deferred_for_live_work);
+        assert!(transcript.exists());
+        let resume = target(&mut service, task)?;
+        let resumed = service.begin_run(resume, "unused", "fixture-base", false)?;
+        assert_eq!(resumed.attempt, run.attempt);
+        service.finish_run(&resumed, "succeeded", None, "Successful after resume", None)?;
+        let preview = service.storage_preview()?;
+        assert_eq!(preview.candidates.len(), 1);
+        service.cleanup_storage(&preview)?;
+        drain_empty_evidence(&mut service, &evidence)?;
+        println!(
+            "pause/resume success {cycle}: evidence entries={}",
+            fs::read_dir(&evidence)?.count()
+        );
+        assert_eq!(fs::read_dir(&evidence)?.count(), 0);
+    }
+    let (unresolved, attempt) = failed_task(root)?;
+    let preserved = evidence.join(format!("attempt-{attempt}/step-3"));
+    fs::create_dir_all(&preserved)?;
+    fs::write(preserved.join("keep"), "historical failure")?;
+    let mut service = self::service(root)?;
+    let preview = service.storage_preview()?;
+    assert!(preview.candidates.is_empty());
+    service.cleanup_storage(&preview)?;
+    assert_eq!(
+        fs::read_to_string(preserved.join("keep"))?,
+        "historical failure"
+    );
+    assert_eq!(service.task(unresolved)?.unwrap().status, "failed");
+    Ok(())
+}
+
+#[test]
+fn substituted_step_entries_do_not_block_later_empty_attempts() -> Result {
+    use std::os::unix::fs::symlink;
+    let sandbox = support::sandbox()?;
+    let root = sandbox.path();
+    let state = root.join("state/ktask-dev");
+    let mut service = self::service(root)?;
+    let policy = service.retention_policy()?;
+    service.set_retention(policy, 0)?;
+    drop(service);
+    let outside = root.join("outside");
+    fs::create_dir(&outside)?;
+    fs::write(outside.join("keep"), "unrelated")?;
+    let mut entries = Vec::new();
+    for index in 0..3 {
+        let (task, attempt) = failed_task(root)?;
+        let mut service = self::service(root)?;
+        let target = target(&mut service, task)?;
+        service.mark_done(target, "Closed after review")?;
+        let db = Database::open_in(&state)?;
+        let step: i64 = db.connection().query_row(
+            "SELECT min(id) FROM attempt_steps WHERE attempt_id=?1",
+            [attempt],
+            |r| r.get(0),
+        )?;
+        let path = state.join(format!("evidence/attempt-{attempt}/step-{step}"));
+        fs::create_dir_all(path.parent().unwrap())?;
+        match index {
+            0 => symlink(&outside, &path)?,
+            1 => fs::write(&path, "user file")?,
+            _ => fs::create_dir(&path)?,
+        }
+        entries.push(path);
+    }
+    let mut service = self::service(root)?;
+    let preview = service.storage_preview()?;
+    service.cleanup_storage(&preview)?;
+    assert!(entries[0].symlink_metadata()?.file_type().is_symlink());
+    assert_eq!(fs::read_to_string(&entries[1])?, "user file");
+    assert_eq!(fs::read_to_string(outside.join("keep"))?, "unrelated");
+    assert!(
+        !entries[2].exists(),
+        "later abandoned directory was stranded"
+    );
+    Ok(())
+}
+
+#[test]
+fn populated_storage_backlog_returns_to_the_terminal_between_batches() -> Result {
+    let sandbox = support::sandbox()?;
+    let root = sandbox.path();
+    support::empty_repository(&project(root))?;
+    let state = root.join("state/ktask-dev");
+    let (task, attempt) = failed_task(root)?;
+    let mut service = self::service(root)?;
+    let target = target(&mut service, task)?;
+    service.mark_done(target, "Closed after review")?;
+    let policy = service.retention_policy()?;
+    service.set_retention(policy, 0)?;
+    let db = Database::open_in(&state)?;
+    let step: i64 = db.connection().query_row(
+        "SELECT min(id) FROM attempt_steps WHERE attempt_id=?1",
+        [attempt],
+        |r| r.get(0),
+    )?;
+    let folder = state.join(format!("evidence/attempt-{attempt}/step-{step}"));
+    fs::create_dir_all(&folder)?;
+    for index in 0..80 {
+        fs::write(folder.join(format!("file-1-{index}")), "batch evidence")?;
+        db.connection().execute("INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms) VALUES (?1,'batch','text/plain',?2,14,1)", rusqlite::params![attempt,format!("evidence/attempt-{attempt}/step-{step}/file-1-{index}")])?;
+    }
+    let first_sequence: i64 = db.connection().query_row(
+        "SELECT coalesce(max(sequence),0) FROM attempt_output WHERE attempt_id=?1",
+        [attempt],
+        |row| row.get(0),
+    )?;
+    for index in 1..=80 {
+        db.connection().execute("INSERT INTO attempt_output(attempt_id,sequence,stream,recorded_at_ms,content) VALUES (?1,?2,'stdout',1,'row')",rusqlite::params![attempt,first_sequence+index])?;
+    }
+    drop(db);
+    drop(service);
+    assert_eq!(fs::read_dir(&folder)?.count(), 80);
+    let mut terminal = Terminal::open_project(
+        env!("CARGO_BIN_EXE_ktask-dev"),
+        root,
+        &project(root),
+        110,
+        42,
+    )?;
+    terminal.send("4")?;
+    terminal.screen("keyboard Config with backlog", |s| s.contains("k Storage"))?;
+    terminal.click("k Storage")?;
+    terminal.screen("mouse backlog preview", |s| s.contains("80 files"))?;
+    terminal.click("Save policy")?;
+    terminal.screen("mouse apply preview choice", |s| {
+        s.contains("< Apply preview >")
+    })?;
+    terminal.click("Apply")?;
+    terminal.screen("mouse backlog confirmation", |s| {
+        s.contains("Delete stored evidence?")
+    })?;
+    terminal.click("Delete evidence")?;
+    let first = terminal.screen("mouse batch returned to Config", |s| {
+        s.contains("batch limit reached")
+    })?;
+    println!("RETENTION POPULATED MOUSE BATCH\n{first}");
+    assert_eq!(fs::read_dir(&folder)?.count(), 16);
+    terminal.send("k")?;
+    terminal.screen("keyboard backlog preview", |s| s.contains("16 files"))?;
+    terminal.send("\t \x13")?;
+    terminal.screen("keyboard backlog confirmation", |s| {
+        s.contains("Delete stored evidence?")
+    })?;
+    terminal.send("\x13")?;
+    let second = terminal.screen("keyboard batch returned to Config", |s| {
+        s.contains("Cleaned 1 attempt")
+            && s.contains("batch limit reached")
+            && !s.contains("Delete stored evidence?")
+    })?;
+    println!("RETENTION POPULATED KEYBOARD BATCH\n{second}");
+    assert_eq!(
+        if folder.exists() {
+            fs::read_dir(&folder)?.count()
+        } else {
+            0
+        },
+        0
+    );
+    terminal.send("3")?;
+    terminal.screen("keyboard History after partial pruning", on_history)?;
+    terminal.send("\r")?;
+    let partial = terminal.screen("keyboard partially pruned History", |s| {
+        s.contains("PARTIALLY PRUNED:")
+    })?;
+    println!("RETENTION PARTIAL HISTORY SCREEN\n{partial}");
+    terminal.click("Reviews")?;
+    terminal.screen("mouse reviews tab before partial output", |s| {
+        !s.contains("Output page")
+    })?;
+    terminal.click("Output")?;
+    terminal.screen("mouse partially pruned output tab", |s| {
+        s.contains("PARTIALLY PRUNED:")
+    })?;
+    let shown = std::process::Command::new(env!("CARGO_BIN_EXE_ktask-dev"))
+        .env_clear()
+        .env("HOME", root)
+        .env("XDG_STATE_HOME", root.join("state"))
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_CACHE_HOME", root.join("cache"))
+        .env("XDG_RUNTIME_DIR", root.join("runtime"))
+        .env("TMPDIR", root)
+        .current_dir(project(root))
+        .args(["show", &task.to_string()])
+        .output()?;
+    assert!(shown.status.success(), "{shown:?}");
+    let shown = String::from_utf8(shown.stdout)?;
+    assert!(shown.contains("PARTIALLY PRUNED:"), "{shown}");
+    println!("RETENTION PARTIAL CLI\n{shown}");
+    let json = std::process::Command::new(env!("CARGO_BIN_EXE_ktask-dev"))
+        .env_clear()
+        .env("HOME", root)
+        .env("XDG_STATE_HOME", root.join("state"))
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_CACHE_HOME", root.join("cache"))
+        .env("XDG_RUNTIME_DIR", root.join("runtime"))
+        .env("TMPDIR", root)
+        .current_dir(project(root))
+        .args(["--json", "show", &task.to_string()])
+        .output()?;
+    assert!(json.status.success(), "{json:?}");
+    let json: serde_json::Value = serde_json::from_slice(&json.stdout)?;
+    assert_eq!(json["data"]["attempts"][0]["output_pruned"], false);
+    assert!(
+        json["data"]["attempts"][0]["output_pruning_records"]
+            .as_i64()
+            .unwrap()
+            > 0
+    );
+    terminal.click("Close")?;
+    terminal.send("q")?;
+    terminal.finish()?;
+    let mut service = self::service(root)?;
+    for _ in 0..10 {
+        if !folder.parent().unwrap().exists() {
+            break;
+        }
+        let preview = service.storage_preview()?;
+        service.cleanup_storage(&preview)?;
+    }
+    assert!(!folder.parent().unwrap().exists());
+    Ok(())
+}
+
+fn evidence_footprint(root: &Path) -> Result<(usize, usize)> {
+    if !root.exists() {
+        return Ok((0, 0));
+    }
+    let mut files = 0;
+    let mut directories = 0;
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            directories += 1;
+            let children = evidence_footprint(&entry.path())?;
+            files += children.0;
+            directories += children.1;
+        } else {
+            files += 1;
+        }
+    }
+    Ok((files, directories))
+}
+
+fn reservation_backlog(root: &Path) -> Result<(PathBuf, PathBuf)> {
+    support::empty_repository(&project(root))?;
+    let state = root.join("state/ktask-dev");
+    let (first_task, first_attempt) = failed_task(root)?;
+    let mut service = self::service(root)?;
+    let first_target = target(&mut service, first_task)?;
+    service.mark_done(first_target, "Closed after review")?;
+    drop(service);
+    let (later_task, later_attempt) = failed_task(root)?;
+    let mut service = self::service(root)?;
+    let later_target = target(&mut service, later_task)?;
+    service.mark_done(later_target, "Closed after review")?;
+    let policy = service.retention_policy()?;
+    service.set_retention(policy, 0)?;
+    let db = Database::open_in(&state)?;
+    let first_step: i64 = db.connection().query_row(
+        "SELECT min(id) FROM attempt_steps WHERE attempt_id=?1",
+        [first_attempt],
+        |row| row.get(0),
+    )?;
+    let first_directory = state.join(format!("evidence/attempt-{first_attempt}"));
+    fs::create_dir_all(first_directory.join(format!("step-{first_step}")))?;
+    let later_directory = state.join(format!("evidence/attempt-{later_attempt}"));
+    fs::create_dir_all(&later_directory)?;
+    let revision: i64 = db.connection().query_row(
+        "SELECT revision FROM attempts WHERE id=?1",
+        [later_attempt],
+        |row| row.get(0),
+    )?;
+    let ordinal: i64 = db.connection().query_row(
+        "SELECT coalesce(max(ordinal),0) FROM attempt_steps WHERE attempt_id=?1",
+        [later_attempt],
+        |row| row.get(0),
+    )?;
+    let project_id: i64 = db.connection().query_row(
+        "SELECT project_id FROM attempts WHERE id=?1",
+        [later_attempt],
+        |row| row.get(0),
+    )?;
+    for index in 1..=140 {
+        db.connection().execute("INSERT INTO attempt_steps(attempt_id,project_id,task_id,revision,ordinal,role,state,command,working_directory,timeout_ms,started_at_ms,finished_at_ms) VALUES (?1,?2,?3,?4,?5,'check','succeeded','true','.',1000,1,2)",rusqlite::params![later_attempt,project_id,later_task,revision,ordinal+index])?;
+        let step = db.connection().last_insert_rowid();
+        fs::create_dir(later_directory.join(format!("step-{step}")))?;
+    }
+    db.connection().execute("INSERT INTO artifact_reservations(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms) VALUES (?1,'interrupted','text/plain',?2,0,?3,?4,1)",rusqlite::params![first_attempt,format!("evidence/attempt-{first_attempt}/step-{first_step}/file-1-0"),"0".repeat(64),"0".repeat(40)])?;
+    drop(db);
+    let preview = service.storage_preview()?;
+    let first = service.cleanup_storage(&preview)?;
+    assert!(first.batch_limit_reached);
+    assert_eq!(fs::read_dir(&first_directory)?.count(), 1);
+    let remaining = fs::read_dir(&later_directory)?.count();
+    assert!((1..140).contains(&remaining));
+    println!(
+        "RESERVATION PTY BEFORE RECOVERY: {:?}",
+        evidence_footprint(&state.join("evidence"))?
+    );
+    Ok((first_directory, later_directory))
+}
+
+#[test]
+fn reservation_release_continues_in_real_terminal() -> Result {
+    let sandbox = support::sandbox()?;
+    let root = sandbox.path();
+    let (first_directory, later_directory) = reservation_backlog(root)?;
+    let mut terminal = Terminal::open_project(
+        env!("CARGO_BIN_EXE_ktask-dev"),
+        root,
+        &project(root),
+        110,
+        42,
+    )?;
+    terminal.send("4")?;
+    terminal.screen("keyboard Config after reservation recovery", |s| {
+        s.contains("k Storage")
+    })?;
+    terminal.click("k Storage")?;
+    terminal.screen("mouse recovered reservation preview", |s| {
+        s.contains("Retain completed attempts")
+    })?;
+    terminal.click("Save policy")?;
+    terminal.screen("mouse select apply", |s| s.contains("< Apply preview >"))?;
+    terminal.click("Apply")?;
+    terminal.screen("mouse confirmation", |s| {
+        s.contains("Delete stored evidence?")
+    })?;
+    terminal.click("Delete evidence")?;
+    let mouse = terminal.screen("mouse bounded continuation", |s| {
+        s.contains("batch limit reached")
+    })?;
+    println!("RESERVATION RELEASE MOUSE CONTINUATION\n{mouse}");
+    assert!(
+        !first_directory.exists(),
+        "recovered earlier directories remained behind the cursor"
+    );
+    assert!(later_directory.exists());
+    println!(
+        "RESERVATION PTY AFTER MOUSE: {:?}",
+        evidence_footprint(&root.join("state/ktask-dev/evidence"))?
+    );
+    terminal.send("k")?;
+    terminal.screen("keyboard remaining preview", |s| {
+        s.contains("Retain completed attempts")
+    })?;
+    terminal.send("\t \x13")?;
+    terminal.screen("keyboard confirmation", |s| {
+        s.contains("Delete stored evidence?")
+    })?;
+    terminal.send("\x13")?;
+    let keyboard = terminal.screen("keyboard bounded continuation", |s| {
+        s.contains("Cleaned")
+            && s.contains("batch limit reached")
+            && !s.contains("Delete stored evidence?")
+    })?;
+    println!("RESERVATION RELEASE KEYBOARD CONTINUATION\n{keyboard}");
+    assert!(later_directory.exists());
+    println!(
+        "RESERVATION PTY AFTER KEYBOARD BATCH: {:?}",
+        evidence_footprint(&root.join("state/ktask-dev/evidence"))?
+    );
+    terminal.send("k")?;
+    terminal.screen("keyboard final preview", |s| {
+        s.contains("Retain completed attempts")
+    })?;
+    terminal.send("\t \x13")?;
+    terminal.screen("keyboard final confirmation", |s| {
+        s.contains("Delete stored evidence?")
+    })?;
+    terminal.send("\x13")?;
+    let complete = terminal.screen("keyboard cleanup complete", |s| {
+        s.contains("Cleaned")
+            && !s.contains("batch limit reached")
+            && !s.contains("Delete stored evidence?")
+    })?;
+    println!("RESERVATION RELEASE KEYBOARD COMPLETION\n{complete}");
+    assert!(!later_directory.exists());
+    let final_footprint = evidence_footprint(&root.join("state/ktask-dev/evidence"))?;
+    println!("RESERVATION PTY AFTER KEYBOARD: {final_footprint:?}");
+    assert_eq!(final_footprint, (0, 0));
+    terminal.send("q")?;
+    terminal.finish()?;
     Ok(())
 }
 
@@ -2887,7 +3405,10 @@ fn retention_rechecks_live_work_and_recovers_partial_artifact_cleanup() -> Resul
     assert!(service.task(task_id)?.unwrap().attempts[0].output_pruned);
     // A substituted parent directory must never redirect deletion to the
     // project or the production instance's state tree.
-    fs::remove_dir(&dir)?;
+    assert!(
+        !dir.exists(),
+        "completed cleanup kept an empty attempt directory"
+    );
     let project_dir = root.join("project-evidence");
     fs::create_dir_all(&project_dir)?;
     fs::write(project_dir.join("step-200.log"), "project evidence")?;

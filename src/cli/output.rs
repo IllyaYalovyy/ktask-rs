@@ -146,7 +146,12 @@ fn task_text(task: &Task) -> String {
             safe(a.outcome.as_deref().unwrap_or("in progress"))
         ));
         text.push_str(&format!("  Usage: {}\n", a.usage.label()));
-        if a.output_pruned {
+        if a.output_pruning_records > 0 {
+            text.push_str(&format!(
+                "  PARTIALLY PRUNED: {} stored output bytes were removed by retention; remaining records are shown.\n",
+                a.output_pruning_bytes
+            ));
+        } else if a.output_pruned {
             text.push_str("  PRUNED: stored output was removed by retention.\n");
         }
         if let Some(report) = &a.report {

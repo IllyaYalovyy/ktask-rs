@@ -269,9 +269,14 @@ impl App {
                     .cleanup_storage(preview)
                     .map_err(|e| e.to_string())?;
                 self.message(format!(
-                    "Cleaned {} attempt(s), {} bytes",
-                    applied.candidates.len(),
-                    applied.reclaimable_bytes
+                    "Cleaned {} attempt(s), {} bytes{}",
+                    applied.attempts,
+                    applied.bytes,
+                    if applied.batch_limit_reached {
+                        " · batch limit reached; reopen Storage for more"
+                    } else {
+                        ""
+                    }
                 ));
                 return Ok(true);
             }

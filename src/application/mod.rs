@@ -192,6 +192,9 @@ pub struct Attempt {
     pub session: Option<i64>,
     pub logs: Vec<String>,
     pub output_pruned: bool,
+    /// Bytes already removed while a bounded output cleanup is still in progress.
+    pub output_pruning_bytes: i64,
+    pub output_pruning_records: i64,
     pub cost_microusd: Option<i64>,
     /// Supervisor outcome or wait message; worker claims live on execution steps.
     pub report: Option<String>,

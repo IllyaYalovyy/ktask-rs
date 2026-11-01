@@ -137,7 +137,7 @@ impl Service {
         watermark: i64,
     ) -> Result<usize> {
         let mut statement = self.db.connection().prepare(
-            "SELECT length(CAST(content AS BLOB)),substr(CAST(content AS BLOB),-4) FROM attempt_output WHERE attempt_id=?1 AND sequence<=?4 ORDER BY sequence DESC LIMIT ?2 OFFSET ?3",
+            "SELECT length(CAST(content AS BLOB)),coalesce(substr(CAST(content AS BLOB),-4),x'') FROM attempt_output WHERE attempt_id=?1 AND sequence<=?4 ORDER BY sequence DESC LIMIT ?2 OFFSET ?3",
         )?;
         let rows = statement.query_map(
             params![
@@ -228,12 +228,14 @@ impl Service {
             chunks,
             total
         );
-        if rows.is_empty() {
-            let pruned: bool = db.query_row(
-                "SELECT EXISTS(SELECT 1 FROM output_pruning WHERE attempt_id=?1)",
-                [attempt],
-                |r| r.get(0),
-            )?;
+        let (pruned, partial_bytes, partial_records): (bool, i64, i64) = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM output_pruning WHERE attempt_id=?1),coalesce((SELECT size_bytes FROM output_pruning_progress WHERE attempt_id=?1),0),coalesce((SELECT removed_records FROM output_pruning_progress WHERE attempt_id=?1),0)",
+            [attempt],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        if partial_records > 0 {
+            text.push_str(&format!("PARTIALLY PRUNED: {partial_bytes} stored output bytes were removed by retention; remaining records are shown.\n"));
+        } else if rows.is_empty() {
             text.push_str(if pruned {
                 "PRUNED: stored output was removed by retention.\n"
             } else {
@@ -1122,7 +1124,7 @@ fn attempts(
     historical_logs: bool,
     mut live: Option<&mut LiveOutput>,
 ) -> Result<Vec<Attempt>> {
-    let mut stmt = db.prepare_cached("SELECT a.id, a.revision, a.state, a.outcome, a.active_ms, a.wait_reason, a.resume_at_ms, (SELECT session_id FROM attempt_steps WHERE attempt_id = a.id AND role = 'execution' ORDER BY ordinal DESC LIMIT 1), (SELECT sum(cost_microusd) FROM model_calls WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id = a.id)), a.report, (SELECT prompt FROM questions WHERE attempt_id = a.id AND state = 'open' ORDER BY id DESC LIMIT 1), EXISTS(SELECT 1 FROM output_pruning WHERE attempt_id=a.id), a.failure_category FROM attempts a WHERE task_id = ?1 ORDER BY number")?;
+    let mut stmt = db.prepare_cached("SELECT a.id, a.revision, a.state, a.outcome, a.active_ms, a.wait_reason, a.resume_at_ms, (SELECT session_id FROM attempt_steps WHERE attempt_id = a.id AND role = 'execution' ORDER BY ordinal DESC LIMIT 1), (SELECT sum(cost_microusd) FROM model_calls WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id = a.id)), a.report, (SELECT prompt FROM questions WHERE attempt_id = a.id AND state = 'open' ORDER BY id DESC LIMIT 1), EXISTS(SELECT 1 FROM output_pruning WHERE attempt_id=a.id), a.failure_category, coalesce((SELECT size_bytes FROM output_pruning_progress WHERE attempt_id=a.id),0), coalesce((SELECT removed_records FROM output_pruning_progress WHERE attempt_id=a.id),0) FROM attempts a WHERE task_id = ?1 ORDER BY number")?;
     let mut attempts = stmt
         .query_map([task], |r| {
             Ok(Attempt {
@@ -1141,6 +1143,8 @@ fn attempts(
                 cost_microusd: r.get(8)?,
                 logs: Vec::new(),
                 output_pruned: r.get(11)?,
+                output_pruning_bytes: r.get(13)?,
+                output_pruning_records: r.get(14)?,
                 report: r.get(9)?,
                 worker_claim: None,
                 question: r.get(10)?,
@@ -1181,7 +1185,9 @@ fn attempts(
                         .collect::<rusqlite::Result<Vec<_>>>()?
                 }
             };
-            if attempt.output_pruned {
+            if attempt.output_pruning_records > 0 {
+                attempt.logs.push(format!("PARTIALLY PRUNED: {} stored output bytes were removed by retention; remaining records are shown.",attempt.output_pruning_bytes));
+            } else if attempt.output_pruned {
                 attempt
                     .logs
                     .push("PRUNED: stored output was removed by retention.".into());

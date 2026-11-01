@@ -160,6 +160,7 @@ erDiagram
     projects ||--o| project_delivery : "project_id"
     projects ||--o| project_retention : "project_id"
     projects ||--o{ evidence_pins : "project_id"
+    projects ||--o| evidence_sweep : "project_id"
     projects ||--o| execution_sessions : "project_id"
     projects ||--o| pending_controls : "project_id"
     projects ||--o{ tasks : "project_id"
@@ -215,6 +216,8 @@ erDiagram
     projects ||--o{ events : "project_id"
     attempts ||--o{ attempt_output : "attempt_id"
     attempts ||--o| output_pruning : "attempt_id"
+    attempts ||--o| output_pruning_progress : "attempt_id"
+    attempts ||--o| evidence_cleanup_admissions : "attempt_id"
     attempts ||--o{ artifacts : "attempt_id"
     attempts ||--o{ artifact_reservations : "attempt_id"
 ```
@@ -542,6 +545,41 @@ recovery also removes idle orphan files left by interrupted creation or retireme
 - FK `(project_id)` → `projects(id)`.
 - Index `ix_evidence_pins_project`: `INDEX ix_evidence_pins_project ON evidence_pins(project_id)`.
 
+### evidence_sweep
+
+Cursor for bounded cleanup of empty evidence directories belonging to eligible closed
+attempts. A missing row starts at attempt 0; reaching the end wraps to 0. Task closure,
+reservation release, cleanup admission, and retention-policy changes mark an active pass
+dirty so the next apply restarts at the oldest attempt. Each instance stores its own cursor
+in its own database.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `project_id` | INTEGER | no | Project whose closed attempts are being swept. |
+| `last_attempt_id` | INTEGER | no | Last examined attempt ID; 0 starts a new pass. |
+| `active_attempt_id` | INTEGER | no | Attempt whose step and artifact parents are being processed. |
+| `last_step_id` | INTEGER | no | Last examined step within the active attempt. |
+| `last_artifact_id` | INTEGER | no | Last examined artifact parent within the active attempt. |
+| `dirty` | INTEGER | no | Eligibility changed during a bounded pass; restart at attempt 0 on the next apply. |
+
+- PK `(project_id)`.
+- FK `(project_id)` → `projects(id)`.
+- Triggers on task closure, reservation release, cleanup admission, and retention-policy changes mark the cursor dirty.
+
+### evidence_cleanup_admissions
+
+An attempt admitted to file, output, or directory cleanup remains eligible for
+empty-directory removal if the retention policy is increased mid-cleanup. The row
+is removed when its attempt directory is gone.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `attempt_id` | INTEGER | no | Attempt admitted to cleanup. |
+| `admitted_at_ms` | INTEGER | no | Time of admission. |
+
+- PK `(attempt_id)`.
+- FK `(attempt_id)` → `attempts(id)`.
+
 ### execution_sessions
 
 One project-scoped execution policy. The mode records the actual started run, separate
@@ -608,6 +646,21 @@ One marker per attempt whose output content was deliberately removed. Task, atte
 | `attempt_id` | INTEGER | no | Owning attempt. |
 | `pruned_at_ms` | INTEGER | no | Cleanup time. |
 | `size_bytes` | INTEGER | no | Original output content bytes. |
+
+- PK `(attempt_id)`.
+- FK `(attempt_id)` → `attempts(id)`.
+
+### output_pruning_progress
+
+Tracks bytes removed in bounded output batches until the last row is removed and the
+completed `output_pruning` marker is written in the same transaction. A zero-byte row
+also carries an eligible attempt across batches after its last artifact is pruned.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `attempt_id` | INTEGER | no | Attempt with pending or partially removed output. |
+| `size_bytes` | INTEGER | no | Output bytes removed so far. |
+| `removed_records` | INTEGER | no | Output records removed so far; zero distinguishes a pending intent from partial deletion. |
 
 - PK `(attempt_id)`.
 - FK `(attempt_id)` → `attempts(id)`.
@@ -1123,12 +1176,18 @@ WHERE id = :call_id AND state = 'running' RETURNING id;
 Use cursor indexes rather than OFFSET or timestamps. Batch output writes (target roughly
 250 ms, with immediate terminal flush); FULL synchronization is not a per-line logging strategy.
 The shared retention command previews logical content bytes and candidates before applying.
-Cleanup runs under a SQLite write transaction and is deferred while any project attempt or
-provider call is live. Only terminal attempts on closed tasks older than the configured age
-are eligible. It removes generated check transcripts beneath the pinned instance state
+Cleanup runs under SQLite write transactions and is deferred while any project attempt or
+provider call is live. Terminal attempts on closed tasks older than the configured age
+are eligible; already admitted cleanup remains eligible if the policy increases. It removes generated check transcripts beneath the pinned instance state
 directory and stored output rows, leaving task history, reports, verdicts, usage and explicit
-pruning markers. It commits artifact pruning intent before unlinking; interrupted or partly
+pruning markers. Partial output removal is labeled with its removed byte count in History and
+CLI until the completed marker is written. It commits artifact pruning intent before unlinking; interrupted or partly
 failed cleanup remains visible and can reconcile files already removed on the next apply.
+Each apply limits file, output-row and directory work; its receipt reports the bytes and
+attempts processed in that call. Further applies resume the remaining work.
+Empty generated step and attempt directories are removed only for eligible attempts with no
+artifact reservation. The bounded `evidence_sweep` cursor revisits interrupted publications
+even when they left no artifact row; retained files keep their directories.
 
 ```sql
 -- name: event-tail
