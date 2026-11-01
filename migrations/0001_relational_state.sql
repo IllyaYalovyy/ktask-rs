@@ -401,6 +401,42 @@ CREATE TABLE attempt_output (
     PRIMARY KEY (attempt_id, sequence)
 ) STRICT;
 
+-- Initialized from existing output once per attempt on first admission after upgrade.
+CREATE TABLE attempt_output_usage (
+    attempt_id INTEGER PRIMARY KEY REFERENCES attempts(id),
+    bytes INTEGER NOT NULL CHECK (bytes >= 0),
+    rows INTEGER NOT NULL CHECK (rows >= 0)
+) STRICT;
+
+-- Once initialized, counters follow every output mutation in the same transaction.
+-- Old attempts initialize from their retained rows on first output admission.
+CREATE TRIGGER attempt_output_usage_insert AFTER INSERT ON attempt_output
+BEGIN
+    UPDATE attempt_output_usage SET
+        bytes=bytes+length(CAST(NEW.content AS BLOB)), rows=rows+1
+    WHERE attempt_id=NEW.attempt_id;
+END;
+
+CREATE TRIGGER attempt_output_usage_delete AFTER DELETE ON attempt_output
+BEGIN
+    UPDATE attempt_output_usage SET
+        bytes=bytes-length(CAST(OLD.content AS BLOB)), rows=rows-1
+    WHERE attempt_id=OLD.attempt_id;
+END;
+
+CREATE TRIGGER attempt_output_usage_update AFTER UPDATE OF content,attempt_id ON attempt_output
+BEGIN
+    UPDATE attempt_output_usage SET
+        bytes=bytes-length(CAST(OLD.content AS BLOB)), rows=rows-1
+    WHERE attempt_id=OLD.attempt_id AND OLD.attempt_id<>NEW.attempt_id;
+    UPDATE attempt_output_usage SET
+        bytes=bytes+length(CAST(NEW.content AS BLOB)), rows=rows+1
+    WHERE attempt_id=NEW.attempt_id AND OLD.attempt_id<>NEW.attempt_id;
+    UPDATE attempt_output_usage SET
+        bytes=bytes+length(CAST(NEW.content AS BLOB))-length(CAST(OLD.content AS BLOB))
+    WHERE attempt_id=NEW.attempt_id AND OLD.attempt_id=NEW.attempt_id;
+END;
+
 -- The history remains inspectable after output bytes are deliberately removed.
 CREATE TABLE output_pruning (
     attempt_id INTEGER PRIMARY KEY REFERENCES attempts(id),

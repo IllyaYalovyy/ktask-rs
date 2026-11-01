@@ -161,7 +161,7 @@ fn run_one(
         &temporary,
         &relative,
         &transcript_tree,
-    )?;
+    ).map_err(|error| crate::storage::Error::Conflict(format!("Resource limit: check transcript evidence incomplete: {error}; captured output retained. Raise the limit or free capacity, then resume")))?;
     scratch.close().map_err(|error| {
         crate::storage::Error::Conflict(format!(
             "Cannot remove check transcript scratch after publication: {error}"

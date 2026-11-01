@@ -94,9 +94,17 @@ pub fn capture_readonly(
                     "Unexpected artifact from read-only proposal".into(),
                 ));
             }
-            Ok(Message::Error(error)) => return Err(Error::Conflict(error)),
+            Ok(Message::Error(error)) => {
+                if let Err(Error::Conflict(reason)) = worker.join()
+                    && reason.starts_with("Resource limit:")
+                {
+                    return Err(Error::Conflict(reason));
+                }
+                return Err(Error::Conflict(error));
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
+                worker.join()?;
                 return Err(Error::Conflict("Remediation worker disconnected".into()));
             }
         }
@@ -108,6 +116,62 @@ pub enum Message {
     Artifact { name: String, relative_path: String },
     Exit { code: i32 },
     Error(String),
+}
+
+/// A guardian may finish cleanup while its supervisor is not draining stdout.
+/// This status survives a full pipe or a partial final protocol frame.
+pub enum WorkerResult {
+    Delivered,
+    ResourceUndelivered(ResourceKind),
+}
+
+#[derive(Clone, Copy)]
+pub enum ResourceKind {
+    Scratch,
+    Artifact,
+    Delivery,
+}
+impl ResourceKind {
+    fn from_reason(reason: &str) -> Self {
+        if reason.contains("managed scratch exceeded") {
+            Self::Scratch
+        } else if reason.contains("artifact evidence incomplete") {
+            Self::Artifact
+        } else {
+            Self::Delivery
+        }
+    }
+
+    pub const fn exit_code(self) -> u8 {
+        match self {
+            Self::Scratch => 75,
+            Self::Artifact => 76,
+            Self::Delivery => 77,
+        }
+    }
+
+    fn from_exit_code(code: Option<i32>) -> Option<Self> {
+        match code {
+            Some(75) => Some(Self::Scratch),
+            Some(76) => Some(Self::Artifact),
+            Some(77) => Some(Self::Delivery),
+            _ => None,
+        }
+    }
+
+    fn incomplete_reason(self) -> &'static str {
+        match self {
+            Self::Scratch => {
+                "Resource limit: managed scratch exceeded; worker stopped and captured evidence retained, but guardian output delivery was incomplete. Raise the scratch limit or free capacity, then resume for fresh verification"
+            }
+            Self::Artifact => {
+                "Resource limit: artifact evidence incomplete; worker stopped and captured evidence retained, but guardian output delivery was incomplete. Raise the artifact limit or free capacity, then resume for fresh verification"
+            }
+            Self::Delivery => {
+                "Resource limit: guardian output delivery incomplete; worker stopped and captured evidence retained. Restore delivery capacity, then resume for fresh verification"
+            }
+        }
+    }
 }
 /// An owner's exclusive lock. Dropping it unlocks explicitly: a child forked by another
 /// thread shares the lock until it execs, and closing our descriptor alone would leave
@@ -263,7 +327,12 @@ fn reader(
         }
     })
 }
-pub fn worker() -> Result<()> {
+fn scratch_error(path: &std::path::Path) -> io::Result<Option<String>> {
+    let bytes = crate::resource::limit("KTASK_SCRATCH_BYTES", 4 * 1024 * 1024 * 1024);
+    let entries = crate::resource::limit("KTASK_SCRATCH_ENTRIES", 200_000);
+    Ok(crate::resource::scratch_exceeded(path, bytes, entries)?.then(|| format!("Resource limit: managed scratch exceeded {bytes} bytes or {entries} entries; work and captured evidence retained. Raise the limit or free capacity, then resume")))
+}
+pub fn worker() -> Result<WorkerResult> {
     nix::sys::prctl::set_child_subreaper(true).map_err(io::Error::other)?;
     let stop = stopped()?;
     let stdin = io::stdin();
@@ -331,6 +400,14 @@ pub fn worker() -> Result<()> {
         let _ = child_input.write_all(spec.prompt.as_bytes());
     });
     let (tx, rx) = mpsc::sync_channel(32);
+    // Keep the process monitor independent of a supervisor stalled on its pipe.
+    // This queue bounds pending delivery instead of spooling it to disk.
+    let (outbound, pending) = mpsc::sync_channel(32);
+    let (delivery_done, delivered) = mpsc::channel();
+    thread::spawn(move || {
+        let result = pending.into_iter().try_for_each(|message| send(&message));
+        let _ = delivery_done.send(result);
+    });
     let stdout = reader(
         "stdout",
         child.0.stdout.take().expect("piped stdout"),
@@ -346,7 +423,19 @@ pub fn worker() -> Result<()> {
     });
     let mut code = None;
     let mut disconnected = false;
-    while !disconnected {
+    let mut quota_error = None;
+    let mut last_scan = Instant::now();
+    let mut pending_message = None;
+    let mut blocked_since = None;
+    while !disconnected || code.is_none() || pending_message.is_some() {
+        if quota_error.is_none() && last_scan.elapsed() >= Duration::from_millis(250) {
+            last_scan = Instant::now();
+            if let Some(error) = scratch_error(scratch.path())? {
+                quota_error = Some(error);
+                child.stop()?;
+                code.get_or_insert(130);
+            }
+        }
         if stop.load(Ordering::Relaxed) {
             child.stop()?;
             code.get_or_insert(130);
@@ -357,27 +446,43 @@ pub fn worker() -> Result<()> {
             code = Some(status.code().unwrap_or(130));
             child.stop()?;
         }
+        if let Some(message) = pending_message.take()
+            && quota_error.is_none()
+        {
+            match outbound.try_send(message) {
+                Ok(()) => blocked_since = None,
+                Err(mpsc::TrySendError::Full(message)) => {
+                    pending_message = Some(message);
+                    if blocked_since.get_or_insert_with(Instant::now).elapsed()
+                        >= Duration::from_secs(2)
+                    {
+                        quota_error = Some("Resource limit: guardian output delivery stalled; captured evidence retained. Resume after restoring delivery capacity".into());
+                        pending_message = None;
+                        child.stop()?;
+                        code.get_or_insert(130);
+                    }
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    stop.store(true, Ordering::Relaxed);
+                }
+            }
+        }
+        if disconnected || pending_message.is_some() {
+            thread::sleep(Duration::from_millis(25));
+            continue;
+        }
         match rx.recv_timeout(Duration::from_millis(25)) {
             Ok(message) => {
-                if send(&message).is_err() {
-                    stop.store(true, Ordering::Relaxed);
+                if quota_error.is_none() {
+                    pending_message = Some(message);
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => disconnected = true,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
     }
-    // Pipes may close before the child finishes. Never mistake EOF for completion.
-    while code.is_none() {
-        if stop.load(Ordering::Relaxed) {
-            child.stop()?;
-            code = Some(130);
-        } else if let Some(status) = child.0.try_wait()? {
-            code = Some(status.code().unwrap_or(130));
-        } else {
-            thread::sleep(Duration::from_millis(25));
-        }
-    }
+    // Pipes may close before the child finishes. The loop above keeps sampling
+    // scratch until the process group has stopped, even without more output.
     child.stop()?;
     writer
         .join()
@@ -388,39 +493,127 @@ pub fn worker() -> Result<()> {
     stderr
         .join()
         .map_err(|_| io::Error::other("stderr reader panicked"))?;
+    if quota_error.is_none() {
+        quota_error = scratch_error(scratch.path())?;
+    }
     let artifact_error = spec
         .artifact_target
         .as_ref()
-        .map(|target| archive_artifacts(&artifact_dir, target))
+        .map(|target| archive_artifacts(&artifact_dir, target, &outbound))
         .transpose()
         .err();
     drop(callback);
     scratch.close()?;
     lease.set_len(0)?;
     lease.sync_all()?;
-    if let Some(error) = artifact_error {
-        send(&Message::Error(error.to_string()))?;
-        return Ok(());
+    if let Some(error) = quota_error.or_else(|| artifact_error.map(|error| {
+        let detail = match error { Error::Conflict(message) => message, other => other.to_string() };
+        if detail.contains(" limit") || detail.contains("No space left on device") || detail.contains("Disk quota exceeded") {
+            format!("Resource limit: artifact evidence incomplete: {detail}; work and captured evidence retained. Raise the limit or free capacity, then resume")
+        } else {
+            format!("Artifact evidence incomplete: {detail}; work and captured evidence retained")
+        }
+    })) {
+        let resource = ResourceKind::from_reason(&error);
+        return Ok(finish_delivery(outbound, delivered, Message::Error(error), resource));
     }
-    send(&Message::Exit {
-        code: code.unwrap_or(130),
-    })?;
-    Ok(())
+    Ok(finish_delivery(
+        outbound,
+        delivered,
+        Message::Exit {
+            code: code.unwrap_or(130),
+        },
+        ResourceKind::Delivery,
+    ))
+}
+
+fn finish_delivery(
+    outbound: mpsc::SyncSender<Message>,
+    delivered: mpsc::Receiver<io::Result<()>>,
+    final_message: Message,
+    resource: ResourceKind,
+) -> WorkerResult {
+    if enqueue_final(&outbound, final_message).is_err() {
+        return WorkerResult::ResourceUndelivered(resource);
+    }
+    drop(outbound);
+    if wait_for_delivery(delivered).is_ok() {
+        WorkerResult::Delivered
+    } else {
+        WorkerResult::ResourceUndelivered(resource)
+    }
+}
+
+fn wait_for_delivery(delivered: mpsc::Receiver<io::Result<()>>) -> io::Result<()> {
+    delivered
+        .recv_timeout(Duration::from_secs(2))
+        .map_err(|error| match error {
+            mpsc::RecvTimeoutError::Timeout => {
+                io::Error::new(io::ErrorKind::TimedOut, "guardian delivery stalled")
+            }
+            mpsc::RecvTimeoutError::Disconnected => {
+                io::Error::new(io::ErrorKind::BrokenPipe, "guardian delivery disconnected")
+            }
+        })?
+}
+
+fn enqueue_final(outbound: &mpsc::SyncSender<Message>, message: Message) -> io::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut message = message;
+    loop {
+        match outbound.try_send(message) {
+            Ok(()) => return Ok(()),
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "guardian delivery disconnected",
+                ));
+            }
+            Err(mpsc::TrySendError::Full(pending)) => {
+                if Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "guardian delivery stalled",
+                    ));
+                }
+                message = pending;
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
 }
 
 /// The guardian owns the scratch lease until every selected file is in state storage.
 /// Only regular, flat files are accepted; a worker cannot redirect the copy with a symlink.
-fn archive_artifacts(source: &std::path::Path, target: &ArtifactTarget) -> Result<()> {
+fn archive_artifacts(
+    source: &std::path::Path,
+    target: &ArtifactTarget,
+    outbound: &mpsc::SyncSender<Message>,
+) -> Result<()> {
     let service = Service::open(Database::open_in(&target.state)?, &target.project, None)?;
     let tree = super::workspace::Workspace::fingerprint_at(&target.project, &target.scratch_root)?;
-    let mut entries = std::fs::read_dir(source)?.collect::<io::Result<Vec<_>>>()?;
+    let scan_limit = crate::resource::limit("KTASK_ARTIFACT_SCAN_ENTRIES", 256) as usize;
+    let mut entries = Vec::new();
+    let mut scan_overflow = false;
+    for entry in std::fs::read_dir(source)? {
+        if entries.len() == scan_limit {
+            scan_overflow = true;
+            break;
+        }
+        entries.push(entry?);
+    }
     entries.sort_by_key(|entry| entry.file_name());
     let mut errors = Vec::new();
+    if scan_overflow {
+        errors.push(format!("Artifact directory exceeds the {scan_limit}-entry scan limit; remaining evidence was not archived"));
+    }
     for (index, entry) in entries.iter().enumerate() {
         let name = match entry.file_name().into_string() {
             Ok(name) => name,
             Err(_) => {
-                errors.push("Artifact name must be UTF-8".to_owned());
+                if errors.len() < 5 {
+                    errors.push("Artifact name must be UTF-8".to_owned());
+                }
                 continue;
             }
         };
@@ -437,12 +630,25 @@ fn archive_artifacts(source: &std::path::Path, target: &ArtifactTarget) -> Resul
             Ok(()) => {
                 // Publication is already durable. A disconnected supervisor must
                 // not prevent later siblings from being archived.
-                let _ = send(&Message::Artifact {
-                    name,
-                    relative_path: stored_name,
-                });
+                if outbound
+                    .try_send(Message::Artifact {
+                        name,
+                        relative_path: stored_name,
+                    })
+                    .is_err()
+                    && errors.len() < 5
+                {
+                    errors.push("Resource limit: artifact notification delivery stalled; archived evidence retained".into());
+                }
             }
-            Err(error) => errors.push(error.to_string()),
+            Err(error) => {
+                if errors.len() < 5 {
+                    errors.push(match error {
+                        Error::Conflict(message) => message,
+                        other => other.to_string(),
+                    });
+                }
+            }
         }
     }
     if errors.is_empty() {
@@ -514,11 +720,13 @@ impl Worker {
                 .join()
                 .map_err(|_| io::Error::other("worker reader panicked"))?;
         }
-        require_exit(status.success())
+        require_exit(status)
     }
 }
-fn require_exit(success: bool) -> Result<()> {
-    if success {
+fn require_exit(status: std::process::ExitStatus) -> Result<()> {
+    if let Some(resource) = ResourceKind::from_exit_code(status.code()) {
+        Err(Error::Conflict(resource.incomplete_reason().into()))
+    } else if status.success() {
         Ok(())
     } else {
         Err(Error::Conflict(
@@ -587,6 +795,38 @@ pub fn stop_orphaned_workers(marker: &[u8]) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn final_enqueue_and_delivery_failures_keep_resource_outcome() {
+        let (full, _receiver) = mpsc::sync_channel(1);
+        full.send(Message::Output {
+            stream: "stdout".into(),
+            bytes: vec![0],
+        })
+        .unwrap();
+        let (_finished, delivered) = mpsc::channel();
+        assert!(matches!(
+            finish_delivery(
+                full,
+                delivered,
+                Message::Error("scratch".into()),
+                ResourceKind::Scratch
+            ),
+            WorkerResult::ResourceUndelivered(ResourceKind::Scratch)
+        ));
+
+        let (queued, _receiver) = mpsc::sync_channel(1);
+        let (_finished, delivered) = mpsc::channel();
+        assert!(matches!(
+            finish_delivery(
+                queued,
+                delivered,
+                Message::Error("artifact".into()),
+                ResourceKind::Artifact
+            ),
+            WorkerResult::ResourceUndelivered(ResourceKind::Artifact)
+        ));
+    }
 
     #[test]
     fn status_checks_never_block_owners_or_each_other() {

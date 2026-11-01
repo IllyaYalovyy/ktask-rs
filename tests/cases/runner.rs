@@ -5,13 +5,34 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, OpenOptions},
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
 const BIN: &str = env!("CARGO_BIN_EXE_ktask-dev");
+
+#[test]
+fn detached_logger_process_rotates_continuous_stderr_with_finite_storage() -> Result {
+    let sandbox = support::sandbox()?;
+    let path = sandbox.path().join("runner-1.log");
+    let mut logger = Command::new(BIN)
+        .arg("__logger")
+        .arg(&path)
+        .env("KTASK_RUNNER_LOG_BYTES", "8192")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    std::io::Write::write_all(&mut logger.stdin.take().unwrap(), &vec![b'x'; 100_000])?;
+    assert!(logger.wait()?.success());
+    let previous = path.with_extension("log.1");
+    assert!(fs::metadata(&path)?.len() <= 8192 + 4096);
+    assert!(fs::metadata(&previous)?.len() <= 8192 + 4096);
+    assert!(fs::read_to_string(&path)?.contains("runner log rotated"));
+    Ok(())
+}
 
 #[test]
 fn worker_artifact_survives_scratch_and_reaches_later_judge_and_attempt() -> Result {
@@ -156,14 +177,640 @@ fn oversized_worker_artifact_reports_limit_and_releases_scratch() -> Result {
     f.provider("artifact-oversize")?;
     f.add("Reject oversized capture")?;
     let run = f.process().args(["run", "--one"]).output()?;
-    assert_eq!(run.status.code(), Some(4));
+    assert_eq!(run.status.code(), Some(0));
     assert!(
-        String::from_utf8_lossy(&run.stderr).contains("8 MiB per-artifact limit"),
+        String::from_utf8_lossy(&run.stdout).contains("8 MiB per-artifact limit"),
         "{}",
-        String::from_utf8_lossy(&run.stderr)
+        String::from_utf8_lossy(&run.stdout)
+    );
+    assert_eq!(f.ok(&["show", "1"])?["attempts"][0]["state"], "paused");
+    f.guardian_finished()?;
+    f.no_scratch()?;
+    let resumed = f
+        .process()
+        .env("KTASK_ARTIFACT_FILE_BYTES", "8388610")
+        .args(["run", "--one"])
+        .output()?;
+    assert!(resumed.status.success(), "{resumed:?}");
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "succeeded", "{task}");
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn many_empty_artifacts_and_nested_entry_pause_with_bounded_records() -> Result {
+    let f = Fixture::new()?;
+    f.provider("artifact-empty-flood")?;
+    f.add("Bound empty evidence")?;
+    let output = f.process().args(["run", "--one"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Resource limit"));
+    let db = f.db()?;
+    let count: i64 = db.connection().query_row(
+        "SELECT count(*) FROM artifacts WHERE attempt_id=1",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(
+        count, 128,
+        "accepted empty evidence should remain available"
+    );
+    assert!(
+        output.stdout.len() < 4096,
+        "overflow diagnostics must stay bounded"
+    );
+    assert_eq!(f.ok(&["show", "1"])?["attempts"][0]["state"], "paused");
+    f.guardian_finished()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn resource_pause_is_visible_in_real_terminal_by_keyboard_and_mouse() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("artifact-oversize")?;
+        f.add("Inspect resource pause")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 34)?;
+        t.screen("resource fixture ready", |screen| {
+            screen.contains("Inspect resource pause") && screen.contains("r Run queue")
+        })?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        let screen = t.screen("resource condition visible", |screen| {
+            screen.contains("Paused") && screen.contains("Resource limit: artifact evidence")
+        })?;
+        println!("RESOURCE PAUSE mouse={mouse}\n{screen}");
+        f.supervisor_stopped()?;
+        t.send("q")?;
+        t.kill()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn nested_scratch_entry_pressure_reaps_worker_and_preserves_attempt() -> Result {
+    let f = Fixture::new()?;
+    f.provider("scratch-flood")?;
+    f.add("Bound nested scratch")?;
+    let output = f
+        .process()
+        .env("KTASK_SCRATCH_ENTRIES", "50")
+        .args(["run", "--one"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("managed scratch exceeded"),
+        "{output:?}"
+    );
+    assert_eq!(f.ok(&["show", "1"])?["attempts"][0]["state"], "paused");
+    f.guardian_finished()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn scratch_byte_pressure_reaps_worker_and_preserves_attempt() -> Result {
+    let f = Fixture::new()?;
+    f.provider("scratch-byte-flood")?;
+    f.add("Bound scratch bytes")?;
+    let output = f
+        .process()
+        .env("KTASK_SCRATCH_BYTES", "65536")
+        .args(["run", "--one"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("managed scratch exceeded"));
+    assert_eq!(f.ok(&["show", "1"])?["attempts"][0]["state"], "paused");
+    f.guardian_finished()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+fn scratch_measure(path: &Path) -> (u64, u64) {
+    let mut bytes = 0_u64;
+    let mut entries = 0_u64;
+    let mut pending = vec![path.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(children) = fs::read_dir(directory) else {
+            continue;
+        };
+        for child in children.flatten() {
+            let Ok(metadata) = child.metadata() else {
+                continue;
+            };
+            entries += 1;
+            bytes += metadata.len().max(metadata.blocks() * 512);
+            if metadata.is_dir() {
+                pending.push(child.path());
+            }
+        }
+    }
+    (bytes, entries)
+}
+
+fn continuing_scratch_pressure(mode: &str, variable: &str, limit: &str) -> Result {
+    let f = Fixture::new()?;
+    f.provider(mode)?;
+    f.add("Monitor a continuing scratch writer")?;
+    let started = Instant::now();
+    let mut child = f
+        .process()
+        .env(variable, limit)
+        .args(["run", "--one"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let deadline = started + Duration::from_secs(8);
+    let marker = f.scratch.path().join("scratch-observed");
+    let mut peak = (0_u64, 0_u64);
+    loop {
+        if let Ok(path) = fs::read_to_string(&marker) {
+            let usage = scratch_measure(Path::new(&path));
+            peak.0 = peak.0.max(usage.0);
+            peak.1 = peak.1.max(usage.1);
+        }
+        if child.try_wait()?.is_some() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            child.kill()?;
+            let _ = child.wait();
+            return Err(format!(
+                "scratch monitoring did not stop the continuing {mode} producer; peak={peak:?}"
+            )
+            .into());
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    let output = child.wait_with_output()?;
+    let elapsed = started.elapsed();
+    println!(
+        "SCRATCH MONITOR mode={mode} peak_bytes={} peak_entries={} elapsed_ms={} status={} stdout={}",
+        peak.0,
+        peak.1,
+        elapsed.as_millis(),
+        output.status,
+        String::from_utf8_lossy(&output.stdout).trim()
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("managed scratch exceeded"),
+        "{output:?}"
+    );
+    assert!(
+        !f.scratch.path().join("scratch-natural-completion").exists(),
+        "producer completed naturally"
+    );
+    assert_eq!(f.ok(&["show", "1"])?["attempts"][0]["state"], "paused");
+    if variable == "KTASK_SCRATCH_BYTES" {
+        assert!(peak.0 > 65536 && peak.0 < 2 * 1024 * 1024, "peak={peak:?}");
+    } else {
+        assert!(peak.1 > 50 && peak.1 < 500, "peak={peak:?}");
+    }
+    f.guardian_finished()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn continuing_byte_producer_is_stopped_before_exit_with_measured_peak() -> Result {
+    continuing_scratch_pressure("scratch-continuing-bytes", "KTASK_SCRATCH_BYTES", "65536")
+}
+
+#[test]
+fn closed_pipe_nested_entry_producer_is_stopped_before_exit_with_measured_peak() -> Result {
+    continuing_scratch_pressure("scratch-closed-pipe-entries", "KTASK_SCRATCH_ENTRIES", "50")
+}
+
+#[test]
+fn unread_guardian_output_cannot_suspend_scratch_monitoring() -> Result {
+    let f = Fixture::new()?;
+    let scratch_root = f.scratch.path().join("blocked-delivery-scratch");
+    fs::create_dir(&scratch_root)?;
+    let spec = serde_json::json!({
+        "executable": "/bin/sh",
+        "args": ["-c", "i=0; while [ \"$i\" -lt 2000 ]; do head -c 16384 /dev/zero >> \"$TMPDIR/flood.bin\"; head -c 4096 /dev/zero; i=$((i+1)); sleep 0.01; done; touch \"$HOME/scratch-natural-completion\""],
+        "env": [["HOME", f.scratch.path().to_string_lossy()]],
+        "cwd": f.root,
+        "prompt": "",
+        "schema": null,
+        "scratch_root": scratch_root,
+        "artifact_target": null,
+        "worker_lock": f.root.join(".git/ktask-worker.lock"),
+        "callback": null,
+        "sandbox": null
+    });
+    let mut child = f
+        .process()
+        .arg("__worker")
+        .env("KTASK_SCRATCH_BYTES", "65536")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let input = child.stdin.as_mut().unwrap();
+    serde_json::to_writer(&mut *input, &spec)?;
+    std::io::Write::write_all(input, b"\n")?;
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(6);
+    let mut peak = (0_u64, 0_u64);
+    loop {
+        let usage = scratch_measure(&scratch_root);
+        peak.0 = peak.0.max(usage.0);
+        peak.1 = peak.1.max(usage.1);
+        if child.try_wait()?.is_some() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            child.kill()?;
+            let _ = child.wait();
+            return Err(format!(
+                "scratch monitor stalled behind unread guardian output; peak={peak:?}"
+            )
+            .into());
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    let output = child.wait_with_output()?;
+    println!(
+        "BLOCKED DELIVERY peak_bytes={} peak_entries={} elapsed_ms={} guardian_status={} delivered_bytes={}",
+        peak.0,
+        peak.1,
+        started.elapsed().as_millis(),
+        output.status,
+        output.stdout.len()
+    );
+    assert!(peak.0 > 65536 && peak.0 < 2 * 1024 * 1024, "peak={peak:?}");
+    assert_eq!(output.status.code(), Some(75), "{output:?}");
+    assert!(!f.scratch.path().join("scratch-natural-completion").exists());
+    f.guardian_finished()?;
+    assert_eq!(
+        fs::read_dir(&scratch_root)?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("run-"))
+            .count(),
+        0
+    );
+    Ok(())
+}
+
+#[test]
+fn blocked_supervisor_delivery_pauses_and_resumes_same_attempt() -> Result {
+    use nix::{
+        sys::signal::{Signal, kill},
+        unistd::Pid,
+    };
+
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("scratch-blocked-supervisor")?;
+        f.add("Keep a blocked resource outcome")?;
+        f.add("Do not advance the queue")?;
+        let mut supervisor = f
+            .process()
+            .env("KTASK_SCRATCH_BYTES", "65536")
+            .args(["run", "--one"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        support::eventually("provider ready for blocked delivery", || {
+            Ok(f.scratch
+                .path()
+                .join("blocked-provider-ready")
+                .exists()
+                .then_some(()))
+        })?;
+        let provider_pid = fs::read_to_string(f.scratch.path().join("blocked-provider-pid"))?
+            .trim()
+            .parse::<u32>()?;
+        let scratch = PathBuf::from(fs::read_to_string(
+            f.scratch.path().join("scratch-observed"),
+        )?);
+        let supervisor_pid = Pid::from_raw(supervisor.id() as i32);
+        kill(supervisor_pid, Signal::SIGSTOP)?;
+        // Always resume the supervisor, including when the bounded observation fails.
+        let observed = (|| -> Result<(u64, u64)> {
+            fs::write(f.scratch.path().join("blocked-provider-go"), "go")?;
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut peak = (0_u64, 0_u64);
+            loop {
+                let usage = scratch_measure(&scratch);
+                peak.0 = peak.0.max(usage.0);
+                peak.1 = peak.1.max(usage.1);
+                let lease = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(f.root.join(".git/ktask-worker.lock"))?;
+                if lease.try_lock().is_ok() && lease.metadata()?.len() == 0 {
+                    return Ok(peak);
+                }
+                if Instant::now() >= deadline {
+                    return Err(format!(
+                        "guardian did not finish while supervisor was blocked; peak={peak:?}"
+                    )
+                    .into());
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+        })();
+        kill(supervisor_pid, Signal::SIGCONT)?;
+        let peak = observed?;
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while supervisor.try_wait()?.is_none() {
+            if Instant::now() >= deadline {
+                supervisor.kill()?;
+                let _ = supervisor.wait();
+                return Err("supervisor did not settle the blocked resource outcome".into());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let output = supervisor.wait_with_output()?;
+        let first = f.ok(&["show", "1"])?;
+        let report = first["attempts"][0]["report"].as_str().unwrap_or_default();
+        let db = f.db()?;
+        let (phase, repairs): (String, i64) = db.connection().query_row(
+            "SELECT phase,repair_round FROM attempt_progress WHERE attempt_id=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let remediation: i64 = db.connection().query_row(
+            "SELECT count(*) FROM attempt_steps WHERE attempt_id=1 AND role='remediation'",
+            [],
+            |row| row.get(0),
+        )?;
+        let captured: String = db.connection().query_row(
+            "SELECT relative_path FROM artifacts WHERE attempt_id=1 AND name='blocked-proof.txt'",
+            [],
+            |row| row.get(0),
+        )?;
+        println!(
+            "BLOCKED SUPERVISOR peak_bytes={} peak_entries={} status={} phase={} repairs={} remediation={} report={report:?} stdout={:?}",
+            peak.0,
+            peak.1,
+            output.status,
+            phase,
+            repairs,
+            remediation,
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(peak.0 > 65536 && peak.0 < 2 * 1024 * 1024, "peak={peak:?}");
+        assert!(!f.scratch.path().join("scratch-natural-completion").exists());
+        assert!(!PathBuf::from(format!("/proc/{provider_pid}")).exists());
+        assert_eq!(first["attempts"][0]["state"], "paused", "{first}");
+        assert_eq!(first["attempts"].as_array().unwrap().len(), 1);
+        assert!(
+            report.contains("managed scratch exceeded") && report.contains("incomplete"),
+            "{report}"
+        );
+        assert_eq!(phase, "implement");
+        assert_eq!(repairs, 0);
+        assert_eq!(remediation, 0);
+        assert_eq!(f.ok(&["show", "2"])?["status"], "ready");
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("state/ktask-dev").join(captured))?,
+            "proof before pressure\n"
+        );
+        f.no_scratch()?;
+
+        let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 34)?;
+        let paused = terminal.screen("blocked delivery resource pause", |screen| {
+            screen.contains("[r Resume]") && screen.contains("managed scratch exceeded")
+        })?;
+        println!("BLOCKED SUPERVISOR PTY mouse={mouse} paused\n{paused}");
+        if mouse {
+            terminal.click("r Resume")?;
+        } else {
+            terminal.send("r")?;
+        }
+        f.state("succeeded")?;
+        if mouse {
+            terminal.click("3 History")?;
+        } else {
+            terminal.send("3")?;
+        }
+        let history = terminal.screen("blocked delivery recovered history", |screen| {
+            screen.contains("History · 1 shown")
+                && screen.contains("Keep a blocked resource outcome")
+                && screen.contains("Done")
+        })?;
+        println!("BLOCKED SUPERVISOR PTY mouse={mouse} recovered\n{history}");
+        terminal.send("q")?;
+        terminal.kill()?;
+        let final_state = f.ok(&["show", "1"])?;
+        assert_eq!(final_state["status"], "succeeded", "{final_state}");
+        assert_eq!(final_state["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(f.ok(&["show", "2"])?["status"], "ready");
+        let (resumed_phase, resumed_repairs): (String, i64) = f.db()?.connection().query_row(
+            "SELECT phase,repair_round FROM attempt_progress WHERE attempt_id=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        println!(
+            "BLOCKED SUPERVISOR RESUME phase={resumed_phase} repairs={resumed_repairs} first_phase={phase}"
+        );
+        assert_eq!(resumed_repairs, repairs);
+        let verified_roles: i64 = f.db()?.connection().query_row(
+            "SELECT count(DISTINCT role) FROM attempt_steps WHERE attempt_id=1 AND role IN ('check','review','validation') AND state='succeeded'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            verified_roles, 3,
+            "fresh check, review and validation required after resume"
+        );
+        assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn continuous_check_output_pauses_without_losing_captured_bytes() -> Result {
+    let f = Fixture::new()?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        "yes noisy",
+        "--timeout-ms",
+        "10000",
+    ])?;
+    f.add("Bound continuous output")?;
+    let output = f
+        .process()
+        .env("KTASK_OUTPUT_BYTES", "65536")
+        .args(["run", "--one"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("attempt output exceeds"),
+        "{output:?}"
+    );
+    let db = f.db()?;
+    let (bytes, rows): (i64, i64) = db.connection().query_row("SELECT coalesce(sum(length(cast(content as blob))),0),count(*) FROM attempt_output WHERE attempt_id=1", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    assert!(
+        bytes > 0 && bytes <= 65536 && rows > 0,
+        "{bytes} bytes, {rows} rows"
+    );
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["attempts"][0]["state"], "paused");
+    assert!(
+        task["attempts"][0]["report"]
+            .as_str()
+            .unwrap()
+            .contains("attempt output exceeds")
+    );
+    let transcript: String = db.connection().query_row(
+        "SELECT relative_path FROM artifacts WHERE attempt_id=1 AND name='build'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert!(
+        fs::read_to_string(f.scratch.path().join("state/ktask-dev").join(transcript))?
+            .contains("noisy")
     );
     f.guardian_finished()?;
     f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn startup_output_limits_pause_and_resume_same_attempt_without_repair() -> Result {
+    for (variable, exhausted) in [("KTASK_OUTPUT_BYTES", "1"), ("KTASK_OUTPUT_ROWS", "1")] {
+        let f = Fixture::new()?;
+        f.provider("normal")?;
+        f.add("Resume startup output")?;
+        let mut first_report = String::new();
+        for resume in 0..2 {
+            let output = f
+                .process()
+                .env(variable, exhausted)
+                .args(["run", "--one"])
+                .output()?;
+            assert_eq!(output.status.code(), Some(0), "{output:?}");
+            let report = String::from_utf8(output.stdout)?;
+            assert!(report.contains("attempt output exceeds"), "{report}");
+            let task = f.ok(&["show", "1"])?;
+            assert_eq!(task["attempts"][0]["state"], "paused", "{task}");
+            assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+            assert!(
+                task["attempts"][0]["report"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Resource limit:")
+            );
+            if resume == 0 {
+                first_report = report;
+            }
+        }
+        let db = f.db()?;
+        let (bytes, rows): (i64, i64) = db.connection().query_row(
+            "SELECT coalesce(bytes,0),coalesce(rows,0) FROM attempts a LEFT JOIN attempt_output_usage u ON u.attempt_id=a.id WHERE a.id=1", [], |r| Ok((r.get(0)?,r.get(1)?)))?;
+        if variable == "KTASK_OUTPUT_BYTES" {
+            assert_eq!((bytes, rows), (0, 0));
+        } else {
+            assert_eq!(rows, 1);
+        }
+        println!(
+            "STARTUP LIMIT variable={variable} saved_bytes={bytes} saved_rows={rows} first={first_report:?}"
+        );
+        let resumed = f.process().args(["run", "--one"]).output()?;
+        assert!(resumed.status.success(), "{resumed:?}");
+        let task = f.ok(&["show", "1"])?;
+        assert_eq!(task["status"], "succeeded", "{task}");
+        assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn startup_output_pause_repeated_resume_and_recovery_render_in_real_terminal() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("normal")?;
+        f.add("Inspect startup output pressure")?;
+        let mut t = Terminal::open_project_with_env(
+            BIN,
+            f.scratch.path(),
+            &f.root,
+            120,
+            34,
+            &[("KTASK_OUTPUT_BYTES", "1")],
+        )?;
+        t.screen("startup resource task ready", |s| {
+            s.contains("Inspect startup output pressure") && s.contains("r Run queue")
+        })?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        let paused = t.screen("startup resource pause", |s| {
+            s.contains("[r Resume]") && s.contains("Resource limit: attempt output")
+        })?;
+        println!("STARTUP RESOURCE PTY mouse={mouse} first\n{paused}");
+        f.supervisor_stopped()?;
+        t.still("resume action ready", |s| s.contains("[r Resume]"))?;
+        if mouse {
+            t.click("r Resume")?;
+        } else {
+            t.send("r")?;
+        }
+        support::eventually("same attempt resumed under exhausted limit", || {
+            let db = f.db()?;
+            let count: i64 = db.connection().query_row(
+                "SELECT count(*) FROM events WHERE attempt_id=1 AND kind='attempt.resumed'",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok((count >= 1).then_some(()))
+        })?;
+        f.supervisor_stopped()?;
+        let paused = t.still("resource pause after repeated resume", |s| {
+            s.contains("[r Resume]") && s.contains("Resource limit: attempt output")
+        })?;
+        println!("STARTUP RESOURCE PTY mouse={mouse} repeated\n{paused}");
+        t.send("q")?;
+        t.kill()?;
+        let mut recovered = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 34)?;
+        recovered.screen("resource recovery ready", |s| s.contains("r Resume"))?;
+        if mouse {
+            recovered.click("r Resume")?;
+        } else {
+            recovered.send("r")?;
+        }
+        recovered.screen("resource recovery completed queue", |s| {
+            s.contains("Queue complete") && s.contains("History 1")
+        })?;
+        if mouse {
+            recovered.click("3 History")?;
+        } else {
+            recovered.send("3")?;
+        }
+        let screen = recovered.screen("resource recovery succeeded in history", |s| {
+            s.contains("History · 1 shown")
+                && s.contains("Inspect startup output pressure")
+                && s.contains("Done")
+        })?;
+        println!("STARTUP RESOURCE PTY mouse={mouse} recovered\n{screen}");
+        assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+        f.supervisor_stopped()?;
+        recovered.send("q")?;
+        recovered.kill()?;
+        assert_eq!(
+            f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
+            1
+        );
+        f.no_scratch()?;
+    }
     Ok(())
 }
 
@@ -204,8 +851,8 @@ fn mixed_artifacts_keep_valid_siblings_and_reject_oversize_without_orphans() -> 
     f.provider("artifact-mixed")?;
     f.add("Archive valid siblings")?;
     let output = f.process().args(["run", "--one"]).output()?;
-    assert_eq!(output.status.code(), Some(4));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("8 MiB per-artifact limit"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("8 MiB per-artifact limit"));
     let db = f.db()?;
     let rows = db.connection().prepare("SELECT name,relative_path FROM artifacts WHERE attempt_id=1 AND name IN ('a.txt','b.bin','c.txt') ORDER BY name")?
         .query_map([], |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?)))?.collect::<std::result::Result<Vec<_>, _>>()?;
@@ -248,6 +895,9 @@ fn interrupted_artifact_publication_reconciles_original_source_tree() -> Result 
     let checksum = format!("{:x}", Sha256::digest(bytes));
     let db = f.db()?;
     db.connection().execute("INSERT INTO artifact_reservations(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms) VALUES (1,'recovered.txt','text/plain',?1,?2,?3,?4,1)", rusqlite::params![relative,bytes.len() as i64,checksum,tree])?;
+    for index in 0..129 {
+        db.connection().execute("INSERT INTO artifact_reservations(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms) VALUES (1,'interrupted','text/plain',?1,0,?2,?3,1)", rusqlite::params![format!("evidence/attempt-1/step-999/missing-{index}"), format!("{:x}", Sha256::digest(b"")), tree])?;
+    }
     drop(db);
     let publication_lock = OpenOptions::new()
         .read(true)
@@ -266,6 +916,23 @@ fn interrupted_artifact_publication_reconciles_original_source_tree() -> Result 
     );
     assert!(pending.is_file(), "a live reservation must not be reaped");
     publication_lock.unlock()?;
+    let reduced_limit = f
+        .process()
+        .env("KTASK_ARTIFACT_FILE_BYTES", "1")
+        .args(["--json", "show", "1"])
+        .output()?;
+    assert!(reduced_limit.status.success(), "{reduced_limit:?}");
+    assert!(
+        final_path.is_file(),
+        "a new lower limit must not discard a previously reserved file"
+    );
+    assert_eq!(
+        f.db()?
+            .connection()
+            .query_row("SELECT count(*) FROM artifact_reservations", [], |r| r
+                .get::<_, i64>(0))?,
+        0
+    );
     let shown = f.ok(&["show", "1"])?;
     let artifact = shown["attempts"][0]["artifacts"]
         .as_array()
@@ -316,8 +983,8 @@ fn cross_turn_budget_rejects_new_file_without_retaining_untracked_bytes() -> Res
     ])?;
     f.add("Bound attempt evidence")?;
     let run = f.process().args(["run", "--one"]).output()?;
-    assert_eq!(run.status.code(), Some(4));
-    assert!(String::from_utf8_lossy(&run.stderr).contains("64 MiB per-attempt artifact limit"));
+    assert_eq!(run.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&run.stdout).contains("64 MiB per-attempt artifact limit"));
     let db = f.db()?;
     let recorded: i64 = db.connection().query_row(
         "SELECT coalesce(sum(size_bytes),0) FROM artifacts WHERE pruned_at_ms IS NULL",
@@ -361,7 +1028,8 @@ fn cross_turn_budget_rejects_new_file_without_retaining_untracked_bytes() -> Res
         recorded as u64
     );
     f.ok(&["retention", "0"])?;
-    f.ok(&["storage", "--apply"])?;
+    let deferred = f.process().args(["storage", "--apply"]).output()?;
+    assert_eq!(deferred.status.code(), Some(4));
     assert_eq!(
         bytes_under(&f.scratch.path().join("state/ktask-dev/evidence"))?,
         recorded as u64,
@@ -390,8 +1058,9 @@ fn oversized_check_transcript_is_rejected_without_state_file() -> Result {
     ])?;
     f.add("Bound check transcript")?;
     let run = f.process().args(["run", "--one"]).output()?;
-    assert_eq!(run.status.code(), Some(4));
-    assert!(String::from_utf8_lossy(&run.stderr).contains("8 MiB per-artifact limit"));
+    assert_eq!(run.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&run.stdout).contains("8 MiB per-artifact limit"));
+    assert_eq!(f.ok(&["show", "1"])?["attempts"][0]["state"], "paused");
     assert_eq!(
         f.db()?.connection().query_row(
             "SELECT count(*) FROM artifacts WHERE name='build'",
@@ -2883,6 +3552,42 @@ case '{mode}' in
   printf '{{"type":"turn.completed","usage":{{}}}}\n'; exit 0;;
  artifact-oversize)
   if [ "$model" = execution ]; then head -c 8388609 /dev/zero > "$KTASK_ARTIFACT_DIR/huge.bin"; fi;;
+ artifact-empty-flood)
+  if [ "$model" = execution ]; then
+   i=0; while [ "$i" -lt 400 ]; do : > "$KTASK_ARTIFACT_DIR/empty-$i"; i=$((i + 1)); done
+   mkdir "$KTASK_ARTIFACT_DIR/nested"
+  fi;;
+ scratch-flood)
+  if [ "$model" = execution ]; then
+   i=0; while [ "$i" -lt 100 ]; do mkdir -p "$TMPDIR/deep/$i"; : > "$TMPDIR/deep/$i/empty"; i=$((i + 1)); done
+   sleep 2
+  fi;;
+ scratch-byte-flood)
+  if [ "$model" = execution ]; then head -c 2097152 /dev/zero > "$TMPDIR/flood.bin"; sleep 2; fi;;
+ scratch-continuing-bytes)
+  if [ "$model" = execution ]; then
+   printf '%s' "$TMPDIR" > "$HOME/scratch-observed"
+   i=0; while [ "$i" -lt 2000 ]; do head -c 16384 /dev/zero >> "$TMPDIR/flood.bin"; i=$((i + 1)); sleep 0.01; done
+   touch "$HOME/scratch-natural-completion"
+  fi;;
+ scratch-blocked-supervisor)
+  if [ "$model" = execution ] && [ ! -f "$HOME/blocked-provider-once" ]; then
+   touch "$HOME/blocked-provider-once"
+   printf 'proof before pressure\n' > "$KTASK_ARTIFACT_DIR/blocked-proof.txt"
+   printf '%s' "$TMPDIR" > "$HOME/scratch-observed"
+   printf '%s' "$$" > "$HOME/blocked-provider-pid"
+   touch "$HOME/blocked-provider-ready"
+   until [ -f "$HOME/blocked-provider-go" ]; do sleep 0.01; done
+   i=0; while [ "$i" -lt 2000 ]; do head -c 16384 /dev/zero >> "$TMPDIR/flood.bin"; head -c 4096 /dev/zero; i=$((i + 1)); sleep 0.01; done
+   touch "$HOME/scratch-natural-completion"
+  fi;;
+ scratch-closed-pipe-entries)
+  if [ "$model" = execution ]; then
+   printf '%s' "$TMPDIR" > "$HOME/scratch-observed"
+   exec >/dev/null 2>&1
+   i=0; while [ "$i" -lt 2000 ]; do mkdir -p "$TMPDIR/deep/$i"; : > "$TMPDIR/deep/$i/empty"; i=$((i + 1)); sleep 0.01; done
+   touch "$HOME/scratch-natural-completion"
+  fi;;
  artifact-fifo)
   if [ "$model" = execution ]; then mkfifo "$KTASK_ARTIFACT_DIR/pipe"; fi;;
  artifact-mixed)

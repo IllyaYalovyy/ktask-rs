@@ -12,6 +12,7 @@ mod mock;
 mod persistent;
 mod presentation;
 mod readiness;
+pub(crate) mod resource;
 pub mod runner;
 pub mod scratch;
 mod selection;
@@ -32,9 +33,34 @@ use ratatui::crossterm::{
 };
 
 pub fn launch(instance: instance::Instance) -> std::process::ExitCode {
+    if std::env::args_os().nth(1).is_some_and(|a| a == "__logger") {
+        let Some(path) = std::env::args_os().nth(2) else {
+            return std::process::ExitCode::FAILURE;
+        };
+        return match runner::rotate_log(
+            std::io::stdin(),
+            std::path::Path::new(&path),
+            resource::limit("KTASK_RUNNER_LOG_BYTES", 8 * 1024 * 1024),
+        ) {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(_) => std::process::ExitCode::FAILURE,
+        };
+    }
     if std::env::args_os().nth(1).is_some_and(|a| a == "__worker") {
         return match runner::process::worker() {
-            Ok(()) => std::process::ExitCode::SUCCESS,
+            Ok(runner::process::WorkerResult::Delivered) => std::process::ExitCode::SUCCESS,
+            Ok(runner::process::WorkerResult::ResourceUndelivered(resource)) => {
+                std::process::ExitCode::from(resource.exit_code())
+            }
+            Err(storage::Error::Io(error))
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::BrokenPipe
+                ) =>
+            {
+                // A stalled output pipe cannot carry a fallback diagnostic.
+                std::process::ExitCode::FAILURE
+            }
             Err(error) => {
                 // The supervisor re-raises this as a conflict; send the bare message once.
                 let message = match error {

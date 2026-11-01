@@ -12,6 +12,15 @@ use std::{
 
 const FILE_LIMIT: u64 = 8 * 1024 * 1024;
 const ATTEMPT_LIMIT: u64 = 64 * 1024 * 1024;
+const COUNT_LIMIT: u64 = 128;
+
+fn budget_label(bytes: u64) -> String {
+    if bytes.is_multiple_of(1024 * 1024) {
+        format!("{} MiB", bytes / (1024 * 1024))
+    } else {
+        format!("{bytes} bytes")
+    }
+}
 
 fn media_type(name: &str, bytes: &[u8]) -> &'static str {
     match Path::new(name).extension().and_then(|e| e.to_str()) {
@@ -28,15 +37,29 @@ fn retained_bytes(tx: &Transaction<'_>, attempt: i64) -> Result<i64> {
 }
 
 fn require_budget(tx: &Transaction<'_>, attempt: i64, name: &str, size: u64) -> Result<()> {
+    let file_limit = crate::resource::limit("KTASK_ARTIFACT_FILE_BYTES", FILE_LIMIT);
+    let attempt_limit = crate::resource::limit("KTASK_ARTIFACT_ATTEMPT_BYTES", ATTEMPT_LIMIT);
+    let count_limit = crate::resource::limit("KTASK_ARTIFACT_ATTEMPT_FILES", COUNT_LIMIT);
     require(
-        size <= FILE_LIMIT,
-        &format!("Artifact {name} exceeds the 8 MiB per-artifact limit"),
+        size <= file_limit,
+        &format!(
+            "Artifact {name} exceeds the {} per-artifact limit",
+            budget_label(file_limit)
+        ),
     )?;
     let used = retained_bytes(tx, attempt)?;
     require(
-        used.saturating_add(size as i64) <= ATTEMPT_LIMIT as i64,
+        used.saturating_add(size as i64) <= attempt_limit as i64,
         &format!(
-            "Artifact {name} exceeds the 64 MiB per-attempt artifact limit ({used} bytes already saved)"
+            "Artifact {name} exceeds the {} per-attempt artifact limit ({used} bytes already saved)",
+            budget_label(attempt_limit)
+        ),
+    )?;
+    let count: i64 = tx.query_row("SELECT (SELECT count(*) FROM artifacts WHERE attempt_id=?1 AND pruned_at_ms IS NULL) + (SELECT count(*) FROM artifact_reservations WHERE attempt_id=?1)", [attempt], |r| r.get(0))?;
+    require(
+        count < count_limit as i64,
+        &format!(
+            "Artifact count limit reached ({count_limit} per attempt, including pending reservations)"
         ),
     )
 }
@@ -101,9 +124,22 @@ fn verify(path: &Path, size: i64, checksum: &str) -> Result<bool> {
     if !metadata.is_file() || metadata.len() != size as u64 {
         return Ok(false);
     }
-    let mut bytes = Vec::new();
-    input.take(FILE_LIMIT + 1).read_to_end(&mut bytes)?;
-    Ok(bytes.len() as i64 == size && format!("{:x}", Sha256::digest(&bytes)) == checksum)
+    let mut input = input;
+    let mut hash = Sha256::new();
+    let mut read = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let n = input.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        read = read.saturating_add(n as u64);
+        if read > size as u64 {
+            return Ok(false);
+        }
+        hash.update(&buffer[..n]);
+    }
+    Ok(read == size as u64 && format!("{:x}", hash.finalize()) == checksum)
 }
 
 impl Service {
@@ -132,12 +168,16 @@ impl Service {
                 "Artifact {name}: only regular files directly in KTASK_ARTIFACT_DIR are supported"
             ),
         )?;
+        let file_limit = crate::resource::limit("KTASK_ARTIFACT_FILE_BYTES", FILE_LIMIT);
         require(
-            metadata.len() <= FILE_LIMIT,
-            &format!("Artifact {name} exceeds the 8 MiB per-artifact limit"),
+            metadata.len() <= file_limit,
+            &format!(
+                "Artifact {name} exceeds the {} per-artifact limit",
+                budget_label(file_limit)
+            ),
         )?;
         let mut bytes = Vec::with_capacity(metadata.len() as usize);
-        input.take(FILE_LIMIT + 1).read_to_end(&mut bytes)?;
+        input.take(file_limit + 1).read_to_end(&mut bytes)?;
         require(
             bytes.len() as u64 == metadata.len(),
             &format!("Artifact {name} changed while being archived"),
@@ -214,41 +254,49 @@ impl Service {
             Err(TryLockError::WouldBlock) => return Ok(()),
             Err(TryLockError::Error(error)) => return Err(error.into()),
         }
-        let mut stmt = self.db.connection().prepare("SELECT relative_path,size_bytes,checksum_sha256 FROM artifact_reservations JOIN attempts ON attempts.id=attempt_id WHERE attempts.project_id=?1 ORDER BY artifact_reservations.id")?;
-        let rows = stmt
-            .query_map([self.project_id], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, String>(2)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        drop(stmt);
-        for (relative, size, checksum) in rows {
-            let path = final_path(&root, &relative)?;
-            let pending = staged_path(&path);
-            if verify(&path, size, &checksum)? {
-                fs::set_permissions(&path, fs::Permissions::from_mode(0o444))?;
-                self.finish_reservation(&relative)?;
-            } else if verify(&pending, size, &checksum)? {
-                fs::set_permissions(&pending, fs::Permissions::from_mode(0o444))?;
-                fs::rename(&pending, &path)?;
-                FileSync::parent(&path)?;
-                self.finish_reservation(&relative)?;
-            } else {
-                // The process stopped before a complete copy; no evidence was published.
-                remove_if_present(&pending)?;
-                remove_if_present(&path)?;
-                let tx = Transaction::new_unchecked(
-                    self.db.connection(),
-                    TransactionBehavior::Immediate,
-                )?;
-                tx.execute(
-                    "DELETE FROM artifact_reservations WHERE relative_path=?1",
-                    [&relative],
-                )?;
-                tx.commit()?;
+        let mut cursor = 0_i64;
+        loop {
+            let mut stmt = self.db.connection().prepare("SELECT artifact_reservations.id,relative_path,size_bytes,checksum_sha256 FROM artifact_reservations JOIN attempts ON attempts.id=attempt_id WHERE attempts.project_id=?1 AND artifact_reservations.id>?2 ORDER BY artifact_reservations.id LIMIT 128")?;
+            let rows = stmt
+                .query_map(params![self.project_id, cursor], |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            drop(stmt);
+            if rows.is_empty() {
+                break;
+            }
+            for (id, relative, size, checksum) in rows {
+                cursor = id;
+                let path = final_path(&root, &relative)?;
+                let pending = staged_path(&path);
+                if verify(&path, size, &checksum)? {
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o444))?;
+                    self.finish_reservation(&relative)?;
+                } else if verify(&pending, size, &checksum)? {
+                    fs::set_permissions(&pending, fs::Permissions::from_mode(0o444))?;
+                    fs::rename(&pending, &path)?;
+                    FileSync::parent(&path)?;
+                    self.finish_reservation(&relative)?;
+                } else {
+                    // The process stopped before a complete copy; no evidence was published.
+                    remove_if_present(&pending)?;
+                    remove_if_present(&path)?;
+                    let tx = Transaction::new_unchecked(
+                        self.db.connection(),
+                        TransactionBehavior::Immediate,
+                    )?;
+                    tx.execute(
+                        "DELETE FROM artifact_reservations WHERE relative_path=?1",
+                        [&relative],
+                    )?;
+                    tx.commit()?;
+                }
             }
         }
         Ok(())
@@ -374,6 +422,52 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(reservations, 0);
+        fs::write(&source, b"")?;
+        for index in 8..128 {
+            service.publish_artifact(
+                run.attempt,
+                &run.token,
+                "empty.txt",
+                &source,
+                &relative(&format!("empty-{index}")),
+                &tree,
+            )?;
+        }
+        let reopened = Service::open(crate::storage::Database::open_in(&state)?, &project, None)?;
+        assert!(
+            reopened
+                .publish_artifact(
+                    run.attempt,
+                    &run.token,
+                    "last.txt",
+                    &source,
+                    &relative("last"),
+                    &tree
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("Artifact count limit")
+        );
+        let tx =
+            Transaction::new_unchecked(reopened.db.connection(), TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM artifacts WHERE attempt_id=?1 AND relative_path=?2",
+            params![run.attempt, relative("empty-8")],
+        )?;
+        tx.execute("INSERT INTO artifact_reservations(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms) VALUES (?1,'pending','text/plain',?2,0,?3,?4,0)", params![run.attempt, relative("pending"), "a".repeat(64), tree])?;
+        assert!(
+            require_budget(&tx, run.attempt, "another-empty", 0)
+                .unwrap_err()
+                .to_string()
+                .contains("Artifact count limit")
+        );
+        // A reservation occupies a slot even without bytes or a finalized row.
+        let count: i64 = tx.query_row(
+            "SELECT count(*) FROM artifacts WHERE attempt_id=?1",
+            [run.attempt],
+            |r| r.get(0),
+        )?;
+        assert_eq!(count, 127);
         Ok(())
     }
 }

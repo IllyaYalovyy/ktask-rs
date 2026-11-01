@@ -257,11 +257,11 @@ impl Terminal {
     }
 
     pub fn open_at(binary: &str, sandbox: &Path, cols: u16, rows: u16) -> Result<Self> {
-        Self::open_mode(binary, sandbox, sandbox, cols, rows, true)
+        Self::open_mode(binary, sandbox, sandbox, cols, rows, true, &[])
     }
 
     pub fn open_real(binary: &str, sandbox: &Path, cols: u16, rows: u16) -> Result<Self> {
-        Self::open_mode(binary, sandbox, sandbox, cols, rows, false)
+        Self::open_mode(binary, sandbox, sandbox, cols, rows, false, &[])
     }
 
     pub fn open_project(
@@ -271,7 +271,18 @@ impl Terminal {
         cols: u16,
         rows: u16,
     ) -> Result<Self> {
-        Self::open_mode(binary, sandbox, project, cols, rows, false)
+        Self::open_mode(binary, sandbox, project, cols, rows, false, &[])
+    }
+
+    pub fn open_project_with_env(
+        binary: &str,
+        sandbox: &Path,
+        project: &Path,
+        cols: u16,
+        rows: u16,
+        env: &[(&str, &str)],
+    ) -> Result<Self> {
+        Self::open_mode(binary, sandbox, project, cols, rows, false, env)
     }
 
     fn open_mode(
@@ -281,6 +292,7 @@ impl Terminal {
         cols: u16,
         rows: u16,
         demo: bool,
+        extra_env: &[(&str, &str)],
     ) -> Result<Self> {
         let pair = native_pty_system().openpty(size(cols, rows))?;
         let mut command = CommandBuilder::new(binary);
@@ -299,6 +311,9 @@ impl Terminal {
             "PATH",
             format!("{}:/usr/bin:/bin", sandbox.join("bin").display()),
         );
+        for (key, value) in extra_env {
+            command.env(key, value);
+        }
         command.cwd(project);
         let mut child = pair.slave.spawn_command(command)?;
         let killer = child.clone_killer();

@@ -5,6 +5,41 @@ use super::*;
 use crate::storage::{execution::StartAttempt, usage::TokenUsage};
 use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
 
+fn reserve_output(tx: &Transaction<'_>, attempt: i64, bytes: u64, rows: u64) -> Result<()> {
+    let byte_limit = crate::resource::limit("KTASK_OUTPUT_BYTES", 64 * 1024 * 1024);
+    let row_limit = crate::resource::limit("KTASK_OUTPUT_ROWS", 100_000);
+    let usage: Option<(i64, i64)> = tx
+        .query_row(
+            "SELECT bytes,rows FROM attempt_output_usage WHERE attempt_id=?1",
+            [attempt],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let (used_bytes, used_rows) = if let Some(usage) = usage {
+        usage
+    } else {
+        // Old V1 databases have output but no counters. This scan runs once per
+        // attempt, inside the admission transaction, and survives restarts.
+        let usage: (i64, i64) = tx.query_row(
+            "SELECT coalesce(sum(length(cast(content as blob))),0),count(*) FROM attempt_output WHERE attempt_id=?1",
+            [attempt], |r| Ok((r.get(0)?, r.get(1)?))
+        )?;
+        tx.execute(
+            "INSERT INTO attempt_output_usage(attempt_id,bytes,rows) VALUES (?1,?2,?3)",
+            params![attempt, usage.0, usage.1],
+        )?;
+        usage
+    };
+    if (used_bytes as u64).saturating_add(bytes) > byte_limit
+        || (used_rows as u64).saturating_add(rows) > row_limit
+    {
+        return Err(Error::Conflict(format!(
+            "Resource limit: attempt output exceeds {byte_limit} bytes or {row_limit} rows; captured output retained. Raise the limit or free capacity, then resume"
+        )));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Check {
     pub id: i64,
@@ -230,10 +265,10 @@ impl Service {
         Ok(())
     }
     /// A provider-limit wait that the owner paused becomes Paused; Resume tries at once.
-    pub fn pause_wait(&mut self, run: &Run) -> Result<()> {
+    pub fn pause_wait(&mut self, run: &Run, reason: &str) -> Result<()> {
         let now = now_ms();
-        require(self.db.connection().execute("UPDATE attempts SET state='paused',report='Paused during a provider limit wait; Resume tries again now',wait_reason=NULL,waiting_since_ms=NULL,resume_at_ms=NULL WHERE id=?1 AND execution_token=?2 AND state='waiting'", params![run.attempt,run.token])? == 1, "Attempt changed during its provider limit wait")?;
-        self.db.connection().execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'attempt.paused','info','Paused during a provider limit wait')", params![self.project_id,run.task,run.attempt,now])?;
+        require(self.db.connection().execute("UPDATE attempts SET state='paused',report=?3,wait_reason=NULL,waiting_since_ms=NULL,resume_at_ms=NULL WHERE id=?1 AND execution_token=?2 AND state='waiting'", params![run.attempt,run.token,reason])? == 1, "Attempt changed during its provider limit wait")?;
+        self.db.connection().execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'attempt.paused','info',?5)", params![self.project_id,run.task,run.attempt,now,reason])?;
         Ok(())
     }
     /// The task was edited while stopped: its open attempt ends so the work continues in a
@@ -474,7 +509,14 @@ impl Service {
         })
     }
     pub fn output(&self, run: &Run, stream: &str, text: &str) -> Result<()> {
-        self.db.connection().execute("INSERT INTO attempt_output(attempt_id,sequence,stream,recorded_at_ms,content) SELECT ?1,coalesce(max(sequence),0)+1,?2,?3,?4 FROM attempt_output WHERE attempt_id=?1", params![run.attempt,stream,now_ms(),text])?;
+        let tx = Transaction::new_unchecked(self.db.connection(), TransactionBehavior::Immediate)?;
+        if let Err(error) = reserve_output(&tx, run.attempt, text.len() as u64, 1) {
+            // Keep the one-time upgraded counter even when admission is denied.
+            tx.commit()?;
+            return Err(error);
+        }
+        tx.execute("INSERT INTO attempt_output(attempt_id,sequence,stream,recorded_at_ms,content) SELECT ?1,coalesce(max(sequence),0)+1,?2,?3,?4 FROM attempt_output WHERE attempt_id=?1", params![run.attempt,stream,now_ms(),text])?;
+        tx.commit()?;
         Ok(())
     }
     /// Appends (stream, text) rows to the attempt's output in one transaction, so output that
@@ -487,6 +529,15 @@ impl Service {
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Err(error) = reserve_output(
+            &tx,
+            run.attempt,
+            rows.iter().map(|(_, text)| text.len() as u64).sum(),
+            rows.len() as u64,
+        ) {
+            tx.commit()?;
+            return Err(error);
+        }
         let last: i64 = tx.query_row(
             "SELECT coalesce(max(sequence),0) FROM attempt_output WHERE attempt_id=?1",
             [run.attempt],

@@ -28,7 +28,7 @@ use process::{Invocation, Message, Worker};
 use provider::{Access, Provider};
 use std::{
     io::{BufRead, Read, Seek, SeekFrom, Write},
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::PathBuf,
     process::{Command, Stdio},
     sync::{
@@ -60,6 +60,17 @@ enum Outcome {
     /// The failure judge changed the plan (task revised, work inserted, model escalated);
     /// this attempt ends without spending budget, the plan is applied, and the loop goes on.
     Replanned(agent::Judgment),
+}
+
+fn settle_result(result: Result<Outcome>, had_rate_wait: bool) -> Outcome {
+    match result {
+        Ok(Outcome::Failed("transport", _)) if had_rate_wait => Outcome::RateLimit(None),
+        Ok(outcome) => outcome,
+        Err(Error::Conflict(message)) if message.starts_with("Resource limit:") => {
+            Outcome::DeliveryBlocked(message)
+        }
+        Err(error) => Outcome::Failed("environment", error.to_string()),
+    }
 }
 struct Context<'a> {
     paths: &'a Paths,
@@ -426,129 +437,129 @@ fn run_inner(
             earlier_task_ms: service.earlier_task_active_ms(&run)?,
         };
 
-        service.output(
-            &run,
-            "system",
-            match opening {
-                cycle::Opening::Repair => "Repair started with the configured remediation model",
-                cycle::Opening::Retry => "Retry started from the kept work; checks run first",
-                cycle::Opening::Fresh { .. } => {
-                    "Execution started; results require checks, review and validation"
-                }
-            },
-        )?;
-        let mut delivery_retries = 0_u32;
-        let result = loop {
-            if let Err(error) = &delivery_init {
-                break Ok(Outcome::DeliveryBlocked(error.to_string()));
-            }
-            match delivery::prepare(service, &run, &context) {
-                Ok(false) => break Ok(Outcome::Paused),
-                Ok(true) => {}
-                Err(error) => {
-                    if let Some(outcome) =
-                        delivery::retry(service, &run, &context, &error, &mut delivery_retries)?
-                    {
-                        break Ok(outcome);
+        let result = (|| -> Result<Outcome> {
+            service.output(
+                &run,
+                "system",
+                match opening {
+                    cycle::Opening::Repair => {
+                        "Repair started with the configured remediation model"
                     }
-                    continue;
+                    cycle::Opening::Retry => "Retry started from the kept work; checks run first",
+                    cycle::Opening::Fresh { .. } => {
+                        "Execution started; results require checks, review and validation"
+                    }
+                },
+            )?;
+            let mut delivery_retries = 0_u32;
+            loop {
+                if let Err(error) = &delivery_init {
+                    break Ok(Outcome::DeliveryBlocked(error.to_string()));
                 }
-            }
-            if let Err(error) = delivery::reconcile_resume(service, &run, &context) {
-                break Ok(Outcome::DeliveryBlocked(error.to_string()));
-            }
-            let result = service.checks().and_then(|checks| {
-                require(
-                    !checks.is_empty(),
-                    "Configure at least one enabled project check",
-                )?;
-                cycle::run(service, &run, &mut context, &checks, opening)
-            });
-            let result = match result {
-                Ok(Outcome::Failed("transport" | "environment" | "protocol", message))
-                    if service.attempt_delivery(&run)?.stage != "work" =>
-                {
-                    Ok(Outcome::DeliveryBlocked(message))
+                match delivery::prepare(service, &run, &context) {
+                    Ok(false) => break Ok(Outcome::Paused),
+                    Ok(true) => {}
+                    Err(error) => {
+                        if let Some(outcome) =
+                            delivery::retry(service, &run, &context, &error, &mut delivery_retries)?
+                        {
+                            break Ok(outcome);
+                        }
+                        continue;
+                    }
                 }
-                Err(error) if service.attempt_delivery(&run)?.stage != "work" => {
-                    Ok(Outcome::DeliveryBlocked(error.to_string()))
+                if let Err(error) = delivery::reconcile_resume(service, &run, &context) {
+                    break Ok(Outcome::DeliveryBlocked(error.to_string()));
                 }
-                other => other,
-            };
-            let Ok(Outcome::Passed(summary)) = result else {
-                break result;
-            };
-            if stop.load(Ordering::Relaxed) || service.control_cursor(&run)? > context.cursor {
-                break Ok(Outcome::Paused);
-            }
-            let verified = service
-                .progress(&run)?
-                .ok_or_else(|| Error::Conflict("Missing verified workflow state".into()))?
-                .verified_tree;
-            let delivery_state = service.attempt_delivery(&run)?;
-            let expected_head = delivery_state.checkpoint_head.clone().unwrap_or(
-                service
-                    .attempt_base(run.task)?
-                    .ok_or_else(|| Error::Conflict("Attempt baseline missing".into()))?,
-            );
-            service.delivery_stage(&run, "checkpointing", Some(&expected_head), None, None)?;
-            let head = match workspace.checkpoint(
-                run.task,
-                run.attempt,
-                &expected_head,
-                &verified,
-                matches!(
-                    delivery_state.stage.as_str(),
-                    "checkpointed" | "integrating" | "verified" | "pushed" | "pr_ready"
-                ),
-            ) {
-                Ok(head) => head,
-                Err(error) => break Ok(Outcome::DeliveryBlocked(error.to_string())),
-            };
-            service.delivery_stage(&run, "checkpointed", Some(&head), None, None)?;
-            match delivery::publish(service, &run, &mut context, &summary, &head) {
-                Ok(delivery::DeliveryOutcome::Done(report)) => {
-                    context.persist_active_time(service, &run)?;
-                    service.finish_run(
-                        &run,
-                        "succeeded",
-                        None,
-                        &report,
-                        Some(&workspace.head()?),
+                let result = service.checks().and_then(|checks| {
+                    require(
+                        !checks.is_empty(),
+                        "Configure at least one enabled project check",
                     )?;
-                    if !options.queue {
-                        return Ok(report);
-                    } else {
+                    cycle::run(service, &run, &mut context, &checks, opening)
+                });
+                let result = match result {
+                    Ok(Outcome::Failed("transport" | "environment" | "protocol", message))
+                        if service.attempt_delivery(&run)?.stage != "work" =>
+                    {
+                        Ok(Outcome::DeliveryBlocked(message))
+                    }
+                    Err(error) if service.attempt_delivery(&run)?.stage != "work" => {
+                        Ok(Outcome::DeliveryBlocked(error.to_string()))
+                    }
+                    other => other,
+                };
+                let Ok(Outcome::Passed(summary)) = result else {
+                    break result;
+                };
+                if stop.load(Ordering::Relaxed) || service.control_cursor(&run)? > context.cursor {
+                    break Ok(Outcome::Paused);
+                }
+                let verified = service
+                    .progress(&run)?
+                    .ok_or_else(|| Error::Conflict("Missing verified workflow state".into()))?
+                    .verified_tree;
+                let delivery_state = service.attempt_delivery(&run)?;
+                let expected_head = delivery_state.checkpoint_head.clone().unwrap_or(
+                    service
+                        .attempt_base(run.task)?
+                        .ok_or_else(|| Error::Conflict("Attempt baseline missing".into()))?,
+                );
+                service.delivery_stage(&run, "checkpointing", Some(&expected_head), None, None)?;
+                let head = match workspace.checkpoint(
+                    run.task,
+                    run.attempt,
+                    &expected_head,
+                    &verified,
+                    matches!(
+                        delivery_state.stage.as_str(),
+                        "checkpointed" | "integrating" | "verified" | "pushed" | "pr_ready"
+                    ),
+                ) {
+                    Ok(head) => head,
+                    Err(error) => break Ok(Outcome::DeliveryBlocked(error.to_string())),
+                };
+                service.delivery_stage(&run, "checkpointed", Some(&head), None, None)?;
+                match delivery::publish(service, &run, &mut context, &summary, &head) {
+                    Ok(delivery::DeliveryOutcome::Done(report)) => {
+                        context.persist_active_time(service, &run)?;
+                        service.finish_run(
+                            &run,
+                            "succeeded",
+                            None,
+                            &report,
+                            Some(&workspace.head()?),
+                        )?;
                         break Ok(Outcome::Passed(report));
                     }
-                }
-                Ok(delivery::DeliveryOutcome::Retry) => {
-                    delivery_retries = 0;
-                    continue;
-                }
-                Ok(delivery::DeliveryOutcome::Paused) => break Ok(Outcome::Paused),
-                Ok(delivery::DeliveryOutcome::Exhausted(reason)) => {
-                    break Ok(cycle::escalation(&reason));
-                }
-                Err(error) => {
-                    if let Some(outcome) =
-                        delivery::retry(service, &run, &context, &error, &mut delivery_retries)?
-                    {
-                        break Ok(outcome);
+                    Ok(delivery::DeliveryOutcome::Retry) => {
+                        delivery_retries = 0;
+                        continue;
                     }
-                    continue;
+                    Ok(delivery::DeliveryOutcome::Paused) => break Ok(Outcome::Paused),
+                    Ok(delivery::DeliveryOutcome::Exhausted(reason)) => {
+                        break Ok(cycle::escalation(&reason));
+                    }
+                    Err(error) => {
+                        if let Some(outcome) =
+                            delivery::retry(service, &run, &context, &error, &mut delivery_retries)?
+                        {
+                            break Ok(outcome);
+                        }
+                        continue;
+                    }
                 }
             }
-        };
-        let outcome = match result {
-            // Until a turn succeeds after a provider limit, odd provider errors are
-            // part of that outage (Codex fails compaction while out of quota).
-            Ok(Outcome::Failed("transport", _)) if service.rate_waits(&run)? > 0 => {
-                Outcome::RateLimit(None)
-            }
-            Ok(outcome) => outcome,
-            Err(error) => Outcome::Failed("environment", error.to_string()),
-        };
+        })();
+        // A transport error during a provider wait belongs to the same outage.
+        let had_rate_wait =
+            matches!(&result, Ok(Outcome::Failed("transport", _))) && service.rate_waits(&run)? > 0;
+        let outcome = settle_result(result, had_rate_wait);
+        if !options.queue
+            && let Outcome::Passed(report) = &outcome
+        {
+            return Ok(report.clone());
+        }
         let outcome = if matches!(outcome, Outcome::Passed(_))
             && (stop.load(Ordering::Relaxed) || service.control_cursor(&run)? > context.cursor)
         {
@@ -567,11 +578,21 @@ fn run_inner(
             // time when it names one, else back off, then resume the same attempt.
             Outcome::RateLimit(reset_at) => {
                 service.rate_wait(&run, reset_at)?;
-                if wait_for_backoff(service, &run, &context)? {
-                    continue;
+                match wait_for_backoff(service, &run, &context) {
+                    Ok(true) => continue,
+                    Err(Error::Conflict(reason)) if reason.starts_with("Resource limit:") => {
+                        service.pause_wait(&run, &reason)?;
+                        service.release_supervisor(&run)?;
+                        return Ok(format!("Paused: {reason}"));
+                    }
+                    Err(error) => return Err(error),
+                    Ok(false) => {}
                 }
                 // Paused during the wait: Resume tries again at once.
-                service.pause_wait(&run)?;
+                service.pause_wait(
+                    &run,
+                    "Paused during a provider limit wait; Resume tries again now",
+                )?;
                 service.release_supervisor(&run)?;
                 return Ok("Paused during a provider limit wait".into());
             }
@@ -587,14 +608,9 @@ fn run_inner(
                 return Ok("Paused".into());
             }
             Outcome::DeliveryBlocked(reason) => {
-                service.output(
-                    &run,
-                    "system",
-                    &format!("Delivery stopped; verified work retained: {reason}"),
-                )?;
                 service.finish_run(&run, "paused", None, &reason, None)?;
                 service.release_supervisor(&run)?;
-                return Ok(format!("Delivery paused: {reason}"));
+                return Ok(format!("Paused: {reason}"));
             }
             Outcome::Question(question) => {
                 service.finish_run(&run, "waiting", None, &question, None)?;
@@ -622,6 +638,22 @@ fn run_inner(
             // A failed attempt is repaired automatically: the next attempt opens with the
             // read-only failure judge. Only a failure no repair can change stops execution.
             Outcome::Failed(category, message) => {
+                if let Err(error) = service.output(
+                    &run,
+                    "system",
+                    &format!(
+                        "Attempt failed ({category}); starting a repair attempt automatically"
+                    ),
+                ) {
+                    if let Error::Conflict(reason) = &error
+                        && reason.starts_with("Resource limit:")
+                    {
+                        service.finish_run(&run, "paused", None, reason, None)?;
+                        service.release_supervisor(&run)?;
+                        return Ok(format!("Paused: {reason}"));
+                    }
+                    return Err(error);
+                }
                 service.finish_run(&run, "failed", Some(category), &message, None)?;
                 let task = service
                     .task(run.task)?
@@ -632,13 +664,6 @@ fn run_inner(
                         run.task, stop.reason, stop.unresolved
                     )));
                 }
-                service.output(
-                    &run,
-                    "system",
-                    &format!(
-                        "Attempt failed ({category}); starting a repair attempt automatically"
-                    ),
-                )?;
                 if stop.load(Ordering::Relaxed) {
                     return Ok("Runner stopped; repair attempt not started".into());
                 }
@@ -1482,7 +1507,16 @@ fn execute(
                 return Ok(interrupted.map_or(Finish::Exited(code), Finish::Stopped));
             }
             Ok(Message::Artifact { .. }) => {}
-            Ok(Message::Error(message)) => return Err(Error::Conflict(message)),
+            Ok(Message::Error(message)) => {
+                // A partial final frame is a protocol error, but the guardian's
+                // exit status still carries a resource pause after cleanup.
+                if let Err(Error::Conflict(reason)) = worker.join()
+                    && reason.starts_with("Resource limit:")
+                {
+                    return Err(Error::Conflict(reason));
+                }
+                return Err(Error::Conflict(message));
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 worker.join()?;
@@ -1515,11 +1549,19 @@ pub fn background(
     let log_path = paths
         .state
         .join(format!("runner-{}.log", service.project_id));
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)?;
-    let log_start = log.metadata()?.len();
+    let log_start = match std::fs::metadata(&log_path) {
+        Ok(metadata) => Some((metadata.dev(), metadata.ino(), metadata.len())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let mut logger = Command::new(&paths.executable)
+        .arg("__logger")
+        .arg(&log_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let log_pipe = logger.stdin.take().expect("piped logger stdin");
     let mut command = Command::new(&paths.executable);
     command
         .arg("--project")
@@ -1527,12 +1569,22 @@ pub fn background(
         .args(["run", "--notify"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(log);
+        .stderr(Stdio::from(log_pipe));
     command.arg(if queue { "--queue" } else { "--one" });
     if continue_session {
         command.arg("--continue-session");
     }
-    let mut child = command.spawn()?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            drop(command);
+            let _ = logger.wait();
+            return Err(error.into());
+        }
+    };
+    // Command retains its Stdio writer after spawn. Close this copy so the logger
+    // sees EOF when the detached runner exits, including before startup readiness.
+    drop(command);
     let output = child.stdout.take().expect("piped stdout");
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -1545,13 +1597,22 @@ pub fn background(
         }
         let _ = std::io::copy(&mut reader, &mut std::io::sink());
         let _ = child.wait();
+        let _ = logger.wait();
         if !ready {
             // Stderr stays attached to a file so a detached runner survives its
             // launching CLI. Read bytes appended since startup, never old errors.
             let error = (|| -> std::io::Result<String> {
                 let mut log = std::fs::File::open(log_path)?;
-                let end = log.metadata()?.len();
-                log.seek(SeekFrom::Start(log_start.max(end.saturating_sub(8192))))?;
+                let metadata = log.metadata()?;
+                let end = metadata.len();
+                let start = log_start
+                    .filter(|(dev, ino, offset)| {
+                        *dev == metadata.dev() && *ino == metadata.ino() && *offset <= end
+                    })
+                    .map_or(end.saturating_sub(8192), |(_, _, offset)| {
+                        offset.max(end.saturating_sub(8192))
+                    });
+                log.seek(SeekFrom::Start(start))?;
                 let mut bytes = Vec::new();
                 log.take(8192).read_to_end(&mut bytes)?;
                 Ok(String::from_utf8_lossy(&bytes).into_owned())
@@ -1575,4 +1636,106 @@ pub fn background(
             )
         })?
         .map_err(Error::Conflict)
+}
+
+pub(crate) fn rotate_log(
+    mut input: impl Read,
+    path: &std::path::Path,
+    limit: u64,
+) -> std::io::Result<()> {
+    const MARKER: &[u8] = b"[runner log rotated; earlier output is in .log.1]\n";
+    let previous = path.with_extension("log.1");
+    if previous.exists() {
+        let mut old = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&previous)?;
+        trim_log(
+            &mut old,
+            limit,
+            b"[runner log trimmed after limit change]\n",
+        )?;
+    }
+    let mut log = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    trim_log(&mut log, limit, MARKER)?;
+    log.seek(SeekFrom::End(0))?;
+    let mut size = log.metadata()?.len();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let n = input.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        if size.saturating_add(n as u64) > limit {
+            drop(log);
+            let _ = std::fs::remove_file(&previous);
+            std::fs::rename(path, &previous)?;
+            log = std::fs::File::create(path)?;
+            log.write_all(MARKER)?;
+            size = log.metadata()?.len();
+        }
+        log.write_all(&buffer[..n])?;
+        size += n as u64;
+    }
+    log.flush()
+}
+
+fn trim_log(log: &mut std::fs::File, limit: u64, marker: &[u8]) -> std::io::Result<()> {
+    let size = log.metadata()?.len();
+    if size <= limit {
+        return Ok(());
+    }
+    let keep = limit.saturating_sub(marker.len() as u64);
+    let mut source = size - keep;
+    let mut target = marker.len() as u64;
+    log.seek(SeekFrom::Start(0))?;
+    log.write_all(marker)?;
+    let mut buffer = [0_u8; 4096];
+    while source < size {
+        let n = (size - source).min(buffer.len() as u64) as usize;
+        log.seek(SeekFrom::Start(source))?;
+        log.read_exact(&mut buffer[..n])?;
+        log.seek(SeekFrom::Start(target))?;
+        log.write_all(&buffer[..n])?;
+        source += n as u64;
+        target += n as u64;
+    }
+    log.set_len(target)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod resource_tests {
+    use super::*;
+    #[test]
+    fn detached_log_keeps_only_two_bounded_segments() -> std::io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("runner-1.log");
+        std::fs::write(&path, vec![b'p'; 8190])?;
+        rotate_log(std::io::Cursor::new(vec![b'x'; 100_000]), &path, 8192)?;
+        let previous = path.with_extension("log.1");
+        assert!(std::fs::metadata(&path)?.len() <= 8192 + 4096);
+        assert!(std::fs::metadata(&previous)?.len() <= 8192 + 4096);
+        assert!(std::fs::read_to_string(&path)?.contains("runner log rotated"));
+        Ok(())
+    }
+
+    #[test]
+    fn lowering_log_limit_compacts_existing_segments() -> std::io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("runner-1.log");
+        let previous = path.with_extension("log.1");
+        std::fs::write(&path, vec![b'a'; 30_000])?;
+        std::fs::write(&previous, vec![b'b'; 30_000])?;
+        rotate_log(std::io::Cursor::new(b"new"), &path, 8192)?;
+        assert!(std::fs::metadata(&path)?.len() <= 8192 + 4096);
+        assert!(std::fs::metadata(&previous)?.len() <= 8192 + 4096);
+        assert!(std::fs::read_to_string(&path)?.ends_with("new"));
+        Ok(())
+    }
 }

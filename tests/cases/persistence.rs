@@ -2061,6 +2061,60 @@ fn running_fixture(
 }
 
 #[test]
+fn output_usage_survives_restart_and_individual_appends_near_row_limit() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (writer, run) = running_fixture(root, "Count persisted output")?;
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    db.connection().execute(
+        "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<98000)
+         INSERT INTO attempt_output(attempt_id,sequence,stream,recorded_at_ms,content)
+         SELECT ?1,x,'stdout',1,'seed' FROM n",
+        [run.attempt],
+    )?;
+    drop(writer);
+    let writer = service(root)?;
+    writer.output(&run, "stdout", "é\0")?;
+    writer.output(&run, "stdout", "")?;
+    let started = std::time::Instant::now();
+    for _ in 0..1000 {
+        writer.output(&run, "stderr", "row")?;
+    }
+    println!(
+        "OUTPUT SCALING baseline_rows=98000 individual_appends=1002 elapsed_ms={}",
+        started.elapsed().as_millis()
+    );
+    let saved: (i64, i64) = db.connection().query_row(
+        "SELECT bytes,rows FROM attempt_output_usage WHERE attempt_id=?1",
+        [run.attempt],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let actual: (i64, i64) = db.connection().query_row(
+        "SELECT coalesce(sum(length(CAST(content AS BLOB))),0),count(*) FROM attempt_output WHERE attempt_id=?1", [run.attempt],
+        |row| Ok((row.get(0)?, row.get(1)?)))?;
+    assert_eq!(saved, actual);
+    assert_eq!(saved, (98_000 * 4 + 3 + 1000 * 3, 99_002));
+    db.connection().execute(
+        "UPDATE attempt_output SET content=?2 WHERE attempt_id=?1 AND sequence=1",
+        rusqlite::params![run.attempt, "é\0"],
+    )?;
+    db.connection().execute(
+        "DELETE FROM attempt_output WHERE attempt_id=?1 AND sequence=2",
+        [run.attempt],
+    )?;
+    drop(writer);
+    let writer = service(root)?;
+    writer.output(&run, "stdout", "after restart")?;
+    let usage: (i64, i64) = db.connection().query_row(
+        "SELECT bytes,rows FROM attempt_output_usage WHERE attempt_id=?1",
+        [run.attempt],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(usage, (saved.0 - 5 + 13, saved.1));
+    Ok(())
+}
+
+#[test]
 fn live_sqlite_log_selection_survives_new_output_and_mouse_copy() -> Result {
     for (cols, rows, release_over_copy) in [
         (70, 22, false),

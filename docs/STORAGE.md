@@ -215,6 +215,7 @@ erDiagram
     tasks o|--o{ events : "task_id, project_id"
     projects ||--o{ events : "project_id"
     attempts ||--o{ attempt_output : "attempt_id"
+    attempts ||--o| attempt_output_usage : "attempt_id"
     attempts ||--o| output_pruning : "attempt_id"
     attempts ||--o| output_pruning_progress : "attempt_id"
     attempts ||--o| evidence_cleanup_admissions : "attempt_id"
@@ -357,6 +358,22 @@ Ordered output chunks, not one row per character. Writer assigns a positive mono
 | `content` | TEXT | no | Text chunk; no structured entity dump. |
 
 - PK `(attempt_id, sequence)`.
+- FK `(attempt_id)` → `attempts(id)`.
+
+### attempt_output_usage
+
+Persisted output bytes and row counts for admission. Existing attempts initialize this row
+from their retained output on first admission after upgrade. SQLite triggers then maintain
+the counts in the same transaction as every output insert, delete or content change,
+including retention cleanup and empty output rows.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `attempt_id` | INTEGER | no | Owning attempt. |
+| `bytes` | INTEGER | no | Nonnegative UTF-8 content bytes retained for this attempt. |
+| `rows` | INTEGER | no | Nonnegative retained output rows, including empty rows. |
+
+- PK `(attempt_id)`.
 - FK `(attempt_id)` → `attempts(id)`.
 
 ### attempt_progress

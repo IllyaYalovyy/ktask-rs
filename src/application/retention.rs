@@ -709,6 +709,12 @@ mod tests {
             |r| r.get(0),
         )?;
         assert_eq!(remaining, 16);
+        let usage: (i64, i64) = service.db.connection().query_row(
+            "SELECT bytes,rows FROM attempt_output_usage WHERE attempt_id=?1",
+            [run.attempt],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        assert_eq!(usage, (48, 16));
         let marker: i64 = service.db.connection().query_row(
             "SELECT count(*) FROM output_pruning WHERE attempt_id=?1",
             [run.attempt],
@@ -793,6 +799,12 @@ mod tests {
         let partial = &service.task(task)?.unwrap().attempts[0];
         assert_eq!(partial.output_pruning_bytes, 0);
         assert_eq!(partial.output_pruning_records, 64);
+        let usage: (i64, i64) = service.db.connection().query_row(
+            "SELECT bytes,rows FROM attempt_output_usage WHERE attempt_id=?1",
+            [run.attempt],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        assert_eq!(usage, (0, 1));
         assert!(
             service
                 .browse_output_at(
