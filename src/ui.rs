@@ -1206,7 +1206,7 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         position.map_or(0, |n| n + 1),
         visible.len(),
         match app.view {
-            View::History => " · Attempts Time Cost",
+            View::History => " · Attempts Time Usage",
             View::Queue if list.width >= QUEUE_MODEL_MIN_WIDTH => " · Model",
             _ => "",
         }
@@ -1232,26 +1232,27 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                     let total_ms = task.attempts.iter().fold(0_u64, |total, attempt| {
                         total.saturating_add(attempt.elapsed_ms.saturating_add(attempt.waiting_ms))
                     });
-                    let cost = if app.service.is_some() {
-                        app.stored_cost(task.id)
+                    let usage = if app.service.is_some() {
+                        app.stored_usage(task.id).history_label()
                     } else if task.attempts.is_empty() {
-                        "unknown".into()
+                        "none yet".into()
                     } else {
                         format!("${:.2}", task.cost() as f64 / 100.0)
                     };
                     format!(
-                        " {:>3} {:>7} {:>9}",
+                        " {:>3} {:>7} {:>width$}",
                         task.attempts.len(),
                         history_time(total_ms),
-                        cost
+                        usage,
+                        width = Line::raw(&usage).width().max(9)
                     )
                 } else if app.view == View::Queue && list.width >= QUEUE_MODEL_MIN_WIDTH {
                     format!(" {}", model_summary(&task.definition().settings))
                 } else {
                     String::new()
                 };
-                let title_width =
-                    available.saturating_sub(prefix.len() + Line::raw(&statistics).width());
+                let title_width = available
+                    .saturating_sub(Line::raw(&prefix).width() + Line::raw(&statistics).width());
                 let text = shortened(&task.definition().title, title_width);
                 let gap = " ".repeat(title_width.saturating_sub(Line::raw(&text).width()));
                 ListItem::new(Line::from(vec![
@@ -1306,7 +1307,7 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
             t.definition().check,
             t.attempts.len(),
             if app.service.is_some() {
-                app.stored_cost(t.id)
+                app.stored_usage(t.id).cost_label()
             } else {
                 format!("${:.2}", t.cost() as f64 / 100.0)
             },

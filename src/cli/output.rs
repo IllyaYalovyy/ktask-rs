@@ -145,6 +145,7 @@ fn task_text(task: &Task) -> String {
             a.revision,
             safe(a.outcome.as_deref().unwrap_or("in progress"))
         ));
+        text.push_str(&format!("  Usage: {}\n", a.usage.label()));
         if a.output_pruned {
             text.push_str("  PRUNED: stored output was removed by retention.\n");
         }

@@ -84,20 +84,8 @@ impl App {
             vec![],
         ));
     }
-    pub(crate) fn stored_cost(&self, id: usize) -> String {
-        let Some(task) = self.stored.get(&id) else {
-            return "unknown".into();
-        };
-        if task.attempts.is_empty() {
-            return "unknown".into();
-        }
-        // Sum what was reported; a provider that reports no cost (Codex) leaves it unknown.
-        cost_label(
-            task.attempts
-                .iter()
-                .filter_map(|attempt| attempt.usage.cost_microusd)
-                .reduce(i64::saturating_add),
-        )
+    pub(crate) fn stored_usage(&self, id: usize) -> crate::application::usage_report::UsageTotals {
+        self.stored.get(&id).map(task_usage).unwrap_or_default()
     }
     pub fn persistent(instance: Instance, service: Service) -> Result<Self, String> {
         let mut app = Self::empty(instance);
@@ -1250,10 +1238,12 @@ fn limit(text: &str) -> Result<Option<i64>, String> {
             .ok_or_else(|| "Limits must be positive integers or blank".into())
     }
 }
-fn cost_label(cost: Option<i64>) -> String {
-    cost.map_or("unknown".into(), |n| {
-        format!("${:.6}", n as f64 / 1_000_000.0)
-    })
+fn task_usage(task: &domain::Task) -> crate::application::usage_report::UsageTotals {
+    let mut total = crate::application::usage_report::UsageTotals::default();
+    for attempt in &task.attempts {
+        total.merge(&attempt.usage);
+    }
+    total
 }
 
 /// "Tokens 380k new · 14M cached · 36k out", naming cache writes only when there are some.
@@ -1514,7 +1504,15 @@ fn project_task(task: &domain::Task) -> Result<model::Task, String> {
                 usage: a.usage.label(),
                 usage_tokens: token_line(&a.usage),
                 usage_tokens_short: short_token_line(&a.usage),
-                usage_cost: format!("Cost {}", a.usage.cost_label()),
+                usage_cost: format!(
+                    "{}{}",
+                    if a.usage.cost_microusd.is_some() {
+                        "Cost "
+                    } else {
+                        ""
+                    },
+                    a.usage.cost_label()
+                ),
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -1594,20 +1592,19 @@ fn revision_overview(revision: &domain::Revision) -> String {
 }
 
 fn task_overview(task: &domain::Task) -> String {
-    let cost = if task.attempts.is_empty() {
-        None
-    } else {
-        task.attempts
-            .iter()
-            .try_fold(0_i64, |sum, a| sum.checked_add(a.usage.cost_microusd?))
-    };
+    let usage = task_usage(task);
     let mut body = format!(
-        "Task #{} · {} · {}\nCurrent task definition\n{}\nTask cost: {}",
+        "Task #{} · {} · {}\nCurrent task definition\n{}\nTask usage: {}{}",
         task.id,
         task.definition().definition.title,
         task.status,
         revision_overview(task.definition()),
-        cost_label(cost)
+        if usage.cost_microusd.is_some() {
+            "cost "
+        } else {
+            ""
+        },
+        usage.cost_label()
     );
     for revision in &task.revisions {
         if revision.number < task.definition().number {

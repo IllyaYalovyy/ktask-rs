@@ -1,4 +1,4 @@
-//! Read projections for recorded provider usage. Missing fields stay unknown.
+//! Read projections for recorded provider usage. Missing fields stay optional.
 use crate::storage::Result;
 use rusqlite::{Connection, params};
 
@@ -22,8 +22,12 @@ pub struct UsageTotals {
 impl UsageTotals {
     fn add(&mut self, fields: [Option<i64>; 5]) {
         self.calls += 1;
-        self.unreported_calls += i64::from(fields[0].is_none());
+        self.unreported_calls += i64::from(fields[0].is_none() || fields[3].is_none());
         self.uncosted_calls += i64::from(fields[4].is_none());
+        self.accumulate_fields(fields);
+    }
+
+    fn accumulate_fields(&mut self, fields: [Option<i64>; 5]) {
         for (target, value) in [
             &mut self.input,
             &mut self.cache_read,
@@ -40,7 +44,27 @@ impl UsageTotals {
         }
     }
 
-    /// "$0.123456", or why there is no cost.
+    pub fn merge(&mut self, other: &Self) {
+        self.calls = self.calls.saturating_add(other.calls);
+        self.unreported_calls = self.unreported_calls.saturating_add(other.unreported_calls);
+        self.uncosted_calls = self.uncosted_calls.saturating_add(other.uncosted_calls);
+        self.accumulate_fields([
+            other.input,
+            other.cache_read,
+            other.cache_write,
+            other.output,
+            other.cost_microusd,
+        ]);
+    }
+
+    pub fn new_tokens(&self) -> Option<i64> {
+        if self.unreported_calls > 0 {
+            return None;
+        }
+        Some(self.input?.saturating_add(self.output?))
+    }
+
+    /// Reported dollars, or new tokens when no provider reported a cost.
     pub fn cost_label(&self) -> String {
         match self.cost_microusd {
             Some(n) if self.uncosted_calls == 0 => format!("${:.6}", n as f64 / 1_000_000.0),
@@ -50,7 +74,19 @@ impl UsageTotals {
                 self.uncosted_calls
             ),
             None if self.calls == 0 => "none yet".into(),
-            None => "not reported by the provider".into(),
+            None => format!("{} new tokens", count(self.new_tokens())),
+        }
+    }
+
+    /// A short History row label; the detail pane retains the full cost explanation.
+    pub fn history_label(&self) -> String {
+        match (self.cost_microusd, self.uncosted_calls) {
+            (Some(cost), missing) if missing > 0 => {
+                let dollars = format!("${:.6}", cost as f64 / 1_000_000.0);
+                let dollars = dollars.trim_end_matches('0').trim_end_matches('.');
+                format!("{dollars} +{missing} no$")
+            }
+            _ => self.cost_label(),
         }
     }
 
@@ -64,12 +100,17 @@ impl UsageTotals {
             String::new()
         };
         format!(
-            "{} calls · uncached {} · cache read {} · cache write {} · output {}{unreported} · cost {}",
+            "{} calls · uncached {} · cache read {} · cache write {} · output {}{unreported} · {}{}",
             self.calls,
             number(self.input),
             number(self.cache_read),
             number(self.cache_write),
             number(self.output),
+            if self.cost_microusd.is_some() {
+                "cost "
+            } else {
+                ""
+            },
             self.cost_label()
         )
     }
@@ -222,6 +263,35 @@ pub fn grouped(n: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merging_attempts_preserves_missing_fields_and_saturates_reported_totals() {
+        let mut first = UsageTotals::default();
+        first.add([Some(i64::MAX - 2), Some(3), None, Some(1), Some(100)]);
+        let mut second = UsageTotals::default();
+        second.add([Some(10), None, Some(4), None, None]);
+        let mut missing = UsageTotals::default();
+        missing.add([None, None, None, None, None]);
+
+        let mut task = UsageTotals::default();
+        for attempt in [&first, &second, &missing] {
+            task.merge(attempt);
+        }
+        assert_eq!(task.calls, 3);
+        assert_eq!(task.input, Some(i64::MAX));
+        assert_eq!(task.cache_read, Some(3));
+        assert_eq!(task.cache_write, Some(4));
+        assert_eq!(task.output, Some(1));
+        assert_eq!(task.cost_microusd, Some(100));
+        assert_eq!(task.unreported_calls, 2);
+        assert_eq!(task.uncosted_calls, 2);
+        assert_eq!(task.new_tokens(), None);
+
+        let mut only_missing = UsageTotals::default();
+        only_missing.merge(&missing);
+        assert_eq!(only_missing.input, None);
+        assert_eq!(only_missing.cost_microusd, None);
+    }
 
     #[test]
     fn counts_read_compactly_and_exactly() {

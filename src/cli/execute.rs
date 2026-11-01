@@ -628,14 +628,14 @@ fn stats(service: &mut Service) -> Result<Reply> {
     let cost = usage.cost_microusd;
     let delivered = service.delivered_by_model()?;
     let mut text = format!(
-        "Queue: {}\nHistory: {}\nSucceeded: {succeeded}\nAttempts: {}\nFailed attempts: {failed}\nActive: {}\nWaiting: {}\nProject usage: {}\nRecorded cost (micro-USD): {}\n",
+        "Queue: {}\nHistory: {}\nSucceeded: {succeeded}\nAttempts: {}\nFailed attempts: {failed}\nActive: {}\nWaiting: {}\nProject usage: {}\n{}",
         snapshot.queue.len(),
         snapshot.history.len(),
         timing.attempts,
         crate::application::limits::elapsed(active_ms),
         crate::application::limits::elapsed(waiting_ms),
         usage.label(),
-        cost.map_or("unknown".into(), |n| n.to_string())
+        cost.map_or_else(String::new, |n| format!("Recorded cost (micro-USD): {n}\n"))
     );
     if !delivered.is_empty() {
         text.push_str("Cost to result, average per delivered task, by execution model:\n");

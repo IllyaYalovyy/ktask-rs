@@ -590,7 +590,7 @@ fn current_activity_shows_multiple_readable_events_at_small_and_large_sizes() ->
 }
 
 #[test]
-fn history_rows_show_attempts_total_time_and_cost_by_keyboard_and_mouse() -> Result {
+fn history_rows_show_attempts_total_time_and_usage_by_keyboard_and_mouse() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();
     let (known_id, known_attempt) = failed_task(root)?;
@@ -613,6 +613,10 @@ fn history_rows_show_attempts_total_time_and_cost_by_keyboard_and_mouse() -> Res
     let db = Database::open_in(&root.join("state/ktask-dev"))?;
     db.connection().execute(
         "UPDATE attempts SET active_ms=2500 WHERE id=?1",
+        [unknown_attempt],
+    )?;
+    db.connection().execute(
+        "UPDATE model_calls SET input_tokens=1000,cache_read_tokens=500,cache_write_tokens=0,output_tokens=50 WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id=?1)",
         [unknown_attempt],
     )?;
     db.connection().execute(
@@ -640,7 +644,9 @@ fn history_rows_show_attempts_total_time_and_cost_by_keyboard_and_mouse() -> Res
             t.send("3")?;
         }
         let screen = t.screen("history statistics", |s| {
-            s.contains("Attempts Time Cost") && s.contains("$0.000300") && s.contains("unknown")
+            s.contains("Attempts Time Usage")
+                && s.contains("$0.000300")
+                && s.contains("2k new tokens")
         })?;
         println!("HISTORY STATISTICS {cols} mouse={mouse}\n{screen}");
         let known = screen
@@ -664,11 +670,118 @@ fn history_rows_show_attempts_total_time_and_cost_by_keyboard_and_mouse() -> Res
             unknown
                 .split_whitespace()
                 .collect::<Vec<_>>()
-                .ends_with(&["2", "6s", "unknown"]),
+                .ends_with(&["2", "6s", "2k", "new", "tokens"]),
             "{unknown}"
         );
         quit(&mut t)?;
     }
+    Ok(())
+}
+
+#[test]
+fn codex_only_usage_reaches_current_history_stats_and_cli() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (id, attempt) = failed_task(root)?;
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    assert_eq!(db.connection().execute(
+        "UPDATE model_calls SET input_tokens=1000,cache_read_tokens=500,cache_write_tokens=0,output_tokens=50 WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id=?1)",
+        [attempt],
+    )?, 2);
+    drop(db);
+
+    for mouse in [false, true] {
+        let mut t = terminal_at(root, 100, 45)?;
+        let current = t.screen("Codex current usage", |s| {
+            s.contains("Tokens 2k new · 1k cached · 100 out")
+                && s.contains("2k new tokens")
+                && !s.contains("Cost unknown")
+        })?;
+        println!("CODEX CURRENT mouse={mouse}\n{current}");
+        if mouse {
+            t.click("Status")?;
+        } else {
+            t.send("\r")?;
+        }
+        let details = t.screen("Codex task details", |s| {
+            s.contains("Task details / attempts")
+                && s.contains("Usage: 2 calls")
+                && s.contains("2k new tokens")
+        })?;
+        println!("CODEX DETAILS mouse={mouse}\n{details}");
+        t.click("Close")?;
+        t.screen("Codex details closed", |s| {
+            !s.contains("Task details / attempts")
+        })?;
+        if mouse {
+            t.click("S Stats")?;
+        } else {
+            t.send("S")?;
+        }
+        let stats = t.screen("Codex project stats", |s| {
+            s.contains("Project usage: 2 calls")
+                && s.contains("2k new tokens")
+                && !s.contains("not reported by the provider")
+        })?;
+        println!("CODEX STATS mouse={mouse}\n{stats}");
+        quit(&mut t)?;
+    }
+
+    let mut writer = service(root)?;
+    let current = target(&mut writer, id)?;
+    writer.mark_done(current, "Recorded")?;
+    drop(writer);
+    for mouse in [false, true] {
+        let mut t = terminal_at(root, 100, 45)?;
+        t.screen("Codex history startup", |s| s.contains("3 History"))?;
+        if mouse {
+            t.click("3 History")?;
+        } else {
+            t.send("3")?;
+        }
+        let history = t.screen("Codex history usage", |s| {
+            s.contains("Attempts Time Usage") && s.contains("2k new tokens")
+        })?;
+        println!("CODEX HISTORY mouse={mouse}\n{history}");
+        quit(&mut t)?;
+    }
+
+    let cli = |args: &[&str]| -> Result<std::process::Output> {
+        Ok(std::process::Command::new(env!("CARGO_BIN_EXE_ktask-dev"))
+            .env_clear()
+            .env("HOME", root)
+            .env("XDG_STATE_HOME", root.join("state"))
+            .env("XDG_CONFIG_HOME", root.join("config"))
+            .env("XDG_CACHE_HOME", root.join("cache"))
+            .env("XDG_RUNTIME_DIR", root.join("runtime"))
+            .env("TMPDIR", root)
+            .current_dir(project(root))
+            .args(args)
+            .output()?)
+    };
+    let plain_show = cli(&["show", &id.to_string()])?;
+    assert!(plain_show.status.success());
+    let plain_show = String::from_utf8(plain_show.stdout)?;
+    assert!(plain_show.contains("2k new tokens"), "{plain_show}");
+    assert!(!plain_show.contains("not reported by the provider"));
+    println!("CODEX PLAIN SHOW\n{plain_show}");
+    let plain_stats = cli(&["stats"])?;
+    assert!(plain_stats.status.success());
+    let plain_stats = String::from_utf8(plain_stats.stdout)?;
+    assert!(plain_stats.contains("2k new tokens"), "{plain_stats}");
+    assert!(!plain_stats.contains("Recorded cost"));
+    println!("CODEX PLAIN STATS\n{plain_stats}");
+    let json_show: serde_json::Value =
+        serde_json::from_slice(&cli(&["--json", "show", &id.to_string()])?.stdout)?;
+    let usage = &json_show["data"]["attempts"][0]["usage"];
+    assert_eq!(usage["input"], 2000);
+    assert_eq!(usage["cache_read"], 1000);
+    assert_eq!(usage["output"], 100);
+    assert!(usage["cost_microusd"].is_null());
+    let json_stats: serde_json::Value = serde_json::from_slice(&cli(&["--json", "stats"])?.stdout)?;
+    assert_eq!(json_stats["data"]["usage"]["input"], 2000);
+    assert!(json_stats["data"]["recorded_cost_microusd"].is_null());
+    println!("CODEX JSON SHOW\n{json_show}\nCODEX JSON STATS\n{json_stats}");
     Ok(())
 }
 
@@ -705,6 +818,7 @@ fn recorded_usage_is_visible_in_current_details_history_and_statistics() -> Resu
     println!("USAGE DETAILS\n{details}");
     assert!(details.contains("Attempt inputs: revision 1"));
     assert!(details.contains("Usage: 2 calls"));
+    assert!(details.contains("$0.000100 + 1 call(s) without cost"));
     assert!(details.contains("new-review-model"));
     t.click("Close")?;
     t.screen("details closed", |s| !s.contains("Task details / attempts"))?;
@@ -721,19 +835,41 @@ fn recorded_usage_is_visible_in_current_details_history_and_statistics() -> Resu
     let resolution_target = target(&mut service, id)?;
     service.mark_done(resolution_target, "Reviewed")?;
     drop(service);
-    let mut t = Terminal::open_project(
-        env!("CARGO_BIN_EXE_ktask-dev"),
-        root,
-        &project(root),
-        100,
-        45,
-    )?;
-    let history = open_history(&mut t, "3")?;
-    println!("USAGE HISTORY\n{history}");
-    t.send("\r")?;
-    let detail = t.screen("history attempt usage", |s| s.contains("Usage: 2 calls"))?;
-    println!("USAGE HISTORY DETAILS\n{detail}");
-    quit(&mut t)
+    for (cols, mouse) in [(70, false), (70, true), (100, false), (100, true)] {
+        let mut t = Terminal::open_project(
+            env!("CARGO_BIN_EXE_ktask-dev"),
+            root,
+            &project(root),
+            cols,
+            45,
+        )?;
+        t.screen("mixed-cost history startup", |s| s.contains("3 History"))?;
+        if mouse {
+            t.click("3 History")?;
+        } else {
+            t.send("3")?;
+        }
+        let history = t.screen("mixed-cost History row", on_history)?;
+        println!("USAGE HISTORY {cols} mouse={mouse}\n{history}");
+        let row = history
+            .lines()
+            .filter_map(|line| line.split('│').nth(1))
+            .find(|cell| cell.contains(&format!("#{id}")))
+            .expect("task row in History list");
+        assert!(row.contains("Failed"), "{row}");
+        assert!(row.contains("$0.0001 +1 no$"), "{row}");
+        assert!(
+            row.split_whitespace()
+                .collect::<Vec<_>>()
+                .ends_with(&["1", "0s", "$0.0001", "+1", "no$"]),
+            "{row}"
+        );
+        t.send("\r")?;
+        let detail = t.screen("history attempt usage", |s| s.contains("Usage: 2 calls"))?;
+        println!("USAGE HISTORY DETAILS {cols} mouse={mouse}\n{detail}");
+        quit(&mut t)?;
+    }
+    Ok(())
 }
 
 fn scroll_usage(t: &mut Terminal, mouse: bool, needle: &str) -> Result<String> {
@@ -4024,7 +4160,7 @@ fn sqlite_queue_and_history_handle_240_tasks_in_execution_order() -> Result {
     );
     t.send("3\x1b[H")?;
     let history = t.screen("first history row", |s| {
-        s.contains("History · 1 / 120") && s.contains("#120") && s.contains("Attempts Time Cost")
+        s.contains("History · 1 / 120") && s.contains("#120") && s.contains("Attempts Time Usage")
     })?;
     println!("LARGE SQLITE HISTORY\n{history}");
     let details = key(&mut t, "\r", "Task details / attempts")?;
