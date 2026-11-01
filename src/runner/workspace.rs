@@ -116,6 +116,7 @@ pub fn retains_work_from(root: &Path, base: Option<&str>, head: &str) -> Result<
 }
 pub fn git(root: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
+        .env("LC_ALL", "C")
         .arg("-C")
         .arg(root)
         .args(args)
