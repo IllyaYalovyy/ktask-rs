@@ -355,7 +355,11 @@ fn run_inner(
         require(
             workspace.clean()?
                 || service.pending_delivery_handoff(task.id)?
-                || service.attempt_base(task.id)?.as_deref() == Some(&base)
+                || workspace::retains_work_from(
+                    &workspace.root,
+                    service.attempt_base(task.id)?.as_deref(),
+                    &base,
+                )?
                 || service
                     .current_delivery_stage(task.id)?
                     .is_some_and(|s| s != "work"),

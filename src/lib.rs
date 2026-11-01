@@ -68,7 +68,7 @@ pub(crate) fn launch_tui(
             application::Service::open(db, root, project_name).map_err(io::Error::other)?;
         app::App::persistent(instance, service).map_err(io::Error::other)?
     };
-    let scratch = scratch::Scratch::new(&paths.cache.join("scratch"))?;
+    let scratch = scratch::Scratch::new_in_background(&paths.cache.join("scratch"))?;
     let result = terminal_session(app);
     let cleanup = scratch.close();
     result.and(cleanup)

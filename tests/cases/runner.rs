@@ -3725,6 +3725,57 @@ fn paused_repair_resumes_its_reserved_round_and_same_attempt() -> Result {
     Ok(())
 }
 #[test]
+fn resume_continues_the_paused_attempt_after_the_owner_commits_on_top() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("dirty-live")?;
+        f.add("Continue after owner commit")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 40)?;
+        t.screen("ready", |s| s.contains("r Run queue"))?;
+        t.send("r")?;
+        f.dirty_worker()?;
+        t.screen("running", |s| s.contains("[p Pause]"))?;
+        if mouse {
+            t.click("p Pause")?;
+        } else {
+            t.send("p")?;
+        }
+        t.screen("paused", |s| {
+            s.contains("[r Resume]") && s.contains("Paused · runner stopped")
+        })?;
+        let attempt = f.ok(&["show", "1"])?["attempts"][0]["id"].clone();
+        fs::write(f.root.join("owner.txt"), "owner")?;
+        f.git(&["add", "owner.txt"])?;
+        f.git(&["commit", "-q", "-m", "Owner work while paused"])?;
+        let owner_head = f.git(&["rev-parse", "HEAD"])?.trim().to_owned();
+        f.provider("normal")?;
+        if mouse {
+            t.click("r Resume")?;
+        } else {
+            t.send("r")?;
+        }
+        let done = t.screen("resumed to completion", |s| s.contains("Queue complete."))?;
+        println!("RESUMED AFTER OWNER COMMIT mouse={mouse}\n{done}");
+        let task = f.ok(&["show", "1"])?;
+        assert_eq!(task["lifecycle"], "succeeded", "{task}");
+        assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(task["attempts"][0]["id"], attempt);
+        // The review covers the task's own change, not the owner's commit underneath it.
+        let review = fs::read_to_string(f.scratch.path().join("prompt-review"))?;
+        assert!(
+            review.contains(&format!("`git diff {owner_head} ")),
+            "{review}"
+        );
+        assert!(!review.contains("owner.txt"), "{review}");
+        assert_eq!(f.git(&["rev-parse", "HEAD^"])?.trim(), owner_head);
+        assert_eq!(f.git(&["show", "HEAD:partial.txt"])?, "partial");
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+#[test]
 fn questions_require_answer_and_reuse_attempt() -> Result {
     let f = Fixture::new()?;
     f.provider("question")?;

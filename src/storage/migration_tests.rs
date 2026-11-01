@@ -215,20 +215,26 @@ fn v1_reconciliation_adds_nullable_column_without_losing_rows() -> Result {
         "INSERT INTO projects(name, root_path, created_at_ms) VALUES ('kept', x'2f776f726b', 1)",
         [],
     )?;
-    let with_column = Box::leak(
-        ALL[0]
-            .sql
-            .replace(
-                "    agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1))\n) STRICT;",
-                "    agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1)),\n    description TEXT\n) STRICT;",
-            )
-            .into_boxed_str(),
+    // A rebuilt table gets a new schema entry.
+    let schema_entry = |db: &Connection, table: &str| -> rusqlite::Result<i64> {
+        db.query_row(
+            "SELECT rowid FROM sqlite_schema WHERE name = ?1",
+            [table],
+            |row| row.get(0),
+        )
+    };
+    let (projects_before, output_before) = (
+        schema_entry(db, "projects")?,
+        schema_entry(db, "attempt_output")?,
     );
     let edited = [Migration {
         name: ALL[0].name,
-        sql: with_column,
+        sql: Box::leak(with_project_description().into_boxed_str()),
     }];
     apply(db, &edited)?;
+    // Only the changed table is rebuilt; large unchanged tables stay where they are.
+    assert_ne!(schema_entry(db, "projects")?, projects_before);
+    assert_eq!(schema_entry(db, "attempt_output")?, output_before);
     assert_eq!(
         db.query_row("SELECT name, description FROM projects", [], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
@@ -253,7 +259,7 @@ fn v1_reconciliation_rejects_silent_row_loss_and_rolls_back() -> Result {
         format!(
             "{}\nCREATE TRIGGER discard_copied_project AFTER INSERT ON projects \
              BEGIN DELETE FROM projects WHERE id = NEW.id; END;",
-            ALL[0].sql
+            with_project_description()
         )
         .into_boxed_str(),
     );
@@ -315,7 +321,11 @@ fn v1_reconciliation_refuses_real_values_that_cast_to_the_same_blob() -> Result 
     )?;
 
     let edited = Box::leak(
-        format!("{old}\nCREATE INDEX ix_real_samples ON real_samples(value);").into_boxed_str(),
+        old.replace(
+            "CREATE TABLE real_samples(value REAL) STRICT;",
+            "CREATE TABLE real_samples(value REAL, note TEXT) STRICT;",
+        )
+        .into_boxed_str(),
     );
     let new_migration = [Migration {
         name: ALL[0].name,
@@ -330,13 +340,13 @@ fn v1_reconciliation_refuses_real_values_that_cast_to_the_same_blob() -> Result 
             .get::<_, String>(0))?,
         old
     );
-    assert_eq!(
+    assert!(
         db.query_row(
-            "SELECT count(*) FROM sqlite_schema WHERE name = 'ix_real_samples'",
+            "SELECT sql FROM sqlite_schema WHERE name = 'real_samples'",
             [],
-            |row| row.get::<_, i64>(0)
-        )?,
-        0
+            |row| row.get::<_, String>(0)
+        )?
+        .contains("(value REAL)")
     );
     Ok(())
 }
@@ -480,4 +490,12 @@ fn v1_accepts_sqlite_quoted_table_declaration_but_rejects_changed_constraints() 
         );
     }
     Ok(())
+}
+
+/// The V1 schema with one nullable column added to `projects`.
+fn with_project_description() -> String {
+    ALL[0].sql.replace(
+        "    agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1))\n) STRICT;",
+        "    agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1)),\n    description TEXT\n) STRICT;",
+    )
 }

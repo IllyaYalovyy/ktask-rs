@@ -264,6 +264,22 @@ fn reconcile_v1(transaction: &Transaction<'_>, recorded: &str, desired: &str) ->
         }
     }
 
+    // Only tables whose definition changed are copied and compared: an unchanged table,
+    // such as hundreds of megabytes of output, stays in place.
+    let recorded_objects = schema_objects(&recorded_schema)?;
+    let desired_objects = schema_objects(&desired_schema)?;
+    let table_definition = |objects: &[Object], table: &str| {
+        objects
+            .iter()
+            .find(|(kind, name, _)| kind == "table" && name == table)
+            .cloned()
+    };
+    let changed: Vec<&String> = old_tables
+        .iter()
+        .filter(|table| {
+            table_definition(&recorded_objects, table) != table_definition(&desired_objects, table)
+        })
+        .collect();
     let sequences = {
         let mut statement = transaction.prepare("SELECT name, seq FROM sqlite_sequence")?;
         statement
@@ -272,44 +288,39 @@ fn reconcile_v1(transaction: &Transaction<'_>, recorded: &str, desired: &str) ->
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
-    for (index, table) in old_tables.iter().enumerate() {
+    // Views and triggers can name any table; they are cheap to recreate.
+    for (kind, name, sql) in &recorded_objects {
+        let kept = desired_objects.contains(&(kind.clone(), name.clone(), sql.clone()));
+        if kind == "view" || kind == "trigger" || (kind == "index" && !kept) {
+            transaction.execute_batch(&format!("DROP {} IF EXISTS {}", kind, quote(name)))?;
+        }
+    }
+    for (index, table) in changed.iter().enumerate() {
         transaction.execute_batch(&format!(
             "CREATE TEMP TABLE {} AS SELECT * FROM main.{}",
             quote(&format!("ktask_v1_backup_{index}")),
             quote(table)
         ))?;
-    }
-    let old_objects = schema_objects(transaction)?;
-    for (kind, name, _) in &old_objects {
-        if kind == "view" || kind == "trigger" {
-            transaction.execute_batch(&format!("DROP {} {}", kind, quote(name)))?;
-        }
-    }
-    for table in &old_tables {
         transaction.execute_batch(&format!("DROP TABLE {}", quote(table)))?;
     }
-    transaction.execute_batch(desired)?;
-    for (index, table) in old_tables.iter().enumerate() {
+    // Create, in script order, every desired object the database now lacks.
+    for sql in missing_objects(transaction, &desired_schema)? {
+        transaction.execute_batch(&sql)?;
+    }
+    for (index, table) in changed.iter().enumerate() {
         let names = columns(&recorded_schema, table)?;
         let list = names
             .iter()
             .map(|name| quote(name))
             .collect::<Vec<_>>()
             .join(", ");
+        let backup = format!("ktask_v1_backup_{index}");
         transaction.execute_batch(&format!(
             "INSERT INTO main.{} ({list}) SELECT {list} FROM temp.{}",
             quote(table),
-            quote(&format!("ktask_v1_backup_{index}"))
+            quote(&backup)
         ))?;
-    }
-    for (index, table) in old_tables.iter().enumerate() {
-        let backup = format!("ktask_v1_backup_{index}");
-        if !same_rows(
-            transaction,
-            table,
-            &backup,
-            &columns(&recorded_schema, table)?,
-        )? {
+        if !same_rows(transaction, table, &backup, &names)? {
             return Err(Error::Incompatible(format!(
                 "retained rows changed in {table}"
             )));
@@ -322,18 +333,58 @@ fn reconcile_v1(transaction: &Transaction<'_>, recorded: &str, desired: &str) ->
             params![name, sequence],
         )?;
     }
+    if schema_objects(transaction)? != desired_objects {
+        return Err(Error::Incompatible(
+            "reconciled schema differs from the V1 definition".into(),
+        ));
+    }
     if transaction
         .prepare("PRAGMA foreign_key_check")?
         .exists([])?
     {
         return Err(Error::Incompatible("foreign-key violations".into()));
     }
-    let integrity: String =
-        transaction.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-    if integrity != "ok" {
-        return Err(Error::Incompatible(format!("integrity check: {integrity}")));
+    for table in tables(&desired_schema)?
+        .iter()
+        .filter(|table| changed.contains(table) || !old_tables.contains(table))
+    {
+        let integrity: String = transaction.query_row(
+            &format!("PRAGMA integrity_check({})", quote(table)),
+            [],
+            |row| row.get(0),
+        )?;
+        if integrity != "ok" {
+            return Err(Error::Incompatible(format!(
+                "integrity check of {table}: {integrity}"
+            )));
+        }
     }
     Ok(())
+}
+
+/// The SQL of each object in `desired`, in script order, that `live` lacks or defines differently.
+fn missing_objects(live: &Connection, desired: &Connection) -> Result<Vec<String>> {
+    let present = schema_objects(live)?;
+    let mut statement = desired.prepare(
+        "SELECT type, name FROM sqlite_schema
+         WHERE name NOT GLOB 'sqlite_*' AND name <> 'schema_migrations' ORDER BY rowid",
+    )?;
+    let order = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let wanted = schema_objects(desired)?;
+    Ok(order
+        .into_iter()
+        .filter_map(|(kind, name)| {
+            wanted
+                .iter()
+                .find(|(k, n, _)| *k == kind && *n == name)
+                .filter(|object| !present.contains(object))
+                .map(|(_, _, sql)| format!("{sql};"))
+        })
+        .collect())
 }
 
 #[cfg(test)]

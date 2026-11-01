@@ -94,6 +94,26 @@ pub fn git_identity(root: &Path) -> Result<GitIdentity> {
         ))),
     }
 }
+pub fn is_ancestor(root: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["merge-base", "--is-ancestor", ancestor, descendant])
+        .status()?;
+    match status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(Error::Conflict("Cannot establish Git ancestry".into())),
+    }
+}
+/// Uncommitted work belongs to the task whose attempt started at `base`, also when the
+/// owner committed on top of that base while the task was paused or failed.
+pub fn retains_work_from(root: &Path, base: Option<&str>, head: &str) -> Result<bool> {
+    match base {
+        Some(base) => Ok(base == head || is_ancestor(root, base, head)?),
+        None => Ok(false),
+    }
+}
 pub fn git(root: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .arg("-C")

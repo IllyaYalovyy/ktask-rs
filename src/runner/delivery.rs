@@ -2,7 +2,7 @@
 use super::{
     Context, Outcome,
     process::{Invocation, Message, Worker},
-    workspace::git,
+    workspace::{git, is_ancestor},
 };
 use crate::{
     application::{Service, delivery::DeliveryAttempt, execution::Run, progress::REPAIR_ROUNDS},
@@ -479,18 +479,6 @@ pub(super) fn prepare(service: &mut Service, run: &Run, ctx: &Context<'_>) -> De
     Ok(true)
 }
 
-fn is_ancestor(root: &std::path::Path, ancestor: &str, descendant: &str) -> Result<bool> {
-    let status = std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["merge-base", "--is-ancestor", ancestor, descendant])
-        .status()?;
-    match status.code() {
-        Some(0) => Ok(true),
-        Some(1) => Ok(false),
-        _ => Err(Error::Conflict("Cannot establish Git ancestry".into())),
-    }
-}
 fn check_destination(root: &std::path::Path, delivery: &DeliveryAttempt) -> Result<()> {
     let fetch = git(root, &["remote", "get-url", &delivery.remote])?;
     let push = git(root, &["remote", "get-url", "--push", &delivery.remote])?;

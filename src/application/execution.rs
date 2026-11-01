@@ -317,6 +317,12 @@ impl Service {
                 execution_token: &saved,
                 now_ms: now_ms(),
             })?;
+            // The owner may have committed on top while the attempt was paused; its own
+            // change, and so its review, starts at the current HEAD. Delivery keeps its base.
+            self.db.connection().execute(
+                "UPDATE attempts SET base_commit=?2 WHERE id=?1 AND NOT EXISTS(SELECT 1 FROM attempt_delivery WHERE attempt_id=?1 AND stage<>'work')",
+                params![id, base],
+            )?;
             (id, rev, saved, active)
         } else {
             if restart_limits {

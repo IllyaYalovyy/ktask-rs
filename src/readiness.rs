@@ -92,11 +92,9 @@ fn baseline(service: &Service, root: &Path, task: i64) -> Result<(), String> {
         return Ok(());
     }
     let head = git(root, &["rev-parse", "HEAD"])?;
-    if service
-        .attempt_base(task)
+    let base = service.attempt_base(task).map_err(|e| e.to_string())?;
+    if crate::runner::workspace::retains_work_from(root, base.as_deref(), &head)
         .map_err(|e| e.to_string())?
-        .as_deref()
-        == Some(&head)
     {
         return Ok(());
     }

@@ -135,8 +135,9 @@ fn created(ids: Vec<i64>) -> Reply {
         data: json!({"action":"created","tasks":ids.iter().map(|id| json!({"id":id,"version":1})).collect::<Vec<_>>()}),
     }
 }
+/// Task summaries; `show` loads one task with its output.
 fn tasks(service: &mut Service, scope: Scope) -> Result<Vec<Task>> {
-    let snapshot = service.snapshot()?;
+    let snapshot = service.snapshot_brief()?;
     Ok(match scope {
         Scope::Queue => snapshot.queue,
         Scope::History => snapshot.history,
@@ -431,13 +432,13 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
             Ok(Reply::list(&rows))
         }
         Command::Show { id } => Ok(Reply::task(&task(service, *id)?)),
-        Command::Current => Ok(service.snapshot()?.queue.first().map_or(
-            Reply {
+        Command::Current => match service.snapshot_brief()?.queue.first() {
+            Some(current) => Ok(Reply::task(&task(service, current.id)?)),
+            None => Ok(Reply {
                 data: json!(null),
                 text: "No current task.\n".into(),
-            },
-            Reply::task,
-        )),
+            }),
+        },
         Command::Add(add) => {
             let mut d = Definition {
                 title: add.title.clone(),
@@ -606,7 +607,7 @@ fn edit(service: &mut Service, input: &Target, pending: bool, changes: &Changes)
     Ok(receipt("revised", target))
 }
 fn stats(service: &mut Service) -> Result<Reply> {
-    let snapshot = service.snapshot()?;
+    let snapshot = service.snapshot_brief()?;
     let all: Vec<_> = snapshot.queue.iter().chain(&snapshot.history).collect();
     let succeeded = all
         .iter()
