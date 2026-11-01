@@ -225,17 +225,6 @@ pub(crate) fn inspect(app: &App) -> Readiness {
             )),
             Some(model) => service
                 .validate_model(role, model)
-                .and_then(|()| {
-                    if index > 0
-                        && let Some(execution) = &definition.definition.models[0]
-                    {
-                        crate::application::require(
-                            !service.same_model(role, execution, model)?,
-                            "Must be stronger than the execution model",
-                        )?;
-                    }
-                    Ok(())
-                })
                 .map_err(|error| error.to_string()),
         };
         report.check(&format!("{role} model"), valid, "m Models");

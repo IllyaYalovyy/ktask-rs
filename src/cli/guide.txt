@@ -21,8 +21,8 @@ CONCEPTS
   Version    Every task has a version that each change increments. Pass --if-version N,
              with N from show/list, so a change fails with exit 4 if the task moved on.
   Roles      execution, review, validation and remediation; every task needs all four.
-             Review, validation and remediation need a stronger model than execution;
-             run refuses to start when one reuses the execution model.
+             Each role uses its configured model; the same model may serve multiple roles.
+             Review and validation still run independently with read-only access.
              planning (project default only) is used by breakdown. Models are written
              PROVIDER/MODEL: codex/gpt-6-sol, claude/sonnet, opencode/VENDOR/MODEL. A bare
              "claude" means claude/sonnet. Providers: codex, claude or opencode.
@@ -31,8 +31,7 @@ BEFORE THE FIRST RUN
   - Once per machine, save the model defaults new projects start with:
         ktask model-default execution --provider codex --model gpt-6-sol --effort high \
             --new-projects
-    Repeat for planning, review, validation and remediation; the three judging roles need
-    a stronger model than execution.
+    Repeat for planning, review, validation and remediation; choose each role explicitly.
   - In each project, a Git repository root with at least one commit and a clean worktree:
         ktask init       registers it, detects a check, exits 4 listing anything missing
     --check-command CMD sets the check; --agent-network on lets agents that change the

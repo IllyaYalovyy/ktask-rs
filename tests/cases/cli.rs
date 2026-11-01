@@ -1271,7 +1271,7 @@ fn init_sets_up_new_projects_from_saved_defaults_and_their_own_files() -> Result
     assert_eq!(fixed["data"]["agent_network"], true);
 
     // Later changes to the saved defaults leave registered projects alone, and a judge
-    // that reuses the execution model is reported.
+    // may explicitly reuse the execution model.
     ktask(
         &first,
         &[
@@ -1290,16 +1290,10 @@ fn init_sets_up_new_projects_from_saved_defaults_and_their_own_files() -> Result
         "codex/gpt-6-astra"
     );
     let fourth = repository("fourth", &[("Cargo.toml", "[package]\n")])?;
-    let weak = ktask(&fourth, &["init"], 4)?;
-    let message = weak["error"]["message"].as_str().unwrap();
-    assert!(
-        message.contains("cargo test (detected from Cargo.toml)"),
-        "{message}"
-    );
-    assert!(
-        message.contains("review model:") && message.contains("Same as the execution model"),
-        "{message}"
-    );
+    let ready = ktask(&fourth, &["init"], 0)?;
+    assert_eq!(ready["data"]["checks"][0]["command"], "cargo test");
+    assert_eq!(ready["data"]["models"]["review"], "codex/gpt-6-sol");
+    assert_eq!(ready["data"]["models"]["execution"], "codex/gpt-6-sol");
 
     // A project can only run from a Git repository root with a clean baseline.
     let plain = root.join("plain");

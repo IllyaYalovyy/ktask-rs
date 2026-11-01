@@ -154,41 +154,6 @@ impl Service {
         }
         Ok(())
     }
-
-    /// Compare provider identity, including explicitly declared aliases, without changing
-    /// the identifier passed to the provider or stored in the revision.
-    pub fn same_model(
-        &self,
-        role: &str,
-        execution: &ModelConfig,
-        judge: &ModelConfig,
-    ) -> Result<bool> {
-        Ok(self.model_identity("execution", execution)? == self.model_identity(role, judge)?)
-    }
-
-    pub fn validate_judge_model(&self, definition: &Definition, index: usize) -> Result<()> {
-        if index > 0
-            && let (Some(execution), Some(judge)) =
-                (&definition.models[0], &definition.models[index])
-        {
-            let role = ROLES[index];
-            require(
-                !self.same_model(role, execution, judge)?,
-                &format!(
-                    "Configure a stronger {role} model distinct from the implementation model; changing effort or using an alias is insufficient"
-                ),
-            )?;
-        }
-        Ok(())
-    }
-
-    pub fn validate_judge_models(&self, definition: &Definition) -> Result<()> {
-        self.validate_definition_models(definition)?;
-        for index in 1..ROLES.len() {
-            self.validate_judge_model(definition, index)?;
-        }
-        Ok(())
-    }
 }
 
 fn validate_effort(

@@ -69,7 +69,6 @@ pub fn problems(service: &Service) -> Result<Vec<Problem>> {
         let index = MODEL_ROLES.iter().position(|r| *r == role);
         index.and_then(|index| defaults[index].as_ref())
     };
-    let execution = model("execution");
     for role in ROLES {
         match model(role) {
             None => problem(
@@ -78,17 +77,7 @@ pub fn problems(service: &Service) -> Result<Vec<Problem>> {
                 MODEL_FIX,
             ),
             Some(model) => {
-                let valid = service.validate_model(role, model).and_then(|()| {
-                    if role != "execution"
-                        && let Some(execution) = execution
-                    {
-                        crate::application::require(
-                            !service.same_model(role, execution, model)?,
-                            "Same as the execution model; it needs a stronger one",
-                        )?;
-                    }
-                    Ok(())
-                });
+                let valid = service.validate_model(role, model);
                 if let Err(error) = valid {
                     problem(format!("{role} model"), error.to_string(), MODEL_FIX);
                 }

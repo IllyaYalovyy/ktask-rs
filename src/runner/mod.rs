@@ -105,7 +105,6 @@ fn preflight(service: &Service, definition: &crate::application::Definition) -> 
                 provider::SUPPORTED
             ))
         })?;
-        service.validate_judge_model(definition, index)?;
         model.validate_for_role(role)?;
         let provider = Provider::of(model)?;
         provider.executable()?;
@@ -1278,7 +1277,7 @@ fn apply_judgment(
             definition.goal = goal;
             definition.criteria = criteria;
             remediation::apply_role_models(&mut definition, &models)?;
-            service.validate_judge_models(&definition)?;
+            service.validate_definition_models(&definition)?;
             service.revise_as(target, &definition, ready, &judge, Some(&reason))?;
         }
         agent::Judgment::Insert { tasks, reason } => {

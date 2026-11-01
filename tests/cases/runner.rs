@@ -1295,7 +1295,7 @@ fn native_model_metadata_is_exact_and_missing_metadata_is_actionable() -> Result
 }
 
 #[test]
-fn model_aliases_cannot_bypass_judge_separation_at_start_or_judge_revision() -> Result {
+fn explicitly_selected_model_alias_can_review_execution() -> Result {
     let f = Fixture::new()?;
     let path = f.scratch.path().join("state/ktask-dev/model-catalog.json");
     let mut catalog: Value = serde_json::from_slice(&fs::read(&path)?)?;
@@ -1307,54 +1307,21 @@ fn model_aliases_cannot_bypass_judge_separation_at_start_or_judge_revision() -> 
         .unwrap();
     entry["aliases"] = serde_json::json!(["execution-alias"]);
     fs::write(&path, serde_json::to_vec(&catalog)?)?;
-    f.add("Aliases preserve model identity")?;
+    f.provider_roles_from_prompt()?;
+    f.add("Honor explicit alias")?;
     f.ok(&["edit", "1", "--model", "review=codex/execution-alias"])?;
-    let rejected = f.process().args(["--json", "run", "--one"]).output()?;
-    assert_eq!(rejected.status.code(), Some(4));
-    let message = String::from_utf8_lossy(&rejected.stderr);
-    assert!(
-        message.contains("review") && message.contains("distinct") && message.contains("alias"),
-        "{message}"
-    );
-    assert!(!f.scratch.path().join("provider-invocations").exists());
-    f.ok(&["edit", "1", "--model", "review=codex/review"])?;
-    // The first attempt fails; the failure judge then revises the task with an alias of
-    // the implementation model as its reviewer.
-    f.provider("malformed-work")?;
-    let provider = f.scratch.path().join("bin/codex");
-    let script = fs::read_to_string(&provider)?;
-    for anchor in ["judge_mode='malformed-work'", r#"\"models\":null"#] {
-        assert_eq!(
-            script.matches(anchor).count(),
-            1,
-            "provider anchor {anchor} changed"
-        );
-    }
-    let script = script.replace("judge_mode='malformed-work'", "judge_mode=judge-revise").replace(
-        r#"\"models\":null"#,
-        r#"\"models\":{\"execution\":null,\"review\":{\"provider\":\"codex\",\"model\":\"execution-alias\",\"effort\":null},\"validation\":null,\"remediation\":null}"#,
-    );
-    support::write_executable(&provider, script)?;
-    let before = f.ok(&["show", "1"])?["revisions"].as_array().unwrap().len();
-    let rejected = f.process().args(["--json", "run", "--one"]).output()?;
-    assert_eq!(rejected.status.code(), Some(4));
-    let message = String::from_utf8_lossy(&rejected.stderr);
-    assert!(
-        message.contains("review") && message.contains("distinct") && message.contains("alias"),
-        "{message}"
-    );
-    assert!(f.scratch.path().join("judge-revised").exists());
+    f.ok(&["run", "--one"])?;
     let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["state"], "done");
     assert_eq!(
-        task["revisions"].as_array().unwrap().len(),
-        before,
-        "{task}"
+        task["definition"]["models"]["review"]["model"],
+        "execution-alias"
     );
     assert!(
-        !task["revisions"].to_string().contains("Clarified task"),
-        "{task}"
+        fs::read_to_string(f.scratch.path().join("provider-network"))?
+            .contains("execution-alias off")
     );
-    assert_eq!(task["definition"]["models"]["review"]["model"], "review");
+    f.no_scratch()?;
     Ok(())
 }
 
@@ -2454,6 +2421,23 @@ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":
         support::write_executable(&self.scratch.path().join("bin/codex"), script)?;
         Ok(())
     }
+    /// These fixtures choose behavior by turn, independently of the requested model ID.
+    fn provider_roles_from_prompt(&self) -> Result {
+        let path = self.scratch.path().join("bin/codex");
+        let script = fs::read_to_string(&path)?;
+        let anchor = "prompt=$(cat)";
+        assert_eq!(script.matches(anchor).count(), 1);
+        let script = script.replace(
+            anchor,
+            r#"prompt=$(cat)
+case "$prompt" in
+ *"Independently review the change"*) model=review;;
+ *"Independently validate that the objective"*) model=validation;;
+esac"#,
+        );
+        support::write_executable(&path, script)?;
+        Ok(())
+    }
     /// Three failed attempts: the supervisor repairs automatically and stops only after the
     /// provider fails three attempts in a row.
     fn fail_provider(&self) -> Result {
@@ -3011,39 +2995,34 @@ fn pause_at_tenth_review_resumes_the_phase_without_an_eleventh_repair() -> Resul
 }
 
 #[test]
-fn implementation_model_cannot_review_repair_or_validate_itself() -> Result {
+fn explicitly_selected_execution_model_can_fill_each_judge_role() -> Result {
     for role in ["review", "remediation", "validation"] {
-        let f = Fixture::new()?;
-        f.add("Require stronger judge model")?;
-        f.ok(&["edit", "1", "--model", &format!("{role}=codex/execution")])?;
-        let output = f.process().args(["run", "--json"]).output()?;
-        assert_eq!(output.status.code(), Some(4));
-        assert!(
-            String::from_utf8_lossy(&output.stderr)
-                .contains(&format!("stronger {role} model distinct"))
-        );
-        assert!(!f.scratch.path().join("provider-invocations").exists());
-        assert!(
-            f.ok(&["show", "1"])?["attempts"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
         for mouse in [false, true] {
-            let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
+            let f = Fixture::new()?;
+            f.provider_roles_from_prompt()?;
+            f.add("Honor explicit role models")?;
+            f.ok(&["edit", "1", "--model", &format!("{role}=codex/execution")])?;
+            f.ok(&[
+                "model-default",
+                role,
+                "--provider",
+                "codex",
+                "--model",
+                "execution",
+            ])?;
+            f.ok(&["init"])?;
+            let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 40)?;
             t.screen("ready", |s| s.contains("r Run queue"))?;
             if mouse {
                 t.click("u Readiness")?;
             } else {
                 t.send("u")?;
             }
-            println!(
-                "MODEL SEPARATION READINESS {role} mouse={mouse}\n{}",
-                t.screen("readiness names the rule", |s| s
-                    .contains("Must be stronger")
-                    && s.contains("execution")
-                    && s.contains("m Models"))?
-            );
+            let screen = t.screen("explicit model accepted", |s| {
+                s.contains("Execution readiness") && s.contains("OK · validation model")
+            })?;
+            assert!(!screen.contains("BLOCK"), "{screen}");
+            println!("EXPLICIT MODEL READINESS {role} mouse={mouse}\n{screen}");
             t.send("\x1b")?;
             t.screen("ready again", |s| {
                 s.contains("r Run queue") && !s.contains("Execution readiness")
@@ -3053,16 +3032,12 @@ fn implementation_model_cannot_review_repair_or_validate_itself() -> Result {
             } else {
                 t.send("r")?;
             }
-            println!(
-                "MODEL SEPARATION {role} mouse={mouse}\n{}",
-                // The status line, not Activity, which keeps the earlier window's refusal.
-                t.screen("model configuration required", |s| s.lines().any(|line| {
-                    line.starts_with("command conflict: Configure a stronger")
-                }))?
-            );
-            assert!(!f.scratch.path().join("provider-invocations").exists());
+            let screen = t.screen("task completes", |s| s.contains("Queue complete."))?;
+            println!("EXPLICIT MODEL COMPLETE {role} mouse={mouse}\n{screen}");
+            assert_eq!(f.ok(&["show", "1"])?["state"], "done");
             t.send("q")?;
             t.finish()?;
+            f.no_scratch()?;
         }
     }
     Ok(())

@@ -14,14 +14,6 @@ pub fn apply_role_models(definition: &mut Definition, changes: &ModelOverrides) 
         model.validate_for_role(role)?;
         definition.models[index] = Some(model.clone());
     }
-    for (index, role) in crate::application::ROLES.iter().enumerate().skip(1) {
-        require(
-            !definition.reuses_execution_model(index),
-            &format!(
-                "{role} must use a model distinct from execution; changing effort alone is insufficient"
-            ),
-        )?;
-    }
     Ok(())
 }
 
@@ -61,7 +53,7 @@ mod tests {
     use crate::application::{Kind, ModelConfig};
 
     #[test]
-    fn revised_models_reject_invalid_effort_and_judge_reuse() {
+    fn revised_models_reject_empty_effort_and_allow_judge_reuse() {
         let model = |name: &str, effort: &str| ModelConfig {
             provider: "codex".into(),
             model: name.into(),
@@ -99,12 +91,8 @@ mod tests {
             .as_mut()
             .unwrap()
             .insert("review".into(), Some(model("execution", "low")));
-        assert!(
-            apply_role_models(&mut definition, &changes)
-                .unwrap_err()
-                .to_string()
-                .contains("distinct from execution")
-        );
+        apply_role_models(&mut definition, &changes).unwrap();
+        assert_eq!(definition.models[1], Some(model("execution", "low")));
     }
 
     #[test]
