@@ -248,7 +248,7 @@ fn stopped_successor_starts_fresh_and_rechecks_handed_off_delivery() -> Result {
         },
         active_ms: 0,
     };
-    assert!(service.claim_delivery_handoff(&run)?);
+    assert!(service.claim_delivery_handoff(&run, &Default::default(), None, "")?);
     let progress = service.progress(&run)?.expect("restarted progress");
     assert_eq!((progress.round, progress.phase.as_str()), (0, "check"));
     assert!(progress.context.starts_with("Prior findings\n"));

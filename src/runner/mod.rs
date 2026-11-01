@@ -388,9 +388,6 @@ fn run_inner(
             if service.attempt_delivery(&run).is_ok() {
                 return Ok(());
             }
-            if service.claim_delivery_handoff(&run)? {
-                return Ok(());
-            }
             let config = service.delivery_config()?;
             let destination = if config.mode == "local" {
                 String::new()
@@ -405,6 +402,9 @@ fn run_inner(
             } else {
                 None
             };
+            if service.claim_delivery_handoff(&run, &config, branch.as_deref(), &destination)? {
+                return Ok(());
+            }
             service.ensure_attempt_delivery(&run, &config, branch.as_deref(), &destination)?;
             Ok(())
         })();

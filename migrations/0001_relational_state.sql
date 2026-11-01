@@ -236,7 +236,8 @@ CREATE TABLE attempt_delivery (
     handoff_claimed_by INTEGER REFERENCES attempts(id),
     repair_origin_task INTEGER REFERENCES tasks(id),
     sync_cycles INTEGER NOT NULL DEFAULT 0 CHECK (sync_cycles BETWEEN 0 AND 6),
-    restart_sync INTEGER NOT NULL DEFAULT 0 CHECK (restart_sync IN (0,1))
+    restart_sync INTEGER NOT NULL DEFAULT 0 CHECK (restart_sync IN (0,1)),
+    retargeted INTEGER NOT NULL DEFAULT 0 CHECK (retargeted IN (0,1))
 ) STRICT;
 CREATE UNIQUE INDEX ux_live_attempt_task ON attempts(task_id) WHERE state IN ('running', 'paused', 'waiting');
 CREATE UNIQUE INDEX ux_running_attempt_project ON attempts(project_id) WHERE state = 'running';

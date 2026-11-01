@@ -330,6 +330,12 @@ pub(super) fn reconcile_resume(service: &mut Service, run: &Run, ctx: &Context<'
 /// Preparation belongs to the live attempt, so pause, retries and crash recovery retain it.
 pub(super) fn prepare(service: &mut Service, run: &Run, ctx: &Context<'_>) -> DeliveryResult<bool> {
     let delivery = service.attempt_delivery(run)?;
+    if delivery.retargeted
+        && delivery.stage == "checkpointed"
+        && !adopt_checkpoint(service, run, ctx, &delivery)?
+    {
+        return Ok(false);
+    }
     if delivery.stage != "preparing" {
         return Ok(true);
     }
@@ -480,6 +486,97 @@ pub(super) fn prepare(service: &mut Service, run: &Run, ctx: &Context<'_>) -> De
         }
     }
     service.finish_delivery_prepare(run, &ctx.workspace.head()?)?;
+    Ok(true)
+}
+
+/// A stopped checkpoint is still owned by its original branch. Establish the new
+/// local delivery branch at that exact commit before any proof or repair resumes.
+/// Each Git step can finish before its acknowledgement; the marker clears last.
+fn adopt_checkpoint(
+    service: &Service,
+    run: &Run,
+    ctx: &Context<'_>,
+    delivery: &DeliveryAttempt,
+) -> DeliveryResult<bool> {
+    let checkpoint = delivery
+        .checkpoint_head
+        .as_deref()
+        .ok_or_else(|| Error::Conflict("Retained delivery checkpoint is missing".into()))?;
+    if ctx.workspace.head()? != checkpoint || !ctx.workspace.clean()? {
+        return Err(Error::Conflict(
+            "Retained delivery checkpoint changed before the new settings were applied".into(),
+        )
+        .into());
+    }
+    let target = match delivery.mode.as_str() {
+        "direct" => Some(delivery.base_branch.as_str()),
+        "pr" => Some(
+            delivery
+                .branch
+                .as_deref()
+                .ok_or_else(|| Error::Conflict("Missing PR branch".into()))?,
+        ),
+        _ => None,
+    };
+    if let Some(branch) = target
+        && current_branch(&ctx.workspace.root)? != branch
+    {
+        let existing = git(
+            &ctx.workspace.root,
+            &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
+        );
+        match existing {
+            Ok(tip) if tip != checkpoint => {
+                if !is_ancestor(&ctx.workspace.root, &tip, checkpoint)? {
+                    return Err(Error::Conflict(
+                        "Configured local delivery branch has divergent commits; retained checkpoint and branch were not changed".into(),
+                    ).into());
+                }
+                if require_ok(
+                    git_network(service, run, ctx, &["branch", "-f", branch, checkpoint])?,
+                    "Git branch",
+                )?
+                .is_none()
+                {
+                    return Ok(false);
+                }
+                if require_ok(
+                    git_network(service, run, ctx, &["switch", branch])?,
+                    "Git switch",
+                )?
+                .is_none()
+                {
+                    return Ok(false);
+                }
+            }
+            Ok(_) => {
+                if require_ok(
+                    git_network(service, run, ctx, &["switch", branch])?,
+                    "Git switch",
+                )?
+                .is_none()
+                {
+                    return Ok(false);
+                }
+            }
+            Err(_) => {
+                if require_ok(
+                    git_network(service, run, ctx, &["switch", "-c", branch])?,
+                    "Git switch",
+                )?
+                .is_none()
+                {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+    if ctx.workspace.head()? != checkpoint || !ctx.workspace.clean()? {
+        return Err(
+            Error::Conflict("Delivery branch changed during checkpoint adoption".into()).into(),
+        );
+    }
+    service.complete_delivery_retarget(run)?;
     Ok(true)
 }
 

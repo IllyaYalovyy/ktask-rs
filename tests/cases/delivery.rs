@@ -39,6 +39,488 @@ fn one_attempt(f: &Fixture) -> Result {
     assert_eq!(count, 1);
     Ok(())
 }
+fn stopped_checkpoint(f: &Fixture) -> Result<String> {
+    remote(f)?;
+    support::write_executable(
+        &f.scratch.path().join("bin/git"),
+        r#"#!/bin/sh
+case " $* " in
+ *" push "*) touch "$HOME/push-waiting"; sleep 30;;
+esac
+exec /usr/bin/git "$@"
+"#,
+    )?;
+    f.ok(&["delivery", "--mode", "direct"])?;
+    f.add("Retain verified checkpoint")?;
+    let mut runner = Running(f.process().args(["run", "--one"]).spawn()?);
+    support::eventually("checkpoint before push", || {
+        Ok(f.scratch.path().join("push-waiting").exists().then_some(()))
+    })?;
+    let checkpoint = f.git(&["rev-parse", "HEAD"])?;
+    f.ok(&["pause"])?;
+    assert!(runner.0.wait()?.success());
+    f.ok(&["stop", "1", "--reason", "Change delivery settings"])?;
+    fs::remove_file(f.scratch.path().join("bin/git"))?;
+    Ok(checkpoint)
+}
+
+#[test]
+fn stopped_checkpoint_uses_current_delivery_settings_in_real_remotes() -> Result {
+    for change in ["local", "remote", "base", "unchanged"] {
+        let f = Fixture::new()?;
+        let checkpoint = stopped_checkpoint(&f)?;
+        let old_remote = f.git(&["ls-remote", "origin", "refs/heads/main"])?;
+        let target = match change {
+            "local" => {
+                f.ok(&["delivery", "--mode", "local"])?;
+                None
+            }
+            "remote" => {
+                let second = f.scratch.path().join("second.git");
+                assert!(
+                    Command::new("git")
+                        .args(["init", "--bare", "-q"])
+                        .arg(&second)
+                        .status()?
+                        .success()
+                );
+                f.git(&["remote", "add", "second", second.to_str().unwrap()])?;
+                f.git(&["push", "second", "HEAD^:refs/heads/main"])?;
+                f.ok(&["delivery", "--remote", "second"])?;
+                Some(("second", "main"))
+            }
+            "base" => {
+                f.git(&["push", "origin", "HEAD^:refs/heads/alternate"])?;
+                f.ok(&["delivery", "--base", "alternate"])?;
+                Some(("origin", "alternate"))
+            }
+            _ => Some(("origin", "main")),
+        };
+        f.ok(&["run", "--one"])?;
+        assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded", "{change}");
+        assert_eq!(f.git(&["rev-parse", "HEAD"])?, checkpoint, "{change}");
+        if let Some((remote, branch)) = target {
+            assert!(
+                f.git(&["ls-remote", remote, &format!("refs/heads/{branch}")])?
+                    .starts_with(checkpoint.trim()),
+                "{change}"
+            );
+        }
+        if change != "unchanged" {
+            assert_eq!(
+                f.git(&["ls-remote", "origin", "refs/heads/main"])?,
+                old_remote,
+                "{change}"
+            );
+        }
+        let rows: Vec<(String,String,String,i64)> = f.db()?.connection().prepare("SELECT mode,remote,base_branch,retargeted FROM attempt_delivery ORDER BY attempt_id")?.query_map([], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?.collect::<rusqlite::Result<_>>()?;
+        assert_eq!(rows.len(), 2, "{change}");
+        assert_eq!(
+            rows[1].3, 0,
+            "adoption must finish before delivery: {change}: {rows:?}"
+        );
+        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            fs::write(
+                PathBuf::from(dir).join(format!("stopped-delivery-{change}.txt")),
+                format!(
+                    "change={change}\ncheckpoint={}\nold_origin_main={}\nnew_origin_main={}\nnew_attempt={:?}\n",
+                    checkpoint.trim(),
+                    old_remote.trim(),
+                    f.git(&["ls-remote", "origin", "refs/heads/main"])?.trim(),
+                    rows[1]
+                ),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn stopped_direct_checkpoint_can_change_to_pull_request_delivery() -> Result {
+    let f = Fixture::new()?;
+    let checkpoint = stopped_checkpoint(&f)?;
+    let main_before = f.git(&["ls-remote", "origin", "refs/heads/main"])?;
+    mock_pr_destination(&f, "origin")?;
+    gh(&f, false)?;
+    f.ok(&["delivery", "--mode", "pr"])?;
+    f.ok(&["run", "--one"])?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    assert_eq!(
+        f.git(&["ls-remote", "origin", "refs/heads/main"])?,
+        main_before
+    );
+    let branch = f.git(&["branch", "--show-current"])?;
+    assert!(branch.starts_with("ktask/project-"), "{branch}");
+    assert!(
+        f.git(&[
+            "ls-remote",
+            "origin",
+            &format!("refs/heads/{}", branch.trim())
+        ])?
+        .starts_with(checkpoint.trim())
+    );
+    assert!(f.scratch.path().join("pr-created").exists());
+    Ok(())
+}
+
+#[test]
+fn stopped_retarget_keeps_its_branch_intent_on_an_unchanged_next_run() -> Result {
+    let f = Fixture::new()?;
+    let checkpoint = stopped_checkpoint(&f)?;
+    f.git(&["push", "origin", "HEAD^:refs/heads/alternate"])?;
+    f.ok(&["delivery", "--base", "alternate"])?;
+    fs::remove_file(f.scratch.path().join("push-waiting"))?;
+    support::write_executable(
+        &f.scratch.path().join("bin/git"),
+        r#"#!/bin/sh
+case " $* " in *" push "*) touch "$HOME/push-waiting"; sleep 30;; esac
+exec /usr/bin/git "$@"
+"#,
+    )?;
+    let mut runner = Running(f.process().args(["run", "--one"]).spawn()?);
+    support::eventually("retargeted checkpoint before push", || {
+        Ok(f.scratch.path().join("push-waiting").exists().then_some(()))
+    })?;
+    f.ok(&["pause"])?;
+    assert!(runner.0.wait()?.success());
+    f.ok(&["stop", "1"])?;
+    fs::remove_file(f.scratch.path().join("bin/git"))?;
+    f.ok(&["run", "--one"])?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    assert!(
+        f.git(&["ls-remote", "origin", "refs/heads/alternate"])?
+            .starts_with(checkpoint.trim())
+    );
+    let retargeted: Vec<i64> = f
+        .db()?
+        .connection()
+        .prepare("SELECT retargeted FROM attempt_delivery ORDER BY attempt_id")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    assert_eq!(retargeted, vec![0, 0, 0]);
+    Ok(())
+}
+
+fn remote_alternate_conflict(f: &Fixture) -> Result<String> {
+    f.git(&["push", "origin", "HEAD^:refs/heads/alternate"])?;
+    let main = f.git(&["ls-remote", "origin", "refs/heads/main"])?;
+    let peer = f.scratch.path().join("alternate-peer");
+    f.git(&[
+        "clone",
+        "-q",
+        f.scratch.path().join("remote.git").to_str().unwrap(),
+        peer.to_str().unwrap(),
+    ])?;
+    f.git_in(&peer, &["switch", "alternate"])?;
+    fs::write(peer.join("result.txt"), "remote\n")?;
+    f.git_in(&peer, &["add", "result.txt"])?;
+    f.git_in(
+        &peer,
+        &[
+            "-c",
+            "user.name=Peer",
+            "-c",
+            "user.email=peer@example.com",
+            "commit",
+            "-qm",
+            "alternate edit",
+        ],
+    )?;
+    f.git_in(&peer, &["push", "origin", "alternate"])?;
+    f.ok(&["delivery", "--base", "alternate"])?;
+    Ok(main)
+}
+
+#[test]
+fn retargeted_direct_conflict_repairs_on_the_new_branch() -> Result {
+    let f = Fixture::new()?;
+    let checkpoint = stopped_checkpoint(&f)?;
+    let main = remote_alternate_conflict(&f)?;
+    f.provider("resolve-conflict")?;
+    f.ok(&["run", "--one"])?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    assert_eq!(f.git(&["branch", "--show-current"])?.trim(), "alternate");
+    assert_eq!(
+        fs::read_to_string(f.root.join("result.txt"))?,
+        "remote\nverified\n"
+    );
+    assert_eq!(f.git(&["ls-remote", "origin", "refs/heads/main"])?, main);
+    let head = f.git(&["rev-parse", "HEAD"])?;
+    assert_ne!(head, checkpoint);
+    assert!(
+        f.git(&["ls-remote", "origin", "refs/heads/alternate"])?
+            .starts_with(head.trim())
+    );
+    let db = f.db()?;
+    for role in ["check", "review", "validation"] {
+        let count: i64 = db.connection().query_row("SELECT count(*) FROM attempt_steps WHERE attempt_id=(SELECT max(id) FROM attempts) AND role=?1", [role], |r| r.get(0))?;
+        assert!(count >= 2, "{role}: {count}");
+    }
+    let repairs: i64 = db.connection().query_row("SELECT count(*) FROM attempt_steps WHERE attempt_id=(SELECT max(id) FROM attempts) AND role='remediation'", [], |r|r.get(0))?;
+    assert!(repairs >= 1);
+    Ok(())
+}
+
+#[test]
+fn retargeted_direct_branch_serves_the_next_queued_task_in_real_pty() -> Result {
+    let f = Fixture::new()?;
+    let checkpoint = stopped_checkpoint(&f)?;
+    let main = f.git(&["ls-remote", "origin", "refs/heads/main"])?;
+    f.git(&["push", "origin", "HEAD^:refs/heads/alternate"])?;
+    f.git(&["branch", "alternate", "HEAD^"])?;
+    f.ok(&["delivery", "--base", "alternate"])?;
+    f.provider("sequential-pr")?;
+    f.add("Second queued task uses alternate")?;
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 130, 36)?;
+    let ready = t.screen("two queued tasks", |s| {
+        s.contains("Queue 2") && s.contains("r Run queue")
+    })?;
+    t.send("r")?;
+    let done = t.screen("queue completed", |s| {
+        s.contains("No current task") && s.contains("History 2")
+    })?;
+    t.send("3")?;
+    let history = t.screen("both delivered tasks", |s| {
+        s.contains("Retain verified checkpoint") && s.contains("Second queued task uses alternate")
+    })?;
+    assert_eq!(f.git(&["branch", "--show-current"])?.trim(), "alternate");
+    assert_eq!(f.git(&["rev-parse", "main"])?, checkpoint);
+    assert_eq!(f.git(&["ls-remote", "origin", "refs/heads/main"])?, main);
+    let head = f.git(&["rev-parse", "HEAD"])?;
+    assert!(
+        f.git(&["ls-remote", "origin", "refs/heads/alternate"])?
+            .starts_with(head.trim())
+    );
+    assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
+    if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+        fs::write(
+            PathBuf::from(dir).join("retargeted-queue-pty.txt"),
+            format!(
+                "Before Run:\n{ready}\nAfter Run:\n{done}\nHistory:\n{history}\norigin_main={main}\nalternate_head={head}"
+            ),
+        )?;
+    }
+    t.send("\x03")?;
+    t.finish()?;
+    Ok(())
+}
+
+#[test]
+fn retargeted_direct_repair_edits_survive_pause_and_resume_in_real_pty() -> Result {
+    let f = Fixture::new()?;
+    let checkpoint = stopped_checkpoint(&f)?;
+    let main = remote_alternate_conflict(&f)?;
+    f.provider("resolve-conflict-pause")?;
+    let script = f.scratch.path().join("bin/codex");
+    let source = fs::read_to_string(&script)?;
+    let before = "touch \"$HOME/conflict-repair-started\"\n sleep 30";
+    assert!(source.contains(before));
+    support::write_executable(&script, source.replace(before, "printf 'remote\\nverified\\n' > result.txt\n touch \"$HOME/conflict-repair-started\"\n sleep 30"))?;
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 130, 36)?;
+    t.screen("retargeted task ready", |s| s.contains("r Run queue"))?;
+    t.send("r")?;
+    support::eventually("edited conflict repair", || {
+        Ok((f.scratch.path().join("conflict-repair-started").exists()
+            && fs::read_to_string(f.root.join("result.txt"))
+                .ok()
+                .as_deref()
+                == Some("remote\nverified\n"))
+        .then_some(()))
+    })?;
+    let running = t.screen("repair running", |s| {
+        s.contains("p Pause") && s.contains("Step: Repair")
+    })?;
+    t.send("p")?;
+    let paused = t.screen("repair paused", |s| {
+        s.contains("Paused · runner stopped") && s.contains("r Resume")
+    })?;
+    let attempt: i64 = f
+        .db()?
+        .connection()
+        .query_row("SELECT max(id) FROM attempts", [], |r| r.get(0))?;
+    assert_eq!(
+        fs::read_to_string(f.root.join("result.txt"))?,
+        "remote\nverified\n"
+    );
+    f.provider("resolve-conflict")?;
+    t.send("r")?;
+    let done = t.screen("repair completed", |s| s.contains("No current task"))?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    assert_eq!(
+        f.db()?
+            .connection()
+            .query_row("SELECT max(id) FROM attempts", [], |r| r.get::<_, i64>(0))?,
+        attempt
+    );
+    assert_ne!(f.git(&["rev-parse", "HEAD"])?, checkpoint);
+    assert_eq!(f.git(&["ls-remote", "origin", "refs/heads/main"])?, main);
+    assert_eq!(f.git(&["branch", "--show-current"])?.trim(), "alternate");
+    assert_eq!(
+        fs::read_to_string(f.root.join("result.txt"))?,
+        "remote\nverified\n"
+    );
+    assert!(
+        f.git(&["ls-remote", "origin", "refs/heads/alternate"])?
+            .starts_with(f.git(&["rev-parse", "HEAD"])?.trim())
+    );
+    let db = f.db()?;
+    for role in ["check", "review", "validation"] {
+        let count: i64 = db.connection().query_row(
+            "SELECT count(*) FROM attempt_steps WHERE attempt_id=?1 AND role=?2",
+            rusqlite::params![attempt, role],
+            |r| r.get(0),
+        )?;
+        assert!(count >= 2, "{role}: {count}");
+    }
+    if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+        fs::write(
+            PathBuf::from(dir).join("retargeted-repair-pty.txt"),
+            format!(
+                "Running:\n{running}\nPaused:\n{paused}\nResumed:\n{done}\nattempt={attempt}\n"
+            ),
+        )?;
+    }
+    t.send("\x03")?;
+    t.finish()?;
+    Ok(())
+}
+
+#[test]
+fn divergent_local_destination_branch_is_preserved() -> Result {
+    let f = Fixture::new()?;
+    let checkpoint = stopped_checkpoint(&f)?;
+    f.git(&["push", "origin", "HEAD^:refs/heads/alternate"])?;
+    f.git(&["branch", "alternate", "HEAD^"])?;
+    f.git(&["switch", "alternate"])?;
+    fs::write(f.root.join("divergent.txt"), "local branch work\n")?;
+    f.git(&["add", "divergent.txt"])?;
+    f.git(&["commit", "-qm", "local branch work"])?;
+    let divergent = f.git(&["rev-parse", "HEAD"])?;
+    f.git(&["switch", "main"])?;
+    f.ok(&["delivery", "--base", "alternate"])?;
+    f.ok(&["run", "--one"])?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "paused");
+    assert_eq!(f.git(&["rev-parse", "HEAD"])?, checkpoint);
+    assert_eq!(f.git(&["rev-parse", "alternate"])?, divergent);
+    assert!(
+        !f.git(&["ls-remote", "origin", "refs/heads/alternate"])?
+            .starts_with(checkpoint.trim())
+    );
+    Ok(())
+}
+
+#[test]
+fn interrupted_branch_adoption_reconciles_its_completed_switch() -> Result {
+    let f = Fixture::new()?;
+    let checkpoint = stopped_checkpoint(&f)?;
+    let main = f.git(&["ls-remote", "origin", "refs/heads/main"])?;
+    f.git(&["push", "origin", "HEAD^:refs/heads/alternate"])?;
+    f.ok(&["delivery", "--base", "alternate"])?;
+    support::write_executable(
+        &f.scratch.path().join("bin/git"),
+        r#"#!/bin/sh
+case " $* " in
+ *" switch -c alternate "*) /usr/bin/git "$@" || exit $?; touch "$HOME/switch-completed"; sleep 30; exit 0;;
+esac
+exec /usr/bin/git "$@"
+"#,
+    )?;
+    let mut runner = Running(f.process().args(["run", "--one"]).spawn()?);
+    support::eventually("branch switched before acknowledgement", || {
+        Ok(f.scratch
+            .path()
+            .join("switch-completed")
+            .exists()
+            .then_some(()))
+    })?;
+    f.ok(&["pause"])?;
+    assert!(runner.0.wait()?.success());
+    assert_eq!(f.git(&["branch", "--show-current"])?.trim(), "alternate");
+    let pending: i64 = f.db()?.connection().query_row(
+        "SELECT retargeted FROM attempt_delivery ORDER BY attempt_id DESC LIMIT 1",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(pending, 1);
+    fs::remove_file(f.scratch.path().join("bin/git"))?;
+    f.ok(&["run", "--one"])?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    assert_eq!(f.git(&["rev-parse", "HEAD"])?, checkpoint);
+    assert_eq!(f.git(&["ls-remote", "origin", "refs/heads/main"])?, main);
+    assert!(
+        f.git(&["ls-remote", "origin", "refs/heads/alternate"])?
+            .starts_with(checkpoint.trim())
+    );
+    let pending: i64 = f.db()?.connection().query_row(
+        "SELECT retargeted FROM attempt_delivery ORDER BY attempt_id DESC LIMIT 1",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(pending, 0);
+    Ok(())
+}
+
+#[test]
+fn stopped_checkpoint_delivery_change_runs_from_real_pty_with_keyboard_and_mouse() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        let checkpoint = stopped_checkpoint(&f)?;
+        let remote_before = f.git(&["ls-remote", "origin", "refs/heads/main"])?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 35)?;
+        t.screen("stopped current", |s| {
+            s.contains("Retain verified checkpoint") && s.contains("r Run queue")
+        })?;
+        if mouse {
+            t.click("4 Config")?;
+            t.screen("configuration navigation", |s| s.contains("g Git delivery"))?;
+            t.click("g Git delivery")?;
+        } else {
+            t.send("4g")?;
+        }
+        t.screen("direct delivery form", |s| {
+            s.contains("╭ Git delivery") && s.contains("Direct push")
+        })?;
+        if mouse {
+            t.click("< Direct push >")?;
+            t.screen("mode changed to pull request", |s| {
+                s.contains("< Pull request >")
+            })?;
+            t.click("< Pull request >")?;
+            t.screen("mode changed to local", |s| s.contains("< Local >"))?;
+            t.click("Apply")?;
+        } else {
+            t.send("  \x13")?;
+        }
+        let saved = t.screen("local delivery saved", |s| s.contains("Delivery: local"))?;
+        if mouse {
+            t.click("1 Current")?;
+            t.screen("current navigation", |s| s.contains("r Run queue"))?;
+            t.click("r Run queue")?;
+        } else {
+            t.send("1r")?;
+        }
+        let done = t.screen("local completion", |s| s.contains("No current task"))?;
+        println!("RECONFIGURED DELIVERY mouse={mouse}\n{done}");
+        assert_eq!(f.git(&["rev-parse", "HEAD"])?, checkpoint);
+        assert_eq!(
+            f.git(&["ls-remote", "origin", "refs/heads/main"])?,
+            remote_before
+        );
+        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            fs::write(
+                PathBuf::from(dir).join(format!("stopped-delivery-pty-{mouse}.txt")),
+                format!(
+                    "Configuration after save:\n{saved}\nCurrent Task after Run:\n{done}\ncheckpoint={}\norigin_main={}\n",
+                    checkpoint.trim(),
+                    remote_before.trim()
+                ),
+            )?;
+        }
+        t.send("\x03")?;
+        t.finish()?;
+    }
+    Ok(())
+}
 #[test]
 fn preflight_fetch_retries_without_starting_another_attempt() -> Result {
     let f = Fixture::new()?;

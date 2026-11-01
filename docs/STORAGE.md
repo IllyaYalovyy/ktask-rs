@@ -81,7 +81,9 @@ and export remain available when provider metadata disappears.
 Project delivery lives in `project_delivery` with a guarded row version, mode (`local`,
 `direct`, or `pr`), remote, base branch, owned PR branch and last published tip. The default
 when no row exists is Local via `origin/main`. `attempt_delivery` pins the mode, destination
-URL and branch when execution begins. Its stage and checkpoint, fetched-base, pushed-head and
+URL and branch when execution begins. After Stop, a successor keeps the checkpoint but pins
+the current project delivery settings; unchanged settings retain the existing handoff intent.
+Its stage and checkpoint, fetched-base, pushed-head and
 PR URL fields record external side-effect boundaries. Preparation is part of the live
 attempt, so its fetch can pause or retry. Pending push head and expected remote tip are
 reconciled before fetching a newer base; rebase completion and proof invalidation commit
@@ -331,6 +333,7 @@ rebase completion. Terminal attempt handoffs are claimed once by an authorized s
 | `repair_origin_task` | INTEGER | yes | Original task whose repair-round count follows this handoff. |
 | `sync_cycles` | INTEGER | no | Distinct remote integration targets reserved, bounded at six; retained across resume and automatic handoffs. |
 | `restart_sync` | INTEGER | no | Stop, Mark done or an edit while stopped authorizes the successor to start a fresh synchronization batch. |
+| `retargeted` | INTEGER | no | Checkpoint adoption pending after destination settings changed; cleared only after the new local delivery branch is established, before checks or repair resume. |
 
 - PK `(attempt_id)`.
 - FK `(attempt_id)` → `attempts(id)`.

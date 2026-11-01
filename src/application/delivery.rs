@@ -13,6 +13,7 @@ pub struct DeliveryAttempt {
     pub fetched_base: Option<String>,
     pub pushed_head: Option<String>,
     pub pr_url: Option<String>,
+    pub retargeted: bool,
 }
 
 impl Service {
@@ -38,7 +39,13 @@ impl Service {
     pub fn pending_delivery_handoff(&self, task: i64) -> Result<bool> {
         Ok(self.db.connection().query_row("SELECT EXISTS(SELECT 1 FROM attempt_delivery d JOIN attempts a ON a.id=d.attempt_id WHERE a.project_id=?1 AND d.handoff_target=?2 AND d.handoff_claimed_by IS NULL)",params![self.project_id,task],|r|r.get(0))?)
     }
-    pub fn claim_delivery_handoff(&mut self, run: &Run) -> Result<bool> {
+    pub fn claim_delivery_handoff(
+        &mut self,
+        run: &Run,
+        config: &DeliveryConfig,
+        branch: Option<&str>,
+        destination_url: &str,
+    ) -> Result<bool> {
         let tx = self
             .db
             .connection_mut()
@@ -48,7 +55,38 @@ impl Service {
             return Ok(false);
         };
         require(tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND execution_token=?2 AND state='running')",params![run.attempt,run.token],|r|r.get(0))?,"Delivery successor ownership lost")?;
-        tx.execute("INSERT INTO attempt_delivery(attempt_id,mode,remote,destination_url,base_branch,branch,stage,checkpoint_head,fetched_base,pushed_head,pr_url,pending_head,pending_tip,repair_origin_task,sync_cycles) SELECT ?2,mode,remote,destination_url,base_branch,branch,stage,checkpoint_head,fetched_base,pushed_head,pr_url,pending_head,pending_tip,repair_origin_task,CASE WHEN restart_sync=1 THEN 0 ELSE sync_cycles END FROM attempt_delivery WHERE attempt_id=?1",params![source,run.attempt])?;
+        let current: (i64, String, String, String) = tx.query_row("SELECT row_version,mode,remote,base_branch FROM project_delivery WHERE project_id=?1",[self.project_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?.unwrap_or((0,"local".into(),"origin".into(),"main".into()));
+        require(
+            current
+                == (
+                    config.version,
+                    config.mode.clone(),
+                    config.remote.clone(),
+                    config.base_branch.clone(),
+                ),
+            "Delivery configuration changed during handoff",
+        )?;
+        let prior: (String, String, String, String) = tx.query_row(
+            "SELECT mode,remote,destination_url,base_branch FROM attempt_delivery WHERE attempt_id=?1",
+            [source],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?;
+        if prior
+            == (
+                config.mode.clone(),
+                config.remote.clone(),
+                destination_url.into(),
+                config.base_branch.clone(),
+            )
+        {
+            // An unchanged target preserves the exact delivery state, including an
+            // interrupted branch adoption that still needs to finish.
+            tx.execute("INSERT INTO attempt_delivery(attempt_id,mode,remote,destination_url,base_branch,branch,stage,checkpoint_head,fetched_base,pushed_head,pr_url,pending_head,pending_tip,repair_origin_task,sync_cycles,retargeted) SELECT ?2,mode,remote,destination_url,base_branch,branch,stage,checkpoint_head,fetched_base,pushed_head,pr_url,pending_head,pending_tip,repair_origin_task,CASE WHEN restart_sync=1 THEN 0 ELSE sync_cycles END,retargeted FROM attempt_delivery WHERE attempt_id=?1",params![source,run.attempt])?;
+        } else {
+            // Keep the commit and task context, but discard the old destination's fetch,
+            // push and PR state. A new proof is required before the new target is used.
+            tx.execute("INSERT INTO attempt_delivery(attempt_id,mode,remote,destination_url,base_branch,branch,stage,checkpoint_head,repair_origin_task,sync_cycles,retargeted) SELECT ?2,?3,?4,?5,?6,?7,CASE WHEN checkpoint_head IS NOT NULL THEN 'checkpointed' WHEN ?3='local' THEN 'work' ELSE 'preparing' END,checkpoint_head,repair_origin_task,0,CASE WHEN checkpoint_head IS NOT NULL THEN 1 ELSE 0 END FROM attempt_delivery WHERE attempt_id=?1",params![source,run.attempt,config.mode,config.remote,destination_url,config.base_branch,branch])?;
+        }
         tx.execute("UPDATE attempts SET base_commit=(SELECT base_commit FROM attempts WHERE id=?2) WHERE id=?1",params![run.attempt,source])?;
         // A Stop restarts from the checks at round 0 with no prior proof; an applied
         // replan keeps the repair round and evidence for its judge.
@@ -197,7 +235,15 @@ impl Service {
         tx.commit().map_err(Into::into)
     }
     pub fn attempt_delivery(&self, run: &Run) -> Result<DeliveryAttempt> {
-        self.db.connection().query_row("SELECT mode,remote,destination_url,base_branch,branch,stage,checkpoint_head,fetched_base,pushed_head,pr_url FROM attempt_delivery WHERE attempt_id=?1", [run.attempt], |r| Ok(DeliveryAttempt { mode:r.get(0)?, remote:r.get(1)?, destination_url:r.get(2)?, base_branch:r.get(3)?, branch:r.get(4)?, stage:r.get(5)?, checkpoint_head:r.get(6)?, fetched_base:r.get(7)?, pushed_head:r.get(8)?, pr_url:r.get(9)? })).map_err(Into::into)
+        self.db.connection().query_row("SELECT mode,remote,destination_url,base_branch,branch,stage,checkpoint_head,fetched_base,pushed_head,pr_url,retargeted FROM attempt_delivery WHERE attempt_id=?1", [run.attempt], |r| Ok(DeliveryAttempt { mode:r.get(0)?, remote:r.get(1)?, destination_url:r.get(2)?, base_branch:r.get(3)?, branch:r.get(4)?, stage:r.get(5)?, checkpoint_head:r.get(6)?, fetched_base:r.get(7)?, pushed_head:r.get(8)?, pr_url:r.get(9)?, retargeted:r.get(10)? })).map_err(Into::into)
+    }
+    /// Complete adoption only after Git is on the intended checkpoint and branch.
+    /// An interrupted Git switch leaves this marker set for the next supervisor.
+    pub fn complete_delivery_retarget(&self, run: &Run) -> Result<()> {
+        require(self.db.connection().execute(
+            "UPDATE attempt_delivery SET retargeted=0 WHERE attempt_id=?1 AND retargeted=1 AND stage='checkpointed' AND EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND project_id=?2 AND execution_token=?3 AND state='running')",
+            params![run.attempt, self.project_id, run.token],
+        )? == 1, "Delivery adoption ownership lost")
     }
     pub fn delivery_stage(
         &mut self,
