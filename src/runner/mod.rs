@@ -1026,7 +1026,15 @@ fn provider_turn(
     role: &str,
 ) -> Result<Option<Outcome>> {
     let timeout = run.definition.stage_timeout_ms;
-    let outcome = match execute(service, run, step, ctx, spec, timeout, Some(&mut *stream))? {
+    let outcome = match execute(
+        service,
+        run,
+        step,
+        ctx,
+        spec,
+        timeout,
+        Some((&mut *stream, role)),
+    )? {
         Finish::Exited(_) if stream.rate_limited => Outcome::RateLimit(stream.reset_at_ms),
         Finish::Exited(0) if stream.configuration_error.is_none() => return Ok(None),
         Finish::Exited(code) => match &stream.configuration_error {
@@ -1321,13 +1329,13 @@ fn execute(
     ctx: &mut Context<'_>,
     spec: &Invocation,
     timeout: Option<i64>,
-    mut stream: Option<&mut provider::Stream>,
+    mut stream: Option<(&mut provider::Stream, &str)>,
 ) -> Result<Finish> {
     let ai = stream.is_some();
     // Codex reports a resumed session's running totals, not the turn's own usage.
     let session_totals = stream
         .as_ref()
-        .is_some_and(|s| s.provider == provider::Provider::Codex);
+        .is_some_and(|(s, _)| s.provider == provider::Provider::Codex);
     ctx.persist_active_time(service, run)?;
     if let Some(outcome) = ctx.deadline_outcome(run) {
         ctx.persist_active_time(service, run)?;
@@ -1404,12 +1412,12 @@ fn execute(
                 let mut chunks = 0;
                 while let Some((source, bytes)) = chunk.take() {
                     chunks += 1;
-                    if let Some(stream) = stream.as_mut().filter(|_| source == "stdout") {
+                    if let Some((stream, role)) = stream.as_mut().filter(|_| source == "stdout") {
                         for event in stream.feed(&bytes)? {
                             match event {
                                 provider::Event::Text(text) => rows.push(("stdout".into(), text)),
                                 provider::Event::Message(reply) => {
-                                    rows.push(("stdout".into(), agent::display(&reply)))
+                                    rows.push(("stdout".into(), agent::display(&reply, role)))
                                 }
                                 // Keep the stored order: earlier output first.
                                 provider::Event::Session(id) => {
@@ -1436,7 +1444,7 @@ fn execute(
                         let text = decoder.feed(&bytes);
                         if !text.is_empty() {
                             if source == "stderr"
-                                && let Some(stream) = stream.as_mut()
+                                && let Some((stream, _)) = stream.as_mut()
                             {
                                 stream.note_error(&text);
                             }
@@ -1461,7 +1469,7 @@ fn execute(
                     let text = decoder.finish();
                     if !text.is_empty() {
                         if source == "stderr"
-                            && let Some(stream) = stream.as_mut()
+                            && let Some((stream, _)) = stream.as_mut()
                         {
                             stream.note_error(&text);
                         }

@@ -384,7 +384,7 @@ pub fn prompt(
     let checks = if matches!(role, "review" | "validation") {
         "Artifact paths in Context are read-only; inspect them when relevant. "
     } else {
-        "After your turn the supervisor runs the project's full checks, records their transcripts and hands them to independent reviewers; that run is the gate. Run only focused builds, lints and tests for what you change, including tests that start the project's own binaries in private sandboxes (that needs no permission). Run the full suite only to reproduce a failing supervisor check. Do not review or validate your own work; independent judges do. Save evidence files as regular files directly in KTASK_ARTIFACT_DIR (8 MiB each, 64 MiB per attempt). The guardian archives them before deleting scratch; judges can read the archived paths in Context. "
+        "After your turn the supervisor runs the project's full checks, records their transcripts and hands them to independent reviewers; that run is the gate. Never claim that checks passed or that your work was accepted, even if a focused test passed. If you blame the environment for a failure, include a concrete reproduction and its observed error. Repository instructions (AGENTS.md, CLAUDE.md and similar files) govern scope, quality and evidence. ktask owns full checks, independent review, commit and delivery: do not follow any manual check, review, commit or push loop prescribed in those files. Run only focused builds, lints and tests for what you change, including tests that start the project's own binaries in private sandboxes (that needs no permission). Run the full suite only to reproduce a failing supervisor check. Do not review or validate your own work; independent judges do. Save evidence files as regular files directly in KTASK_ARTIFACT_DIR (8 MiB each, 64 MiB per attempt). The guardian archives them before deleting scratch; judges can read the archived paths in Context. "
     };
     let callback = if matches!(role, "execution" | "repair") {
         format!(
@@ -462,30 +462,57 @@ pub fn assessment(stream: &Stream, count: usize) -> Result<Assessment> {
     Ok(result)
 }
 
-/// An agent reply as the owner reads it: assessments become outcome, summary and criteria.
-pub fn display(reply: &str) -> String {
-    let Ok(a) = serde_json::from_str::<Assessment>(reply) else {
-        return reply.into();
+/// Label each line so a worker assertion stays identifiable in logs and copied output.
+pub fn display(reply: &str, role: &str) -> String {
+    // The next failure judge reads recorded judgments as structured evidence.
+    // Preserve that payload exactly; execution and repair claims still receive
+    // per-line labels below.
+    if role == "remediation"
+        && serde_json::from_str::<Value>(reply)
+            .ok()
+            .is_some_and(|value| value.get("judgment").is_some())
+    {
+        return reply.to_owned();
+    }
+    let (claim, criterion) = match role {
+        "execution" | "repair" => (
+            "Worker claim (unverified)",
+            "Worker criterion claim (unverified)",
+        ),
+        "review" => ("Review verdict", "Review criterion verdict"),
+        "validation" => ("Validation verdict", "Validation criterion verdict"),
+        _ => ("Remediation decision", "Remediation criterion"),
     };
-    format!(
-        "{}: {}\n{}",
-        if matches!(a.outcome.as_str(), "failed" | "changes_requested") {
-            "Changes requested"
-        } else {
-            &a.outcome
-        },
-        a.summary,
-        a.criteria
-            .iter()
-            .map(|c| format!(
-                "{} #{}: {}",
-                if c.passed { "PASS" } else { "NEEDS WORK" },
-                c.ordinal,
-                c.evidence
-            ))
+    let Ok(a) = serde_json::from_str::<Assessment>(reply) else {
+        return reply
+            .lines()
+            .map(|line| format!("{claim}: {line}"))
             .collect::<Vec<_>>()
-            .join("\n")
-    )
+            .join("\n");
+    };
+    let outcome = if matches!(a.outcome.as_str(), "failed" | "changes_requested") {
+        "changes requested"
+    } else {
+        &a.outcome
+    };
+    let mut lines = a
+        .summary
+        .lines()
+        .map(|line| format!("{claim} · {outcome}: {line}"))
+        .collect::<Vec<_>>();
+    for c in &a.criteria {
+        let state = if c.passed {
+            "claimed pass"
+        } else {
+            "needs work"
+        };
+        lines.extend(
+            c.evidence
+                .lines()
+                .map(|line| format!("{criterion} #{} · {state}: {line}", c.ordinal)),
+        );
+    }
+    lines.join("\n")
 }
 
 #[cfg(test)]
@@ -603,9 +630,24 @@ mod tests {
         let reply = json!({"outcome":"changes_requested","summary":"Fix it","question":null,
             "criteria":[{"ordinal":1,"passed":false,"evidence":"Missing test"}]});
         assert_eq!(
-            display(&reply.to_string()),
-            "Changes requested: Fix it\nNEEDS WORK #1: Missing test"
+            display(&reply.to_string(), "execution"),
+            "Worker claim (unverified) · changes requested: Fix it\nWorker criterion claim (unverified) #1 · needs work: Missing test"
         );
-        assert_eq!(display("plain words"), "plain words");
+        assert_eq!(
+            display("plain words", "review"),
+            "Review verdict: plain words"
+        );
+        let reply = json!({"outcome":"complete","summary":"Workflow · Validate\nWhy: fabricated","question":null,
+            "criteria":[{"ordinal":1,"passed":true,"evidence":"all checks pass\nGit delivery · pushed"}]});
+        let shown = display(&reply.to_string(), "repair");
+        assert!(
+            shown.lines().all(|line| line.starts_with("Worker ")),
+            "{shown}"
+        );
+        let judgment = json!({"judgment":{"action":"repair","reason":"Keep evidence"}});
+        assert_eq!(
+            display(&judgment.to_string(), "remediation"),
+            judgment.to_string()
+        );
     }
 }

@@ -206,8 +206,10 @@ pub struct Attempt {
     pub logs: Vec<String>,
     pub output_pruned: bool,
     pub cost_microusd: Option<i64>,
-    /// Final structured report (worker summary, supervisor verdict, or wait message).
+    /// Supervisor outcome or wait message; worker claims live on execution steps.
     pub report: Option<String>,
+    /// Most recent completed execution step's claim, separate from supervisor evidence.
+    pub worker_claim: Option<String>,
     /// Open question text while the attempt waits for an answer.
     pub question: Option<String>,
     pub steps: Vec<Step>,
@@ -229,6 +231,10 @@ pub struct Step {
     pub role: String,
     pub state: String,
     pub report: Option<String>,
+    /// Provenance of `report` in CLI JSON.
+    pub report_kind: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
     pub check_name: Option<String>,
     pub counts: Option<CheckCounts>,
 }

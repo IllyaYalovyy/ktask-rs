@@ -722,7 +722,13 @@ impl App {
                             record.id,
                             record.revision,
                             record.state,
-                            record.outcome.as_deref().unwrap_or("No outcome recorded"),
+                            record
+                                .outcome
+                                .as_deref()
+                                .unwrap_or("No outcome recorded")
+                                .lines()
+                                .next()
+                                .unwrap_or_default(),
                             evidence
                                 .unwrap_or_else(|error| format!("Evidence unavailable: {error}"))
                         );
@@ -735,12 +741,21 @@ impl App {
                         record.id,
                         record.revision,
                         record.state,
-                        record.outcome.as_deref().unwrap_or("No outcome recorded"),
+                        record
+                            .outcome
+                            .as_deref()
+                            .unwrap_or("No outcome recorded")
+                            .lines()
+                            .next()
+                            .unwrap_or_default(),
                         record
                             .report
                             .as_deref()
                             .filter(|report| Some(*report) != record.outcome.as_deref())
-                            .map_or(String::new(), |report| format!("{report}\n")),
+                            .map_or(String::new(), |report| format!(
+                                "Supervisor outcome: {}\n",
+                                report.lines().next().unwrap_or_default()
+                            )),
                         if excerpt.is_empty() {
                             String::new()
                         } else {
@@ -1312,33 +1327,60 @@ fn step_label(steps: &[domain::Step], index: usize) -> &'static str {
         _ => "Remediation",
     }
 }
-/// The attempt's own report first, then each step's finding; empty until something was recorded.
-/// An open question is shown in its own panel, so it is not repeated here.
+/// Keep the worker's claim distinct from the supervisor's outcome and recorded steps.
 fn report_text(attempt: &domain::Attempt) -> String {
-    let mut text = attempt
+    let supervisor_report = attempt
         .report
         .clone()
-        .filter(|report| {
-            attempt.question.as_deref() != Some(report.trim())
-                && attempt.outcome.as_deref().map(str::trim) != Some(report.trim())
-        })
+        .filter(|report| attempt.question.as_deref() != Some(report.trim()))
         .unwrap_or_default();
+    let mut text = String::new();
+    if let Some(claim) = &attempt.worker_claim {
+        text.push_str(&format!("Worker claim (unverified):\n{claim}"));
+    }
+    let latest_check = attempt.steps.iter().rposition(|step| step.role == "check");
     let last = attempt.steps.len();
     for (i, step) in attempt.steps.iter().enumerate() {
-        if let Some(counts) = step.counts {
+        if step.role == "execution" && step.state == "succeeded" {
+            continue;
+        }
+        if step.role == "check" {
+            if Some(i) != latest_check {
+                continue;
+            }
             if !text.is_empty() {
                 text.push_str("\n\n");
             }
             text.push_str(&format!(
-                "Check {}: {} passed, {} failed, {} ignored",
+                "Supervisor check {} · {}",
                 step.check_name.as_deref().unwrap_or("unknown"),
-                counts.passed,
-                counts.failed,
-                counts.ignored
+                step.state
             ));
+            if let Some(counts) = step.counts {
+                text.push_str(&format!(
+                    "\nCheck {}: {} passed, {} failed, {} ignored",
+                    step.check_name.as_deref().unwrap_or("unknown"),
+                    counts.passed,
+                    counts.failed,
+                    counts.ignored
+                ));
+            } else {
+                text.push_str(&format!(
+                    "\nCheck {}: test counts unavailable",
+                    step.check_name.as_deref().unwrap_or("unknown")
+                ));
+            }
+            if let Some(report) = step
+                .report
+                .as_deref()
+                .filter(|report| !report.trim().is_empty())
+            {
+                text.push_str(&format!("\n{}", report.lines().next().unwrap_or_default()));
+            }
+            continue;
         }
         let finding = step.report.as_deref().unwrap_or_default().trim();
-        if finding.is_empty() || text.contains(finding) {
+        if finding.is_empty() {
             continue;
         }
         if !text.is_empty() {
@@ -1353,10 +1395,41 @@ fn report_text(attempt: &domain::Attempt) -> String {
                 step.state.as_str()
             }
         };
+        let model = step
+            .model
+            .as_deref()
+            .map(|model| {
+                format!(
+                    " · {}/{}",
+                    step.provider.as_deref().unwrap_or("unknown"),
+                    model
+                )
+            })
+            .unwrap_or_default();
         text.push_str(&format!(
-            "{} · {state}: {finding}",
+            "{} · {state}{model} verdict: {finding}",
             step_label(&attempt.steps, i)
         ));
+    }
+    if attempt.state == "succeeded"
+        && attempt
+            .steps
+            .iter()
+            .any(|step| step.role == "validation" && step.state == "succeeded")
+    {
+        text.push_str("\n\nAccepted: validation passed");
+    }
+    if !supervisor_report.is_empty() {
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        if supervisor_report.starts_with("Workflow · ")
+            || supervisor_report.starts_with("Git delivery · ")
+        {
+            text.push_str(&supervisor_report);
+        } else {
+            text.push_str(&format!("Supervisor outcome: {supervisor_report}"));
+        }
     }
     text
 }
@@ -1390,6 +1463,7 @@ fn project_task(task: &domain::Task) -> Result<model::Task, String> {
                     "waiting" => "Waiting".to_owned(),
                     state => state.to_owned(),
                 }),
+                supervisor_status: a.report.clone().unwrap_or_default(),
                 report: report_text(a),
                 question: a.question.clone(),
                 steps: a

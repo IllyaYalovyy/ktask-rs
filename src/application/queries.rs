@@ -283,7 +283,7 @@ impl Service {
     pub fn browse_results(&self, attempt: i64) -> Result<String> {
         let db = self.db.connection();
         let mut text = String::from("Role steps, findings and acceptance results\n");
-        let mut stmt = db.prepare("SELECT s.id,s.ordinal,s.role,s.state,coalesce(c.name,''),coalesce(s.report,''),s.command,s.exit_code,s.passed_count,s.failed_count,s.ignored_count FROM attempt_steps s LEFT JOIN project_checks c ON c.id=s.project_check_id WHERE s.attempt_id=?1 ORDER BY s.ordinal")?;
+        let mut stmt = db.prepare("SELECT s.id,s.ordinal,s.role,s.state,coalesce(c.name,''),coalesce(s.report,''),s.command,s.exit_code,s.passed_count,s.failed_count,s.ignored_count,s.provider,s.model FROM attempt_steps s LEFT JOIN project_checks c ON c.id=s.project_check_id WHERE s.attempt_id=?1 ORDER BY s.ordinal")?;
         let steps = stmt
             .query_map([attempt], |r| {
                 Ok((
@@ -298,25 +298,56 @@ impl Service {
                     r.get::<_, Option<i64>>(8)?,
                     r.get::<_, Option<i64>>(9)?,
                     r.get::<_, Option<i64>>(10)?,
+                    r.get::<_, Option<String>>(11)?,
+                    r.get::<_, Option<String>>(12)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         if steps.is_empty() {
             text.push_str("No role steps recorded.\n");
         }
-        for (id, ordinal, role, state, check, report, command, exit, passed, failed, ignored) in
-            steps
+        for (
+            id,
+            ordinal,
+            role,
+            state,
+            check,
+            report,
+            command,
+            exit,
+            passed,
+            failed,
+            ignored,
+            provider,
+            model,
+        ) in steps
         {
             text.push_str(&format!(
-                "\nStep {ordinal} · {role}{} · {state}\n",
+                "\nStep {ordinal} · {role}{}{} · {state}\n",
                 if check.is_empty() {
                     String::new()
                 } else {
                     format!(" · {check}")
-                }
+                },
+                model
+                    .as_deref()
+                    .map(|model| format!(
+                        " · {}/{}",
+                        provider.as_deref().unwrap_or("unknown"),
+                        model
+                    ))
+                    .unwrap_or_default()
             ));
             if !report.is_empty() {
-                text.push_str(&format!("{report}\n"));
+                let label = match role.as_str() {
+                    "execution" if state == "succeeded" => "Worker claim (unverified)",
+                    "execution" => "Execution failure",
+                    "check" => "Supervisor check result",
+                    "review" => "Review verdict",
+                    "validation" => "Validation verdict",
+                    _ => "Report",
+                };
+                text.push_str(&format!("{label}: {report}\n"));
             }
             if let Some(command) = command {
                 text.push_str(&format!("Command: {command}\n"));
@@ -351,7 +382,7 @@ impl Service {
     pub fn browse_step_outline(&self, attempt: i64) -> Result<String> {
         let db = self.db.connection();
         let mut text = String::from("Recorded steps (select Reviews or Failures for findings)\n");
-        let mut stmt = db.prepare("SELECT ordinal,role,state,coalesce(failed_count,0) FROM attempt_steps WHERE attempt_id=?1 ORDER BY ordinal")?;
+        let mut stmt = db.prepare("SELECT ordinal,role,state,coalesce(failed_count,0),report,provider,model,check_name FROM attempt_steps WHERE attempt_id=?1 ORDER BY ordinal")?;
         let mut count = 0;
         for row in stmt.query_map([attempt], |r| {
             Ok((
@@ -359,18 +390,51 @@ impl Service {
                 r.get::<_, String>(1)?,
                 r.get::<_, String>(2)?,
                 r.get::<_, i64>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, Option<String>>(5)?,
+                r.get::<_, Option<String>>(6)?,
+                r.get::<_, Option<String>>(7)?,
             ))
         })? {
-            let (ordinal, role, state, failed) = row?;
+            let (ordinal, role, state, failed, report, provider, model, check_name) = row?;
             text.push_str(&format!(
-                "Step {ordinal} · {role} · {state}{}\n",
+                "Step {ordinal} · {role} · {state}{}{}\n",
+                model
+                    .as_deref()
+                    .map(|model| format!(
+                        " · {}/{}",
+                        provider.as_deref().unwrap_or("unknown"),
+                        model
+                    ))
+                    .unwrap_or_default(),
                 if failed > 0 {
                     format!(" · {failed} failed")
                 } else {
                     String::new()
                 }
             ));
+            match role.as_str() {
+                "execution" if state == "succeeded" => text.push_str(&format!(
+                    "Worker claim (unverified): {}\n",
+                    report.as_deref().unwrap_or("No claim recorded")
+                )),
+                "check" => text.push_str(&format!(
+                    "Supervisor check {} · {state}: {}\n",
+                    check_name.as_deref().unwrap_or("unknown"),
+                    report.as_deref().unwrap_or("No result recorded")
+                )),
+                "review" | "validation" => {
+                    text.push_str(&format!(
+                        "{role} verdict · {state} (open Reviews or Results for findings)\n"
+                    ));
+                }
+                _ => {}
+            }
             count += 1;
+        }
+        let accepted: bool = db.query_row("SELECT state='succeeded' AND EXISTS(SELECT 1 FROM attempt_steps WHERE attempt_id=?1 AND role='validation' AND state='succeeded') FROM attempts WHERE id=?1", [attempt], |r| r.get(0))?;
+        if accepted {
+            text.push_str("Accepted: validation passed\n");
         }
         if count == 0 {
             text.push_str("No steps recorded.\n");
@@ -1078,6 +1142,7 @@ fn attempts(
                 logs: Vec::new(),
                 output_pruned: r.get(11)?,
                 report: r.get(9)?,
+                worker_claim: None,
                 question: r.get(10)?,
                 steps: Vec::new(),
                 artifacts: Vec::new(),
@@ -1123,16 +1188,29 @@ fn attempts(
             }
         }
         let mut steps = db.prepare_cached(
-            "SELECT s.role, s.state, s.report, c.name, s.passed_count, s.failed_count, s.ignored_count
+            "SELECT s.role, s.state, s.report, c.name, s.passed_count, s.failed_count, s.ignored_count, s.provider, s.model
              FROM attempt_steps s LEFT JOIN project_checks c ON c.id=s.project_check_id
              WHERE s.attempt_id = ?1 ORDER BY s.ordinal",
         )?;
         attempt.steps = steps
             .query_map([attempt.id], |r| {
+                let role: String = r.get(0)?;
+                let state: String = r.get(1)?;
+                let report_kind = match (role.as_str(), state.as_str()) {
+                    ("execution", "succeeded") => "worker_claim",
+                    ("execution", _) => "execution_failure",
+                    ("check", _) => "supervisor_check",
+                    ("review", _) => "review_verdict",
+                    ("validation", _) => "validation_verdict",
+                    _ => "remediation_decision",
+                };
                 Ok(Step {
-                    role: r.get(0)?,
-                    state: r.get(1)?,
+                    role,
+                    state,
                     report: r.get(2)?,
+                    report_kind: report_kind.into(),
+                    provider: r.get(7)?,
+                    model: r.get(8)?,
                     check_name: r.get(3)?,
                     counts: match r.get::<_, Option<i64>>(4)? {
                         Some(passed) => Some(CheckCounts {
@@ -1145,6 +1223,14 @@ fn attempts(
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        attempt.worker_claim = attempt
+            .steps
+            .iter()
+            .rev()
+            .find(|step| {
+                step.role == "execution" && step.state == "succeeded" && step.report.is_some()
+            })
+            .and_then(|step| step.report.clone());
     }
     Ok(attempts)
 }

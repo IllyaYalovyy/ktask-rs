@@ -208,7 +208,10 @@ fn content(rect: Rect) -> Rect {
 }
 
 fn active_phase(task: &crate::presentation::Task) -> String {
-    if let Some(line) = task.attempts.last().and_then(|a| a.report.lines().next())
+    if let Some(line) = task
+        .attempts
+        .last()
+        .and_then(|a| a.supervisor_status.lines().next())
         && (line.starts_with("Workflow ·") || line.starts_with("Git delivery ·"))
     {
         return line.to_owned();
@@ -593,11 +596,11 @@ fn current_step_line(
 
 /// Why the running fix round exists, wrapped onto at most two lines; Activity keeps it all.
 fn why_lines(task: &crate::presentation::Task, width: usize) -> Vec<Line<'static>> {
-    let Some(why) = task
-        .attempts
-        .last()
-        .and_then(|a| a.report.lines().find(|line| line.starts_with("Why: ")))
-    else {
+    let Some(why) = task.attempts.last().and_then(|a| {
+        a.supervisor_status
+            .lines()
+            .find(|line| line.starts_with("Why: "))
+    }) else {
         return Vec::new();
     };
     let mut first = clip(why, width);
@@ -693,7 +696,7 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         .map(|(label, _)| label.as_str());
     let phase = attempt
         .filter(|_| status == Status::Running)
-        .and_then(|a| a.report.strip_prefix("Workflow · "))
+        .and_then(|a| a.supervisor_status.strip_prefix("Workflow · "))
         .and_then(|report| report.split(" · ").next());
     let model_index = match phase.or(role) {
         Some("Review") => 1,
@@ -1073,9 +1076,13 @@ fn draw_output(frame: &mut Frame, app: &mut App, output: Rect) {
     let (title, text, warn_prefixes): (String, String, &[&str]) = match (attempt, report) {
         (_, Some(a)) => (
             format!(" Report · attempt {} · o: raw log ", task.attempts.len()),
-            format!("Outcome: {}\n\n{}", a.outcome, a.report)
-                .trim_end()
-                .to_owned(),
+            format!(
+                "Outcome: {}\n\n{}",
+                a.outcome.lines().next().unwrap_or_default(),
+                a.report
+            )
+            .trim_end()
+            .to_owned(),
             &["Outcome: Failed", "Outcome: failed", "FAIL", "Expected"],
         ),
         (Some(a), None) => (
@@ -1119,7 +1126,7 @@ fn draw_output(frame: &mut Frame, app: &mut App, output: Rect) {
     app.selection.zone(content(output));
     let last = lines.len().saturating_sub(app.log_height);
     app.log_offset = if app.follow {
-        last
+        if showing_report { 0 } else { last }
     } else {
         app.log_offset.min(last)
     };

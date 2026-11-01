@@ -148,6 +148,9 @@ fn task_text(task: &Task) -> String {
         if a.output_pruned {
             text.push_str("  PRUNED: stored output was removed by retention.\n");
         }
+        if let Some(report) = &a.report {
+            text.push_str(&format!("  Supervisor outcome: {}\n", safe(report)));
+        }
         for artifact in &a.artifacts {
             text.push_str(&format!(
                 "  Artifact {}: {} · {} · {} bytes · sha256 {} · tree {}{}\n",
@@ -159,6 +162,9 @@ fn task_text(task: &Task) -> String {
                 artifact.source_tree.as_deref().unwrap_or("unrecorded"),
                 if artifact.pruned { " · PRUNED" } else { "" }
             ));
+        }
+        if a.steps.iter().any(|step| step.role == "check") {
+            text.push_str("  Supervisor check results:\n");
         }
         for step in a.steps.iter().filter(|step| step.role == "check") {
             let counts = step.counts.map_or_else(
@@ -174,6 +180,30 @@ fn task_text(task: &Task) -> String {
                 "  Check {}: {counts}\n",
                 safe(step.check_name.as_deref().unwrap_or("unknown"))
             ));
+        }
+        if let Some(claim) = &a.worker_claim {
+            text.push_str(&format!("  Worker claim (unverified): {}\n", safe(claim)));
+        }
+        for step in a
+            .steps
+            .iter()
+            .filter(|step| matches!(step.role.as_str(), "review" | "validation"))
+        {
+            text.push_str(&format!(
+                "  {} verdict · {}/{} · {}: {}\n",
+                step.role,
+                step.provider.as_deref().unwrap_or("unknown"),
+                step.model.as_deref().unwrap_or("unknown"),
+                step.state,
+                safe(step.report.as_deref().unwrap_or("No report recorded"))
+            ));
+        }
+        if a.state == "succeeded"
+            && a.steps
+                .iter()
+                .any(|step| step.role == "validation" && step.state == "succeeded")
+        {
+            text.push_str("  Accepted: validation passed\n");
         }
         for line in &a.logs {
             text.push_str(&format!("  {}\n", safe(line)));

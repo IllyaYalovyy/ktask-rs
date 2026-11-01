@@ -125,7 +125,9 @@ pub struct Attempt {
     pub resume_at_ms: Option<i64>,
     pub logs: Vec<String>,
     pub outcome: String,
-    /// Final report: worker summary, supervisor verdict and step findings. Empty while unknown.
+    /// Supervisor-owned status, kept outside rendered worker claims.
+    pub supervisor_status: String,
+    /// Rendered claim, check and verdict sections. Empty while unknown.
     pub report: String,
     /// Question the worker is waiting on, while open.
     pub question: Option<String>,
@@ -157,6 +159,7 @@ impl Attempt {
             resume_at: None,
             resume_at_ms: None,
             outcome: "Running".into(),
+            supervisor_status: String::new(),
             report: String::new(),
             question: None,
             steps: Vec::new(),
