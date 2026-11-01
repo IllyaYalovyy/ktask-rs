@@ -254,6 +254,13 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         },
         name: cli.actor.clone().unwrap_or_else(|| "owner".into()),
     })?;
+    if service
+        .pending_control()?
+        .is_some_and(|control| !control.completed)
+        && !crate::runner::supervisor_alive(&service)?
+    {
+        crate::runner::control::finish_pending(&mut service)?;
+    }
     if let Command::Run {
         queue,
         one,

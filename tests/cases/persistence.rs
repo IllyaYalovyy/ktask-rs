@@ -4463,6 +4463,330 @@ fn mark_done_failed_current_and_pending_queue_task_by_keyboard_and_mouse() -> Re
 }
 
 #[test]
+fn real_pty_stop_and_done_behind_paused_prerequisite_preserve_its_edits() -> Result {
+    for a_state in ["failed", "paused"] {
+        for mouse in [false, true] {
+            for done in [false, true] {
+                let scratch = support::sandbox()?;
+                let root = scratch.path();
+                let checkout = project(root);
+                support::empty_repository(&checkout)?;
+                fs::write(checkout.join(".git/info/exclude"), "*\n!b-untracked.rs\n")?;
+                let (a, a_attempt) = failed_task(root)?;
+                if a_state == "paused" {
+                    Database::open_in(&root.join("state/ktask-dev"))?.connection().execute(
+                    "UPDATE attempts SET state='paused',outcome=NULL,finished_at_ms=NULL,failure_category=NULL WHERE id=?1",
+                    [a_attempt],
+                )?;
+                }
+                let mut writer = service(root)?;
+                let b = writer.create(&[runnable("Paused prerequisite")], Some(a), true)?[0];
+                let head = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&checkout)
+                    .args(["rev-parse", "HEAD"])
+                    .output()?;
+                let head = String::from_utf8(head.stdout)?.trim().to_owned();
+                let b_target = target(&mut writer, b)?;
+                let run = writer.begin_run(b_target, "fixture-b", &head, false)?;
+                writer.finish_run(&run, "paused", None, "Owner paused B", None)?;
+                writer.release_supervisor(&run)?;
+                let file = checkout.join("b-work.txt");
+                fs::write(&file, "staged B\n")?;
+                let staged = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&checkout)
+                    .args(["add", "-f", "b-work.txt"])
+                    .output()?;
+                assert!(staged.status.success());
+                fs::write(&file, "unstaged B\n")?;
+                fs::write(checkout.join("b-untracked.rs"), "untracked B\n")?;
+                let before = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&checkout)
+                    .args(["status", "--porcelain"])
+                    .output()?
+                    .stdout;
+                let mut t = terminal_at(root, 120, 34)?;
+                t.screen("paused prerequisite current", |s| {
+                    s.contains("Current #2 · Paused")
+                })?;
+                tab(&mut t, mouse, "2 Queue")?;
+                t.screen("queue with failed A", |s| {
+                    on_queue(s) && s.contains("#1") && s.contains("#2")
+                })?;
+                if mouse {
+                    t.click(if a_state == "paused" {
+                        "#1   Paused"
+                    } else {
+                        "#1   Failed"
+                    })?;
+                } else {
+                    t.send("j")?;
+                }
+                t.screen("failed A selected", |s| s.contains("› #1"))?;
+                control(&mut t, mouse, if done { "D Mark done" } else { "s Stop" })?;
+                t.screen("control A dialog", |s| {
+                    s.contains(if done { "Mark done #1" } else { "Stop #1" })
+                })?;
+                if mouse {
+                    t.click("Apply")?;
+                } else {
+                    t.send("\r")?;
+                }
+                let screen = t.screen("A controlled", |s| {
+                    s.contains(if done { "#1 marked done" } else { "#1 stopped" })
+                })?;
+                println!("CONTROL A WITH PAUSED B mouse={mouse} done={done}\n{screen}");
+                quit(&mut t)?;
+                let after = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&checkout)
+                    .args(["status", "--porcelain"])
+                    .output()?
+                    .stdout;
+                assert_eq!(before, after);
+                assert_eq!(fs::read_to_string(file)?, "unstaged B\n");
+                assert_eq!(
+                    fs::read_to_string(checkout.join("b-untracked.rs"))?,
+                    "untracked B\n"
+                );
+                let b_task = writer.task(b)?.unwrap();
+                assert_eq!(
+                    b_task.state(),
+                    ktask_rs_mk3::application::lifecycle::State::Paused
+                );
+                assert_eq!(b_task.attempts[0].id, run.attempt);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn real_pty_controls_save_failed_or_paused_a_behind_unstarted_b() -> Result {
+    for state in ["failed", "paused"] {
+        for mouse in [false, true] {
+            for done in [false, true] {
+                pty_control_behind_unstarted_prerequisite(state, mouse, done)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn pty_control_behind_unstarted_prerequisite(state: &str, mouse: bool, done: bool) -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let checkout = project(root);
+    support::empty_repository(&checkout)?;
+    fs::write(checkout.join(".git/info/exclude"), "*\n!a-untracked.rs\n")?;
+    let (a, attempt) = failed_task(root)?;
+    let mut writer = service(root)?;
+    if state == "paused" {
+        Database::open_in(&root.join("state/ktask-dev"))?.connection().execute(
+            "UPDATE attempts SET state='paused',outcome=NULL,finished_at_ms=NULL,failure_category=NULL WHERE id=?1",
+            [attempt],
+        )?;
+    }
+    let b = writer.create(&[runnable("Unstarted prerequisite")], Some(a), true)?[0];
+    fs::write(checkout.join("a-work.txt"), "staged A\n")?;
+    let staged = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&checkout)
+        .args(["add", "-f", "a-work.txt"])
+        .output()?;
+    assert!(staged.status.success());
+    fs::write(checkout.join("a-work.txt"), "unstaged A\n")?;
+    fs::write(checkout.join("a-untracked.rs"), "untracked A\n")?;
+    let mut t = terminal_at(root, 120, 34)?;
+    t.screen("unstarted B current", |s| {
+        s.contains("Current #2 · Pending")
+    })?;
+    tab(&mut t, mouse, "2 Queue")?;
+    t.screen("A behind unstarted B", |s| {
+        on_queue(s) && s.contains("#1") && s.contains("#2")
+    })?;
+    if mouse {
+        t.click(if state == "paused" {
+            "#1   Paused"
+        } else {
+            "#1   Failed"
+        })?;
+    } else {
+        t.send("j")?;
+    }
+    t.screen("A selected", |s| s.contains("› #1"))?;
+    control(&mut t, mouse, if done { "D Mark done" } else { "s Stop" })?;
+    t.screen("A control dialog", |s| {
+        s.contains(if done { "Mark done #1" } else { "Stop #1" })
+    })?;
+    apply(&mut t, mouse)?;
+    let screen = t.screen("A saved", |s| {
+        s.contains(if done { "#1 marked done" } else { "#1 stopped" })
+    })?;
+    println!("CONTROL A WITH UNSTARTED B state={state} mouse={mouse} done={done}\n{screen}");
+    quit(&mut t)?;
+    let b_task = writer.task(b)?.unwrap();
+    assert_eq!(
+        b_task.state(),
+        ktask_rs_mk3::application::lifecycle::State::Pending
+    );
+    assert!(b_task.attempts.is_empty());
+    assert!(!checkout.join("a-work.txt").exists());
+    assert!(!checkout.join("a-untracked.rs").exists());
+    let stash = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&checkout)
+        .args(["stash", "list"])
+        .output()?;
+    assert!(String::from_utf8(stash.stdout)?.contains("ktask: task #1 attempt #1"));
+    Ok(())
+}
+
+#[test]
+fn recorded_mark_done_wins_a_racing_runner_success() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let checkout = project(root);
+    support::empty_repository(&checkout)?;
+    let mut writer = service(root)?;
+    let id = writer.create(&[runnable("Owner verdict wins")], None, true)?[0];
+    let head = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&checkout)
+        .args(["rev-parse", "HEAD"])
+        .output()?;
+    let head = String::from_utf8(head.stdout)?.trim().to_owned();
+    let opening = target(&mut writer, id)?;
+    let run = writer.begin_run(opening, "fixture-race", &head, false)?;
+    writer.set_actor(Actor {
+        kind: ActorKind::Human,
+        name: "reviewer".into(),
+    })?;
+    let running = target(&mut writer, id)?;
+    writer.request_control(running, "done", "Owner accepted")?;
+    writer.finish_run(&run, "succeeded", None, "Runner accepted", Some(&head))?;
+    assert_eq!(
+        writer.task(id)?.unwrap().state(),
+        ktask_rs_mk3::application::lifecycle::State::Paused
+    );
+    ktask_rs_mk3::runner::control::finish_pending(&mut writer)?;
+    let task = writer.task(id)?.unwrap();
+    assert_eq!(
+        task.state(),
+        ktask_rs_mk3::application::lifecycle::State::Done
+    );
+    assert_eq!(task.resolution_reason.as_deref(), Some("Owner accepted"));
+    assert_eq!(task.resolved_by.as_deref(), Some("human: reviewer"));
+    assert_eq!(task.attempts[0].state, "interrupted");
+    Ok(())
+}
+
+#[test]
+fn interrupted_control_recovers_branch_prefixed_stash_once() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let checkout = project(root);
+    support::empty_repository(&checkout)?;
+    fs::write(checkout.join(".git/info/exclude"), "*\n!a-work.rs\n")?;
+    let mut writer = service(root)?;
+    let a = writer.create(&[runnable("Recover saved work")], None, true)?[0];
+    let head = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&checkout)
+        .args(["rev-parse", "HEAD"])
+        .output()?;
+    let head = String::from_utf8(head.stdout)?.trim().to_owned();
+    let opening = target(&mut writer, a)?;
+    let run = writer.begin_run(opening, "fixture-recovery", &head, false)?;
+    writer.set_actor(Actor {
+        kind: ActorKind::Human,
+        name: "reviewer".into(),
+    })?;
+    fs::write(checkout.join("a-work.rs"), "A work\n")?;
+    let running = target(&mut writer, a)?;
+    writer.request_control(running, "done", "Accepted A")?;
+    let label = "ktask: task #1 attempt #1";
+    let saved = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&checkout)
+        .args(["stash", "push", "--include-untracked", "--message", label])
+        .output()?;
+    assert!(
+        saved.status.success(),
+        "{}",
+        String::from_utf8_lossy(&saved.stderr)
+    );
+    let subject = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&checkout)
+        .args(["stash", "list", "--format=%gs"])
+        .output()?;
+    let subject = String::from_utf8(subject.stdout)?;
+    assert!(
+        subject.starts_with("On ") && subject.trim_end().ends_with(label),
+        "{subject}"
+    );
+    writer.finish_run(&run, "paused", None, "Worker stopped", None)?;
+    writer.release_supervisor(&run)?;
+    let b = writer.create(&[runnable("Later work")], Some(a), true)?[0];
+    fs::write(checkout.join("b-work.txt"), "staged B\n")?;
+    let staged = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&checkout)
+        .args(["add", "-f", "b-work.txt"])
+        .output()?;
+    assert!(staged.status.success());
+    fs::write(checkout.join("b-work.txt"), "unstaged B\n")?;
+    let before = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&checkout)
+        .args(["status", "--porcelain"])
+        .output()?
+        .stdout;
+    assert!(ktask_rs_mk3::runner::control::finish_pending(&mut writer)?);
+    assert!(!ktask_rs_mk3::runner::control::finish_pending(&mut writer)?);
+    assert_eq!(
+        writer.task(a)?.unwrap().state(),
+        ktask_rs_mk3::application::lifecycle::State::Done
+    );
+    assert_eq!(
+        writer.task(b)?.unwrap().state(),
+        ktask_rs_mk3::application::lifecycle::State::Pending
+    );
+    let after = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&checkout)
+        .args(["status", "--porcelain"])
+        .output()?
+        .stdout;
+    assert_eq!(before, after);
+    assert_eq!(
+        fs::read_to_string(checkout.join("b-work.txt"))?,
+        "unstaged B\n"
+    );
+    let receipt = writer.pending_control()?.unwrap();
+    assert!(receipt.completed && receipt.stash.as_deref() == Some(label));
+    assert_eq!(receipt.actor.name, "reviewer");
+    assert_eq!(receipt.reason, "Accepted A");
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    let events: i64 = db.connection().query_row(
+        "SELECT count(*) FROM events WHERE task_id=?1 AND kind='task.stash'",
+        [a],
+        |r| r.get(0),
+    )?;
+    assert_eq!(events, 1);
+    let stashes = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&checkout)
+        .args(["stash", "list", "--format=%gs"])
+        .output()?;
+    assert_eq!(String::from_utf8(stashes.stdout)?.lines().count(), 1);
+    Ok(())
+}
+
+#[test]
 fn reject_draft_only_task_cancels_it_by_keyboard_and_mouse() -> Result {
     for mouse in [false, true] {
         let scratch = support::sandbox()?;

@@ -1,5 +1,6 @@
 use crate::support::{self, Result, Terminal};
 use ktask_rs_mk3::storage::Database;
+use rusqlite::OptionalExtension;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -1111,6 +1112,609 @@ fn cli_stop_and_done_wait_for_the_running_worker_and_report_the_stash() -> Resul
             && stashes.contains("ktask: task #1 attempt #2"),
         "{stashes}"
     );
+    f.no_scratch()?;
+    Ok(())
+}
+
+struct PausedSupervisor(i32);
+impl Drop for PausedSupervisor {
+    fn drop(&mut self) {
+        let _ = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(self.0),
+            nix::sys::signal::Signal::SIGCONT,
+        );
+    }
+}
+
+fn pause_supervisor_when_db_idle(f: &Fixture) -> Result<PausedSupervisor> {
+    let supervisor = f.supervisor_pid()?;
+    for _ in 0..100 {
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(supervisor),
+            nix::sys::signal::Signal::SIGSTOP,
+        )?;
+        let guard = PausedSupervisor(supervisor);
+        let connection =
+            rusqlite::Connection::open(f.scratch.path().join("state/ktask-dev/ktask.sqlite3"))?;
+        connection.busy_timeout(Duration::from_millis(20))?;
+        if connection
+            .execute_batch("BEGIN IMMEDIATE; ROLLBACK;")
+            .is_ok()
+        {
+            return Ok(guard);
+        }
+        drop(guard);
+        thread::sleep(Duration::from_millis(10));
+    }
+    Err("supervisor never released SQLite write lock".into())
+}
+
+fn wait_for_control_cleanup(f: &Fixture, worker: i32) -> Result {
+    support::eventually(
+        "controlled runner and guardian released their leases",
+        || match f.runner_gone(worker) {
+            Ok(()) => Ok(Some(())),
+            Err(error)
+                if error
+                    .downcast_ref::<std::fs::TryLockError>()
+                    .is_some_and(|error| matches!(error, std::fs::TryLockError::WouldBlock)) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        },
+    )
+}
+
+#[test]
+fn control_request_survives_cli_or_tui_exit_and_finishes_once() -> Result {
+    for action in ["stop", "done"] {
+        for issuer in ["cli", "keyboard", "mouse"] {
+            let f = Fixture::new()?;
+            f.provider("dirty-live")?;
+            f.add("Durable control")?;
+            f.ok(&["run", "--background"])?;
+            let worker = f.dirty_worker()?;
+            let paused_supervisor = pause_supervisor_when_db_idle(&f)?;
+            if issuer == "cli" {
+                let mut command = f.process();
+                let mut caller = command
+                    .args([
+                        "--actor",
+                        "reviewer",
+                        action,
+                        "1",
+                        "--reason",
+                        "Owner verdict",
+                    ])
+                    .spawn()?;
+                support::eventually("control request recorded before CLI exit", || {
+                    let state: Option<String> = f
+                        .db()?
+                        .connection()
+                        .query_row(
+                            "SELECT state FROM pending_controls WHERE task_id=1",
+                            [],
+                            |r| r.get(0),
+                        )
+                        .optional()?;
+                    Ok((state.as_deref() == Some("requested")).then_some(()))
+                })?;
+                caller.kill()?;
+                caller.wait()?;
+            } else {
+                let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 40)?;
+                t.screen("running control before terminal exit", |s| {
+                    s.contains("Current #1 · Running")
+                })?;
+                let mouse = issuer == "mouse";
+                if mouse {
+                    t.click(if action == "stop" {
+                        "s Stop"
+                    } else {
+                        "D Mark done"
+                    })?;
+                } else {
+                    t.send(if action == "stop" { "s" } else { "D" })?;
+                }
+                t.screen("control reason dialog", |s| s.contains("Reason (optional)"))?;
+                t.send("Owner verdict")?;
+                if mouse {
+                    t.click("Apply")?;
+                } else {
+                    t.send("\r")?;
+                }
+                let intent = t.screen("control intent persisted", |s| {
+                    s.contains("stopping the worker")
+                })?;
+                println!(
+                    "CONTROL REQUEST BEFORE TUI EXIT action={action} issuer={issuer}\n{intent}"
+                );
+                t.send("q")?;
+                t.finish()?;
+            }
+            let pending: String = f.db()?.connection().query_row(
+                "SELECT state FROM pending_controls WHERE task_id=1",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(
+                pending, "requested",
+                "issuer exited before supervisor resumed"
+            );
+            drop(paused_supervisor);
+            f.supervisor_stopped()?;
+            f.guardian_finished()?;
+            wait_for_control_cleanup(&f, worker)?;
+            let shown = f.ok(&["show", "1"])?;
+            assert_eq!(
+                shown["state"],
+                if action == "stop" { "pending" } else { "done" },
+                "{shown}"
+            );
+            assert_eq!(shown["attempts"][0]["state"], "interrupted");
+            assert_eq!(
+                shown["attempts"][0]["outcome"],
+                if action == "stop" {
+                    "Stopped: Owner verdict"
+                } else {
+                    "Marked done: Owner verdict"
+                }
+            );
+            let db = f.db()?;
+            let receipt: (String, String, String, Option<String>) = db.connection().query_row(
+                "SELECT state,actor,reason,stash FROM pending_controls WHERE task_id=1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?;
+            assert_eq!(receipt.0, "completed");
+            assert_eq!(
+                receipt.1,
+                if issuer == "cli" { "reviewer" } else { "owner" }
+            );
+            assert_eq!(receipt.2, "Owner verdict");
+            assert_eq!(receipt.3.as_deref(), Some("ktask: task #1 attempt #1"));
+            let events: i64 = db.connection().query_row(
+                "SELECT count(*) FROM events WHERE task_id=1 AND kind='task.stopped'",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(events, if action == "stop" { 1 } else { 0 });
+            let stash_events: i64 = db.connection().query_row(
+                "SELECT count(*) FROM events WHERE task_id=1 AND kind='task.stash' AND message LIKE '%ktask: task #1 attempt #1%'",
+                [], |r| r.get(0)
+            )?;
+            assert_eq!(stash_events, 1);
+            assert!(
+                f.git(&["stash", "list"])?
+                    .contains("ktask: task #1 attempt #1")
+            );
+            let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 30)?;
+            let screen = reopened.screen("reopened after durable control", |s| {
+                s.contains(if action == "stop" {
+                    "Current #1 · Pending"
+                } else {
+                    "History 1"
+                })
+            })?;
+            println!("REOPENED AFTER CONTROL action={action} issuer={issuer}\n{screen}");
+            if action == "stop" {
+                assert!(screen.contains("ktask: task #1 attempt #1"), "{screen}");
+            } else {
+                reopened.send("3")?;
+                let history = reopened.screen("history after durable done", |s| {
+                    s.contains("Durable control")
+                })?;
+                println!("HISTORY AFTER CONTROL issuer={issuer}\n{history}");
+            }
+            reopened.send("q")?;
+            reopened.finish()?;
+            f.no_scratch()?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn controls_during_provider_limit_backoff_survive_cli_and_pty_exit() -> Result {
+    for action in ["stop", "done"] {
+        for issuer in ["cli", "keyboard", "mouse"] {
+            control_during_provider_wait(action, issuer)?;
+        }
+    }
+    Ok(())
+}
+
+fn control_during_provider_wait(action: &str, issuer: &str) -> Result {
+    let f = Fixture::new()?;
+    f.provider("rate")?;
+    f.add("Provider wait control")?;
+    f.ok(&["run", "--background"])?;
+    f.next_limit_wait()?;
+    fs::write(f.root.join("waiting-work.rs"), "work during wait\n")?;
+    let paused_supervisor = pause_supervisor_when_db_idle(&f)?;
+    if issuer == "cli" {
+        let mut caller = f
+            .process()
+            .args([
+                "--actor",
+                "reviewer",
+                action,
+                "1",
+                "--reason",
+                "Provider wait verdict",
+            ])
+            .spawn()?;
+        support::eventually("provider wait control recorded", || {
+            let db = f.db()?;
+            let state: Option<String> = db
+                .connection()
+                .query_row(
+                    "SELECT state FROM pending_controls WHERE task_id=1",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            Ok((state.as_deref() == Some("requested")).then_some(()))
+        })?;
+        caller.kill()?;
+        caller.wait()?;
+    } else {
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 40)?;
+        t.screen("provider limit running", |s| {
+            s.contains("Current #1 · Running")
+        })?;
+        let mouse = issuer == "mouse";
+        if mouse {
+            t.click(if action == "stop" {
+                "s Stop"
+            } else {
+                "D Mark done"
+            })?;
+        } else {
+            t.send(if action == "stop" { "s" } else { "D" })?;
+        }
+        t.screen("provider limit control dialog", |s| {
+            s.contains("Reason (optional)")
+        })?;
+        t.send("Provider wait verdict")?;
+        if mouse {
+            t.click("Apply")?;
+        } else {
+            t.send("\r")?;
+        }
+        let screen = t.screen("provider wait request stored", |s| {
+            s.contains("stopping the worker")
+        })?;
+        println!("PROVIDER WAIT REQUEST action={action} issuer={issuer}\n{screen}");
+        t.send("q")?;
+        t.finish()?;
+    }
+    drop(paused_supervisor);
+    f.supervisor_stopped()?;
+    f.guardian_finished()?;
+    let shown = f.ok(&["show", "1"])?;
+    assert_eq!(
+        shown["state"],
+        if action == "stop" { "pending" } else { "done" },
+        "{shown}"
+    );
+    let receipt: (String, String, String, Option<String>) = f.db()?.connection().query_row(
+        "SELECT state,actor,reason,stash FROM pending_controls WHERE task_id=1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )?;
+    assert_eq!(receipt.0, "completed");
+    assert_eq!(
+        receipt.1,
+        if issuer == "cli" { "reviewer" } else { "owner" }
+    );
+    assert_eq!(receipt.2, "Provider wait verdict");
+    assert_eq!(receipt.3.as_deref(), Some("ktask: task #1 attempt #1"));
+    let db = f.db()?;
+    let events: i64 = db.connection().query_row(
+        "SELECT count(*) FROM events WHERE task_id=1 AND kind='task.stash'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(events, 1);
+    let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 30)?;
+    let screen = reopened.screen("provider wait control completed after exit", |s| {
+        s.contains(if action == "stop" {
+            "Current #1 · Pending"
+        } else {
+            "History 1"
+        })
+    })?;
+    println!("PROVIDER WAIT REOPENED action={action} issuer={issuer}\n{screen}");
+    reopened.send("q")?;
+    reopened.finish()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+/// A's paused attempt keeps its ID while B starts later and commits its own result.
+/// Resuming A must transfer checkout ownership back to that older attempt.
+fn paused_a_after_completed_b() -> Result<(Fixture, Value, Value, String)> {
+    let f = Fixture::new()?;
+    f.provider("usage-live")?;
+    f.add("Original A")?;
+    f.ok(&["run", "--background"])?;
+    support::eventually("A provider started without edits", || {
+        let calls = fs::read_to_string(f.scratch.path().join("provider-invocations")).ok();
+        Ok(calls
+            .is_some_and(|calls| calls.contains("execution"))
+            .then_some(()))
+    })?;
+    f.ok(&["pause"])?;
+    f.supervisor_stopped()?;
+    f.guardian_finished()?;
+    assert_eq!(f.git(&["status", "--porcelain"])?, "");
+    let a = f.ok(&["show", "1"])?;
+    assert_eq!(a["state"], "paused");
+    let attempt = a["attempts"][0]["id"].clone();
+    let session = a["attempts"][0]["session"].clone();
+    assert!(
+        !session.is_null(),
+        "A has a reusable execution session: {a}"
+    );
+    f.ok(&[
+        "add",
+        "--title",
+        "Prerequisite B",
+        "--goal",
+        "Commit B's result",
+        "--criterion",
+        "result.txt contains verified",
+        "--before",
+        "1",
+    ])?;
+    f.provider("normal")?;
+    f.ok(&["run", "--one"])?;
+    assert_eq!(f.ok(&["show", "2"])?["state"], "done");
+    let b_head = f.git(&["rev-parse", "HEAD"])?.trim().to_owned();
+    assert_eq!(f.git(&["show", "HEAD:result.txt"])?, "verified\n");
+    let a = f.ok(&["show", "1"])?;
+    assert_eq!(a["state"], "paused");
+    assert_eq!(a["attempts"][0]["id"], attempt);
+    assert_eq!(a["attempts"][0]["session"], session);
+    Ok((f, attempt, session, b_head))
+}
+
+fn resumed_a_work(f: &Fixture) -> Result<i32> {
+    f.provider("dirty-live")?;
+    f.ok(&["run", "--background"])?;
+    let worker = f.dirty_worker()?;
+    fs::write(f.root.join("a-work.txt"), "staged A\n")?;
+    f.git(&["add", "a-work.txt"])?;
+    fs::write(f.root.join("a-work.txt"), "unstaged A\n")?;
+    fs::write(f.root.join("a-untracked.rs"), "untracked A\n")?;
+    Ok(worker)
+}
+
+fn assert_resumed_a_stash(
+    f: &Fixture,
+    action: &str,
+    attempt: &Value,
+    session: &Value,
+    b_head: &str,
+) -> Result {
+    let a = f.ok(&["show", "1"])?;
+    assert_eq!(
+        a["state"],
+        if action == "stop" { "pending" } else { "done" },
+        "{a}"
+    );
+    assert_eq!(a["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(a["attempts"][0]["id"], *attempt);
+    assert_eq!(a["attempts"][0]["session"], *session);
+    assert_eq!(f.ok(&["show", "2"])?["state"], "done");
+    assert_eq!(f.git(&["rev-parse", "HEAD"])?.trim(), b_head);
+    assert_eq!(f.git(&["show", "HEAD:result.txt"])?, "verified\n");
+    assert_eq!(f.git(&["show", "stash@{0}:a-work.txt"])?, "unstaged A\n");
+    assert_eq!(f.git(&["show", "stash@{0}^2:a-work.txt"])?, "staged A\n");
+    assert_eq!(
+        f.git(&["show", "stash@{0}^3:a-untracked.rs"])?,
+        "untracked A\n"
+    );
+    assert_eq!(f.git(&["show", "stash@{0}^3:partial.txt"])?, "partial");
+    assert_eq!(f.git(&["status", "--porcelain"])?, "");
+    Ok(())
+}
+
+#[test]
+fn resumed_a_after_completed_b_controls_survive_cli_and_pty_exit() -> Result {
+    for action in ["stop", "done"] {
+        for issuer in ["cli", "keyboard", "mouse"] {
+            resumed_a_control_after_issuer_exit(action, issuer)?;
+        }
+    }
+    Ok(())
+}
+
+fn resumed_a_control_after_issuer_exit(action: &str, issuer: &str) -> Result {
+    let (f, attempt, session, b_head) = paused_a_after_completed_b()?;
+    let worker = resumed_a_work(&f)?;
+    let paused_supervisor = pause_supervisor_when_db_idle(&f)?;
+    if issuer == "cli" {
+        let mut caller = f
+            .process()
+            .args([
+                "--actor",
+                "reviewer",
+                action,
+                "1",
+                "--reason",
+                "Resumed A verdict",
+            ])
+            .spawn()?;
+        support::eventually("resumed A control recorded", || {
+            let state: Option<String> = f
+                .db()?
+                .connection()
+                .query_row(
+                    "SELECT state FROM pending_controls WHERE task_id=1",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            Ok((state.as_deref() == Some("requested")).then_some(()))
+        })?;
+        caller.kill()?;
+        caller.wait()?;
+    } else {
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 40)?;
+        t.screen("resumed A running after B", |s| {
+            s.contains("Current #1 · Running")
+        })?;
+        let mouse = issuer == "mouse";
+        if mouse {
+            t.click(if action == "stop" {
+                "s Stop"
+            } else {
+                "D Mark done"
+            })?;
+        } else {
+            t.send(if action == "stop" { "s" } else { "D" })?;
+        }
+        t.screen("resumed A reason", |s| s.contains("Reason (optional)"))?;
+        t.send("Resumed A verdict")?;
+        if mouse {
+            t.click("Apply")?;
+        } else {
+            t.send("\r")?;
+        }
+        let screen = t.screen("resumed A request saved", |s| {
+            s.contains("stopping the worker")
+        })?;
+        println!("RESUMED A REQUEST action={action} issuer={issuer}\n{screen}");
+        t.send("q")?;
+        t.finish()?;
+    }
+    drop(paused_supervisor);
+    f.supervisor_stopped()?;
+    f.guardian_finished()?;
+    wait_for_control_cleanup(&f, worker)?;
+    assert_resumed_a_stash(&f, action, &attempt, &session, &b_head)?;
+    let db = f.db()?;
+    let receipt: (String, String, String, Option<String>) = db.connection().query_row(
+        "SELECT state,actor,reason,stash FROM pending_controls WHERE task_id=1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )?;
+    assert_eq!(receipt.0, "completed");
+    assert_eq!(
+        receipt.1,
+        if issuer == "cli" { "reviewer" } else { "owner" }
+    );
+    assert_eq!(receipt.2, "Resumed A verdict");
+    assert_eq!(receipt.3.as_deref(), Some("ktask: task #1 attempt #1"));
+    let (completion, stash_events): (i64, i64) = db.connection().query_row(
+        "SELECT (SELECT count(*) FROM events WHERE task_id=1 AND kind=?1), (SELECT count(*) FROM events WHERE task_id=1 AND kind='task.stash')",
+        [if action == "stop" { "task.stopped" } else { "task.resolved" }],
+        |r| Ok((r.get(0)?,r.get(1)?))
+    )?;
+    assert_eq!(completion, 1);
+    assert_eq!(stash_events, 1);
+    let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 30)?;
+    let screen = reopened.screen("resumed A result after issuer exit", |s| {
+        s.contains(if action == "stop" {
+            "Current #1 · Pending"
+        } else {
+            "History 2"
+        })
+    })?;
+    println!("RESUMED A REOPENED action={action} issuer={issuer}\n{screen}");
+    reopened.send("q")?;
+    reopened.finish()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn paused_resumed_a_after_completed_b_controls_stash_its_work() -> Result {
+    for action in ["stop", "done"] {
+        for issuer in ["cli", "keyboard", "mouse"] {
+            paused_resumed_a_control(action, issuer)?;
+        }
+    }
+    Ok(())
+}
+
+fn paused_resumed_a_control(action: &str, issuer: &str) -> Result {
+    let (f, attempt, session, b_head) = paused_a_after_completed_b()?;
+    let worker = resumed_a_work(&f)?;
+    f.ok(&["pause"])?;
+    f.supervisor_stopped()?;
+    f.guardian_finished()?;
+    wait_for_control_cleanup(&f, worker)?;
+    assert_eq!(f.ok(&["show", "1"])?["state"], "paused");
+    if issuer == "cli" {
+        let receipt = f.ok(&[
+            "--actor",
+            "reviewer",
+            action,
+            "1",
+            "--reason",
+            "Paused resumed A verdict",
+        ])?;
+        assert_eq!(receipt["stash"], "ktask: task #1 attempt #1");
+    } else {
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 40)?;
+        t.screen("resumed A paused after B", |s| {
+            s.contains("Current #1 · Paused")
+        })?;
+        let mouse = issuer == "mouse";
+        if mouse {
+            t.click(if action == "stop" {
+                "s Stop"
+            } else {
+                "D Mark done"
+            })?;
+        } else {
+            t.send(if action == "stop" { "s" } else { "D" })?;
+        }
+        t.screen("paused resumed A reason", |s| {
+            s.contains("Reason (optional)")
+        })?;
+        t.send("Paused resumed A verdict")?;
+        if mouse {
+            t.click("Apply")?;
+        } else {
+            t.send("\r")?;
+        }
+        let screen = t.screen("paused resumed A saved", |s| {
+            s.contains("changes stashed as \"ktask: task #1 attempt #1\"")
+        })?;
+        println!("PAUSED RESUMED A CONTROL action={action} issuer={issuer}\n{screen}");
+        t.send("q")?;
+        t.finish()?;
+    }
+    assert_resumed_a_stash(&f, action, &attempt, &session, &b_head)?;
+    let a = f.ok(&["show", "1"])?;
+    if action == "done" {
+        assert_eq!(a["resolution_reason"], "Paused resumed A verdict");
+        assert_eq!(
+            a["resolved_by"],
+            if issuer == "cli" {
+                "human: reviewer"
+            } else {
+                "human: owner"
+            }
+        );
+    } else {
+        assert_eq!(
+            a["attempts"][0]["outcome"],
+            "Stopped: Paused resumed A verdict"
+        );
+    }
+    let db = f.db()?;
+    let stash_events: i64 = db.connection().query_row(
+        "SELECT count(*) FROM events WHERE task_id=1 AND kind='task.stash'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(stash_events, 1);
     f.no_scratch()?;
     Ok(())
 }

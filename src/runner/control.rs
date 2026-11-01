@@ -50,6 +50,18 @@ pub fn settle(service: &mut Service) -> Result<bool> {
     service.settle_orphan()
 }
 
+/// Recover a request left by a runner that exited before recording its receipt.
+pub fn finish_pending(service: &mut Service) -> Result<bool> {
+    if !service
+        .pending_control()?
+        .is_some_and(|control| !control.completed)
+    {
+        return Ok(false);
+    }
+    let workspace = Workspace::acquire(&service.project_root()?)?;
+    finish_pending_with_workspace(service, &workspace)
+}
+
 /// What Stop or Mark done did with the attempt's uncommitted changes.
 pub struct Saved {
     /// The stash message holding them (`git stash list`), when there were any.
@@ -59,6 +71,9 @@ pub struct Saved {
 /// Stop: the task returns to Pending, its open attempt ends and its uncommitted changes are
 /// saved as a named stash, so the next Run starts from a clean tree with full limits.
 pub fn stop(service: &mut Service, target: VersionedTask, reason: &str) -> Result<Saved> {
+    if live_target(service, target)? {
+        return defer_and_wait(service, target, "stop", reason);
+    }
     let (target, saved) = halt(service, target)?;
     service.stop_task(target, reason)?;
     Ok(saved)
@@ -67,9 +82,84 @@ pub fn stop(service: &mut Service, target: VersionedTask, reason: &str) -> Resul
 /// Mark done: the owner's judgment. A live attempt is stopped and its changes stashed first;
 /// commit them before marking done to keep them in the tree.
 pub fn mark_done(service: &mut Service, target: VersionedTask, reason: &str) -> Result<Saved> {
+    if live_target(service, target)? {
+        return defer_and_wait(service, target, "done", reason);
+    }
     let (target, saved) = halt(service, target)?;
     service.mark_done(target, reason)?;
     Ok(saved)
+}
+
+fn live_target(service: &mut Service, target: VersionedTask) -> Result<bool> {
+    let task = service
+        .task(target.id)?
+        .ok_or_else(|| Error::Conflict(format!("Task #{} does not exist", target.id)))?;
+    require(
+        task.version == target.version,
+        "Task changed elsewhere; refresh the task",
+    )?;
+    Ok(task.state() == State::Running && supervisor_alive(service)?)
+}
+
+fn defer_and_wait(
+    service: &mut Service,
+    target: VersionedTask,
+    action: &str,
+    reason: &str,
+) -> Result<Saved> {
+    service.request_control(target, action, reason)?;
+    wait_for_exit(service)?;
+    // The runner normally completes this while holding the lease. If it died after the
+    // request, the caller claims the released lease and completes the recorded intent.
+    if service.pending_control()?.is_some_and(|c| !c.completed) {
+        finish_pending(service)?;
+    }
+    let pending = service
+        .pending_control()?
+        .ok_or_else(|| Error::Conflict("Control receipt disappeared".into()))?;
+    require(
+        pending.completed && pending.task == target.id && pending.action == action,
+        "Control did not complete",
+    )?;
+    Ok(Saved {
+        stash: pending.stash,
+    })
+}
+
+/// Finish a durable control while no worker can mutate the checkout.
+pub(crate) fn finish_pending_with_workspace(
+    service: &mut Service,
+    workspace: &Workspace,
+) -> Result<bool> {
+    let Some(control) = service.pending_control()? else {
+        return Ok(false);
+    };
+    if control.completed {
+        return Ok(false);
+    }
+    let task = service
+        .task(control.task)?
+        .ok_or_else(|| Error::Conflict("Controlled task disappeared".into()))?;
+    if task.state() == State::Running
+        && service
+            .current_task()?
+            .is_some_and(|current| current.id == task.id)
+    {
+        service.settle_orphan()?;
+    }
+    if !matches!(task.state(), State::Pending | State::Done) && !control.stash_checked {
+        let label = format!("ktask: task #{} attempt #{}", task.id, task.attempts.len());
+        let stash = if existing_stash(workspace, &label)? {
+            Some(label)
+        } else if service.workspace_owner_attempt()? == Some(control.attempt) {
+            save_changes(workspace, task.id, task.attempts.len())?
+        } else {
+            None
+        };
+        service.record_control_stash(control.attempt, stash.as_deref())?;
+    }
+    service.complete_control(control.attempt)?;
+    Ok(true)
 }
 
 /// Stop the task's worker if one runs, then save the changes its attempt left. Returns the
@@ -89,17 +179,31 @@ fn halt(service: &mut Service, target: VersionedTask) -> Result<(VersionedTask, 
     if !owns_changes {
         return Ok((target, Saved { stash: None }));
     }
-    if task.state() == State::Running && supervisor_alive(service)? {
-        service.request_pause(target)?;
-        wait_for_exit(service)?;
-    }
     let workspace = Workspace::acquire(&service.project_root()?)?;
-    service.settle_orphan()?;
+    if task.state() == State::Running
+        && service
+            .current_task()?
+            .is_some_and(|current| current.id == task.id)
+    {
+        service.settle_orphan()?;
+    }
     let task = service
         .task(target.id)?
         .ok_or_else(|| Error::Conflict("Task disappeared while stopping".into()))?;
     let attempt = task.attempts.len();
-    let stash = save_changes(&workspace, task.id, attempt)?;
+    // Starting or resuming another attempt transfers checkout ownership; queue edits do not.
+    let stash = if service.workspace_owner_attempt()? == task.attempts.last().map(|a| a.id) {
+        save_changes(&workspace, task.id, attempt)?
+    } else {
+        None
+    };
+    if let Some(label) = &stash {
+        service.record_stash_event(
+            task.id,
+            task.attempts.last().expect("active attempt").id,
+            label,
+        )?;
+    }
     Ok((
         VersionedTask {
             id: task.id,
@@ -107,6 +211,23 @@ fn halt(service: &mut Service, target: VersionedTask) -> Result<(VersionedTask, 
         },
         Saved { stash },
     ))
+}
+
+/// Git prefixes a named stash subject with `On <branch>: `. Compare the complete
+/// message after that prefix, so a different task or attempt cannot be mistaken for it.
+fn existing_stash(workspace: &Workspace, label: &str) -> Result<bool> {
+    let subjects = workspace::git(&workspace.root, &["stash", "list", "--format=%gs"])?;
+    let matches = subjects
+        .lines()
+        .filter(|subject| {
+            subject
+                .strip_prefix("On ")
+                .and_then(|subject| subject.split_once(": "))
+                .is_some_and(|(branch, message)| !branch.is_empty() && message == label)
+        })
+        .count();
+    require(matches <= 1, "Multiple stashes match this control receipt")?;
+    Ok(matches == 1)
 }
 
 fn wait_for_exit(service: &Service) -> Result<()> {

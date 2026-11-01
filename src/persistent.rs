@@ -26,7 +26,6 @@ pub(crate) enum ProposalResult {
 pub(crate) struct PendingControl {
     action: Action,
     id: usize,
-    reason: String,
 }
 impl Drop for ProposalJob {
     fn drop(&mut self) {
@@ -123,6 +122,7 @@ impl App {
         let service = self.service.as_mut().expect("SQLite mode");
         if !crate::runner::supervisor_alive(service).map_err(|e| e.to_string())? {
             crate::runner::control::settle(service).map_err(|e| e.to_string())?;
+            crate::runner::control::finish_pending(service).map_err(|e| e.to_string())?;
         }
         self.execution_session = self
             .service
@@ -406,22 +406,39 @@ impl App {
         if crate::runner::supervisor_alive(service).unwrap_or(true) {
             return false;
         }
-        let PendingControl { action, id, reason } = self.pending_control.take().expect("pending");
-        // The worker stopped at this request, so the task's newer version is its own doing.
+        if let Err(error) = crate::runner::control::finish_pending(service) {
+            self.pending_control.take();
+            let _ = self.reload();
+            self.message(error.to_string());
+            return true;
+        }
+        let PendingControl { action, id } = self.pending_control.take().expect("pending");
         let result = service
-            .task(id as i64)
+            .pending_control()
             .map_err(|e| e.to_string())
-            .and_then(|task| task.ok_or_else(|| format!("Task #{id} no longer exists")))
-            .and_then(|task| {
-                control(
-                    service,
-                    action,
-                    VersionedTask {
-                        id: task.id,
-                        version: task.version,
-                    },
-                    &reason,
-                )
+            .and_then(|pending| {
+                let pending = pending.ok_or_else(|| "Control receipt disappeared".to_owned())?;
+                if !pending.completed || pending.task != id as i64 {
+                    return Err("Control has not completed".into());
+                }
+                Ok(match pending.stash {
+                    Some(stash) => format!(
+                        "#{id} {} · changes stashed as \"{stash}\" (git stash list)",
+                        if action == Action::Stop {
+                            "stopped · back to Pending"
+                        } else {
+                            "marked done"
+                        }
+                    ),
+                    None => format!(
+                        "#{id} {}",
+                        if action == Action::Stop {
+                            "stopped · back to Pending"
+                        } else {
+                            "marked done"
+                        }
+                    ),
+                })
             });
         match result {
             Ok(notice) => {
@@ -883,8 +900,18 @@ impl App {
                     .is_some_and(|t| t.state() == domain::lifecycle::State::Running)
                     && crate::runner::supervisor_alive(service).map_err(|e| e.to_string())?;
                 if running {
-                    service.request_pause(target).map_err(|e| e.to_string())?;
-                    self.pending_control = Some(PendingControl { action, id, reason });
+                    service
+                        .request_control(
+                            target,
+                            if action == Action::Stop {
+                                "stop"
+                            } else {
+                                "done"
+                            },
+                            &reason,
+                        )
+                        .map_err(|e| e.to_string())?;
+                    self.pending_control = Some(PendingControl { action, id });
                     self.saved_notice = Some(format!(
                         "#{id}: stopping the worker · {} completes when it exits",
                         if action == Action::Stop {

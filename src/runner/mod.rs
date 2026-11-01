@@ -159,6 +159,7 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
     let workspace = Workspace::acquire(&service.project_root()?)?;
     // Holding the lease proves no supervisor owns the project: a running attempt is orphaned.
     service.settle_orphan()?;
+    control::finish_pending_with_workspace(service, &workspace)?;
     workspace::git_identity(&workspace.root)?;
     let mut owns_session = false;
     let result = run_inner(service, paths, options, &workspace, &mut owns_session);
@@ -205,6 +206,8 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
         };
         requested = service.settle_execution_session(state, &reason)?;
     }
+    // The control is owned by this supervisor, not the terminal that requested it.
+    control::finish_pending_with_workspace(service, &workspace)?;
     // Keep the lease until the final state is committed. An intervention that
     // arrived during this handoff is retained and claims the next supervisor.
     drop(workspace);

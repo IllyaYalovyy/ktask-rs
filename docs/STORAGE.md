@@ -41,6 +41,10 @@ displays ready (Pending) until the next Run clears the flag; attempts and eviden
 Stop closes the task's open provider sessions while retaining their records. Run from Pending
 and Retry restart the limits: `tasks.counted_from` records how many attempts existed then, and
 the attempt limit, the task time limit and the stop rules count only later attempts.
+For a running attempt, `pending_controls` stores Stop or Mark done with its reason and actor
+before the runner pauses. The runner finishes it under the workspace lease; its receipt records
+the named stash, so the request survives the issuing CLI or TUI. Stashing only applies when
+the target owns the checkout; a paused prerequisite keeps its work and attempt.
 A runner that died leaves its attempt running; whoever next holds the workspace lease (the
 TUI's refresh or `run`) settles it to paused with its work kept.
 
@@ -155,6 +159,7 @@ erDiagram
     projects ||--o| project_retention : "project_id"
     projects ||--o{ evidence_pins : "project_id"
     projects ||--o| execution_sessions : "project_id"
+    projects ||--o| pending_controls : "project_id"
     projects ||--o{ tasks : "project_id"
     tasks ||--o{ tasks : "recovery_root_id"
     tasks ||--o{ tasks : "origin_task_id"
@@ -176,6 +181,8 @@ erDiagram
 erDiagram
     task_revisions ||--o{ attempts : "task_id, revision"
     tasks ||--o{ attempts : "task_id, project_id"
+    tasks ||--o| pending_controls : "task_id"
+    attempts ||--o| pending_controls : "attempt_id"
     tasks o|--o{ ai_sessions : "task_id, project_id"
     projects ||--o{ ai_sessions : "project_id"
     project_checks o|--o{ attempt_steps : "project_check_id, project_id"
@@ -601,6 +608,31 @@ One marker per attempt whose output content was deliberately removed. Task, atte
 
 - PK `(attempt_id)`.
 - FK `(attempt_id)` → `attempts(id)`.
+
+### pending_controls
+
+One project-scoped Stop or Mark done request and its completion receipt. The request is
+recorded before pausing a running worker, then completed once under the workspace lease.
+A completed row remains available to the issuing CLI or TUI until the next request replaces it.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `project_id` | INTEGER | no | Project with the controlled runner. |
+| `task_id` | INTEGER | no | Target task. |
+| `attempt_id` | INTEGER | no | Running attempt targeted when the request was recorded. |
+| `action` | TEXT | no | stop or done. |
+| `reason` | TEXT | no | Owner-supplied reason; may be empty for the default reason. |
+| `actor_kind` | TEXT | no | human or ai attribution from the issuer. |
+| `actor` | TEXT | no | Nonblank issuing actor name. |
+| `state` | TEXT | no | requested or completed. |
+| `stash` | TEXT | yes | Named Git stash holding the target attempt's uncommitted work, if any. |
+| `stash_checked` | INTEGER | no | 1 once the stash decision is recorded; prevents a retry from touching later work. Default 0. |
+| `completed_version` | INTEGER | yes | Target task version after completing the request. |
+
+- PK `(project_id)`.
+- FK `(attempt_id)` → `attempts(id)`.
+- FK `(task_id)` → `tasks(id)`.
+- FK `(project_id)` → `projects(id)`.
 
 ### project_checks
 

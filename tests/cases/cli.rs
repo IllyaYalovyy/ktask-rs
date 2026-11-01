@@ -1078,6 +1078,249 @@ fn cli_running_guards_and_marking_failed_done_keep_attempts_immutable() -> Resul
 }
 
 #[test]
+fn cli_stop_and_done_leave_paused_prerequisite_index_and_worktree_alone() -> Result {
+    use ktask_rs_mk3::storage::{Database, execution::StartAttempt};
+    for a_state in ["failed", "paused"] {
+        for action in ["stop", "done"] {
+            let scratch = support::sandbox()?;
+            let root = scratch.path();
+            support::empty_repository(root)?;
+            std::fs::write(root.join(".git/info/exclude"), "*\n!b-untracked.rs\n")?;
+            let add = |title: &str, before: bool| -> Result {
+                let mut args = vec![
+                    "add",
+                    "--title",
+                    title,
+                    "--goal",
+                    "Goal",
+                    "--criterion",
+                    "Check",
+                    "--model",
+                    "execution=codex/worker",
+                    "--model",
+                    "review=codex/reviewer",
+                    "--model",
+                    "validation=codex/validator",
+                    "--model",
+                    "remediation=codex/strong",
+                ];
+                if before {
+                    args.extend(["--before", "1"]);
+                }
+                json(root, &args, 0)?;
+                Ok(())
+            };
+            add("Failed A", false)?;
+            let mut db = Database::open_in(&root.join("state/ktask-dev"))?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_millis() as i64;
+            let a = db.start_attempt(StartAttempt {
+                task_id: 1,
+                expected_version: 1,
+                execution_token: "fixture-a",
+                now_ms: now,
+            })?;
+            db.connection().execute("UPDATE attempts SET state=?2,finished_at_ms=CASE WHEN ?2='failed' THEN started_at_ms ELSE NULL END,outcome=CASE WHEN ?2='failed' THEN 'Failed' ELSE NULL END,failure_category=CASE WHEN ?2='failed' THEN 'check' ELSE NULL END WHERE id=?1", rusqlite::params![a, a_state])?;
+            add("Paused B", true)?;
+            let later = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_millis() as i64;
+            let b = db.start_attempt(StartAttempt {
+                task_id: 2,
+                expected_version: 1,
+                execution_token: "fixture-b",
+                now_ms: later,
+            })?;
+            db.connection()
+                .execute("UPDATE attempts SET state='paused' WHERE id=?1", [b])?;
+            db.connection().execute("INSERT INTO execution_sessions(project_id,mode,state,reason,updated_at_ms) VALUES (1,'queue','paused','Paused B',?1)", [later])?;
+            let file = root.join("b-work.txt");
+            std::fs::write(&file, "staged B\n")?;
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(["add", "-f", "b-work.txt"])
+                .output()?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            std::fs::write(&file, "unstaged B\n")?;
+            std::fs::write(root.join("b-untracked.rs"), "untracked B\n")?;
+            let before = Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(["status", "--porcelain"])
+                .output()?
+                .stdout;
+            let receipt = json(root, &[action, "1", "--reason", "Owner verdict"], 0)?;
+            assert!(receipt["data"]["stash"].is_null(), "{receipt}");
+            let after = Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(["status", "--porcelain"])
+                .output()?
+                .stdout;
+            assert_eq!(before, after, "{action} changed B's index or worktree");
+            assert_eq!(std::fs::read_to_string(&file)?, "unstaged B\n");
+            assert_eq!(
+                std::fs::read_to_string(root.join("b-untracked.rs"))?,
+                "untracked B\n"
+            );
+            let b_show = json(root, &["show", "2"], 0)?;
+            assert_eq!(b_show["data"]["state"], "paused");
+            assert_eq!(b_show["data"]["attempts"][0]["id"], b);
+            assert!(
+                b_show["data"]["actions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|x| x == "Resume")
+            );
+            let session: String = db.connection().query_row(
+                "SELECT state FROM execution_sessions WHERE project_id=1",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(session, "paused");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn cli_stop_and_done_stash_latest_attempt_behind_unstarted_prerequisite() -> Result {
+    use ktask_rs_mk3::storage::{Database, execution::StartAttempt};
+    for state in ["failed", "paused"] {
+        for action in ["stop", "done"] {
+            let scratch = support::sandbox()?;
+            let root = scratch.path();
+            support::empty_repository(root)?;
+            std::fs::write(root.join(".git/info/exclude"), "*\n!a-untracked.rs\n")?;
+            json(
+                root,
+                &[
+                    "add",
+                    "--title",
+                    "A",
+                    "--goal",
+                    "Goal",
+                    "--criterion",
+                    "Check",
+                    "--model",
+                    "execution=codex/worker",
+                    "--model",
+                    "review=codex/reviewer",
+                    "--model",
+                    "validation=codex/validator",
+                    "--model",
+                    "remediation=codex/strong",
+                ],
+                0,
+            )?;
+            let mut db = Database::open_in(&root.join("state/ktask-dev"))?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_millis() as i64;
+            let attempt = db.start_attempt(StartAttempt {
+                task_id: 1,
+                expected_version: 1,
+                execution_token: "fixture-a",
+                now_ms: now,
+            })?;
+            db.connection().execute(
+                "UPDATE attempts SET state=?2,finished_at_ms=CASE WHEN ?2='failed' THEN started_at_ms ELSE NULL END,outcome=CASE WHEN ?2='failed' THEN 'Failed' ELSE NULL END,failure_category=CASE WHEN ?2='failed' THEN 'check' ELSE NULL END WHERE id=?1",
+                rusqlite::params![attempt, state],
+            )?;
+            json(
+                root,
+                &[
+                    "add",
+                    "--title",
+                    "B",
+                    "--goal",
+                    "Goal",
+                    "--criterion",
+                    "Check",
+                    "--model",
+                    "execution=codex/worker",
+                    "--model",
+                    "review=codex/reviewer",
+                    "--model",
+                    "validation=codex/validator",
+                    "--model",
+                    "remediation=codex/strong",
+                    "--before",
+                    "1",
+                ],
+                0,
+            )?;
+            std::fs::write(root.join("a-work.txt"), "staged A\n")?;
+            let staged = Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(["add", "-f", "a-work.txt"])
+                .output()?;
+            assert!(staged.status.success());
+            std::fs::write(root.join("a-work.txt"), "unstaged A\n")?;
+            std::fs::write(root.join("a-untracked.rs"), "untracked A\n")?;
+            let receipt = json(root, &[action, "1", "--reason", "Owner verdict"], 0)?;
+            assert_eq!(receipt["data"]["stash"], "ktask: task #1 attempt #1");
+            let names = Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args([
+                    "stash",
+                    "show",
+                    "--include-untracked",
+                    "--name-only",
+                    "stash@{0}",
+                ])
+                .output()?;
+            assert!(names.status.success());
+            let names = String::from_utf8(names.stdout)?;
+            assert!(
+                names.contains("a-work.txt") && names.contains("a-untracked.rs"),
+                "{names}"
+            );
+            let saved_content = |revision: &str| -> Result<String> {
+                let shown = Command::new("git")
+                    .arg("-C")
+                    .arg(root)
+                    .args(["show", revision])
+                    .output()?;
+                assert!(
+                    shown.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&shown.stderr)
+                );
+                Ok(String::from_utf8(shown.stdout)?)
+            };
+            assert_eq!(saved_content("stash@{0}:a-work.txt")?, "unstaged A\n");
+            assert_eq!(saved_content("stash@{0}^2:a-work.txt")?, "staged A\n");
+            assert_eq!(
+                saved_content("stash@{0}^3:a-untracked.rs")?,
+                "untracked A\n"
+            );
+            assert_eq!(json(root, &["show", "2"], 0)?["data"]["state"], "pending");
+            assert_eq!(
+                json(root, &["show", "2"], 0)?["data"]["attempts"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                0
+            );
+            assert!(!root.join("a-work.txt").exists());
+            assert!(!root.join("a-untracked.rs").exists());
+            println!("CLI UNSTARTED PREREQUISITE state={state} action={action} stash={names}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn self_host_script_configures_a_private_checkout_with_the_given_executable() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();

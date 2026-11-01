@@ -33,6 +33,21 @@ CREATE TABLE execution_sessions (
     updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0)
 ) STRICT;
 
+-- A control request belongs to the runner's lease, not to the issuing terminal.
+CREATE TABLE pending_controls (
+    project_id INTEGER PRIMARY KEY REFERENCES projects(id),
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    attempt_id INTEGER NOT NULL REFERENCES attempts(id),
+    action TEXT NOT NULL CHECK (action IN ('stop', 'done')),
+    reason TEXT NOT NULL,
+    actor_kind TEXT NOT NULL CHECK (actor_kind IN ('human', 'ai')),
+    actor TEXT NOT NULL CHECK (length(trim(actor)) > 0),
+    state TEXT NOT NULL CHECK (state IN ('requested', 'completed')),
+    stash TEXT,
+    stash_checked INTEGER NOT NULL DEFAULT 0 CHECK (stash_checked IN (0, 1)),
+    completed_version INTEGER
+) STRICT;
+
 -- Defaults are copied into revision_models, not followed through a mutable reference.
 CREATE TABLE project_models (
     project_id INTEGER NOT NULL REFERENCES projects(id),

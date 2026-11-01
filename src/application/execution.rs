@@ -33,10 +33,114 @@ pub struct Step {
     pub session: Option<i64>,
     pub provider_session: Option<String>,
 }
+pub struct PendingControl {
+    pub task: i64,
+    pub attempt: i64,
+    pub action: String,
+    pub reason: String,
+    pub actor: super::Actor,
+    pub stash: Option<String>,
+    pub stash_checked: bool,
+    pub completed: bool,
+}
 
 impl Service {
+    pub fn pending_control(&self) -> Result<Option<PendingControl>> {
+        self.db.connection().query_row(
+            "SELECT task_id,attempt_id,action,reason,actor_kind,actor,stash,state,stash_checked FROM pending_controls WHERE project_id=?1",
+            [self.project_id], |r| {
+                let kind: String = r.get(4)?;
+                let state: String = r.get(7)?;
+                Ok(PendingControl { task:r.get(0)?, attempt:r.get(1)?, action:r.get(2)?, reason:r.get(3)?, actor:super::Actor { kind:if kind=="ai" {super::ActorKind::Ai} else {super::ActorKind::Human}, name:r.get(5)? }, stash:r.get(6)?, completed:state=="completed", stash_checked:r.get::<_,i64>(8)? != 0 })
+            }
+        ).optional().map_err(Into::into)
+    }
+    pub fn record_control_stash(&mut self, attempt: i64, stash: Option<&str>) -> Result<()> {
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require(tx.execute(
+            "UPDATE pending_controls SET stash=?3,stash_checked=1 WHERE project_id=?1 AND attempt_id=?2 AND state='requested'",
+            params![self.project_id,attempt,stash],
+        )? == 1, "Control request changed while saving work")?;
+        if let Some(label) = stash {
+            let task: i64 = tx.query_row(
+                "SELECT task_id FROM pending_controls WHERE project_id=?1",
+                [self.project_id],
+                |r| r.get(0),
+            )?;
+            tx.execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'task.stash','info',?5)", params![self.project_id,task,attempt,now_ms(),format!("Uncommitted changes saved as git stash \"{label}\"")])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn record_stash_event(&mut self, task: i64, attempt: i64, label: &str) -> Result<()> {
+        self.db.connection().execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'task.stash','info',?5)", params![self.project_id,task,attempt,now_ms(),format!("Uncommitted changes saved as git stash \"{label}\"")])?;
+        Ok(())
+    }
+    pub fn complete_control(&mut self, attempt: i64) -> Result<Option<String>> {
+        let Some(control) = self.pending_control()? else {
+            return Ok(None);
+        };
+        if control.attempt != attempt || control.completed {
+            return Ok(None);
+        }
+        let task = self
+            .task(control.task)?
+            .ok_or_else(|| Error::Conflict("Controlled task disappeared".into()))?;
+        let previous = std::mem::replace(&mut self.actor, control.actor);
+        let result = if control.action == "stop" {
+            if task.state() == super::lifecycle::State::Pending {
+                Ok(())
+            } else {
+                self.stop_task(
+                    VersionedTask {
+                        id: task.id,
+                        version: task.version,
+                    },
+                    &control.reason,
+                )
+            }
+        } else if matches!(task.state(), super::lifecycle::State::Done) {
+            Ok(())
+        } else {
+            self.mark_done(
+                VersionedTask {
+                    id: task.id,
+                    version: task.version,
+                },
+                &control.reason,
+            )
+        };
+        self.actor = previous;
+        result?;
+        let version = self
+            .task(control.task)?
+            .ok_or_else(|| Error::Conflict("Controlled task disappeared".into()))?
+            .version;
+        require(self.db.connection().execute(
+            "UPDATE pending_controls SET state='completed',completed_version=?3 WHERE project_id=?1 AND attempt_id=?2 AND state='requested'",
+            params![self.project_id,attempt,version],
+        )? == 1, "Control request changed while completing")?;
+        Ok(control.stash)
+    }
     pub fn attempt_base(&self, task: i64) -> Result<Option<String>> {
         Ok(self.db.connection().query_row("SELECT base_commit FROM attempts WHERE project_id=?1 AND task_id=?2 ORDER BY number DESC LIMIT 1",params![self.project_id,task],|r|r.get(0)).optional()?.flatten())
+    }
+    /// The last attempt to start or resume owns checkout edits. A resumed attempt keeps
+    /// its ID, so attempt creation order cannot identify the latest workspace handoff.
+    /// Queue insertion and selection do not hand the workspace to an unstarted task.
+    pub fn workspace_owner_attempt(&self) -> Result<Option<i64>> {
+        self.db
+            .connection()
+            .query_row(
+                "SELECT attempt_id FROM events WHERE project_id=?1 AND kind IN ('attempt.started','attempt.resumed') ORDER BY id DESC LIMIT 1",
+                [self.project_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
     }
     pub fn supervisor_released(&self, attempt: i64) -> Result<bool> {
         let kind: Option<String> = self.db.connection().query_row(
@@ -112,7 +216,7 @@ impl Service {
             "UPDATE tasks SET reset_pending=1, reset_worktree=NULL WHERE id=?1",
             [target.id],
         )?;
-        tx.execute("UPDATE execution_sessions SET state='stopped',reason=?2,updated_at_ms=?3 WHERE project_id=?1", params![self.project_id,reason,now])?;
+        tx.execute("UPDATE execution_sessions SET state='stopped',reason=?2,updated_at_ms=?3 WHERE project_id=?1 AND EXISTS (SELECT 1 FROM current_tasks WHERE project_id=?1 AND id=?4)", params![self.project_id,reason,now,target.id])?;
         event(
             &tx,
             self.project_id,
@@ -163,6 +267,11 @@ impl Service {
         allowed(&tx, self.project_id, target, Action::MarkDone)?;
         let now = now_ms();
         let attempt = latest_attempt(&tx, target.id)?;
+        let was_current: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM current_tasks WHERE project_id=?1 AND id=?2)",
+            params![self.project_id, target.id],
+            |r| r.get(0),
+        )?;
         end_attempt(
             &tx,
             self.project_id,
@@ -195,6 +304,12 @@ impl Service {
             &reason,
             now,
         )?;
+        if was_current {
+            tx.execute(
+                "UPDATE execution_sessions SET state=CASE WHEN EXISTS(SELECT 1 FROM current_tasks WHERE project_id=?1) THEN 'stopped' ELSE 'completed' END,reason=?2,updated_at_ms=?3 WHERE project_id=?1 AND state='paused'",
+                params![self.project_id,reason,now],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -420,12 +535,30 @@ impl Service {
         )?)
     }
     pub fn request_pause(&mut self, target: VersionedTask) -> Result<()> {
+        self.request_pause_for(target, None)
+    }
+    /// Persist the owner's final control before signalling the runner. The runner completes
+    /// this request under its workspace lease even if the requesting process disappears.
+    pub fn request_control(
+        &mut self,
+        target: VersionedTask,
+        action: &str,
+        reason: &str,
+    ) -> Result<()> {
+        require(matches!(action, "stop" | "done"), "Invalid control action")?;
+        self.request_pause_for(target, Some((action, reason)))
+    }
+    fn request_pause_for(
+        &mut self,
+        target: VersionedTask,
+        control: Option<(&str, &str)>,
+    ) -> Result<()> {
         let tx = self
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current: Option<(String,Option<i64>)> = tx.query_row("SELECT status,latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2 AND row_version=?3", params![self.project_id,target.id,target.version], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
-        let (status, latest) = current.ok_or_else(|| {
+        let current: Option<(String, Option<String>, Option<i64>)> = tx.query_row("SELECT status,wait_reason,latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2 AND row_version=?3", params![self.project_id,target.id,target.version], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+        let (status, wait_reason, latest) = current.ok_or_else(|| {
             Error::Conflict("Current task changed; refresh before pausing".into())
         })?;
         let session: Option<(String, String)> = tx
@@ -447,6 +580,26 @@ impl Service {
             attempt.is_some() || active,
             "Only an active current or queue handoff can pause",
         )?;
+        if let Some((action, control_reason)) = control {
+            require(
+                lifecycle::State::of(&status, wait_reason.as_deref()) == lifecycle::State::Running
+                    && attempt.is_some(),
+                "Only a running task can defer a control",
+            )?;
+            let existing: Option<String> = tx
+                .query_row(
+                    "SELECT state FROM pending_controls WHERE project_id=?1",
+                    [self.project_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            require(
+                existing.as_deref() != Some("requested"),
+                "A Stop or Mark done is already pending",
+            )?;
+            tx.execute("INSERT INTO pending_controls(project_id,task_id,attempt_id,action,reason,actor_kind,actor,state) VALUES (?1,?2,?3,?4,?5,?6,?7,'requested') ON CONFLICT(project_id) DO UPDATE SET task_id=excluded.task_id,attempt_id=excluded.attempt_id,action=excluded.action,reason=excluded.reason,actor_kind=excluded.actor_kind,actor=excluded.actor,state='requested',stash=NULL,stash_checked=0,completed_version=NULL",
+                params![self.project_id,target.id,attempt,action,control_reason,self.actor.kind.as_str(),self.actor.name])?;
+        }
         let reason = if attempt.is_some() {
             "Pause requested; stopping worker"
         } else {
@@ -903,11 +1056,22 @@ impl Service {
             ),
             "Invalid runner result",
         )?;
-        let live = matches!(state, "paused" | "waiting");
         let tx = self
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // A Stop/Mark done accepted while the final step was ending wins over the
+        // runner's success transition. Both decisions serialize in this transaction.
+        let control_requested: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pending_controls WHERE project_id=?1 AND attempt_id=?2 AND state='requested')",
+            params![self.project_id,run.attempt], |r| r.get(0),
+        )?;
+        let state = if state == "succeeded" && control_requested {
+            "paused"
+        } else {
+            state
+        };
+        let live = matches!(state, "paused" | "waiting");
         let now = now_ms();
         require(tx.execute("UPDATE attempts SET state=?2,finished_at_ms=?3,outcome=?4,failure_category=?5,report=?6,head_commit=?7,wait_reason=?8,waiting_since_ms=?9 WHERE id=?1 AND execution_token=?10 AND state='running'", params![run.attempt,state,(!live).then_some(now),(!live).then_some(report),if live {None} else {category},report,head,(state=="waiting").then_some("question"),(state=="waiting").then_some(now),run.token])? == 1, "Attempt is no longer owned by this runner")?;
         close_unfinished(&tx, run.attempt, now, report, "interrupted")?;
