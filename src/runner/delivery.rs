@@ -97,6 +97,7 @@ fn command(
         prompt: String::new(),
         schema: None,
         scratch_root: ctx.paths.cache.join("workers"),
+        artifact_target: None,
         worker_lock: ctx.workspace.worker_lock.clone(),
         callback: None,
         sandbox: None,
@@ -132,6 +133,9 @@ fn command(
             )));
         }
         match worker.messages.recv_timeout(Duration::from_millis(50)) {
+            Ok(Message::Artifact { .. }) => {
+                return Err(DeliveryError::Retry("Unexpected delivery artifact".into()));
+            }
             Ok(Message::Output { stream, bytes }) => {
                 let buffer = if stream == "stdout" {
                     &mut out

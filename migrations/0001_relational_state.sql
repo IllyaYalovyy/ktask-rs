@@ -415,9 +415,25 @@ CREATE TABLE artifacts (
     media_type TEXT NOT NULL CHECK (length(trim(media_type)) > 0),
     relative_path TEXT NOT NULL UNIQUE CHECK (length(relative_path) > 0),
     size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+    checksum_sha256 TEXT CHECK (checksum_sha256 IS NULL OR length(checksum_sha256) = 64),
+    source_tree TEXT CHECK (source_tree IS NULL OR length(source_tree) IN (40,64)),
     created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
     pruning_requested_at_ms INTEGER CHECK (pruning_requested_at_ms >= created_at_ms),
     pruned_at_ms INTEGER CHECK (pruned_at_ms >= created_at_ms)
+) STRICT;
+
+-- A reservation is committed before bytes enter state storage. Recovery can finish
+-- a complete copy or discard a partial one without losing its source attribution.
+CREATE TABLE artifact_reservations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempt_id INTEGER NOT NULL REFERENCES attempts(id),
+    name TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    relative_path TEXT NOT NULL UNIQUE,
+    size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+    checksum_sha256 TEXT NOT NULL CHECK (length(checksum_sha256) = 64),
+    source_tree TEXT NOT NULL CHECK (length(source_tree) IN (40,64)),
+    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0)
 ) STRICT;
 
 CREATE INDEX ix_tasks_history ON tasks(project_id, closed_at_ms DESC, id DESC);
@@ -439,6 +455,7 @@ CREATE INDEX ix_events_project ON events(project_id, id);
 CREATE INDEX ix_events_task ON events(task_id, id);
 CREATE INDEX ix_events_attempt ON events(attempt_id, id);
 CREATE INDEX ix_artifacts_attempt ON artifacts(attempt_id, id);
+CREATE INDEX ix_artifact_reservations_attempt ON artifact_reservations(attempt_id);
 
 CREATE VIEW task_details AS
 SELECT t.*, r.revision, r.lifecycle AS revision_lifecycle,

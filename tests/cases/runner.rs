@@ -1,6 +1,7 @@
 use crate::support::{self, Result, Terminal};
 use ktask_rs_mk3::storage::Database;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{
     fs::{self, OpenOptions},
     os::unix::fs::PermissionsExt,
@@ -10,6 +11,418 @@ use std::{
     time::{Duration, Instant},
 };
 const BIN: &str = env!("CARGO_BIN_EXE_ktask-dev");
+
+#[test]
+fn worker_artifact_survives_scratch_and_reaches_later_judge_and_attempt() -> Result {
+    let f = Fixture::new()?;
+    f.provider("artifact-malformed")?;
+    f.add("Archive worker evidence")?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        "printf 'CHECK CAPTURE\\n' > \"$KTASK_ARTIFACT_DIR/check.txt\"; test -f result.txt",
+    ])?;
+    f.ok(&["edit", "1", "--attempt-limit", "1"])?;
+    let first_run = f.process().args(["run", "--one"]).output()?;
+    assert_eq!(
+        first_run.status.code(),
+        Some(4),
+        "{}",
+        String::from_utf8_lossy(&first_run.stderr)
+    );
+    f.guardian_finished()?;
+    f.no_scratch()?;
+    let first = f.ok(&["show", "1"])?;
+    let artifact = first["attempts"][0]["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["name"] == "capture.txt")
+        .ok_or("worker artifact missing")?;
+    assert_eq!(artifact["media_type"], "text/plain");
+    assert_eq!(artifact["size_bytes"], 24);
+    assert_eq!(artifact["checksum_sha256"].as_str().unwrap().len(), 64);
+    assert_eq!(artifact["source_tree"].as_str().unwrap().len(), 40);
+    let artifact_id = artifact["id"].as_i64().unwrap().to_string();
+    let relative: String = f.db()?.connection().query_row(
+        "SELECT relative_path FROM artifacts WHERE id=?1",
+        [artifact["id"].as_i64().unwrap()],
+        |r| r.get(0),
+    )?;
+    let stored_path = f.scratch.path().join("state/ktask-dev").join(relative);
+    assert!(stored_path.is_file());
+    assert_eq!(
+        f.ok(&["artifact", &artifact_id])?["content"],
+        "CAPTURE FROM FIRST TURN\n"
+    );
+    f.ok(&["retention", "0"])?;
+    assert!(
+        f.ok(&["storage"])?["preview"]["candidates"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    for mouse in [false, true] {
+        let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 105, 30)?;
+        terminal.screen("failed current with retained evidence", |screen| {
+            screen.contains("Archive worker evidence")
+        })?;
+        if mouse {
+            terminal.click("Enter Details")?;
+        } else {
+            terminal.send("\r")?;
+        }
+        terminal.screen("attempt details opened", |screen| {
+            screen.contains("Task details / attempts")
+        })?;
+        if mouse {
+            terminal.click("Transcripts")?;
+        } else {
+            terminal.send("t")?;
+        }
+        let opened = terminal.screen("worker artifact in real terminal", |screen| {
+            screen.contains("CAPTURE FROM FIRST TURN")
+        })?;
+        println!("RETAINED ARTIFACT OPEN mouse={mouse}\n{opened}");
+        if mouse {
+            terminal.click("Summary")?;
+        } else {
+            terminal.send("s")?;
+        }
+        let listed = terminal.screen("artifact listed in attempt summary", |screen| {
+            screen.contains("capture.txt") && screen.contains("sha256")
+        })?;
+        println!("RETAINED ARTIFACT LIST mouse={mouse}\n{listed}");
+        terminal.send("q")?;
+        terminal.kill()?;
+    }
+    f.provider("normal")?;
+    let second_run = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        second_run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second_run.stderr)
+    );
+    let judge_prompt = fs::read_to_string(f.scratch.path().join("prompt-judge"))?;
+    assert!(
+        judge_prompt.contains("CAPTURE FROM FIRST TURN"),
+        "{judge_prompt}"
+    );
+    let repair_prompt = fs::read_to_string(f.scratch.path().join("prompt-repair-worker"))?;
+    assert!(
+        repair_prompt.contains("Artifact capture.txt") && repair_prompt.contains("read-only path"),
+        "{repair_prompt}"
+    );
+    assert_eq!(
+        f.ok(&["artifact", &artifact_id])?["content"],
+        "CAPTURE FROM FIRST TURN\n"
+    );
+    let completed = f.ok(&["show", "1"])?;
+    let check_file = completed["attempts"].as_array().unwrap().last().unwrap()["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["name"] == "check.txt")
+        .ok_or("check artifact missing")?;
+    assert_eq!(
+        f.ok(&["artifact", &check_file["id"].as_i64().unwrap().to_string()])?["content"],
+        "CHECK CAPTURE\n"
+    );
+    assert!(
+        fs::read_to_string(f.scratch.path().join("prompt-review"))?.contains("Artifact check.txt")
+    );
+    for role in ["review", "validation"] {
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join(format!("read-artifact-{role}")))?,
+            "CHECK CAPTURE\n"
+        );
+    }
+    assert!(f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len() > 3);
+    f.no_scratch()?;
+    f.ok(&["storage", "--apply"])?;
+    assert!(!stored_path.exists());
+    assert_eq!(
+        f.ok(&["show", "1"])?["attempts"][0]["artifacts"][0]["pruned"],
+        true
+    );
+    Ok(())
+}
+
+#[test]
+fn oversized_worker_artifact_reports_limit_and_releases_scratch() -> Result {
+    let f = Fixture::new()?;
+    f.provider("artifact-oversize")?;
+    f.add("Reject oversized capture")?;
+    let run = f.process().args(["run", "--one"]).output()?;
+    assert_eq!(run.status.code(), Some(4));
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("8 MiB per-artifact limit"),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    f.guardian_finished()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn fifo_artifact_is_rejected_without_hanging_guardian_or_leaving_scratch() -> Result {
+    let f = Fixture::new()?;
+    f.provider("artifact-fifo")?;
+    f.add("Reject a named pipe")?;
+    let mut child = f
+        .process()
+        .args(["run", "--one"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if child.try_wait()?.is_some() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            child.kill()?;
+            let _ = child.wait();
+            return Err("guardian hung while opening an artifact FIFO".into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let output = child.wait_with_output()?;
+    assert_eq!(output.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("only regular files"));
+    f.guardian_finished()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn mixed_artifacts_keep_valid_siblings_and_reject_oversize_without_orphans() -> Result {
+    let f = Fixture::new()?;
+    f.provider("artifact-mixed")?;
+    f.add("Archive valid siblings")?;
+    let output = f.process().args(["run", "--one"]).output()?;
+    assert_eq!(output.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("8 MiB per-artifact limit"));
+    let db = f.db()?;
+    let rows = db.connection().prepare("SELECT name,relative_path FROM artifacts WHERE attempt_id=1 AND name IN ('a.txt','b.bin','c.txt') ORDER BY name")?
+        .query_map([], |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?)))?.collect::<std::result::Result<Vec<_>, _>>()?;
+    assert_eq!(
+        rows.iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["a.txt", "c.txt"]
+    );
+    for (name, relative) in rows {
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("state/ktask-dev").join(relative))?,
+            format!("saved {name}\n")
+        );
+    }
+    assert_eq!(
+        db.connection()
+            .query_row("SELECT count(*) FROM artifact_reservations", [], |r| r
+                .get::<_, i64>(0))?,
+        0
+    );
+    f.guardian_finished()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn interrupted_artifact_publication_reconciles_original_source_tree() -> Result {
+    let f = Fixture::new()?;
+    f.add("Recover archived evidence")?;
+    f.ok(&["run"])?;
+    let relative = "evidence/attempt-1/step-999/file-recover";
+    let root = f.scratch.path().join("state/ktask-dev");
+    let final_path = root.join(relative);
+    fs::create_dir_all(final_path.parent().unwrap())?;
+    let pending = final_path.with_file_name("file-recover.pending");
+    let bytes = b"copied before interruption\n";
+    fs::write(&pending, bytes)?;
+    let tree = "a".repeat(40);
+    let checksum = format!("{:x}", Sha256::digest(bytes));
+    let db = f.db()?;
+    db.connection().execute("INSERT INTO artifact_reservations(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms) VALUES (1,'recovered.txt','text/plain',?1,?2,?3,?4,1)", rusqlite::params![relative,bytes.len() as i64,checksum,tree])?;
+    drop(db);
+    let publication_lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(root.join("artifact-publication.lock"))?;
+    publication_lock.lock()?;
+    let live = f.ok(&["show", "1"])?;
+    assert!(
+        !live["attempts"][0]["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|artifact| artifact["name"] == "recovered.txt")
+    );
+    assert!(pending.is_file(), "a live reservation must not be reaped");
+    publication_lock.unlock()?;
+    let shown = f.ok(&["show", "1"])?;
+    let artifact = shown["attempts"][0]["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["name"] == "recovered.txt")
+        .ok_or("recovered artifact not listed")?;
+    assert_eq!(artifact["source_tree"], tree);
+    assert_eq!(
+        f.ok(&["artifact", &artifact["id"].as_i64().unwrap().to_string()])?["content"],
+        "copied before interruption\n"
+    );
+    assert!(final_path.is_file());
+    assert!(!pending.exists());
+    assert_eq!(
+        f.db()?
+            .connection()
+            .query_row("SELECT count(*) FROM artifact_reservations", [], |r| r
+                .get::<_, i64>(0))?,
+        0
+    );
+    let partial_relative = "evidence/attempt-1/step-999/file-partial";
+    let partial = root.join("evidence/attempt-1/step-999/file-partial.pending");
+    fs::write(&partial, b"incomplete")?;
+    f.db()?.connection().execute("INSERT INTO artifact_reservations(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms) VALUES (1,'partial.txt','text/plain',?1,?2,?3,?4,1)", rusqlite::params![partial_relative,bytes.len() as i64,checksum,tree])?;
+    f.ok(&["show", "1"])?;
+    assert!(!partial.exists());
+    assert_eq!(
+        f.db()?
+            .connection()
+            .query_row("SELECT count(*) FROM artifact_reservations", [], |r| r
+                .get::<_, i64>(0))?,
+        0
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn cross_turn_budget_rejects_new_file_without_retaining_untracked_bytes() -> Result {
+    let f = Fixture::new()?;
+    f.provider("artifact-budget")?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        "head -c 8388608 /dev/zero > \"$KTASK_ARTIFACT_DIR/extra.bin\"; test -f result.txt",
+    ])?;
+    f.add("Bound attempt evidence")?;
+    let run = f.process().args(["run", "--one"]).output()?;
+    assert_eq!(run.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&run.stderr).contains("64 MiB per-attempt artifact limit"));
+    let db = f.db()?;
+    let recorded: i64 = db.connection().query_row(
+        "SELECT coalesce(sum(size_bytes),0) FROM artifacts WHERE pruned_at_ms IS NULL",
+        [],
+        |r| r.get(0),
+    )?;
+    let largest_attempt: i64 = db.connection().query_row(
+        "SELECT max(used) FROM (SELECT sum(size_bytes) AS used FROM artifacts GROUP BY attempt_id)",
+        [],
+        |r| r.get(0),
+    )?;
+    assert!((60 * 1024 * 1024..=64 * 1024 * 1024).contains(&largest_attempt));
+    assert_eq!(
+        db.connection().query_row(
+            "SELECT count(*) FROM artifacts WHERE name='extra.bin'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        0
+    );
+    assert_eq!(
+        db.connection()
+            .query_row("SELECT count(*) FROM artifact_reservations", [], |r| r
+                .get::<_, i64>(0))?,
+        0
+    );
+    fn bytes_under(path: &Path) -> std::io::Result<u64> {
+        let mut size = 0;
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                size += bytes_under(&entry.path())?;
+            } else {
+                size += entry.metadata()?.len();
+            }
+        }
+        Ok(size)
+    }
+    assert_eq!(
+        bytes_under(&f.scratch.path().join("state/ktask-dev/evidence"))?,
+        recorded as u64
+    );
+    f.ok(&["retention", "0"])?;
+    f.ok(&["storage", "--apply"])?;
+    assert_eq!(
+        bytes_under(&f.scratch.path().join("state/ktask-dev/evidence"))?,
+        recorded as u64,
+        "unresolved failure evidence must stay retained"
+    );
+    f.ok(&["done", "1", "--reason", "Evidence inspection complete"])?;
+    f.ok(&["storage", "--apply"])?;
+    assert_eq!(
+        bytes_under(&f.scratch.path().join("state/ktask-dev/evidence"))?,
+        0,
+        "resolved overflow evidence must be eligible for cleanup"
+    );
+    f.guardian_finished()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn oversized_check_transcript_is_rejected_without_state_file() -> Result {
+    let f = Fixture::new()?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        "head -c 8388609 /dev/zero | tr '\\000' x",
+    ])?;
+    f.add("Bound check transcript")?;
+    let run = f.process().args(["run", "--one"]).output()?;
+    assert_eq!(run.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&run.stderr).contains("8 MiB per-artifact limit"));
+    assert_eq!(
+        f.db()?.connection().query_row(
+            "SELECT count(*) FROM artifacts WHERE name='build'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        0
+    );
+    f.guardian_finished()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn failed_check_capture_is_read_by_next_repair_turn() -> Result {
+    let f = Fixture::new()?;
+    f.provider("read-repair-capture")?;
+    f.ok(&["check-set","build","--command", "if [ ! -f \"$HOME/checked-once\" ]; then touch \"$HOME/checked-once\"; printf 'diagnostic capture\\n' > \"$KTASK_ARTIFACT_DIR/diagnostic.txt\"; exit 7; fi; test -f result.txt"])?;
+    f.add("Use failing check capture")?;
+    f.ok(&["run"])?;
+    assert_eq!(
+        fs::read_to_string(f.scratch.path().join("repair-capture-read"))?,
+        "diagnostic capture\n"
+    );
+    let prompt = fs::read_to_string(f.scratch.path().join("prompt-repair-worker"))?;
+    assert!(
+        prompt.contains("Artifact diagnostic.txt") && prompt.contains("read-only path"),
+        "{prompt}"
+    );
+    f.no_scratch()?;
+    Ok(())
+}
 
 #[test]
 fn stop_in_real_pty_keeps_attempt_evidence_stashes_work_and_uses_corrected_defaults() -> Result {
@@ -1787,7 +2200,11 @@ impl Fixture {
     }
     fn ok_in(&self, project: &Path, args: &[&str]) -> Result<Value> {
         let o = self.process_in(project).arg("--json").args(args).output()?;
-        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        assert!(
+            o.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
         Ok(serde_json::from_slice::<Value>(&o.stdout)?["data"].clone())
     }
     fn add(&self, title: &str) -> Result {
@@ -1890,6 +2307,27 @@ if [ '{mode}' = resolve-conflict-pause ] && [ "$repair" = yes ] && [ ! -f "$HOME
  sleep 30
 fi
 case '{mode}' in
+ artifact-malformed)
+  if [ "$model" = execution ]; then printf 'CAPTURE FROM FIRST TURN\n' > "$KTASK_ARTIFACT_DIR/capture.txt"; printf 'verified\n' > result.txt; fi
+  printf '{{"type":"turn.completed","usage":{{}}}}\n'; exit 0;;
+ artifact-oversize)
+  if [ "$model" = execution ]; then head -c 8388609 /dev/zero > "$KTASK_ARTIFACT_DIR/huge.bin"; fi;;
+ artifact-fifo)
+  if [ "$model" = execution ]; then mkfifo "$KTASK_ARTIFACT_DIR/pipe"; fi;;
+ artifact-mixed)
+  if [ "$model" = execution ]; then printf 'saved a.txt\n' > "$KTASK_ARTIFACT_DIR/a.txt"; head -c 8388609 /dev/zero > "$KTASK_ARTIFACT_DIR/b.bin"; printf 'saved c.txt\n' > "$KTASK_ARTIFACT_DIR/c.txt"; fi;;
+ artifact-budget)
+  if [ "$model" = execution ]; then
+   i=1; while [ "$i" -le 7 ]; do head -c 8388608 /dev/zero > "$KTASK_ARTIFACT_DIR/file-$i.bin"; i=$((i + 1)); done
+   head -c 4194304 /dev/zero > "$KTASK_ARTIFACT_DIR/file-8.bin"
+  fi;;
+ read-repair-capture)
+  if [ "$repair" = yes ]; then
+   artifact=$(printf '%s\n' "$prompt" | sed -n 's/.*Artifact diagnostic.txt:.*read-only path \(.*\)$/\1/p' | head -n 1)
+   [ -n "$artifact" ] || exit 22
+   cat "$artifact" > "$HOME/repair-capture-read" || exit 23
+   if (printf tamper >> "$artifact") 2>/dev/null; then exit 24; fi
+  fi;;
  follow-up)
   if [ "$model" = execution ]; then
    export XDG_STATE_HOME="$TMPDIR/no-supervisor-state"
@@ -1990,6 +2428,13 @@ case '{mode}' in
  ask-once) case "$prompt" in *"You returned blocked"*) :;; *) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"blocked\",\"summary\":\"Need direction\",\"question\":\"Which content?\",\"criteria\":[]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;; esac;;
  review-asks) case "$model" in review) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"blocked\",\"summary\":\"Need direction\",\"question\":\"Which content?\",\"criteria\":[]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;; esac;;
 esac
+if [ '{mode}' = normal ] && {{ [ "$model" = review ] || [ "$model" = validation ]; }}; then
+ artifact=$(printf '%s\n' "$prompt" | sed -n 's/.*Artifact check.txt:.*read-only path \(.*\)$/\1/p' | head -n 1)
+ if [ -n "$artifact" ]; then
+  cat "$artifact" > "$HOME/read-artifact-$model" || exit 20
+  if (printf 'write-test' >> "$artifact") 2>/dev/null; then exit 21; fi
+ fi
+fi
 if [ "$repair" = yes ]; then
  if [ '{mode}' = resolve-conflict ] || [ '{mode}' = resolve-conflict-pause ]; then printf 'remote\nverified\n' > result.txt; elif [ '{mode}' = reuse-changed ]; then printf 'verified after repair\n' > result.txt; else printf 'verified\n' > result.txt; fi
 elif [ "$model" = execution ]; then
@@ -7103,6 +7548,7 @@ fn review_failure_is_judged_repaired_and_queue_continues_automatically() -> Resu
     for mouse in [false, true] {
         let f = Fixture::new()?;
         f.provider("review-once")?;
+        f.ok(&["check-set", "build", "--command", "printf 'review proof\\n' > \"$KTASK_ARTIFACT_DIR/review-proof.txt\"; test -f result.txt"])?;
         f.add("Review repair")?;
         f.add("Following task")?;
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
@@ -7123,6 +7569,11 @@ fn review_failure_is_judged_repaired_and_queue_continues_automatically() -> Resu
         );
         t.send("q")?;
         t.finish()?;
+        let repair = fs::read_to_string(f.scratch.path().join("prompt-repair-worker"))?;
+        assert!(
+            repair.contains("Artifact review-proof.txt") && repair.contains("read-only path"),
+            "{repair}"
+        );
         let first = f.ok(&["show", "1"])?;
         assert!(
             first["attempts"][0]["steps"]

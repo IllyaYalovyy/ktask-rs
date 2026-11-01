@@ -119,18 +119,29 @@ fn io(error: Errno) -> Error {
     Error::Io(std::io::Error::from_raw_os_error(error as i32))
 }
 
-/// Only generated transcript paths are eligible. Directory descriptors with
+/// Only generated artifact paths are eligible. Directory descriptors with
 /// O_NOFOLLOW prevent a swapped symlink from redirecting deletion into a project.
 fn remove_transcript(root: &File, attempt: i64, relative: &str) -> Result<()> {
     let expected_dir = format!("attempt-{attempt}");
     let parts: Vec<_> = relative.split('/').collect();
     require(
-        parts.len() == 3
+        (parts.len() == 3 || parts.len() == 4)
             && parts[0] == "evidence"
             && parts[1] == expected_dir
-            && parts[2].starts_with("step-")
-            && parts[2].ends_with(".log")
-            && parts[2][5..parts[2].len() - 4].parse::<u64>().is_ok(),
+            && if parts.len() == 3 {
+                parts[2].starts_with("step-")
+                    && parts[2].ends_with(".log")
+                    && parts[2][5..parts[2].len() - 4].parse::<u64>().is_ok()
+            } else {
+                parts[2]
+                    .strip_prefix("step-")
+                    .is_some_and(|n| n.parse::<u64>().is_ok())
+                    && parts[3].strip_prefix("file-").is_some_and(|name| {
+                        name.split_once('-').is_some_and(|(pid, index)| {
+                            pid.parse::<u32>().is_ok() && index.parse::<usize>().is_ok()
+                        })
+                    })
+            },
         "Unsafe artifact path; cleanup stopped",
     )?;
     let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
@@ -144,8 +155,18 @@ fn remove_transcript(root: &File, attempt: i64, relative: &str) -> Result<()> {
         Err(Errno::ENOENT) => return Ok(()),
         Err(e) => return Err(io(e)),
     };
-    match unlinkat(&directory, parts[2], UnlinkatFlags::NoRemoveDir) {
-        Ok(()) => File::from(directory).sync_all().map_err(Into::into),
+    let (parent, filename) = if parts.len() == 4 {
+        let step = match openat(&directory, parts[2], flags, Mode::empty()) {
+            Ok(fd) => fd,
+            Err(Errno::ENOENT) => return Ok(()),
+            Err(e) => return Err(io(e)),
+        };
+        (File::from(step), parts[3])
+    } else {
+        (File::from(directory), parts[2])
+    };
+    match unlinkat(&parent, filename, UnlinkatFlags::NoRemoveDir) {
+        Ok(()) => parent.sync_all().map_err(Into::into),
         Err(Errno::ENOENT) => Ok(()),
         Err(e) => Err(io(e)),
     }

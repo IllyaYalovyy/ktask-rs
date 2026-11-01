@@ -78,7 +78,11 @@ pub(super) fn run(
                     break;
                 }
                 Outcome::Failed(category, message) => {
-                    let message = format!("{message}\nFull log: {}", path.display());
+                    let message = format!(
+                        "{message}\nFull log: {}{}",
+                        path.display(),
+                        service.artifact_manifest(run.attempt, &ctx.paths.state)?
+                    );
                     if category == "environment" && recheck < 2 {
                         service.output(run, "system", &format!(
                             "Check infrastructure failed · automatic retry {}/2 after {}s · transcript retained; Pause cancels",
@@ -95,6 +99,7 @@ pub(super) fn run(
             }
         }
     }
+    evidence.push_str(&service.artifact_manifest(run.attempt, &ctx.paths.state)?);
     Ok(Outcome::Passed(evidence))
 }
 
@@ -124,6 +129,7 @@ fn run_one(
         prompt: String::new(),
         schema: None,
         scratch_root: ctx.paths.cache.join("workers"),
+        artifact_target: None,
         worker_lock: ctx.workspace.worker_lock.clone(),
         callback: None,
         sandbox: None,
@@ -139,21 +145,38 @@ fn run_one(
         None,
     );
     let relative = format!("evidence/attempt-{}/step-{}.log", run.attempt, step.id);
-    let path = ctx.paths.state.join(&relative);
-    std::fs::create_dir_all(path.parent().expect("evidence directory"))?;
-    let mut transcript = std::fs::File::create_new(&path)?;
+    let scratch = crate::scratch::Scratch::new(&ctx.paths.cache.join("workers"))?;
+    let temporary = scratch.path().join("check-transcript");
+    let mut transcript = std::fs::File::create_new(&temporary)?;
     service.write_output_since(run, cursor, &mut transcript)?;
     transcript.flush()?;
     transcript.sync_all()?;
-    service.record_artifact(
-        run,
+    let transcript_tree = ctx
+        .workspace
+        .fingerprint(&ctx.paths.cache.join("workers"))?;
+    service.publish_artifact(
+        run.attempt,
+        &run.token,
         &check.name,
+        &temporary,
         &relative,
-        transcript.metadata()?.len() as i64,
+        &transcript_tree,
     )?;
+    scratch.close().map_err(|error| {
+        crate::storage::Error::Conflict(format!(
+            "Cannot remove check transcript scratch after publication: {error}"
+        ))
+    })?;
+    let path = ctx.paths.state.join(&relative);
     let (outcome, exit, counts) = match finish? {
         Finish::Exited(code) => {
-            let transcript = String::from_utf8_lossy(&std::fs::read(&path)?).into_owned();
+            let transcript = String::from_utf8_lossy(&std::fs::read(&path).map_err(|error| {
+                crate::storage::Error::Conflict(format!(
+                    "Cannot read published check transcript {}: {error}",
+                    path.display()
+                ))
+            })?)
+            .into_owned();
             let counts = test_summary::parse(&transcript);
             let outcome = match verdict(&check.name, code, counts) {
                 Outcome::Failed(category, headline) => Outcome::Failed(
@@ -175,12 +198,7 @@ fn run_one(
         // A paused check ends with its attempt.
         _ => {}
     }
-    if matches!(outcome, Outcome::Passed(_) | Outcome::Failed(_, _))
-        && ctx
-            .workspace
-            .fingerprint(&ctx.paths.cache.join("workers"))?
-            == tree
-    {
+    if matches!(outcome, Outcome::Passed(_) | Outcome::Failed(_, _)) && transcript_tree == tree {
         service.record_check_tree(&step, tree)?;
     }
     if let Some(counts) = counts {

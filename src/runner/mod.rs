@@ -135,6 +135,7 @@ pub(crate) fn provider_invocation(
         prompt: launch.prompt,
         schema: launch.schema_file,
         scratch_root,
+        artifact_target: None,
         worker_lock,
         callback: None,
         sandbox: match access {
@@ -1332,7 +1333,17 @@ fn execute(
         ctx.persist_active_time(service, run)?;
         return Ok(Finish::Stopped(outcome));
     }
-    let mut worker = match Worker::spawn(&ctx.paths.executable, spec) {
+    let mut spec = spec.clone();
+    let artifact_relative = format!("evidence/attempt-{}/step-{}", run.attempt, step.id);
+    spec.artifact_target = Some(process::ArtifactTarget {
+        state: ctx.paths.state.clone(),
+        project: ctx.workspace.root.clone(),
+        scratch_root: ctx.paths.cache.join("workers"),
+        attempt: run.attempt,
+        token: run.token.clone(),
+        relative_prefix: artifact_relative,
+    });
+    let mut worker = match Worker::spawn(&ctx.paths.executable, &spec) {
         Ok(worker) => worker,
         Err(error) => {
             ctx.persist_active_time(service, run)?;
@@ -1460,6 +1471,7 @@ fn execute(
                 ctx.persist_active_time(service, run)?;
                 return Ok(interrupted.map_or(Finish::Exited(code), Finish::Stopped));
             }
+            Ok(Message::Artifact { .. }) => {}
             Ok(Message::Error(message)) => return Err(Error::Conflict(message)),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {

@@ -1452,7 +1452,7 @@ fn dialog_hint(dialog: &crate::dialog::Dialog, has_position: bool) -> &str {
     } else if has_position {
         "Alt-Up/Down: position · Ctrl-S: apply · Esc: cancel"
     } else if matches!(dialog.kind, DialogKind::Inspect { .. }) {
-        "[ ] attempt · s summary · v reviews · f failures · n/p step · o output"
+        "[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t artifacts"
     } else if dialog.read_only() {
         "Wheel / PgUp / PgDn: scroll · Esc: close"
     } else if matches!(dialog.kind, DialogKind::StorageConfirm(_)) {

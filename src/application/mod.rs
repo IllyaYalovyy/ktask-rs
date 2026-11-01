@@ -1,4 +1,5 @@
 //! Shared application commands. Neither terminal state nor demo fixtures enter this layer.
+mod artifacts;
 mod commands;
 mod evidence;
 pub mod evidence_pin;
@@ -210,6 +211,17 @@ pub struct Attempt {
     /// Open question text while the attempt waits for an answer.
     pub question: Option<String>,
     pub steps: Vec<Step>,
+    pub artifacts: Vec<Artifact>,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct Artifact {
+    pub id: i64,
+    pub name: String,
+    pub media_type: String,
+    pub size_bytes: i64,
+    pub checksum_sha256: Option<String>,
+    pub source_tree: Option<String>,
+    pub pruned: bool,
 }
 /// One supervisor step of an attempt (execution, check, review, validation, remediation).
 #[derive(Clone, Debug, Serialize)]
@@ -330,14 +342,18 @@ impl Service {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        Ok(project.map(|(project_id, project_name)| Self {
+        let service = project.map(|(project_id, project_name)| Self {
             db,
             project_id,
             project_name,
             observed_data_version: 0,
             live_output: Default::default(),
             actor: Actor::default(),
-        }))
+        });
+        if let Some(service) = &service {
+            service.reconcile_artifact_reservations()?;
+        }
+        Ok(service)
     }
     pub fn set_actor(&mut self, actor: Actor) -> Result<()> {
         require(!actor.name.trim().is_empty(), "Actor name is required")?;
@@ -393,14 +409,16 @@ impl Service {
             (id, name.to_owned())
         };
         tx.commit()?;
-        Ok(Self {
+        let service = Self {
             db,
             observed_data_version: 0,
             live_output: Default::default(),
             actor: Actor::default(),
             project_id,
             project_name,
-        })
+        };
+        service.reconcile_artifact_reservations()?;
+        Ok(service)
     }
     pub fn defaults(&self) -> Result<[Option<ModelConfig>; 4]> {
         let mut models = std::array::from_fn(|_| None);

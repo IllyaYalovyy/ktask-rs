@@ -432,6 +432,13 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
             Ok(Reply::list(&rows))
         }
         Command::Show { id } => Ok(Reply::task(&task(service, *id)?)),
+        Command::Artifact { id } => {
+            let (artifact, content) = service.open_text_artifact(*id)?;
+            Ok(Reply {
+                data: json!({"artifact":artifact,"content":content}),
+                text: content,
+            })
+        }
         Command::Current => match service.snapshot_brief()?.queue.first() {
             Some(current) => Ok(Reply::task(&task(service, current.id)?)),
             None => Ok(Reply {

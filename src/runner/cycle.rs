@@ -79,7 +79,8 @@ pub(super) fn run(
                 } else {
                     "execution"
                 },
-                &format!("{}\nRecorded answers:\n{answers}", progress.context),
+                &format!("{}\nRecorded answers:\n{answers}{}", progress.context,
+                    service.artifact_manifest(run.attempt, &ctx.paths.state)?),
             )?,
             "integrate" => super::delivery::continue_integration(service, run, ctx)?,
             "baseline" => {
@@ -368,7 +369,7 @@ fn opening_progress(
         .skip(1)
         .find_map(|a| a.outcome.clone())
         .unwrap_or_default();
-    Ok(match opening {
+    let mut progress = match opening {
         Opening::Fresh { verify } => fresh(if verify { "baseline" } else { "implement" }),
         Opening::Retry if ctx.workspace.clean()? => fresh("implement"),
         Opening::Retry => {
@@ -404,5 +405,12 @@ fn opening_progress(
             }
             progress
         }
-    })
+    };
+    // Later rounds and judges see the previous attempt's archived evidence files.
+    if let Some(prior) = task.attempts.iter().rev().find(|a| a.id != run.attempt) {
+        progress
+            .context
+            .push_str(&service.artifact_manifest(prior.id, &ctx.paths.state)?);
+    }
+    Ok(progress)
 }

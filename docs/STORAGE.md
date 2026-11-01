@@ -207,6 +207,7 @@ erDiagram
     attempts ||--o{ attempt_output : "attempt_id"
     attempts ||--o| output_pruning : "attempt_id"
     attempts ||--o{ artifacts : "attempt_id"
+    attempts ||--o{ artifact_reservations : "attempt_id"
 ```
 
 ## Table definitions
@@ -252,6 +253,28 @@ Durable provider chat identity, independent of attempts and worker processes. Co
 - UQ `(id, project_id, provider)`.
 - UQ `(provider, provider_scope, provider_session_id)`.
 
+### artifact_reservations
+
+Reservations account for bytes before publication. Recovery finishes complete copies with
+their original source tree, or removes partial copies and releases the budget.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `id` | INTEGER | no | Stable reservation ID. |
+| `attempt_id` | INTEGER | no | Owning attempt. |
+| `name` | TEXT | no | Artifact name. |
+| `media_type` | TEXT | no | Detected content type. |
+| `relative_path` | TEXT | no | Final path in instance storage. |
+| `size_bytes` | INTEGER | no | Reserved byte count. |
+| `checksum_sha256` | TEXT | no | Checksum of intended bytes. |
+| `source_tree` | TEXT | no | Source tree when the worker or check ended. |
+| `created_at_ms` | INTEGER | no | Reservation time. |
+
+- PK `(id)`.
+- FK `(attempt_id)` → `attempts(id)`.
+- Index `ix_artifact_reservations_attempt`: `INDEX ix_artifact_reservations_attempt ON artifact_reservations(attempt_id)`.
+- UQ `(relative_path)`.
+
 ### artifacts
 
 Retained files outside SQLite, owned by an attempt. Paths are unique within the instance artifact root. Commands validate containment and reject traversal/symlink escapes; pruning removes bytes and retains metadata.
@@ -264,6 +287,8 @@ Retained files outside SQLite, owned by an attempt. Paths are unique within the 
 | `media_type` | TEXT | no | Nonblank content type. |
 | `relative_path` | TEXT | no | Path under the instance artifact root, never the project root. |
 | `size_bytes` | INTEGER | no | Nonnegative retained byte count. |
+| `checksum_sha256` | TEXT | yes | SHA-256 digest of retained bytes; NULL when not recorded. |
+| `source_tree` | TEXT | yes | Git tree fingerprint of the completed worker or check turn; NULL when not recorded. |
 | `created_at_ms` | INTEGER | no | Creation time. |
 | `pruning_requested_at_ms` | INTEGER | yes | Durable cleanup intent; NULL until selected. Retry reconciles interrupted deletion. |
 | `pruned_at_ms` | INTEGER | yes | Deletion time; NULL while retained. |
@@ -1089,7 +1114,7 @@ SELECT id, prompt FROM questions WHERE attempt_id = :attempt_id AND state = 'ope
 
 ```sql
 -- name: attempt-artifacts
-SELECT id, name, relative_path, size_bytes, pruned_at_ms
+SELECT id, name, media_type, relative_path, size_bytes, checksum_sha256, source_tree, pruned_at_ms
 FROM artifacts WHERE attempt_id = :attempt_id ORDER BY id;
 ```
 

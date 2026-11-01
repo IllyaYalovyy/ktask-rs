@@ -1,9 +1,10 @@
 //! A small worker guardian: stdin is a lifeline, not a terminal. Losing the supervisor
 //! stops the entire child process group before releasing its workspace/scratch leases.
 use crate::{
+    application::Service,
     runner::callback::{Capability, Server},
     scratch::Scratch,
-    storage::{Error, Result},
+    storage::{Database, Error, Result},
 };
 use nix::{
     sys::signal::{Signal, kill, killpg},
@@ -25,7 +26,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Invocation {
     pub executable: PathBuf,
     pub args: Vec<String>,
@@ -36,11 +37,24 @@ pub struct Invocation {
     pub prompt: String,
     pub schema: Option<serde_json::Value>,
     pub scratch_root: PathBuf,
+    /// Artifact admission is owned by the guardian before it deletes scratch.
+    #[serde(default)]
+    pub artifact_target: Option<ArtifactTarget>,
     pub worker_lock: PathBuf,
     pub callback: Option<Capability>,
     /// Set for read-only turns: the provider runs inside it.
     #[serde(default)]
     pub sandbox: Option<super::sandbox::Sandbox>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ArtifactTarget {
+    pub state: PathBuf,
+    pub project: PathBuf,
+    pub scratch_root: PathBuf,
+    pub attempt: i64,
+    pub token: String,
+    pub relative_prefix: String,
 }
 
 /// Use the isolated guardian so descendants cannot retain pipes or outlive cancellation.
@@ -75,6 +89,11 @@ pub fn capture_readonly(
                 worker.join()?;
                 return Ok((code, stdout, stderr));
             }
+            Ok(Message::Artifact { .. }) => {
+                return Err(Error::Conflict(
+                    "Unexpected artifact from read-only proposal".into(),
+                ));
+            }
             Ok(Message::Error(error)) => return Err(Error::Conflict(error)),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -86,6 +105,7 @@ pub fn capture_readonly(
 #[derive(Serialize, Deserialize)]
 pub enum Message {
     Output { stream: String, bytes: Vec<u8> },
+    Artifact { name: String, relative_path: String },
     Exit { code: i32 },
     Error(String),
 }
@@ -268,6 +288,10 @@ pub fn worker() -> Result<()> {
     lease.write_all(scratch.path().as_os_str().as_encoded_bytes())?;
     lease.write_all(b"\n")?;
     lease.sync_all()?;
+    let artifact_dir = scratch.path().join("artifacts");
+    if spec.artifact_target.is_some() {
+        std::fs::create_dir(&artifact_dir)?;
+    }
     let callback = spec
         .callback
         .map(|capability| Server::start(scratch.path(), capability))
@@ -286,6 +310,11 @@ pub fn worker() -> Result<()> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
+    if spec.artifact_target.is_some() {
+        command.env("KTASK_ARTIFACT_DIR", &artifact_dir);
+    } else {
+        command.env_remove("KTASK_ARTIFACT_DIR");
+    }
     if let Some(callback) = &callback {
         command.env("KTASK_CALLBACK_DIR", callback.path());
     } else {
@@ -359,14 +388,68 @@ pub fn worker() -> Result<()> {
     stderr
         .join()
         .map_err(|_| io::Error::other("stderr reader panicked"))?;
+    let artifact_error = spec
+        .artifact_target
+        .as_ref()
+        .map(|target| archive_artifacts(&artifact_dir, target))
+        .transpose()
+        .err();
     drop(callback);
     scratch.close()?;
     lease.set_len(0)?;
     lease.sync_all()?;
+    if let Some(error) = artifact_error {
+        send(&Message::Error(error.to_string()))?;
+        return Ok(());
+    }
     send(&Message::Exit {
         code: code.unwrap_or(130),
     })?;
     Ok(())
+}
+
+/// The guardian owns the scratch lease until every selected file is in state storage.
+/// Only regular, flat files are accepted; a worker cannot redirect the copy with a symlink.
+fn archive_artifacts(source: &std::path::Path, target: &ArtifactTarget) -> Result<()> {
+    let service = Service::open(Database::open_in(&target.state)?, &target.project, None)?;
+    let tree = super::workspace::Workspace::fingerprint_at(&target.project, &target.scratch_root)?;
+    let mut entries = std::fs::read_dir(source)?.collect::<io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    let mut errors = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let name = match entry.file_name().into_string() {
+            Ok(name) => name,
+            Err(_) => {
+                errors.push("Artifact name must be UTF-8".to_owned());
+                continue;
+            }
+        };
+        let stored_name = format!("file-{}-{index}", std::process::id());
+        let relative = format!("{}/{stored_name}", target.relative_prefix);
+        match service.publish_artifact(
+            target.attempt,
+            &target.token,
+            &name,
+            &entry.path(),
+            &relative,
+            &tree,
+        ) {
+            Ok(()) => {
+                // Publication is already durable. A disconnected supervisor must
+                // not prevent later siblings from being archived.
+                let _ = send(&Message::Artifact {
+                    name,
+                    relative_path: stored_name,
+                });
+            }
+            Err(error) => errors.push(error.to_string()),
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::Conflict(errors.join("; ")))
+    }
 }
 
 pub struct Worker {

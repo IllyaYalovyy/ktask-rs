@@ -89,6 +89,12 @@ WHEN EXECUTION STOPS ON A FAILED TASK
   edit ID --apply-project-defaults copies them.
 
 OUTPUT CONTRACT
+  Workers and checks can save flat regular files in KTASK_ARTIFACT_DIR. Files are
+  archived per attempt before scratch cleanup, up to 8 MiB each and 64 MiB total.
+  ktask show ID (or current) lists artifact IDs, media types, sizes, SHA-256 digests
+  and source trees. ktask artifact ID opens retained UTF-8 text/JSON. Storage retention
+  keeps Queue and unresolved-failure evidence; eligible History artifacts are pruned.
+
   Without --json, output is human text and may change. With --json, stdout carries one
   line:  {"schema_version":1,"ok":true,"data":...}
   and a failure writes to stderr:

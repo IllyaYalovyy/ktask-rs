@@ -295,6 +295,12 @@ pub enum Command {
         #[arg(value_parser = positive)]
         id: i64,
     },
+    /// Open a retained text artifact by ID (listed by show/current).
+    Artifact {
+        /// Artifact ID listed by show or current.
+        #[arg(value_parser = positive)]
+        id: i64,
+    },
     /// Show the current task like show; prints null when the queue is empty.
     Current,
     /// Add a task at the end of the queue (or --before ID). Ready unless --approval draft.

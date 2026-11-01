@@ -409,13 +409,6 @@ impl Service {
         }
         Ok(())
     }
-    pub fn record_artifact(&self, run: &Run, name: &str, path: &str, size: i64) -> Result<()> {
-        self.db.connection().execute(
-            "INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms) VALUES (?1,?2,'text/plain',?3,?4,?5)",
-            params![run.attempt, name, path, size, now_ms()],
-        )?;
-        Ok(())
-    }
     pub fn active_time(&self, run: &Run, active_ms: i64) -> Result<()> {
         require(self.db.connection().execute("UPDATE attempts SET active_ms=?2 WHERE id=?1 AND execution_token=?3 AND state='running' AND active_ms<=?2", params![run.attempt,active_ms,run.token])? == 1, "Runner lost ownership of attempt")
     }

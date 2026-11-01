@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "ktask-rs-mk3"
-version = "0.29.1"
+version = "0.30.1"
 dependencies = [
  "chrono",
  "clap",
@@ -757,6 +757,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "signal-hook 0.4.5",
  "tempfile",
  "vt100",

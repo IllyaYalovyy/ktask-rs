@@ -375,6 +375,33 @@ impl Service {
         if count == 0 {
             text.push_str("No steps recorded.\n");
         }
+        let mut files = db.prepare("SELECT id,name,media_type,size_bytes,checksum_sha256,source_tree,pruned_at_ms IS NOT NULL FROM artifacts WHERE attempt_id=?1 ORDER BY id")?;
+        let rows = files.query_map([attempt], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, Option<String>>(5)?,
+                r.get::<_, bool>(6)?,
+            ))
+        })?;
+        text.push_str("\nArtifacts (open text in Transcripts; ,/. selects file)\n");
+        let mut any = false;
+        for row in rows {
+            let (id, name, media, size, checksum, tree, pruned) = row?;
+            text.push_str(&format!(
+                "#{id} {name} · {media} · {size} bytes{}\n  sha256 {} · tree {}\n",
+                if pruned { " · PRUNED" } else { "" },
+                checksum.as_deref().unwrap_or("unrecorded"),
+                tree.as_deref().unwrap_or("unrecorded")
+            ));
+            any = true;
+        }
+        if !any {
+            text.push_str("No artifacts recorded.\n");
+        }
         Ok(text)
     }
 
@@ -487,7 +514,7 @@ impl Service {
         root: &std::path::Path,
     ) -> Result<String> {
         let db = self.db.connection();
-        let mut stmt = db.prepare("SELECT name,relative_path,size_bytes,pruned_at_ms,pruning_requested_at_ms FROM artifacts WHERE attempt_id=?1 ORDER BY id")?;
+        let mut stmt = db.prepare("SELECT name,relative_path,size_bytes,pruned_at_ms,pruning_requested_at_ms,media_type FROM artifacts WHERE attempt_id=?1 ORDER BY id")?;
         let artifacts = stmt
             .query_map([attempt], |r| {
                 Ok((
@@ -496,6 +523,7 @@ impl Service {
                     r.get::<_, i64>(2)?,
                     r.get::<_, Option<i64>>(3)?,
                     r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, String>(5)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -508,14 +536,18 @@ impl Service {
             return Ok(text);
         }
         let index = artifact.min(artifacts.len() - 1);
-        let (name, relative, size, pruned, pending) = &artifacts[index];
+        let (name, relative, size, pruned, pending, media_type) = &artifacts[index];
         text.push_str(&format!(
             "Artifact {} / {} · {name} · {size} bytes\n",
             index + 1,
-            artifacts.len()
+            artifacts.len(),
         ));
         if pruned.is_some() {
             text.push_str("PRUNED: transcript content is no longer retained.\n");
+            return Ok(text);
+        }
+        if !matches!(media_type.as_str(), "text/plain" | "application/json") {
+            text.push_str("Binary artifact; open the retained file with a suitable viewer.\n");
             return Ok(text);
         }
         let Some(path) = retained_artifact_path(root, relative) else {
@@ -557,6 +589,60 @@ impl Service {
         }
         text.push_str(&String::from_utf8_lossy(&bytes));
         Ok(text)
+    }
+
+    pub fn open_text_artifact(&self, id: i64) -> Result<(super::Artifact, String)> {
+        let db = self.db.connection();
+        let row: Option<(super::Artifact, String)> = db.query_row(
+            "SELECT f.id,f.name,f.media_type,f.size_bytes,f.checksum_sha256,f.source_tree,f.pruned_at_ms IS NOT NULL,f.relative_path FROM artifacts f JOIN attempts a ON a.id=f.attempt_id WHERE f.id=?1 AND a.project_id=?2",
+            params![id, self.project_id],
+            |r| Ok((super::Artifact { id:r.get(0)?, name:r.get(1)?, media_type:r.get(2)?, size_bytes:r.get(3)?, checksum_sha256:r.get(4)?, source_tree:r.get(5)?, pruned:r.get(6)? }, r.get(7)?)),
+        ).optional()?;
+        let (artifact, relative) = row.ok_or_else(|| {
+            Error::Conflict(format!("Artifact #{id} does not exist in this project"))
+        })?;
+        require(!artifact.pruned, "Artifact was pruned by Storage retention")?;
+        require(
+            matches!(
+                artifact.media_type.as_str(),
+                "text/plain" | "application/json"
+            ),
+            "Artifact is binary; only text artifacts can be opened by the CLI",
+        )?;
+        let root = self.db.state_file("")?;
+        let path = retained_artifact_path(&root, &relative)
+            .ok_or_else(|| Error::Conflict("Artifact file is missing or unsafe".into()))?;
+        let bytes = std::fs::read(path)?;
+        require(
+            bytes.len() as i64 == artifact.size_bytes,
+            "Artifact size differs from its record",
+        )?;
+        let content = String::from_utf8(bytes)
+            .map_err(|_| Error::Conflict("Artifact is not valid UTF-8".into()))?;
+        Ok((artifact, content))
+    }
+
+    pub fn artifact_manifest(&self, attempt: i64, root: &std::path::Path) -> Result<String> {
+        let mut stmt = self.db.connection().prepare("SELECT name,media_type,size_bytes,checksum_sha256,source_tree,relative_path FROM artifacts WHERE attempt_id=?1 AND pruned_at_ms IS NULL ORDER BY id")?;
+        let rows = stmt.query_map([attempt], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, String>(5)?,
+            ))
+        })?;
+        let mut result = String::new();
+        for (name, media, size, checksum, tree, relative) in
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        {
+            if let Some(path) = retained_artifact_path(root, &relative) {
+                result.push_str(&format!("\nArtifact {name}: {media}, {size} bytes, sha256 {}, source tree {}, read-only path {}", checksum.as_deref().unwrap_or("unrecorded"), tree.as_deref().unwrap_or("unrecorded"), path.display()));
+            }
+        }
+        Ok(result)
     }
     /// Persisted waiting-attempt timing, read without changing the attempt or its guards.
     pub fn waiting_resume(&self, task: i64) -> Result<Option<WaitingResume>> {
@@ -634,12 +720,22 @@ impl Service {
             evidence.push_str(&format!("\n[{stream}] {text}"));
             retain_tail(&mut evidence, OUTPUT_TAIL);
         }
+        evidence.push_str(&self.artifact_manifest(attempt, artifact_root)?);
         let mut transcripts = String::new();
-        let mut artifacts = self.db.connection().prepare("SELECT name,relative_path FROM artifacts WHERE attempt_id=?1 AND pruned_at_ms IS NULL ORDER BY id")?;
+        let mut artifacts = self.db.connection().prepare("SELECT name,relative_path,media_type,size_bytes,checksum_sha256,source_tree FROM artifacts WHERE attempt_id=?1 AND pruned_at_ms IS NULL ORDER BY id")?;
         let paths = artifacts.query_map([attempt], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, Option<String>>(5)?,
+            ))
         })?;
-        for (name, relative) in paths.collect::<rusqlite::Result<Vec<_>>>()? {
+        for (name, relative, media, size, checksum, tree) in
+            paths.collect::<rusqlite::Result<Vec<_>>>()?
+        {
             let relative = std::path::Path::new(&relative);
             if relative
                 .components()
@@ -648,7 +744,10 @@ impl Service {
                 continue;
             }
             let path = artifact_root.join(relative);
-            if let Ok(mut file) = std::fs::File::open(&path) {
+            transcripts.push_str(&format!("\n\nArtifact {name} ({media}, {size} bytes, sha256 {}, source tree {}, read-only path {}):", checksum.as_deref().unwrap_or("unrecorded"), tree.as_deref().unwrap_or("unrecorded"), path.display()));
+            if matches!(media.as_str(), "text/plain" | "application/json")
+                && let Ok(mut file) = std::fs::File::open(&path)
+            {
                 let start = file
                     .metadata()?
                     .len()
@@ -656,11 +755,7 @@ impl Service {
                 file.seek(std::io::SeekFrom::Start(start))?;
                 let mut bytes = Vec::new();
                 file.take(TRANSCRIPT_TAIL as u64).read_to_end(&mut bytes)?;
-                transcripts.push_str(&format!(
-                    "\n\nSupervisor check transcript ({name}, {}):\n{}",
-                    path.display(),
-                    String::from_utf8_lossy(&bytes)
-                ));
+                transcripts.push_str(&format!("\n{}", String::from_utf8_lossy(&bytes)));
                 retain_tail(&mut transcripts, TRANSCRIPT_TAIL);
             }
         }
@@ -985,11 +1080,26 @@ fn attempts(
                 report: r.get(9)?,
                 question: r.get(10)?,
                 steps: Vec::new(),
+                artifacts: Vec::new(),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let latest = attempts.last().map(|attempt| attempt.id);
     for attempt in &mut attempts {
+        let mut artifact_query = db.prepare_cached("SELECT id,name,media_type,size_bytes,checksum_sha256,source_tree,pruned_at_ms IS NOT NULL FROM artifacts WHERE attempt_id=?1 ORDER BY id")?;
+        attempt.artifacts = artifact_query
+            .query_map([attempt.id], |r| {
+                Ok(super::Artifact {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    media_type: r.get(2)?,
+                    size_bytes: r.get(3)?,
+                    checksum_sha256: r.get(4)?,
+                    source_tree: r.get(5)?,
+                    pruned: r.get(6)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         (attempt.usage, attempt.role_usage) = super::usage_report::attempt(db, attempt.id)?;
         attempt.cost_microusd = attempt.usage.cost_microusd;
         attempt.waiting_ms = waiting_time(db, attempt.id)?;

@@ -191,21 +191,30 @@ impl Workspace {
     /// Hash the exact tracked/untracked content a checkpoint would include, without
     /// changing the user's index. Git's tree identity includes paths, modes and bytes.
     pub fn fingerprint(&self, scratch_root: &Path) -> Result<String> {
+        Self::fingerprint_at(&self.root, scratch_root)
+    }
+    /// The guardian holds the worker lease while archiving, so it must fingerprint
+    /// without trying to acquire the supervisor's separate runner lease.
+    pub(crate) fn fingerprint_at(root: &Path, scratch_root: &Path) -> Result<String> {
         let scratch = crate::scratch::Scratch::new(scratch_root)?;
         let index = git(
-            &self.root,
+            root,
             &["rev-parse", "--path-format=absolute", "--git-path", "index"],
         )?;
         let index = Path::new(&index);
         if index.exists() {
             std::fs::copy(index, scratch.path().join("index"))?;
         }
-        let tree = self.stage_tree(Some(&scratch.path().join("index")), Some(scratch.path()))?;
+        let tree = Self::stage_tree_at(
+            root,
+            Some(&scratch.path().join("index")),
+            Some(scratch.path()),
+        )?;
         scratch.close()?;
         Ok(tree)
     }
-    fn git_for_index(
-        &self,
+    fn git_for_index_at(
+        root: &Path,
         index: Option<&Path>,
         scratch: Option<&Path>,
         args: &[&str],
@@ -213,7 +222,7 @@ impl Workspace {
         let mut command = Command::new("git");
         command
             .arg("-C")
-            .arg(&self.root)
+            .arg(root)
             .args([
                 "-c",
                 "core.hooksPath=/dev/null",
@@ -250,18 +259,26 @@ impl Workspace {
     /// trust stale index stat data after a rapid same-size edit; raw blob hashes
     /// identify only those entries that need their content staged explicitly.
     fn stage_tree(&self, index: Option<&Path>, scratch: Option<&Path>) -> Result<String> {
+        Self::stage_tree_at(&self.root, index, scratch)
+    }
+    fn stage_tree_at(root: &Path, index: Option<&Path>, scratch: Option<&Path>) -> Result<String> {
         Self::git_output(
-            self.git_for_index(index, scratch, &["add", "--all"]),
+            Self::git_for_index_at(root, index, scratch, &["add", "--all"]),
             None,
             "stage worktree",
         )?;
         let listing = Self::git_output(
-            self.git_for_index(index, scratch, &["ls-files", "--stage", "-z", "--sparse"]),
+            Self::git_for_index_at(
+                root,
+                index,
+                scratch,
+                &["ls-files", "--stage", "-z", "--sparse"],
+            ),
             None,
             "list staged files",
         )?;
         let flags = Self::git_output(
-            self.git_for_index(index, scratch, &["ls-files", "-t", "-z", "--sparse"]),
+            Self::git_for_index_at(root, index, scratch, &["ls-files", "-t", "-z", "--sparse"]),
             None,
             "read staged file flags",
         )?;
@@ -288,7 +305,7 @@ impl Workspace {
                 continue;
             }
             let path = PathBuf::from(std::ffi::OsString::from_vec(record[tab + 1..].to_vec()));
-            let file = self.root.join(&path);
+            let file = root.join(&path);
             let metadata = match std::fs::symlink_metadata(&file) {
                 Ok(metadata) => metadata,
                 Err(error)
@@ -307,13 +324,22 @@ impl Workspace {
             };
             let raw = if let Some(target) = &link_target {
                 Self::git_output(
-                    self.git_for_index(index, scratch, &["hash-object", "--no-filters", "--stdin"]),
+                    Self::git_for_index_at(
+                        root,
+                        index,
+                        scratch,
+                        &["hash-object", "--no-filters", "--stdin"],
+                    ),
                     Some(target.as_os_str().as_bytes()),
                     "hash symlink",
                 )?
             } else {
-                let mut command =
-                    self.git_for_index(index, scratch, &["hash-object", "--no-filters", "--"]);
+                let mut command = Self::git_for_index_at(
+                    root,
+                    index,
+                    scratch,
+                    &["hash-object", "--no-filters", "--"],
+                );
                 command.arg(&path);
                 Self::git_output(command, None, "hash worktree file")?
             };
@@ -322,7 +348,8 @@ impl Workspace {
             }
             let converted = if let Some(target) = &link_target {
                 Self::git_output(
-                    self.git_for_index(
+                    Self::git_for_index_at(
+                        root,
                         index,
                         scratch,
                         &["hash-object", "-w", "--no-filters", "--stdin"],
@@ -332,7 +359,7 @@ impl Workspace {
                 )?
             } else {
                 let mut command =
-                    self.git_for_index(index, scratch, &["hash-object", "-w", "--path"]);
+                    Self::git_for_index_at(root, index, scratch, &["hash-object", "-w", "--path"]);
                 command.arg(&path).arg("--").arg(&path);
                 Self::git_output(command, None, "stage changed file")?
             };
@@ -344,14 +371,19 @@ impl Workspace {
                 entry.extend_from_slice(path.as_os_str().as_bytes());
                 entry.push(0);
                 Self::git_output(
-                    self.git_for_index(index, scratch, &["update-index", "-z", "--index-info"]),
+                    Self::git_for_index_at(
+                        root,
+                        index,
+                        scratch,
+                        &["update-index", "-z", "--index-info"],
+                    ),
                     Some(&entry),
                     "update changed file",
                 )?;
             }
         }
         let tree = Self::git_output(
-            self.git_for_index(index, scratch, &["write-tree"]),
+            Self::git_for_index_at(root, index, scratch, &["write-tree"]),
             None,
             "write staged tree",
         )?;

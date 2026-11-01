@@ -148,6 +148,18 @@ fn task_text(task: &Task) -> String {
         if a.output_pruned {
             text.push_str("  PRUNED: stored output was removed by retention.\n");
         }
+        for artifact in &a.artifacts {
+            text.push_str(&format!(
+                "  Artifact {}: {} · {} · {} bytes · sha256 {} · tree {}{}\n",
+                artifact.id,
+                safe(&artifact.name),
+                artifact.media_type,
+                artifact.size_bytes,
+                artifact.checksum_sha256.as_deref().unwrap_or("unrecorded"),
+                artifact.source_tree.as_deref().unwrap_or("unrecorded"),
+                if artifact.pruned { " · PRUNED" } else { "" }
+            ));
+        }
         for step in a.steps.iter().filter(|step| step.role == "check") {
             let counts = step.counts.map_or_else(
                 || "test counts unavailable".into(),

@@ -382,9 +382,9 @@ pub fn prompt(
         }
     };
     let checks = if matches!(role, "review" | "validation") {
-        ""
+        "Artifact paths in Context are read-only; inspect them when relevant. "
     } else {
-        "After your turn the supervisor runs the project's full checks, records their transcripts and hands them to independent reviewers; that run is the gate. Run only focused builds, lints and tests for what you change, including tests that start the project's own binaries in private sandboxes (that needs no permission). Run the full suite only to reproduce a failing supervisor check. Do not review or validate your own work; independent judges do. "
+        "After your turn the supervisor runs the project's full checks, records their transcripts and hands them to independent reviewers; that run is the gate. Run only focused builds, lints and tests for what you change, including tests that start the project's own binaries in private sandboxes (that needs no permission). Run the full suite only to reproduce a failing supervisor check. Do not review or validate your own work; independent judges do. Save evidence files as regular files directly in KTASK_ARTIFACT_DIR (8 MiB each, 64 MiB per attempt). The guardian archives them before deleting scratch; judges can read the archived paths in Context. "
     };
     let callback = if matches!(role, "execution" | "repair") {
         format!(
