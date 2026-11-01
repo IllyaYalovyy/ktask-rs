@@ -24,7 +24,9 @@ impl std::fmt::Display for DeliveryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Retry(message) => message.fmt(f),
-            Self::Deadline => f.write_str("Active time limit reached during Git delivery; increase the task limit before retrying"),
+            Self::Deadline => f.write_str(
+                "Active time limit reached during Git delivery; Retry restarts the limit",
+            ),
             Self::Safety(error) => error.fmt(f),
         }
     }
@@ -96,7 +98,6 @@ fn command(
         schema: None,
         scratch_root: ctx.paths.cache.join("workers"),
         worker_lock: ctx.workspace.worker_lock.clone(),
-        evidence_pin_guardian: None,
         callback: None,
         sandbox: None,
     };
@@ -571,7 +572,7 @@ pub(super) fn publish(
         .status()?;
     if !ancestor.success() {
         if !service.begin_delivery_integration(run, &base)? {
-            return Err(Error::Conflict("Remote advanced beyond six synchronization cycles. Work and proof are retained; Resume preserves this bound. After remote writers settle, use Abandon attempt, then Run for a fresh bounded synchronization batch.".into()).into());
+            return Err(Error::Conflict("Remote advanced beyond six synchronization cycles. Work and proof are retained; Resume preserves this bound. After remote writers settle, s Stop, then r Run for a fresh bounded synchronization batch.".into()).into());
         }
         match git_network(service, run, ctx, &["rebase", &base])? {
             CommandResult::Paused => return Ok(DeliveryOutcome::Paused),

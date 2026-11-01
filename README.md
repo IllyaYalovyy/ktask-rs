@@ -40,10 +40,26 @@ switches screens; `j/k`, arrows, `PgUp/PgDn`, and `Home/End` navigate. `?` shows
 calls for, and the action bar lists that action first. An open question from the worker gets its
 own panel. The output pane shows the attempt report once work settles and the raw log while it
 runs; `o` switches between them. The status panel lists budget, model, and each supervisor step
-with its result. Activity shows events for the current task; `l` opens all events. `x` abandons
-current when it is failed, waiting or paused: the task moves to History as cancelled with its
-attempts and evidence; a waiting or paused attempt can instead be dropped alone, without spending
-budget, so the task stays for a fresh run. Queue's `d` does the same for that task.
+with its result. Activity shows events for the current task; `l` opens all events.
+
+Every task is in one state, and the action bar shows exactly what that state offers:
+
+| State | Actions |
+| --- | --- |
+| Needs approval | `v` Approve, `n` Reject, `e` Edit, `m` Move, `D` Mark done |
+| Pending | `r` Run, `e` Edit, `m` Move, `x` Cancel, `R` Supersede, `D` Mark done |
+| Running (also while waiting for a provider limit) | `p` Pause, `s` Stop, `D` Mark done |
+| Paused | `r` Resume, `e` Edit, `s` Stop, `D` Mark done |
+| Needs input | `r` Answer, `e` Edit, `s` Stop, `D` Mark done |
+| Failed | `r` Retry, `e` Edit, `s` Stop, `D` Mark done |
+| Done, Cancelled, Superseded | `C` Copy to queue (History) |
+
+**Stop** returns a live task to Pending: the worker stops, the attempt ends, and uncommitted
+changes are saved as the git stash `ktask: task #N attempt #M`; the next Run starts fresh with
+full limits. **Retry** keeps the code, continues from the checks and restarts the limits.
+**Mark done** is your verdict from any unfinished state. Remediation is automatic; a task the
+supervisor cannot repair is Failed. If the runner dies, the next refresh shows the task Paused
+with its work kept; `r` resumes it.
 
 Workers do not get to ask for permission. Review and validation run in a read-only sandbox by
 design and are told so; every role is told that permissions, sandbox limits and tooling are never
@@ -78,7 +94,7 @@ Insertion/move dialogs offer Earlier/Later buttons (`Alt-Up/Down`) and show neig
 Mouse can be disabled in Configuration; keyboard controls always remain available.
 
 Real operations: add/edit, per-role provider/model/effort and limits, draft approval/rejection,
-fractional ordering, delete/undo, Human acknowledgment, failure resolution, history/events,
+fractional ordering, stop, mark done, cancel, supersede, copy to queue, history/events,
 and disk import/export. SQL and validation live in shared transactional application commands,
 not the TUI. Concurrent stale edits fail without overwriting data; other windows refresh.
 New AI tasks have no invented model defaults. **Models** accepts `provider/model`, optional
@@ -101,8 +117,8 @@ read-only judge and repair cycle, retaining the same attempt and ten-round limit
 the rebase and edited files; resume continues them. Network steps have bounded retries and keep
 their delivery intent if they stop. Remote synchronization accepts at most six changing targets
 per attempt, separately from coding repair rounds. Resume and automatic replans retain that
-bound. After exhaustion, wait for remote writers to settle, explicitly Abandon attempt, then
-Run to retain the checkpoint and start a fresh bounded synchronization batch. CLI `delivery` reports the versioned configuration; for
+bound. After exhaustion, wait for remote writers to settle, Stop the task, then Run to retain
+the checkpoint and start a fresh bounded synchronization batch. CLI `delivery` reports the versioned configuration; for
 example `ktask delivery --mode pr --remote origin --base main --if-version 0`.
 Configuration → Storage previews retained output and check transcript bytes, sets the age
 of completed work eligible for cleanup, and applies cleanup after review. History marks
@@ -115,16 +131,15 @@ AI task breakdown uses the planning model. Normal mode never simulates
 success or creates fake attempts. Use `cargo run --locked -- --demo` to explore
 the isolated simulator: 120 queued/current and 120 historical tasks, no SQLite access.
 
-Implemented in the simulator: execution/pause/retry, ordinary remediation tasks, revision approval,
-per-role models/effort and limits, failure resolutions, timed waits, workspace handoffs, Human
-acknowledgment, AI questions, queue management, search/filter, history/attempts, statistics,
+Implemented in the simulator: execution/pause/retry, stop, mark done, cancel, supersede, copy to
+queue, revision approval, per-role models/effort and limits, timed waits, workspace handoffs, AI
+questions, queue management, search/filter, history/attempts, statistics,
 settings, and import/export previews. Continue queue is the default: the supervisor keeps taking
 the next task and stops only for a question, an approval, Human work, or an exhausted budget.
 Insertion before current is allowed unless it is running.
 
-Try **Remediate → Apply** on the initial failure: escalate its execution model or insert a repair
-task before it. Configuration controls whether planner changes need approval. **Models** edits
-all four role settings and limits; **Resolve** records override/skip/supersede with a reason.
+Try **r Retry**, **s Stop** and **D Mark done** on the initial failure. Configuration controls
+whether planner changes need approval. **Models** edits all four role settings and limits.
 Attempts retain their original inputs and sessions. **Events** opens the full activity feed.
 Guided, Empty, Waits, and Approvals datasets exercise interventions, timed waits, and approval.
 Configuration can fail the next simulated cleanup; a blocked start preserves work and creates
@@ -256,12 +271,11 @@ In Current, **Run** starts a detached supervisor using the saved run mode. Run o
 current succeeds; Continue queue advances after verified success. The Run button names its mode;
 **m Run mode** opens preferences directly from Current. The global strip shows that preference
 and the next task; Current shows the goal, proof required, and the active supervisor phase.
-In queue mode, answering a question, approving current, or acknowledging Human work continues
-automatically. A saved intervention stays saved if starting fails; the footer explains the blocker.
+Answering a question continues that task at once in either mode. In queue mode, approving
+current or marking Human work done also continues the queue. A saved intervention stays saved if starting fails; the footer explains the blocker.
 **Pause** stops/reaps workers before recording paused state; **Run/resume** retains the attempt
 and compatible session. Closing the TUI does not stop the supervisor (the background runner):
-press `p` on any screen, or run `ktask stop` (`ktask stop --all` for every project, for example
-before `make install`); it returns once the runner has exited. Start it again with `r` or `ktask run`. A failing check
+press `p` on any screen, or run `ktask pause`; it returns once the runner has exited. Start it again with `r` or `ktask run`. A failing check
 returns to the worker directly; critical review and validation findings go to a read-only judge
 that plans the fix or escalates the execution model. Each fix round shows a one-line **Why:** in
 Status and Activity, and regenerates proof; the ten-round limit applies, then the failure judge
@@ -284,13 +298,12 @@ automatic work.
 
 CLI: `run` follows the saved run mode (Continue queue by default); `run --queue`
 forces queue execution, `run --one` stops after current, and `--background` detaches. `resume` and
-`retry` are aliases that still target only current. `pause ID` requests shutdown; `answer ID
---text TEXT` saves an answer, then `resume` continues. `abandon ID --reason TEXT` gives up on failed,
-paused or waiting current (History, cancelled); `--attempt` drops only the paused or waiting attempt
-nobody will resume, without spending budget, so the task can run again. `recover` marks a crashed supervisor's
-attempt interrupted only when repository and worker locks are free. Inspect its work first.
-If the guardian itself died without confirming cleanup, execution stays blocked; only after
-stopping orphaned processes and preserving work, use `recover --confirm-worker-cleanup`.
+`retry` are aliases that still target only current. `pause` stops the runner and waits for it;
+`answer ID --text TEXT` saves an answer and the task continues. `stop ID` returns a live task to
+Pending and prints the stash holding its changes; `done ID --reason TEXT` marks any unfinished task
+done. `cancel ID`, `supersede ID --by 3,4` and `copy ID [--before ID]` manage pending and finished
+work. A supervisor that died leaves its attempt to be settled as paused by the next `run` or TUI
+refresh; worker processes it left are stopped first.
 Execution, review, validation and repair-worker connection failures retry twice within the same attempt, with short
 interruptible backoff and preserved work/session; a failed attempt is then repaired
 automatically as above. Infrastructure failures do not spend the coding budget. Rate and usage limits never fail a task:
@@ -347,16 +360,14 @@ cargo run --locked -- show 1 --json
 cargo run --locked -- approve 1 --if-version 1
 ```
 
-- Read: `list`, `show ID`, `current`, `events`, `stats`. List scopes: queue/history/all/deleted;
+- Read: `list`, `show ID`, `current`, `events`, `stats`. List scopes: queue/history/all;
   filtering never sorts execution order. `current` returns null on an empty registered queue.
 - Storage: `storage` previews logical output and artifact bytes; `storage --apply` removes
   eligible content. `retention DAYS [--if-version N]` sets the age policy (default 30 days;
   0 allows immediate cleanup of closed work). Both commands support `--json`.
-- Change: `add`, `edit ID`, `move ID --before ID`, `approve`, `reject --reason`, `resolve
-  --outcome --reason`, `ack`, `delete`, `restore`, `reopen ID --reason '...' [--if-version N]`.
-  Only done is final, and done can be reopened; any closed task returns to the front of Queue
-  with its full history. Delete is recoverable through restore. Only current Human
-  work can be acknowledged; only failed current can be resolved.
+- Change: `add`, `edit ID`, `move ID --before ID`, `approve`, `reject --reason`, `stop`, `done`,
+  `cancel`, `supersede --by`, `copy [--before ID]`. Each task's JSON lists its `state` and the
+  `actions` it offers; a refused action exits 4 naming both.
 - Models/limits: add/edit accept repeated `--model ROLE=PROVIDER/MODEL`, `--effort ROLE=VALUE`
   (`none` clears effort), `--clear-model ROLE`, `--attempt-limit N`, `--timeout-ms N` (`unlimited`
   removes either limit), `--task-limit off|on|6h`, `--stage-limit off|on|30m`. Edit preserves omitted fields; `--criterion` replaces the entire list.
@@ -371,7 +382,7 @@ cargo run --locked -- approve 1 --if-version 1
   Without it, the command reads the latest version and still guards its transaction. A conflict
   never silently retries. Successful mutations return committed ID/version receipts; reread for state.
 - Attribution: defaults to `human: owner`. AI callers must pass `--actor-kind ai --actor NAME`;
-  this is audit metadata, not authentication. Explicit AI actors cannot acknowledge Human work.
+  this is audit metadata, not authentication. Explicit AI actors cannot mark Human work done.
 - JSON: `--json` emits one `{"schema_version":1,"ok":true,"data":...}` object on stdout;
   errors emit `{"schema_version":1,"ok":false,"error":{"code":"...","message":"..."}}`
   on stderr with empty stdout. Help/version remain plain text. JSON file/path output requires UTF-8.

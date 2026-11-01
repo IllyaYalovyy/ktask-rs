@@ -7,27 +7,20 @@ pub enum DialogKind {
         id: Option<usize>,
         insert: bool,
     },
-    Delete(usize),
     Move(usize),
-    Repair(usize),
-    RemediationPending,
+    Stop(usize),
+    MarkDone(usize),
+    CancelTask(usize),
+    Supersede(usize),
+    CopyToQueue(usize),
     BreakdownPending,
     BreakdownReview {
         proposal: crate::runner::agent::BreakdownProposal,
     },
-    RemediationReview {
-        id: usize,
-        judgment: crate::runner::agent::Judgment,
-    },
     Models(usize),
-    Resolve(usize),
-    Reopen(usize),
     Reject(usize),
     Breakdown(usize),
     Answer(usize),
-    Abandon(usize),
-    ResetToPending(usize),
-    Recover,
     Readiness,
     Import,
     ImportPreview(Vec<Task>),
@@ -252,8 +245,7 @@ impl Dialog {
     pub fn read_only(&self) -> bool {
         matches!(
             self.kind,
-            DialogKind::RemediationPending
-                | DialogKind::Readiness
+            DialogKind::Readiness
                 | DialogKind::BreakdownPending
                 | DialogKind::Help
                 | DialogKind::Stats

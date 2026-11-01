@@ -67,8 +67,6 @@ pub enum Scope {
     History,
     /// Queue, then History.
     All,
-    /// Soft-deleted tasks.
-    Deleted,
 }
 #[derive(Clone, Copy, ValueEnum)]
 pub enum Approval {
@@ -77,16 +75,6 @@ pub enum Approval {
     /// Waits for approve or reject.
     Draft,
 }
-#[derive(Clone, Copy, ValueEnum)]
-pub enum Outcome {
-    /// Accept the work as succeeded despite the failed attempts.
-    SucceededOverride,
-    /// Record it as failed and move on.
-    FailedSkipped,
-    /// Other tasks replace it.
-    Superseded,
-}
-
 #[derive(Clone, Copy, ValueEnum)]
 pub enum Switch {
     On,
@@ -154,13 +142,15 @@ pub enum Command {
         #[arg(long)]
         if_version: Option<i64>,
     },
-    /// Execute or resume the current task, then continue the queue.
+    /// Move the current task forward: Run a pending task, Resume a paused one, or Retry a
+    /// failed one; then continue the queue.
     ///
-    /// Starts a supervisor that runs current: agent work, project checks, review and
-    /// validation, with up to ten repair rounds. Success commits the change and moves on
-    /// to the next task. A failed attempt is repaired automatically until a stop rule
-    /// applies. Without --background it blocks until the queue is done or the owner is
-    /// needed, then prints why it stopped. resume and retry are the same command.
+    /// Run starts fresh: the project checks run on the clean starting commit, then the
+    /// agent works, and checks, review and validation follow, with up to ten repair rounds.
+    /// Retry keeps the failed attempt's changes and continues from the checks. Run and
+    /// Retry restart the task's attempt and time limits. Success commits the change and
+    /// moves on to the next task. Without --background it blocks until the queue is done
+    /// or the owner is needed, then prints why it stopped. resume and retry are aliases.
     ///
     /// Needs a Git repository with a commit, a clean worktree, at least one check
     /// (check-set) and a model for all four roles; otherwise it exits 4 and says which.
@@ -181,68 +171,70 @@ pub enum Command {
         #[arg(long, hide = true)]
         continue_session: bool,
     },
-    /// Pause current; its attempt resumes with run.
+    /// Pause the runner and wait until it has exited; run resumes the same attempt.
     ///
-    /// The request is saved at once. The task shows paused only after the worker has
-    /// stopped and its scratch is cleaned.
-    Pause {
-        #[command(flatten)]
-        target: Target,
-    },
-    /// Stop this project's runner gracefully and wait until it has exited.
+    /// The worker stops and its scratch is cleaned; the attempt keeps its phase, changes
+    /// and provider session. Nothing to pause is not an error.
+    Pause,
+    /// Stop a running, paused, waiting or failed task: it returns to Pending.
     ///
-    /// Pauses what the runner is doing (its attempt resumes with run), then waits for worker
-    /// shutdown and cleanup. With --all, stops the runner of every project in this instance,
-    /// for example before reinstalling. Start again with run, or r in the TUI.
+    /// The worker stops, the attempt ends and its uncommitted changes are saved as a git
+    /// stash named "ktask: task #ID attempt #N" (restore them with git stash pop). The next
+    /// run starts fresh with full limits.
     Stop {
-        /// Stop the runner of every project in this instance.
-        #[arg(long)]
-        all: bool,
-    },
-    /// End the current attempt and return the same task to editable pending work.
-    /// Resume keeps the old attempt; reset requires an explicit later Run.
-    ResetToPending {
         #[command(flatten)]
         target: Target,
-        /// Confirm stopping the attempt and requiring a fresh Run.
-        #[arg(long)]
-        confirm: bool,
-        /// Recorded on the interrupted attempt and task event.
-        #[arg(long, default_value = "Owner reset current to pending", value_parser = nonempty)]
+        /// Why; recorded with the attempt. Defaults to who stopped it.
+        #[arg(long, default_value = "")]
         reason: String,
     },
-    /// Answer the question a waiting or failed current asked (attempt "question").
+    /// Mark a task done, whatever its state, overriding the supervisor's verdict.
     ///
-    /// An active queue session continues automatically; otherwise run resumes it.
+    /// A live attempt is stopped first and its uncommitted changes are stashed as for stop;
+    /// commit them before marking done to keep them in the tree.
+    Done {
+        #[command(flatten)]
+        target: Target,
+        /// Why; recorded with the task. Defaults to who marked it.
+        #[arg(long, default_value = "")]
+        reason: String,
+    },
+    /// Cancel a pending task: it moves to History. copy brings it back as a new task.
+    Cancel {
+        #[command(flatten)]
+        target: Target,
+        /// Why; recorded with the task. Defaults to who cancelled it.
+        #[arg(long, default_value = "")]
+        reason: String,
+    },
+    /// Mark a pending task as replaced by other tasks of this project.
+    Supersede {
+        #[command(flatten)]
+        target: Target,
+        /// Replacing task IDs, comma separated; at least one.
+        #[arg(long, required = true, value_delimiter = ',', value_parser = positive)]
+        by: Vec<i64>,
+        /// Why; recorded with the task.
+        #[arg(long, default_value = "")]
+        reason: String,
+    },
+    /// Copy a done, cancelled or superseded task into the queue as a new pending task.
+    Copy {
+        #[command(flatten)]
+        target: Target,
+        /// Insert before this task ID instead of at the end.
+        #[arg(long, value_parser = positive)]
+        before: Option<i64>,
+    },
+    /// Answer the question a task needs input on; the task continues at once.
+    ///
+    /// Run one then stops after that task; an active queue session continues with the next.
     Answer {
         #[command(flatten)]
         target: Target,
         /// The answer passed to the agent.
         #[arg(long, value_parser=nonempty)]
         text: String,
-    },
-    /// Give up on current: it moves to History as cancelled, keeping attempts and evidence.
-    ///
-    /// Works on a failed, paused or waiting current. With --attempt only the paused or
-    /// waiting attempt is interrupted, without spending budget, and the task stays current.
-    Abandon {
-        #[command(flatten)]
-        target: Target,
-        /// Why; recorded with the task.
-        #[arg(long, value_parser = nonempty)]
-        reason: String,
-        /// Interrupt the paused or waiting attempt only, without spending budget.
-        #[arg(long)]
-        attempt: bool,
-    },
-    /// Recover an attempt whose supervisor died, once no worker holds the workspace.
-    ///
-    /// Use it when run reports that an attempt is already running but no supervisor is
-    /// alive. Inspect the workspace first; useful changes are preserved.
-    Recover {
-        /// Operator confirms all orphaned workers are stopped and useful work is preserved.
-        #[arg(long)]
-        confirm_worker_cleanup: bool,
     },
     /// Add or update a project check: a shell command run from the project root.
     ///
@@ -296,8 +288,8 @@ pub enum Command {
     },
     /// Show one task: definition, revisions, attempts with steps, usage, cost and reports.
     ///
-    /// Deleted tasks are included. A waiting attempt carries its "question" or its
-    /// "wait_reason" and "resume_at_ms".
+    /// "state" is the task's place in the state machine: needs_approval, pending, running,
+    /// paused, needs_input, failed, done, cancelled or superseded.
     Show {
         /// Task ID.
         #[arg(value_parser = positive)]
@@ -324,8 +316,9 @@ pub enum Command {
     },
     /// Change a task by appending a revision; unspecified fields are kept.
     ///
-    /// The approval state is kept unless --approval is given. Running, paused, waiting and
-    /// finished tasks cannot be edited. Changes to a failed current apply to its next attempt.
+    /// The approval state is kept unless --approval is given. Running and finished tasks
+    /// cannot be edited. A paused, waiting or failed task continues with the new revision
+    /// in a new attempt.
     Edit {
         #[command(flatten)]
         target: Target,
@@ -356,65 +349,16 @@ pub enum Command {
         #[arg(long, value_parser = nonempty)]
         reason: String,
     },
-    /// Close the failed current task without changing its failed attempts.
-    ///
-    /// The task moves to History with the chosen outcome, and the queue can continue.
-    Resolve {
-        #[command(flatten)]
-        target: Target,
-        /// How the task ends.
-        #[arg(long, value_enum)]
-        outcome: Outcome,
-        /// Why; recorded with the task.
-        #[arg(long, value_parser = nonempty)]
-        reason: String,
-    },
-    /// Ask the task's remediation model what to do about the failed current.
-    ///
-    /// Prints the judgment (repair, revise, insert prerequisite work, and so on). With
-    /// --apply the judgment is carried out; new tasks need approval if the project
-    /// requires review of planner output.
-    Remediate {
-        /// The failed current task's ID.
-        #[arg(value_parser = positive)]
-        id: i64,
-        /// Carry out the judgment.
-        #[arg(long)]
-        apply: bool,
-    },
     /// Ask the planning model to split a task into ordered subtasks.
     ///
-    /// Works on pending work or a failed current. With --apply the subtasks are added in
-    /// its place and the original is superseded.
+    /// Works on a pending task. With --apply the subtasks are added in its place and the
+    /// original is superseded by them.
     Breakdown {
         #[command(flatten)]
         target: Target,
         /// Add the subtasks and supersede the original.
         #[arg(long)]
         apply: bool,
-    },
-    /// Confirm that a current human task is done; no AI attempt is created.
-    Ack {
-        #[command(flatten)]
-        target: Target,
-    },
-    /// Soft-delete pending work. Recover with restore ID.
-    Delete {
-        #[command(flatten)]
-        target: Target,
-    },
-    /// Restore a deleted task at its retained execution position.
-    Restore {
-        #[command(flatten)]
-        target: Target,
-    },
-    /// Return any closed task, including done, to the front of the queue.
-    Reopen {
-        #[command(flatten)]
-        target: Target,
-        /// Why this task needs another run.
-        #[arg(long, value_parser = nonempty)]
-        reason: String,
     },
     /// Preview or atomically import a ktask-tasks-v2 (or v1) TSV file.
     Import {

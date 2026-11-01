@@ -8,6 +8,7 @@ pub use evidence::{EvidenceCursor, EvidenceMatch, EvidenceSearch};
 pub mod configuration;
 pub mod delivery;
 pub mod execution;
+pub mod lifecycle;
 pub mod limits;
 pub mod preferences;
 pub mod progress;
@@ -241,6 +242,8 @@ pub struct Task {
     pub revisions: Vec<Revision>,
     pub attempts: Vec<Attempt>,
     pub attempts_used: i64,
+    /// Attempts before this count belong to earlier runs; Run and Retry restart the limits.
+    pub counted_from: i64,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct LifecycleEvent {
@@ -251,20 +254,11 @@ pub struct LifecycleEvent {
     pub occurred_at_ms: i64,
 }
 impl Task {
-    /// Resume uses the attempt's pinned revision even when a newer revision is ready.
-    pub fn execution_revision(&self) -> &Revision {
-        if matches!(self.status.as_str(), "paused" | "waiting")
-            && let Some(attempt) = self.attempts.last()
-        {
-            return self
-                .revisions
-                .iter()
-                .find(|revision| revision.number == attempt.revision)
-                .expect("attempt FK");
-        }
-        self.definition()
+    /// The attempts that count toward this run's limits: those since the latest Run or Retry.
+    pub fn counted_attempts(&self) -> &[Attempt] {
+        let start = usize::try_from(self.counted_from).unwrap_or(0);
+        &self.attempts[start.min(self.attempts.len())..]
     }
-
     pub fn definition(&self) -> &Revision {
         self.revisions
             .iter()
@@ -288,24 +282,6 @@ pub struct Snapshot {
 pub struct VersionedTask {
     pub id: i64,
     pub version: i64,
-}
-#[derive(Clone, Copy)]
-pub enum Resolution {
-    SucceededOverride,
-    FailedSkipped,
-    Superseded,
-    /// The owner gave up on the task; attempts and evidence stay in History.
-    Cancelled,
-}
-impl Resolution {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::SucceededOverride => "succeeded_override",
-            Self::FailedSkipped => "failed_skipped",
-            Self::Superseded => "superseded",
-            Self::Cancelled => "cancelled",
-        }
-    }
 }
 
 pub struct Service {

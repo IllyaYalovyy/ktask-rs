@@ -29,18 +29,24 @@ The displayed status combines task readiness/resolution with attempt state; it i
 a second stored lifecycle. Running is pinned by the attempt. Otherwise current is the first
 unfinished task in execution order: failure blocks later work, but insertion before non-running
 current can make remediation current. New/unapproved current is never silently skipped.
-Reset to pending sets `tasks.reset_pending` and interrupts an open attempt in one
-version-checked transaction after worker cleanup. The view displays ready until an
-explicit new Run clears the flag; attempts, evidence, and workspace changes remain.
-Reset closes the task's open provider sessions while retaining their records.
-The reset records the worktree fingerprint; a new uncommitted change before Run blocks
-execution so the next attempt does not sweep unrelated user work into its commit.
-The new attempt begins with fresh execution (or the required repair judge after failure),
-retaining the repair count and context while clearing proof for the edited revision.
+The task states shown to owners (`application::lifecycle::State`) derive from this view and
+the live attempt's wait reason: new → Needs approval; ready → Pending; running, or waiting for a
+provider limit → Running; paused → Paused; waiting on a question → Needs input; failed → Failed;
+succeeded/succeeded_override → Done; superseded → Superseded; cancelled (and older deleted or
+failed_skipped rows) → Cancelled. Each state offers a fixed set of actions; every command
+checks it in the same transaction that changes the task.
+Stop sets `tasks.reset_pending` and interrupts the open attempt in one version-checked
+transaction after its worker was reaped and its uncommitted changes were stashed. The view
+displays ready (Pending) until the next Run clears the flag; attempts and evidence remain.
+Stop closes the task's open provider sessions while retaining their records. Run from Pending
+and Retry restart the limits: `tasks.counted_from` records how many attempts existed then, and
+the attempt limit, the task time limit and the stop rules count only later attempts.
+A runner that died leaves its attempt running; whoever next holds the workspace lease (the
+TUI's refresh or `run`) settles it to paused with its work kept.
 
 Planner/remediator work uses ordinary tasks, not proposal tables. Approval is a human or AI
-decision on the revision. An override/skip/supersede resolves the task without rewriting its
-attempts. Escalation creates a new revision with new role settings.
+decision on the revision. Mark done, Cancel and Supersede close the task without rewriting its
+attempts; Copy to queue creates a new task linked by `derived_from`. Escalation creates a new revision with new role settings.
 An active execution worker may use the supervisor's absolute executable and its attempt token
 to file a follow-up draft immediately after current. The CLI sends the request through a
 guardian-owned endpoint in the worker's TMPDIR; only the guardian opens SQLite and applies this
@@ -292,7 +298,7 @@ rebase completion. Terminal attempt handoffs are claimed once by an authorized s
 | `handoff_claimed_by` | INTEGER | yes | Successor that claimed this handoff. |
 | `repair_origin_task` | INTEGER | yes | Original task whose repair-round count follows this handoff. |
 | `sync_cycles` | INTEGER | no | Distinct remote integration targets reserved, bounded at six; retained across resume and automatic handoffs. |
-| `restart_sync` | INTEGER | no | Explicit abandon-attempt authorizes the successor to start a fresh synchronization batch. |
+| `restart_sync` | INTEGER | no | Stop, Mark done or an edit while stopped authorizes the successor to start a fresh synchronization batch. |
 
 - PK `(attempt_id)`.
 - FK `(attempt_id)` → `attempts(id)`.
@@ -327,7 +333,7 @@ Durable phase within one attempt. Initial implementation is round zero; at most 
 | `context` | TEXT | no | Current findings and authorized repair plan. |
 | `evidence` | TEXT | no | Current round's assessments and durable transcript references. |
 | `verified_tree` | TEXT | no | Git tree fingerprint binding the retained proof to source content. |
-| `reset_fresh` | INTEGER | no | Marks a new attempt after Reset to pending so delivery recovery preserves its fresh worker/judge phase; stored only on this attempt. |
+| `reset_fresh` | INTEGER | no | Unused; always 0. Kept because V1 reconciliation cannot drop columns. |
 | `why` | TEXT | no | One readable line on why the current fix round runs: the failing check and its first error, the reviewer's summary, or the judge's reason. Empty outside a fix round. |
 
 - PK `(attempt_id)`.
@@ -474,7 +480,8 @@ Append-only command/runner audit and activity feed. Task and attempt are optiona
 
 ### evidence_pins
 
-Interactive remediation owns a durable evidence pin before it reads failure evidence.
+Rows left by the former interactive remediation, which pinned failure evidence while a
+judge read it; nothing creates pins now, and retention retires the remaining ones.
 Pins defer project cleanup even after the failed task is resolved. Owner and guardian
 locks live under `evidence-pins/` in the database state root. The guardian reservation
 is written before spawn and stays nonempty until descendants have been reaped.
@@ -703,9 +710,8 @@ Immutable migration ledger. Exact applied SQL detects changed migration files; v
 
 ### task_lifecycle_events
 
-Every closure and reopen is an append-only record. This retains earlier outcomes after a task
-returns to Queue; attempts, usage and evidence remain on their original rows. Older V1 closures
-are copied into this table when the task is first reopened.
+Every closure is an append-only record; rows with action reopened were written by the
+former Reopen command. Attempts, usage and evidence remain on their original rows.
 
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
@@ -780,8 +786,9 @@ Stable task identity, readiness, and final resolution. Execution status exists o
 | `origin_attempt_id` | INTEGER | yes | Source attempt for a worker draft; required only when origin is worker. |
 | `recovery_root_id` | INTEGER | yes | Original task whose automatic replan budget this prerequisite shares. |
 | `automatic_replans` | INTEGER | no | Number of automatic judge handoffs for the recovery root, at most ten. |
-| `reset_pending` | INTEGER | no | Explicit reset makes current editable and requires a fresh Run; cleared when a new attempt starts. |
-| `reset_worktree` | TEXT | yes | Worktree fingerprint at reset; a fresh Run blocks new uncommitted changes. |
+| `reset_pending` | INTEGER | no | Stop returned the task to Pending; the next Run starts fresh. Cleared when a new attempt starts. |
+| `reset_worktree` | TEXT | yes | Unused; always NULL. Kept because V1 reconciliation cannot drop columns. |
+| `counted_from` | INTEGER | no | Attempts that existed when Run from Pending or Retry last restarted the limits; only later attempts count. Default 0. |
 | `row_version` | INTEGER | no | Positive optimistic concurrency version, default 1. |
 | `created_at_ms` | INTEGER | no | Creation time. |
 | `updated_at_ms` | INTEGER | no | Last command time; not before creation. |
@@ -1163,8 +1170,8 @@ remains for future released upgrades; its tests use synthetic changes, not ficti
 
 Implemented: schema initialization, ordering, execution-record guards, token normalization,
 and TUI persistence through `application::Service`. Commands atomically create tasks/revisions,
-approve/reject drafts, move, soft-delete/restore, acknowledge Human tasks, resolve failures,
-and import definitions. Edits require the version captured when the form opened. Stale edits
+approve/reject drafts, move, stop, mark done, cancel, supersede, copy to queue, and import
+definitions. Edits require the version captured when the form opened. Stale edits
 fail without overwriting newer data; windows refresh on external SQLite commits.
 
 The canonical working directory selects a project; its name defaults to the directory name.

@@ -26,6 +26,9 @@
   blocks later work; remediation may be inserted before it when it is not running.
   Queue, History, Configuration, and About are separate screens. Only current can run,
   resume, or retry; Queue contains current/pending work in execution order, without sorting.
+- The task state machine (`application::lifecycle`, docs/USECASES.md) is the one source of
+  what a task allows; TUI, CLI and runner all ask it. Stop returns any live task to Pending
+  with its changes stashed; remediation is automatic only. Do not add side paths around it.
 - Support every user flow with both mouse and keyboard. Enable mouse support by default;
   allow disabling it in Configuration. Test both input paths in the real terminal.
 - Separate Queue (browse/manage work) and Current Task (execution, output, events).
@@ -56,7 +59,7 @@
   evidence is complete. A review or validation fix opens with a read-only judge; during normal
   rounds apply its repair, revise, insert or escalate decision before a worker, and carry the
   original task’s ten-round count across replans. Owner questions wait until critical findings
-  remain after ten rounds. Standalone recovery from actual failures retains all five judge
+  remain after ten rounds. Automatic recovery from actual failures retains all five judge
   decisions. Permission, sandbox and tooling limits are never questions for the owner.
 - Normalize input_tokens to uncached input for every provider; cache read/write are disjoint.
 - Before switching tasks, preserve useful work, stop/reap workers, and clean owned scratch.

@@ -1,7 +1,6 @@
 //! A small worker guardian: stdin is a lifeline, not a terminal. Losing the supervisor
 //! stops the entire child process group before releasing its workspace/scratch leases.
 use crate::{
-    application::evidence_pin::GUARDIAN_RESERVED as RESERVED,
     runner::callback::{Capability, Server},
     scratch::Scratch,
     storage::{Error, Result},
@@ -38,71 +37,10 @@ pub struct Invocation {
     pub schema: Option<serde_json::Value>,
     pub scratch_root: PathBuf,
     pub worker_lock: PathBuf,
-    #[serde(default)]
-    pub evidence_pin_guardian: Option<PathBuf>,
     pub callback: Option<Capability>,
     /// Set for read-only turns: the provider runs inside it.
     #[serde(default)]
     pub sandbox: Option<super::sandbox::Sandbox>,
-}
-
-// A durable reservation closes the gap between spawning a guardian and its first
-// lock acquisition. An abnormal exit after provider launch deliberately stays dirty.
-struct EvidenceGuardian {
-    lease: File,
-    launched: bool,
-}
-// EvidencePin supplies a /proc/<owner>/fd path to the original guard inode.
-// Never manufacture an empty replacement when that descriptor is gone.
-fn evidence_lock(path: &std::path::Path) -> Result<File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .custom_flags(nix::libc::O_NONBLOCK)
-        .open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(Error::Conflict(
-            "Evidence guard is not a regular file".into(),
-        ));
-    }
-    file.try_lock()
-        .map_err(|e| Error::Conflict(format!("Evidence guardian is already owned: {e}")))?;
-    Ok(file)
-}
-
-impl EvidenceGuardian {
-    fn claim(path: &std::path::Path) -> Result<Self> {
-        let mut lease = evidence_lock(path)?;
-        let mut marker = Vec::new();
-        lease.read_to_end(&mut marker)?;
-        if marker != RESERVED {
-            return Err(Error::Conflict(
-                "Evidence guardian reservation is missing or dirty".into(),
-            ));
-        }
-        lease.set_len(0)?;
-        use std::io::{Seek, SeekFrom};
-        lease.seek(SeekFrom::Start(0))?;
-        lease.write_all(b"guardian running\n")?;
-        lease.sync_all()?;
-        Ok(Self {
-            lease,
-            launched: false,
-        })
-    }
-    fn clear(&self) -> Result<()> {
-        self.lease.set_len(0)?;
-        self.lease.sync_all()?;
-        Ok(())
-    }
-}
-impl Drop for EvidenceGuardian {
-    fn drop(&mut self) {
-        if !self.launched {
-            let _ = self.clear();
-        }
-    }
 }
 
 /// Use the isolated guardian so descendants cannot retain pipes or outlive cancellation.
@@ -151,10 +89,34 @@ pub enum Message {
     Exit { code: i32 },
     Error(String),
 }
+/// An owner's exclusive lock. Dropping it unlocks explicitly: a child forked by another
+/// thread shares the lock until it execs, and closing our descriptor alone would leave
+/// the lock held for that moment.
+pub struct Lease(File);
+
+impl std::ops::Deref for Lease {
+    type Target = File;
+    fn deref(&self) -> &File {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Lease {
+    fn deref_mut(&mut self) -> &mut File {
+        &mut self.0
+    }
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 /// Takes ownership: an exclusive lock held for the owner's lifetime. Status checks
 /// ([`inspect`]) hold a shared lock for an instant, so contention from them is retried;
 /// only an exclusive holder is another owner.
-pub fn lock(path: &std::path::Path) -> Result<File> {
+pub fn lock(path: &std::path::Path) -> Result<Lease> {
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -164,7 +126,7 @@ pub fn lock(path: &std::path::Path) -> Result<File> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         match file.try_lock() {
-            Ok(()) => return Ok(file),
+            Ok(()) => return Ok(Lease(file)),
             Err(TryLockError::WouldBlock) => {}
             Err(TryLockError::Error(error)) => return Err(error.into()),
         }
@@ -290,18 +252,22 @@ pub fn worker() -> Result<()> {
     input.by_ref().take(32 * 1024 * 1024).read_line(&mut line)?;
     let spec: Invocation = serde_json::from_str(&line).map_err(io::Error::other)?;
     drop(input);
-    let mut evidence_guardian = spec
-        .evidence_pin_guardian
-        .as_deref()
-        .map(EvidenceGuardian::claim)
-        .transpose()?;
     let mut lease = lock(&spec.worker_lock)?;
     if lease.metadata()?.len() != 0 {
-        return Err(Error::Conflict("Previous worker did not confirm cleanup; inspect processes before clearing its worker-lock marker".into()));
+        let mut marker = Vec::new();
+        lease.read_to_end(&mut marker)?;
+        stop_orphaned_workers(&marker)?;
+        lease.set_len(0)?;
+        io::Seek::rewind(&mut *lease)?;
     }
-    writeln!(&mut lease, "guardian {}", std::process::id())?;
-    lease.sync_all()?;
     let scratch = Scratch::new(&spec.scratch_root)?;
+    // If this guardian dies without cleanup, the next lease holder finds and stops its
+    // workers by this scratch directory, which every worker inherits as TMPDIR.
+    writeln!(&mut *lease, "guardian {}", std::process::id())?;
+    lease.write_all(b"scratch ")?;
+    lease.write_all(scratch.path().as_os_str().as_encoded_bytes())?;
+    lease.write_all(b"\n")?;
+    lease.sync_all()?;
     let callback = spec
         .callback
         .map(|capability| Server::start(scratch.path(), capability))
@@ -331,9 +297,6 @@ pub fn worker() -> Result<()> {
         command.arg("--output-schema").arg(path);
     }
     let mut child = Group(command.spawn()?);
-    if let Some(guardian) = &mut evidence_guardian {
-        guardian.launched = true;
-    }
     let mut child_input = child.0.stdin.take().expect("piped stdin");
     let writer = thread::spawn(move || {
         let _ = child_input.write_all(spec.prompt.as_bytes());
@@ -400,9 +363,6 @@ pub fn worker() -> Result<()> {
     scratch.close()?;
     lease.set_len(0)?;
     lease.sync_all()?;
-    if let Some(guardian) = &evidence_guardian {
-        guardian.clear()?;
-    }
     send(&Message::Exit {
         code: code.unwrap_or(130),
     })?;
@@ -416,34 +376,13 @@ pub struct Worker {
 }
 impl Worker {
     pub fn spawn(executable: &std::path::Path, spec: &Invocation) -> Result<Self> {
-        if let Some(path) = &spec.evidence_pin_guardian {
-            let mut lease = evidence_lock(path)?;
-            if lease.metadata()?.len() != 0 {
-                return Err(Error::Conflict(
-                    "Evidence guardian marker is already in use".into(),
-                ));
-            }
-            lease.write_all(RESERVED)?;
-            lease.sync_all()?;
-        }
         let spawned = Command::new(executable)
             .arg("__worker")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn();
-        let mut child = match spawned {
-            Ok(child) => child,
-            Err(error) => {
-                // spawn failed before any guardian/provider existed.
-                if let Some(path) = &spec.evidence_pin_guardian {
-                    let lease = evidence_lock(path)?;
-                    lease.set_len(0)?;
-                    lease.sync_all()?;
-                }
-                return Err(error.into());
-            }
-        };
+        let mut child = spawned?;
         let mut input = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");
         let (tx, messages) = mpsc::sync_channel(32);
@@ -507,6 +446,58 @@ fn require_exit(success: bool) -> Result<()> {
 impl Drop for Worker {
     fn drop(&mut self) {
         let _ = self.join();
+    }
+}
+
+/// Stop the workers of a guardian that died without cleaning up. They are found by the
+/// scratch directory its marker names (every worker's TMPDIR), never by a stored PID.
+/// The caller holds the worker lock, so no live guardian owns them.
+pub fn stop_orphaned_workers(marker: &[u8]) -> Result<usize> {
+    use std::os::unix::ffi::OsStrExt;
+    let Some(scratch) = marker
+        .split(|&b| b == b'\n')
+        .find_map(|line| line.strip_prefix(b"scratch "))
+        .filter(|path| !path.is_empty())
+    else {
+        return Ok(0);
+    };
+    let wanted = [b"TMPDIR=".as_slice(), scratch].concat();
+    let mut stopped = 0;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut found = 0;
+        for entry in std::fs::read_dir("/proc")? {
+            let entry = entry?;
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<i32>().ok())
+            else {
+                continue;
+            };
+            let Ok(environ) = std::fs::read(entry.path().join("environ")) else {
+                continue;
+            };
+            if environ
+                .split(|&b| b == 0)
+                .any(|var| var == wanted.as_slice())
+                && pid != std::process::id() as i32
+            {
+                found += 1;
+                let _ = kill(Pid::from_raw(pid), Signal::SIGKILL);
+            }
+        }
+        if found == 0 {
+            let _ = std::fs::remove_dir_all(std::ffi::OsStr::from_bytes(scratch));
+            return Ok(stopped);
+        }
+        stopped = stopped.max(found);
+        if Instant::now() >= deadline {
+            return Err(Error::Conflict(format!(
+                "{found} worker processes of a crashed run did not stop; stop them, then try again"
+            )));
+        }
+        thread::sleep(Duration::from_millis(50));
     }
 }
 

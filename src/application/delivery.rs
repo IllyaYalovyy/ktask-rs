@@ -50,9 +50,9 @@ impl Service {
         require(tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND execution_token=?2 AND state='running')",params![run.attempt,run.token],|r|r.get(0))?,"Delivery successor ownership lost")?;
         tx.execute("INSERT INTO attempt_delivery(attempt_id,mode,remote,destination_url,base_branch,branch,stage,checkpoint_head,fetched_base,pushed_head,pr_url,pending_head,pending_tip,repair_origin_task,sync_cycles) SELECT ?2,mode,remote,destination_url,base_branch,branch,stage,checkpoint_head,fetched_base,pushed_head,pr_url,pending_head,pending_tip,repair_origin_task,CASE WHEN restart_sync=1 THEN 0 ELSE sync_cycles END FROM attempt_delivery WHERE attempt_id=?1",params![source,run.attempt])?;
         tx.execute("UPDATE attempts SET base_commit=(SELECT base_commit FROM attempts WHERE id=?2) WHERE id=?1",params![run.attempt,source])?;
-        // Reset already seeded fresh progress for the edited revision. Keep it;
-        // ordinary delivery successors inherit the prior repair context here.
-        tx.execute("INSERT INTO attempt_progress(attempt_id,repair_round,phase,context,evidence,verified_tree) SELECT ?2,repair_round,CASE WHEN (SELECT restart_sync FROM attempt_delivery WHERE attempt_id=?1)=1 THEN 'check' ELSE 'judge' END,context || char(10) || 'Retained Git delivery after explicit restart or applied replan; regenerate proof before publication.',evidence,'' FROM attempt_progress WHERE attempt_id=?1 ON CONFLICT(attempt_id) DO NOTHING",params![source,run.attempt])?;
+        // A Stop restarts from the checks at round 0 with no prior proof; an applied
+        // replan keeps the repair round and evidence for its judge.
+        tx.execute("INSERT INTO attempt_progress(attempt_id,repair_round,phase,context,evidence,verified_tree) SELECT ?2,CASE WHEN d.restart_sync=1 THEN 0 ELSE p.repair_round END,CASE WHEN d.restart_sync=1 THEN 'check' ELSE 'judge' END,p.context || char(10) || 'Retained Git delivery after explicit restart or applied replan; regenerate proof before publication.',CASE WHEN d.restart_sync=1 THEN '' ELSE p.evidence END,'' FROM attempt_progress p JOIN attempt_delivery d ON d.attempt_id=p.attempt_id WHERE p.attempt_id=?1 ON CONFLICT(attempt_id) DO NOTHING",params![source,run.attempt])?;
         tx.execute(
             "UPDATE attempt_delivery SET handoff_claimed_by=?2 WHERE attempt_id=?1",
             params![source, run.attempt],
@@ -175,7 +175,7 @@ impl Service {
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         require(tx.execute("UPDATE attempt_delivery SET stage='checkpointed',checkpoint_head=?3 WHERE attempt_id=?1 AND EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND execution_token=?2 AND state='running')",params![run.attempt,run.token,head])? == 1,"Delivery ownership lost")?;
-        require(tx.execute("UPDATE attempt_progress SET phase=CASE WHEN reset_fresh=1 AND phase IN ('implement','judge') THEN phase ELSE 'check' END,verified_tree='',evidence=context || char(10) || ?2 WHERE attempt_id=?1",params![run.attempt,reason])? == 1,"Delivery proof missing")?;
+        require(tx.execute("UPDATE attempt_progress SET phase='check',verified_tree='',evidence=context || char(10) || ?2 WHERE attempt_id=?1",params![run.attempt,reason])? == 1,"Delivery proof missing")?;
         tx.commit().map_err(Into::into)
     }
     pub fn delivery_push_intent(&self, run: &Run, head: &str, expected: &str) -> Result<()> {

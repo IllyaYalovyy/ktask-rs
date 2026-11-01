@@ -106,6 +106,26 @@ fn receipt(action: &str, target: VersionedTask) -> Reply {
         text: format!("{action}: #{} v{}\n", target.id, target.version + 1),
     }
 }
+/// A receipt for Stop or Mark done: the task's version after its worker stopped, and the
+/// stash that holds the attempt's uncommitted changes, if it left any.
+fn saved_receipt(
+    service: &mut Service,
+    action: &str,
+    id: i64,
+    stash: Option<String>,
+) -> Result<Reply> {
+    let version = task(service, id)?.version;
+    let mut text = format!("{action}: #{id} v{version}\n");
+    if let Some(stash) = &stash {
+        text.push_str(&format!(
+            "Uncommitted changes saved as git stash \"{stash}\"; git stash pop restores them\n"
+        ));
+    }
+    Ok(Reply {
+        data: json!({"action":action,"id":id,"version":version,"stash":stash}),
+        text,
+    })
+}
 fn created(ids: Vec<i64>) -> Reply {
     Reply {
         text: ids
@@ -116,15 +136,11 @@ fn created(ids: Vec<i64>) -> Reply {
     }
 }
 fn tasks(service: &mut Service, scope: Scope) -> Result<Vec<Task>> {
-    if matches!(scope, Scope::Deleted) {
-        return Ok(service.deleted()?);
-    }
     let snapshot = service.snapshot()?;
     Ok(match scope {
         Scope::Queue => snapshot.queue,
         Scope::History => snapshot.history,
         Scope::All => snapshot.queue.into_iter().chain(snapshot.history).collect(),
-        Scope::Deleted => unreachable!(),
     })
 }
 
@@ -253,10 +269,9 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
                 ),
             })
         }
-        Command::Run { .. }
-        | Command::Recover { .. }
-        | Command::Storage { .. }
-        | Command::Retention { .. } => unreachable!("runner dispatch"),
+        Command::Run { .. } | Command::Storage { .. } | Command::Retention { .. } => {
+            unreachable!("runner dispatch")
+        }
         Command::Init {
             check_command,
             check_name,
@@ -271,53 +286,60 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
             *agent_network,
             *check_before_task,
         ),
-        Command::Pause { target: input } => {
-            let (_, target) = target(service, input)?;
-            service.request_pause(target)?;
-            Ok(Reply {
-                data: json!({"action":"pause_requested","id":target.id}),
-                text: "Pause requested; worker shutdown pending\n".into(),
-            })
-        }
-        Command::ResetToPending {
-            target: input,
-            confirm,
-            reason,
-        } => {
-            if !confirm {
-                return Err(Failure::usage(
-                    "Reset to pending needs --confirm; it ends the current attempt and requires a fresh Run",
-                ));
-            }
-            let (_, target) = target(service, input)?;
-            crate::runner::reset_to_pending(service, target, reason)?;
-            Ok(Reply {
-                data: json!({"action":"reset_to_pending","id":target.id}),
-                text: format!(
-                    "Task #{} reset to pending; edit it, then Run explicitly\n",
-                    target.id
-                ),
-            })
-        }
-        Command::Abandon {
-            target: input,
-            reason,
-            attempt,
-        } => {
-            let (_, target) = target(service, input)?;
-            let (scope, text) = if *attempt {
-                crate::runner::abandon(service, target, reason)?;
-                (
-                    "attempt",
-                    "Attempt abandoned; resolve the task or run it again\n",
-                )
-            } else {
-                crate::runner::abandon_task(service, target, reason)?;
-                ("task", "Task abandoned; it is in History as cancelled\n")
+        Command::Pause => {
+            let paused = crate::runner::control::pause(service)?;
+            let text = match paused {
+                None => "Nothing is running\n".to_owned(),
+                Some(None) => "Runner stopped; no task was running\n".to_owned(),
+                Some(Some(id)) => format!("#{id} paused; run resumes it\n"),
             };
             Ok(Reply {
-                data: json!({"action":"abandoned","id":target.id,"scope":scope}),
-                text: text.into(),
+                data: json!({"action":"paused","id":paused.flatten(),"runner_was_running":paused.is_some()}),
+                text,
+            })
+        }
+        Command::Stop {
+            target: input,
+            reason,
+        } => {
+            let (_, target) = target(service, input)?;
+            let saved = crate::runner::control::stop(service, target, reason)?;
+            saved_receipt(service, "stopped", target.id, saved.stash)
+        }
+        Command::Done {
+            target: input,
+            reason,
+        } => {
+            let (_, target) = target(service, input)?;
+            let saved = crate::runner::control::mark_done(service, target, reason)?;
+            saved_receipt(service, "done", target.id, saved.stash)
+        }
+        Command::Cancel {
+            target: input,
+            reason,
+        } => {
+            let (_, target) = target(service, input)?;
+            service.cancel(target, reason)?;
+            Ok(receipt("cancelled", target))
+        }
+        Command::Supersede {
+            target: input,
+            by,
+            reason,
+        } => {
+            let (_, target) = target(service, input)?;
+            service.supersede(target, by, reason)?;
+            Ok(receipt("superseded", target))
+        }
+        Command::Copy {
+            target: input,
+            before,
+        } => {
+            let (_, target) = target(service, input)?;
+            let id = service.copy_to_queue(target, *before)?;
+            Ok(Reply {
+                data: json!({"action":"copied","from":target.id,"tasks":[{"id":id,"version":1}]}),
+                text: format!("copied #{} to the queue as #{id}\n", target.id),
             })
         }
         Command::Answer {
@@ -435,7 +457,6 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
             )?))
         }
         Command::FollowUp { .. } => unreachable!("worker callback dispatch"),
-        Command::Stop { .. } => unreachable!("stop dispatch covers several projects"),
         Command::Edit {
             target: input,
             pending,
@@ -461,53 +482,6 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
             let (_, target) = target(service, input)?;
             service.decide(target, false, reason)?;
             Ok(receipt("rejected", target))
-        }
-        Command::Resolve {
-            target: input,
-            outcome,
-            reason,
-        } => {
-            let (_, target) = target(service, input)?;
-            service.resolve(
-                target,
-                match outcome {
-                    Outcome::SucceededOverride => app::Resolution::SucceededOverride,
-                    Outcome::FailedSkipped => app::Resolution::FailedSkipped,
-                    Outcome::Superseded => app::Resolution::Superseded,
-                },
-                reason,
-            )?;
-            Ok(receipt("resolved", target))
-        }
-        Command::Ack { target: input } => {
-            let (_, target) = target(service, input)?;
-            service.acknowledge(target)?;
-            Ok(receipt("acknowledged", target))
-        }
-        Command::Delete { target: input } => {
-            let (_, target) = target(service, input)?;
-            service.delete(target)?;
-            Ok(receipt("deleted", target))
-        }
-        Command::Restore { target: input } => {
-            let (_, target) = target(service, input)?;
-            service.restore(target)?;
-            Ok(receipt("restored", target))
-        }
-        Command::Reopen {
-            target: input,
-            reason,
-        } => {
-            let (_, target) = target(service, input)?;
-            let exhausted = service.reopen(target, reason)?;
-            let mut reply = receipt("reopened", target);
-            reply.data["attempt_budget_exhausted"] = json!(exhausted);
-            if exhausted {
-                reply
-                    .text
-                    .push_str("Attempt budget used up; edit --attempt-limit before running.\n");
-            }
-            Ok(reply)
         }
         Command::Import { file, before, .. } => {
             Ok(created(service.import(&transfer::import(file)?, *before)?))
@@ -566,9 +540,7 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
             })
         }
         Command::Stats => stats(service),
-        Command::Remediate { .. } | Command::Breakdown { .. } => {
-            Err(Failure::usage("proposal command was not dispatched"))
-        }
+        Command::Breakdown { .. } => Err(Failure::usage("proposal command was not dispatched")),
     }
 }
 

@@ -17,5 +17,7 @@ mod storage;
 #[path = "cases/storage_docs.rs"]
 mod storage_docs;
 mod support;
+#[path = "cases/usage.rs"]
+mod usage;
 #[path = "cases/workflows.rs"]
 mod workflows;

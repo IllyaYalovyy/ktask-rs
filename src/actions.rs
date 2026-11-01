@@ -2,13 +2,13 @@ use crate::{
     app::{Action, App, Catalog, View},
     dialog::{Dialog, DialogKind, Field},
     mock,
-    presentation::{Attempt, Kind, RevisionState, Status, Task},
+    presentation::{Attempt, Kind, RevisionState, Status, Task, TaskAction},
 };
 use std::time::Instant;
 
 impl App {
     pub fn enabled(&self, action: Action) -> bool {
-        if matches!(action, Action::Run | Action::Retry)
+        if action == Action::Run
             && self
                 .readiness
                 .as_ref()
@@ -18,148 +18,52 @@ impl App {
         }
         let current = self.current();
         let selected = self.selected_task();
+        let allows =
+            |task: Option<&Task>, step: TaskAction| task.is_some_and(|t| t.status().allows(step));
+        let queue_or_current = self.view != View::History;
         match action {
-            Action::Recover => {
-                self.service.is_some()
-                    && self.view == View::Current
-                    && current.is_some_and(|t| {
-                        t.status() == Status::Abandoned
-                            || (matches!(
-                                t.status(),
-                                Status::Pending
-                                    | Status::Failed
-                                    | Status::Interrupted
-                                    | Status::New
-                            ) && !self.supervisor_alive
-                                && self.readiness.as_ref().is_some_and(|report| {
-                                    report
-                                        .lines
-                                        .iter()
-                                        .any(|line| line.contains("Worker cleanup is unconfirmed"))
-                                }))
-                    })
-            }
             Action::Run => {
                 matches!(self.view, View::Current | View::Queue)
                     && !(self.service.is_some() && self.supervisor_alive)
                     && current.is_some_and(|t| {
                         t.definition().kind == Kind::Ai
-                            && match t.status() {
-                                Status::Pending | Status::Paused => true,
-                                Status::Waiting => {
-                                    self.service.is_some()
-                                        && self
-                                            .readiness
-                                            .as_ref()
-                                            .is_some_and(|report| !report.resume_blocked)
-                                }
-                                // Saving an answer retains the waiting attempt until resumed.
-                                Status::Question => self.service.as_ref().is_some_and(|service| {
-                                    service
-                                        .open_question(t.id as i64)
-                                        .is_ok_and(|question| question.is_none())
-                                }),
-                                _ => false,
-                            }
+                            && t.status()
+                                .forward()
+                                .is_some_and(|step| step != TaskAction::Approve)
                     })
             }
-            Action::Retry => {
-                self.view == View::Current
-                    && current.is_some_and(|t| t.status().failed())
-                    && self.service.as_ref().is_none_or(|service| {
-                        current.is_some_and(|t| {
-                            service
-                                .open_question(t.id as i64)
-                                .is_ok_and(|question| question.is_none())
-                        })
-                    })
-            }
-            Action::Diagnose => {
-                self.view == View::Current
-                    && current.is_some_and(|t| t.status().failed())
-                    && self.service.as_ref().is_none_or(|service| {
-                        current.is_some_and(|t| {
-                            service
-                                .open_question(t.id as i64)
-                                .is_ok_and(|question| question.is_none())
-                        })
-                    })
-            }
-            Action::Approve | Action::Reject => {
-                self.view != View::History
-                    && selected.is_some_and(|t| {
-                        t.draft().is_some()
-                            && (matches!(t.status(), Status::New | Status::Pending)
-                                || t.status().failed())
-                    })
-            }
-            Action::Models => {
-                self.view != View::History
-                    && selected.is_some_and(|t| {
-                        matches!(t.status(), Status::New | Status::Pending) || t.status().failed()
-                    })
-            }
-            Action::Resolve => {
-                self.view == View::Current && current.is_some_and(|t| t.status().failed())
-            }
-            Action::Reopen => {
-                self.service.is_some() && self.view == View::History && selected.is_some()
-            }
-            // A live run can be stopped from every screen, not only Current.
+            Action::Answer => self.view == View::Current && allows(current, TaskAction::Answer),
+            // A live run can be paused from every screen, not only Current.
             Action::Pause => {
                 (self.view == View::Current || self.service.is_some())
-                    && current.is_some_and(|t| {
-                        t.status() == Status::Running
-                            || (self.service.is_some() && t.status() == Status::Waiting)
-                            || (self.service.is_some()
-                                && self.execution_session.as_ref().is_some_and(|session| {
-                                    session.mode == "queue"
-                                        && matches!(
-                                            session.state.as_str(),
-                                            "running" | "waiting" | "resume_requested"
-                                        )
-                                }))
-                    })
+                    && (allows(current, TaskAction::Pause)
+                        || (self.service.is_some()
+                            && self.execution_session.as_ref().is_some_and(|session| {
+                                // A provider wait is a Running current; an answer wait
+                                // has nothing to pause (s Stop returns it to Pending).
+                                session.mode == "queue"
+                                    && matches!(
+                                        session.state.as_str(),
+                                        "running" | "resume_requested"
+                                    )
+                            })))
             }
-            Action::Answer => {
-                self.view == View::Current
-                    && current.is_some_and(|t| {
-                        (t.status() == Status::Question
-                            || (self.service.is_some() && t.status().failed()))
-                            && self.service.as_ref().is_none_or(|service| {
-                                service
-                                    .open_question(t.id as i64)
-                                    .is_ok_and(|question| question.is_some())
-                            })
-                    })
+            Action::Stop => queue_or_current && allows(self.stop_target(), TaskAction::Stop),
+            Action::MarkDone => queue_or_current && allows(selected, TaskAction::MarkDone),
+            Action::CancelTask => queue_or_current && allows(selected, TaskAction::Cancel),
+            Action::Supersede | Action::Breakdown => {
+                queue_or_current && allows(selected, TaskAction::Supersede)
             }
-            Action::Acknowledge => {
-                self.view == View::Current
-                    && current.is_some_and(|t| {
-                        t.definition().kind == Kind::Human && t.status() == Status::Pending
-                    })
+            Action::CopyToQueue => {
+                self.view == View::History && allows(selected, TaskAction::CopyToQueue)
             }
-            // Stored current that no supervisor owns: failed, or waiting on something.
-            Action::Abandon => {
-                self.view == View::Current
-                    && self.service.is_some()
-                    && current.is_some_and(|t| abandonable(t.status()))
+            Action::Approve | Action::Reject => {
+                queue_or_current
+                    && allows(selected, TaskAction::Approve)
+                    && selected.is_some_and(|t| t.draft().is_some())
             }
-            Action::ResetToPending => {
-                self.view == View::Current
-                    && self.service.is_some()
-                    && current.is_some_and(|t| {
-                        matches!(
-                            t.status(),
-                            Status::Running
-                                | Status::Paused
-                                | Status::Waiting
-                                | Status::Question
-                                | Status::Failed
-                                | Status::Interrupted
-                        )
-                    })
-            }
+            Action::Models | Action::Edit => queue_or_current && allows(selected, TaskAction::Edit),
+            Action::Move => self.view == View::Queue && allows(selected, TaskAction::Move),
             Action::Output => {
                 self.view == View::Current
                     && current.is_some_and(|t| {
@@ -168,39 +72,7 @@ impl App {
                             .is_some_and(|a| !a.report.is_empty() || a.question.is_some())
                     })
             }
-            Action::Edit => {
-                self.view != View::History
-                    && selected.is_some_and(|t| {
-                        matches!(t.status(), Status::New | Status::Pending) || t.status().failed()
-                    })
-            }
-            Action::Breakdown => {
-                self.view != View::History
-                    && selected.is_some_and(|t| {
-                        matches!(t.status(), Status::New | Status::Pending)
-                            || (t.status().failed() && self.current().is_some_and(|c| c.id == t.id))
-                    })
-            }
-            // Delete removes pending work; on stored current it abandons the task instead.
-            Action::Delete => {
-                self.view == View::Queue
-                    && selected.is_some_and(|t| {
-                        t.status() == Status::Pending
-                            || (self.service.is_some()
-                                && (t.status() == Status::New || abandonable(t.status())))
-                    })
-            }
-            Action::Move => {
-                self.view == View::Queue
-                    && selected.is_some_and(|t| {
-                        t.status() == Status::Pending
-                            || (self.service.is_some() && t.status() == Status::New)
-                    })
-            }
             Action::Insert | Action::Import => self.view == View::Queue,
-            Action::Undo => {
-                self.view == View::Queue && (self.undo.is_some() || self.durable_undo.is_some())
-            }
             Action::Inspect | Action::InspectSection(_) => selected.is_some(),
             Action::Filter | Action::Search | Action::Clear | Action::Export => {
                 matches!(self.view, View::Queue | View::History)
@@ -209,19 +81,49 @@ impl App {
         }
     }
 
-    fn unavailable_message(&self, action: Action) -> &'static str {
-        if matches!(action, Action::Edit | Action::Models)
-            && self.service.is_some()
-            && self.selected_task().is_some_and(|task| {
-                matches!(
-                    task.status(),
-                    Status::Running | Status::Paused | Status::Waiting | Status::Question
-                )
-            })
-        {
-            "Task is live; use Reset to pending before editing models or the task"
-        } else {
-            "Unavailable here · only the current task can execute; running work and History are read-only"
+    /// Why `action` is unavailable: the task's state names what it offers instead.
+    fn unavailable_message(&self, action: Action) -> String {
+        const ELSEWHERE: &str =
+            "Unavailable here · only the current task can execute; History offers Copy to queue";
+        let step = match action {
+            Action::Run => self
+                .current()
+                .and_then(|t| t.status().forward())
+                .unwrap_or(TaskAction::Run),
+            Action::Answer => TaskAction::Answer,
+            Action::Pause => TaskAction::Pause,
+            Action::Stop => TaskAction::Stop,
+            Action::MarkDone => TaskAction::MarkDone,
+            Action::CancelTask => TaskAction::Cancel,
+            Action::Supersede | Action::Breakdown => TaskAction::Supersede,
+            Action::CopyToQueue => TaskAction::CopyToQueue,
+            Action::Approve | Action::Reject => TaskAction::Approve,
+            Action::Models | Action::Edit => TaskAction::Edit,
+            Action::Move => TaskAction::Move,
+            _ => return ELSEWHERE.into(),
+        };
+        let target = match action {
+            Action::Run | Action::Answer | Action::Pause => self.current(),
+            Action::Stop => self.stop_target(),
+            _ => self.selected_task(),
+        };
+        match target {
+            Some(task) if !task.status().allows(step) => {
+                format!("#{}: {}", task.id, task.status().refusal(step))
+            }
+            Some(task) if action == Action::Run && task.definition().kind == Kind::Human => {
+                format!("#{} is a Human task · D marks it done", task.id)
+            }
+            Some(_) if action == Action::Run && step == TaskAction::Approve => {
+                "Approve a revision first · v approves, n rejects".into()
+            }
+            Some(_) if action == Action::Run && self.supervisor_alive => {
+                "The runner is already working · p pauses, s stops".into()
+            }
+            Some(task) if matches!(action, Action::Approve | Action::Reject) => {
+                format!("#{} has no revision waiting for approval", task.id)
+            }
+            _ => ELSEWHERE.into(),
         }
     }
 
@@ -231,7 +133,7 @@ impl App {
             return;
         }
         self.selection.clear();
-        if matches!(action, Action::Run | Action::Retry)
+        if action == Action::Run
             && self
                 .dialog
                 .as_ref()
@@ -250,11 +152,10 @@ impl App {
                     | Action::Models
                     | Action::Approve
                     | Action::Answer
-                    | Action::Acknowledge
                     | Action::Pause
-                    | Action::Recover
+                    | Action::Stop
+                    | Action::MarkDone
                     | Action::Run
-                    | Action::Retry
                     | Action::Readiness
             )
         {
@@ -304,8 +205,11 @@ impl App {
             Action::Approve => self.approve_selected(),
             Action::Reject => self.open_reject(),
             Action::Models => self.open_models(),
-            Action::Resolve => self.open_resolution(),
-            Action::Reopen => self.open_reopen(),
+            Action::Stop
+            | Action::MarkDone
+            | Action::CancelTask
+            | Action::Supersede
+            | Action::CopyToQueue => self.open_control(action),
             Action::Field(index) => {
                 if let Some(dialog) = &mut self.dialog {
                     dialog.focus = index;
@@ -353,8 +257,14 @@ impl App {
                 self.reconcile();
             }
             Action::Follow => self.follow = true,
-            Action::Run | Action::Retry => self.start_current(),
-            Action::Recover => {}
+            Action::Run
+                if self
+                    .current()
+                    .is_some_and(|t| t.status() == Status::NeedsInput) =>
+            {
+                self.open_answer()
+            }
+            Action::Run => self.start_current(),
             Action::Readiness => {}
             Action::Pause => {
                 if let Some(task) = self.queue.first_mut()
@@ -368,23 +278,7 @@ impl App {
                 }
                 self.record("Current paused · later tasks will not start");
             }
-            Action::Acknowledge => self.complete_current("Human task acknowledged"),
             Action::Add | Action::Insert | Action::Edit => self.open_task(action),
-            Action::Delete => {
-                if let Some(task) = self.selected_task() {
-                    self.dialog = Some(Dialog::new(
-                        DialogKind::Delete(task.id),
-                        "Delete pending task?",
-                        &format!(
-                            "#{} {}\nConfirm removes it from Queue. Undo can restore it.",
-                            task.id,
-                            task.definition().title
-                        ),
-                        vec![],
-                    ));
-                }
-            }
-            Action::Undo => self.restore_deleted(),
             Action::Move => {
                 if let Some(task) = self.selected_task() {
                     self.dialog = Some(Dialog::new(
@@ -394,19 +288,6 @@ impl App {
                         vec![Field::text("Before task ID", "")],
                     ));
                 }
-            }
-            Action::Diagnose => {
-                let id = self.current().expect("enabled current").id;
-                self.dialog = Some(Dialog::new(
-                    DialogKind::Repair(id),
-                    "Remediate failure · capable model (mock)",
-                    "Use a stronger execution revision or insert an ordinary repair task.\nApproval follows Configuration policy; no separate proposal queue.",
-                    vec![Field::choice(
-                        "Strategy",
-                        &["Escalate model", "Insert repair task"],
-                        "Escalate model",
-                    )],
-                ));
             }
             Action::Breakdown => {
                 if let Some(task) = self.selected_task() {
@@ -424,15 +305,7 @@ impl App {
                     ));
                 }
             }
-            Action::Answer => {
-                let id = self.current().expect("enabled current").id;
-                self.dialog = Some(Dialog::new(
-                    DialogKind::Answer(id),
-                    "Answer AI question",
-                    "Which export format should be used?\nAn answer is required before current can continue.",
-                    vec![Field::text("Answer", "")],
-                ));
-            }
+            Action::Answer => self.open_answer(),
             Action::Stats => self.open_stats(),
             Action::Events => {
                 self.dialog = Some(Dialog::new(
@@ -448,10 +321,6 @@ impl App {
                 self.show_log = !self.show_log;
                 self.follow = true;
             }
-            Action::Abandon => {
-                self.message("Abandon applies to stored tasks only");
-            }
-            Action::ResetToPending => self.message("Reset to pending applies to stored tasks only"),
             Action::Inspect | Action::InspectSection(_) => {
                 if let Some(task) = self.selected_task() {
                     let index = self
@@ -513,11 +382,6 @@ impl App {
             return;
         }
         let resume = task.status() == Status::Paused;
-        let settings = &task.definition().settings;
-        if !resume && settings.attempt_limit > 0 && task.used() >= settings.attempt_limit {
-            self.message("Attempt budget exhausted · change limits in Models or resolve current");
-            return;
-        }
         let id = task.id;
         let cleanup = self.last_workspace != Some(id) || (!resume && self.clean_retry);
         if cleanup {
@@ -546,6 +410,7 @@ impl App {
                 attempt.logs.push("Resumed same attempt and session".into());
             }
         } else {
+            task.stored_status = None;
             let session = task.attempts.last().and_then(|a| a.session).unwrap_or(id);
             task.attempts
                 .push(Attempt::start(task.definition().clone(), session));
@@ -621,7 +486,7 @@ impl App {
                 .position(|t| t.id == id)
                 .ok_or("That ID is not an insertion target in Queue")?
         };
-        if position == 0 && tasks.first().is_some_and(|t| t.status().pinned()) {
+        if position == 0 && tasks.first().is_some_and(|t| t.status() == Status::Running) {
             return Err("Cannot insert before running current".into());
         }
         Ok(position)
@@ -649,15 +514,16 @@ impl App {
         }
     }
 
-    fn restore_deleted(&mut self) {
-        if let Some((position, task)) = self.undo.take() {
-            let min = usize::from(self.current().is_some_and(|t| t.status().pinned()));
-            let position = position.max(min).min(self.queue.len());
-            let id = task.id;
-            self.queue.insert(position, task);
-            self.reveal(id);
-            self.record("Deleted task restored");
-        }
+    fn open_answer(&mut self) {
+        let Some(id) = self.current().map(|t| t.id) else {
+            return;
+        };
+        self.dialog = Some(Dialog::new(
+            DialogKind::Answer(id),
+            "Answer AI question",
+            "Which export format should be used?\nThe answer is saved and the task continues.",
+            vec![Field::text("Answer", "")],
+        ));
     }
 
     fn adjust_position(&mut self, delta: i32) {
@@ -675,7 +541,7 @@ impl App {
         let current = self
             .insertion_position(dialog.value(field), excluding)
             .unwrap_or(tasks.len());
-        let min = usize::from(tasks.first().is_some_and(|t| t.status().pinned()));
+        let min = usize::from(tasks.first().is_some_and(|t| t.status() == Status::Running));
         let next = current
             .saturating_add_signed(delta as isize)
             .clamp(min, tasks.len());
@@ -760,7 +626,7 @@ impl App {
         self.dialog = Some(Dialog::new(
             DialogKind::Help,
             "Keyboard help",
-            "1 Current  2 Queue  3 History  4 Config  5 About\nTab / Shift-Tab: next / previous screen\nClick tabs, rows, buttons, and fields; wheel scrolls.\nDrag body text to select; click Copy or press F6 for OSC 52.\nCtrl-Shift-C copies selection when terminal reports modifiers.\nF2 selects a text pane; F2 again moves to the next pane.\nShift-arrows extend selection; Enter copies; Esc clears.\nF7 releases mouse capture for native terminal selection.\nCurrent: r run/resume, p pause, P Reset to pending, t retry, d remediate\nCurrent: R recover abandoned, x abandon task, z resolve failed\nCurrent: c models/limits; v approve; n reject\nCurrent: y acknowledge Human, w answer AI\nCurrent: o toggles report / raw log; l all events\nQueue: a add, i insert, e edit, d delete/abandon, u undo\nQueue: m move, b break down, o import, x export\nQueue: c models/limits; v approve; n reject\nQueue/History: / search, f filter, Esc clear\nHistory: R reopen closed (done too; only done final), V reviews, F failures\nj/k or arrows: move/scroll; PgUp/PgDn: page\nHome/End: first/last; End follows current output\nEnter: inspect selected task; [ / ]: inspect attempts\nDetails: s summary, v reviews, f failures, g results, o output, t transcripts\nDetails: n/p step, Left/Right section, < / > evidence page\ns: project statistics; ?: help; q: quit\nForms: Tab/arrows focus; Space cycles choices\nForms: Ctrl-A clears field; Ctrl-S/Enter applies\nEsc cancels dialogs/search; Ctrl-C copies selection or quits\nSearch: Enter applies; Esc restores previous query\nAll tasks, models, runs, and files are simulated.",
+            "1 Current  2 Queue  3 History  4 Config  5 About\nTab / Shift-Tab: next / previous screen\nClick tabs, rows, buttons, and fields; wheel scrolls.\nDrag body text to select; click Copy or press F6 for OSC 52.\nCtrl-Shift-C copies selection when terminal reports modifiers.\nF2 selects a text pane; F2 again moves to the next pane.\nShift-arrows extend selection; Enter copies; Esc clears.\nF7 releases mouse capture for native terminal selection.\nCurrent: r Run / Resume / Retry / Answer, p pause, s stop (back to Pending)\nCurrent: D mark done, x cancel pending, R supersede pending\nCurrent: c models/limits, e edit, b break down; v approve, n reject\nCurrent: w answer, o report / raw log, u readiness, m run mode\nQueue: a add, i insert, e edit, m move, b break down, r run current\nQueue: s stop, D mark done, x cancel, R supersede, o import, E export\nQueue: c models/limits; v approve; n reject\nQueue/History: / search, f filter, Esc clear\nHistory: C copy to queue, V reviews, F failures\nj/k or arrows: move/scroll; PgUp/PgDn: page\nHome/End: first/last; End follows current output\nEnter: inspect selected task; [ / ]: inspect attempts\nDetails: s summary, v reviews, f failures, g results, o output, t transcripts\nDetails: n/p step, Left/Right section, < / > evidence page\nS: project statistics; l: events; a: add; ?: help; q: quit\nForms: Tab/arrows focus; Space cycles choices\nForms: Ctrl-A clears field; Ctrl-S/Enter applies\nEsc cancels dialogs/search; Ctrl-C copies selection or quits\nSearch: Enter applies; Esc restores previous query\nAll tasks, models, runs, and files are simulated.",
             vec![],
         ));
     }
@@ -783,7 +649,7 @@ impl App {
             DialogKind::Stats,
             "Project statistics · simulated",
             &format!(
-                "Tasks: {}\nQueue: {}\nHistory: {}\nCompleted: {}\nFailed attempts: {failed}\nExecution steps: {steps}\nElapsed execution: {:.1}s (simulated)\nTotal cost: ${:.2} (simulated)\nOverrides: {} · Skipped: {} · Superseded: {}",
+                "Tasks: {}\nQueue: {}\nHistory: {}\nCompleted: {}\nFailed attempts: {failed}\nExecution steps: {steps}\nElapsed execution: {:.1}s (simulated)\nTotal cost: ${:.2} (simulated)\nCancelled: {} · Superseded: {}",
                 tasks.len(),
                 self.queue.len(),
                 self.history.len(),
@@ -795,11 +661,7 @@ impl App {
                 cost as f64 / 100.0,
                 self.history
                     .iter()
-                    .filter(|t| t.status() == Status::Override)
-                    .count(),
-                self.history
-                    .iter()
-                    .filter(|t| t.status() == Status::Skipped)
+                    .filter(|t| t.status() == Status::Cancelled)
                     .count(),
                 self.history
                     .iter()
@@ -1440,21 +1302,11 @@ impl App {
         }
         match dialog.kind.clone() {
             DialogKind::Task { id, insert } => self.save_task(dialog, id, insert)?,
-            DialogKind::Abandon(_) => return Err("Abandon applies to stored tasks only".into()),
-            DialogKind::ResetToPending(_) => {
-                return Err("Reset to pending applies to stored tasks only".into());
-            }
-            DialogKind::Recover => return Err("Recover applies to stored tasks only".into()),
-            DialogKind::Delete(id) => {
-                let pos = self
-                    .queue
-                    .iter()
-                    .position(|t| t.id == id && t.status() == Status::Pending)
-                    .ok_or("Task is no longer pending")?;
-                let task = self.queue.remove(pos);
-                self.undo = Some((pos, task));
-                self.record(format!("#{id} deleted · Undo available"));
-            }
+            DialogKind::Stop(_)
+            | DialogKind::MarkDone(_)
+            | DialogKind::CancelTask(_)
+            | DialogKind::Supersede(_)
+            | DialogKind::CopyToQueue(_) => self.apply_demo_control(dialog)?,
             DialogKind::Move(id) => {
                 let position = self.insertion_position(dialog.value(0), Some(id))?;
                 let old = self
@@ -1467,18 +1319,10 @@ impl App {
                 self.reveal(id);
                 self.record(format!("#{id} moved · execution order updated"));
             }
-            DialogKind::Repair(id) => {
-                self.remediate(id, dialog.value(0) == "Insert repair task")?
-            }
-            DialogKind::RemediationPending
-            | DialogKind::RemediationReview { .. }
-            | DialogKind::BreakdownPending
-            | DialogKind::BreakdownReview { .. } => {
+            DialogKind::BreakdownPending | DialogKind::BreakdownReview { .. } => {
                 return Err("Persistent proposal is unavailable in demo mode".into());
             }
             DialogKind::Models(id) => self.save_models(dialog, id)?,
-            DialogKind::Resolve(id) => self.resolve_failed(dialog, id)?,
-            DialogKind::Reopen(_) => return Err("Reopen applies to stored tasks only".into()),
             DialogKind::Reject(id) => self.reject_revision(dialog, id)?,
             DialogKind::Breakdown(id) => self.accept_breakdown(dialog, id)?,
             DialogKind::Answer(id) => {
@@ -1488,7 +1332,7 @@ impl App {
                 let task = self
                     .queue
                     .first_mut()
-                    .filter(|t| t.id == id && t.status() == Status::Question)
+                    .filter(|t| t.id == id && t.status() == Status::NeedsInput)
                     .ok_or("Current is not waiting for an answer")?;
                 task.answer = dialog.value(0).into();
                 if let Some(attempt) = task.attempts.last_mut() {
@@ -1590,7 +1434,6 @@ impl App {
                     (self.queue, self.history) = mock::dataset(dialog.value(2));
                     self.queue_catalog = Catalog::default();
                     self.history_catalog = Catalog::default();
-                    self.undo = None;
                     self.follow = true;
                     self.log_offset = 0;
                     self.events = vec!["Mock workspace reset".into()];
@@ -1637,10 +1480,7 @@ impl App {
             let task = self
                 .queue
                 .iter_mut()
-                .find(|t| {
-                    t.id == id
-                        && matches!(t.status(), Status::New | Status::Pending | Status::Failed)
-                })
+                .find(|t| t.id == id && t.status().allows(TaskAction::Edit))
                 .ok_or("This task is read-only")?;
             if task.status() == Status::Failed && kind != task.definition().kind {
                 return Err("Keep the kind of a failed task; use breakdown to replace it".into());
@@ -1799,9 +1639,4 @@ fn import_settings(parts: &[&str], task: &mut Task) -> Result<(), String> {
         .map_or(Ok(0), |stage| stage.parse())
         .map_err(|_| "Invalid imported stage time limit")?;
     Ok(())
-}
-
-/// Current that no supervisor owns and that the owner may give up on.
-pub(crate) fn abandonable(status: Status) -> bool {
-    status.failed() || matches!(status, Status::Question | Status::Waiting | Status::Paused)
 }

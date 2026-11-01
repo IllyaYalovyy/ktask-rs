@@ -75,8 +75,11 @@ CREATE TABLE tasks (
     origin_attempt_id INTEGER,
     recovery_root_id INTEGER REFERENCES tasks(id),
     automatic_replans INTEGER NOT NULL DEFAULT 0 CHECK (automatic_replans BETWEEN 0 AND 10),
+    -- Set by Stop and by a decided revision: the next Run starts fresh, not from the last attempt.
     reset_pending INTEGER NOT NULL DEFAULT 0 CHECK (reset_pending IN (0, 1)),
     reset_worktree TEXT,
+    -- Run and Retry restart the limits: only attempts numbered above this one count.
+    counted_from INTEGER NOT NULL DEFAULT 0 CHECK (counted_from >= 0),
     row_version INTEGER NOT NULL DEFAULT 1 CHECK (row_version > 0),
     created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
     updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
@@ -444,11 +447,13 @@ SELECT t.*, r.revision, r.lifecycle AS revision_lifecycle,
     draft.revision AS pending_revision, draft.title AS pending_title, draft.goal AS pending_goal,
     a.id AS latest_attempt_id, a.state AS attempt_state, a.revision AS attempt_revision,
     a.wait_reason, a.waiting_since_ms, a.resume_at_ms, a.active_ms,
-    CASE WHEN t.lifecycle <> 'ready' THEN t.lifecycle
+    -- The task state machine (docs/USECASES.md): live attempt, then approval, then failure.
+    CASE WHEN t.lifecycle NOT IN ('new', 'ready') THEN t.lifecycle
          WHEN a.state IN ('running', 'paused', 'waiting') THEN a.state
-         WHEN t.reset_pending = 1 THEN 'ready'
-         WHEN a.state IS NOT NULL THEN a.state ELSE 'ready' END AS status,
-    (SELECT count(*) FROM attempts spent WHERE spent.task_id = t.id
+         WHEN r.revision IS NULL OR draft.revision IS NOT NULL THEN 'new'
+         WHEN a.state = 'failed' AND t.reset_pending = 0 THEN 'failed'
+         ELSE 'ready' END AS status,
+    (SELECT count(*) FROM attempts spent WHERE spent.task_id = t.id AND spent.number > t.counted_from
         AND (spent.state = 'succeeded' OR (spent.state = 'failed'
             AND spent.failure_category IN ('check', 'review', 'validation', 'agent', 'unknown')))) AS attempts_used
 FROM tasks t

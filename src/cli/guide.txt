@@ -10,14 +10,14 @@ CONCEPTS
              directory never selects the instance.
   Task       A title, a Goal and acceptance criteria (one --criterion each). State only the
              outcome and how to verify it; the agent owns design and implementation.
-             Kind ai is run by agents. Kind human is owner work, confirmed with ack.
+             Kind ai is run by agents. Kind human is owner work, confirmed with done.
   Revision   Each edit appends a revision. Only a ready (approved) revision runs; a newer
              draft waits for approve or reject while the older ready one stays usable.
   Attempt    One execution: implement, project checks, independent review and validation,
              with up to ten repair rounds. Success commits the change as
              "ktask: task #N, attempt #M". Failed attempts are kept as recorded.
   Current    The first unfinished task in queue order. Only current runs. A failed current
-             blocks later tasks until it is repaired, retried or resolved.
+             blocks later tasks until it is retried, stopped or marked done.
   Version    Every task has a version that each change increments. Pass --if-version N,
              with N from show/list, so a change fails with exit 4 if the task moved on.
   Roles      execution, review, validation and remediation; every task needs all four.
@@ -49,47 +49,44 @@ TYPICAL SESSION
   ktask --json current                 # the task the runner is on, with attempts
   ktask --json events --after 0        # progress feed; pass next_after on the next call
   ktask --json show 12                 # full record: revisions, attempts, steps, usage
-  ktask --json pause 12                # stop after the worker is cleaned up; run resumes
-  ktask stop [--all]                   # stop this (or every) project's runner; waits until it exits
-  ktask --json reset-to-pending 12 --confirm  # end attempt, edit task, then Run afresh
+  ktask --json pause                   # pause the runner; waits until it exits; run resumes
+  ktask --json stop 12                 # back to Pending; changes stashed; run starts afresh
+  ktask --json done 12 --reason '...'  # the owner's verdict; the task goes to History
   Foreground run (no --background) blocks until the queue is done or something needs
   the owner, then prints why it stopped. A detached runner logs to
   <state>/runner-<project id>.log (see --paths).
 
-STATUS VALUES ("status" in list, show and current)
-  new             no approved revision yet: approve it, or edit --approval ready
-  ready           queued or Reset to pending; editable, explicit Run starts a new attempt
-  running         an attempt is executing
-  paused          paused by the owner; run resumes the same attempt
-  waiting         a provider usage limit (wait_reason "rate_limit", resume_at_ms), or an
-                  agent question (attempt "question"): reply with answer
-  failed          the last attempt failed; a running supervisor starts a repair attempt by
-                  itself unless a stop rule applies (see below)
-  interrupted     the last attempt was stopped without a result; run tries again
-  succeeded  succeeded_override  failed_skipped  superseded  cancelled
-                  closed; listed with --scope history. Only done is final, and done can
-                  be reopened. Use reopen ID --reason '...' [--if-version N] for any
-                  closed task. Earlier attempts, usage and resolutions remain recorded.
-  deleted         soft-deleted; list --scope deleted, then restore
+STATES ("state" in list, show and current; "actions" lists what each offers)
+  needs_approval  no approved revision, or a newer draft: approve, reject, edit, move, done
+  pending         queued; run, edit, move, cancel, supersede --by IDS, done
+  running         an attempt is executing, or waiting for a provider limit (attempt
+                  wait_reason "rate_limit", resume_at_ms; it resumes by itself):
+                  pause, stop, done
+  paused          run resumes the same attempt; edit, stop, done
+  needs_input     the agent asked a question: answer ID --text '...'; edit, stop, done
+  failed          the last attempt failed and automatic repair stopped (see below):
+                  run retries from the checks with restarted limits; edit, stop, done
+  done  cancelled  superseded
+                  final; listed with --scope history. copy ID [--before ID] queues a new
+                  pending task with the same definition.
+  stop returns a task to pending: its worker stops, the attempt ends, and uncommitted
+  changes are saved as the stash "ktask: task #N attempt #M" (git stash list); the next run
+  starts fresh with full limits. done stops a live attempt the same way first. A refused
+  action exits 4 and names the state and the actions it offers. "status" keeps the stored
+  value (new, ready, running, paused, waiting, failed, succeeded, succeeded_override,
+  superseded, cancelled).
 
 WHEN EXECUTION STOPS ON A FAILED TASK
   Automatic repair stops only when the attempt budget or the task time limit is used up,
   critical findings remain after ten repair rounds, the failure judge replanned ten times,
   the provider or environment failed three attempts in a row, or five attempts in a row
   failed. Then choose one:
-    ktask run                                  retry (after fixing the cause or a limit)
+    ktask run                                  retry from the checks; limits restart
     ktask edit ID --attempt-limit 6            or --task-limit off, --model ..., then run
-    ktask remediate ID [--apply]               ask the remediation model for a plan
-    ktask breakdown ID [--apply]               split it into ordered subtasks
-    ktask resolve ID --outcome failed-skipped --reason '...'   move on
-    ktask abandon ID --reason '...'            give up; the task goes to History
-    ktask reset-to-pending ID --confirm          keep task/history/work; edit, then Run
-  Resume continues the paused or waiting attempt and its provider session. Reset to pending
-  interrupts it without spending attempt budget, preserves evidence and workspace changes,
-  and requires a new Run. A running worker is stopped and reaped first. New uncommitted
-  source changes after Reset block Run until preserved or committed. Editing a paused
-  or waiting task requires Reset to pending. Use edit ID --preview-project-defaults to
-  inspect all four effective role settings; edit ID --apply-project-defaults copies them.
+    ktask stop ID                              back to pending; edit it, then run afresh
+    ktask done ID --reason '...'               accept it as done; it goes to History
+  Use edit ID --preview-project-defaults to inspect all four effective role settings;
+  edit ID --apply-project-defaults copies them.
 
 OUTPUT CONTRACT
   Without --json, output is human text and may change. With --json, stdout carries one

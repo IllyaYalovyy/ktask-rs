@@ -11,62 +11,27 @@ use crate::{
 };
 use std::sync::atomic::Ordering;
 
+/// How a new attempt begins. Resume never opens a new attempt; it continues the saved one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Opening {
+    /// Run from Pending: nothing carries over. The project checks run first when enabled.
+    Fresh { verify: bool },
+    /// Retry after a failure: the kept work is checked first, then reviewed as usual.
+    Retry,
+    /// The supervisor's own repair after a failure or replan: the failure judge goes first.
+    Repair,
+}
+
 pub(super) fn run(
     service: &mut Service,
     run: &Run,
     ctx: &mut Context<'_>,
     checks: &[Check],
-    repair: bool,
-    verify_first: bool,
+    opening: Opening,
 ) -> Result<Outcome> {
     let mut progress = match service.progress(run)? {
         Some(saved) => saved,
-        None => {
-            let prior = service
-                .task(run.task)?
-                .and_then(|t| t.attempts.iter().rev().find_map(|a| a.outcome.clone()))
-                .unwrap_or_default();
-            // A verified fresh start owes nothing to an earlier attempt that never began work.
-            let previous = service.prior_progress(run)?.filter(|_| !verify_first);
-            let round = previous.as_ref().map_or(0, |p| p.round);
-            let mut progress = Progress {
-                round,
-                phase: if verify_first {
-                    "baseline"
-                } else if repair {
-                    "judge"
-                } else {
-                    "implement"
-                }
-                .into(),
-                context: format!(
-                    "Prior failure context (scope only; not proof of current success): {prior}"
-                ),
-                evidence: String::new(),
-                verified_tree: String::new(),
-                why: String::new(),
-            };
-            if let Some(previous) = previous {
-                progress.phase = if repair || previous.phase == "replanned" {
-                    "judge"
-                } else {
-                    match previous.phase.as_str() {
-                        "judge" | "fix" => "judge",
-                        _ => "check",
-                    }
-                }
-                .into();
-                progress.context.push_str(&format!(
-                    "\nRetained current findings and authorized scope:\n{}",
-                    previous.context
-                ));
-                progress.evidence = format!(
-                    "{}\nRechecking retained work after supervisor handoff; previous passes need a matching verified tree and check definition before reuse.",
-                    progress.context
-                );
-            }
-            progress
-        }
+        None => opening_progress(service, run, ctx, opening)?,
     };
     service.save_progress(run, &progress)?;
     loop {
@@ -104,7 +69,7 @@ pub(super) fn run(
             .ok_or_else(|| Error::Conflict("Current task disappeared during execution".into()))?
             .attempts_used;
         let outcome = match progress.phase.as_str() {
-            "fix" if run.definition.attempt_limit.is_some_and(|limit| attempts_used >= limit) => Outcome::Failed("protocol", "Coding attempt limit exhausted after the read-only failure judge; work and evidence retained. Increase the limit or insert a prerequisite through Remediate before another worker runs.".into()),
+            "fix" if run.definition.attempt_limit.is_some_and(|limit| attempts_used >= limit) => Outcome::Failed("protocol", "Coding attempt limit exhausted after the read-only failure judge; work and evidence retained. c Models raises the limit; r Retry restarts it.".into()),
             "implement" | "fix" => ai(
                 service,
                 run,
@@ -161,9 +126,14 @@ pub(super) fn run(
                 ),
             )?,
             "complete" => {
+                let minor = progress.evidence.matches("\nMinor: ").count();
                 return Ok(Outcome::Passed(format!(
-                    "Checks, independent review and validation passed after {} repair rounds; any accepted minor findings remain in the review records",
+                    "Checks, independent review and validation passed after {} repair rounds{}",
                     progress.round,
+                    match minor {
+                        0 => String::new(),
+                        n => format!("; {n} minor finding(s) recorded with the reviews"),
+                    }
                 )));
             }
             _ => return Err(Error::Conflict("Unknown workflow phase".into())),
@@ -372,4 +342,67 @@ pub(super) fn escalation(report: &str) -> Outcome {
             "Critical findings remain after {REPAIR_ROUNDS} repair rounds. Work and evidence are preserved; no additional repair worker will start automatically. Inspect findings and apply explicit model escalation or remediation before retrying.\n{readable}"
         ),
     )
+}
+
+fn opening_progress(
+    service: &mut Service,
+    run: &Run,
+    ctx: &Context<'_>,
+    opening: Opening,
+) -> Result<Progress> {
+    let fresh = |phase: &str| Progress {
+        round: 0,
+        phase: phase.into(),
+        context: String::new(),
+        evidence: String::new(),
+        verified_tree: String::new(),
+        why: String::new(),
+    };
+    let task = service
+        .task(run.task)?
+        .ok_or_else(|| Error::Conflict("Current task disappeared".into()))?;
+    let prior = task
+        .attempts
+        .iter()
+        .rev()
+        .skip(1)
+        .find_map(|a| a.outcome.clone())
+        .unwrap_or_default();
+    Ok(match opening {
+        Opening::Fresh { verify } => fresh(if verify { "baseline" } else { "implement" }),
+        Opening::Retry if ctx.workspace.clean()? => fresh("implement"),
+        Opening::Retry => {
+            let mut progress = fresh("check");
+            progress.context = format!(
+                "Retry of the failed attempt, continuing from its kept work. It ended: {prior}"
+            );
+            if let Some(previous) = service.prior_progress(run)? {
+                progress.context.push_str(&format!(
+                    "\nIts findings and authorized scope:\n{}",
+                    previous.context
+                ));
+            }
+            progress.evidence = progress.context.clone();
+            progress
+        }
+        Opening::Repair => {
+            let previous = service.prior_progress(run)?;
+            let mut progress = fresh("judge");
+            progress.round = previous.as_ref().map_or(0, |p| p.round);
+            progress.context = format!(
+                "Prior failure context (scope only; not proof of current success): {prior}"
+            );
+            if let Some(previous) = previous {
+                progress.context.push_str(&format!(
+                    "\nRetained current findings and authorized scope:\n{}",
+                    previous.context
+                ));
+                progress.evidence = format!(
+                    "{}\nRechecking retained work after supervisor handoff; previous passes need a matching verified tree and check definition before reuse.",
+                    progress.context
+                );
+            }
+            progress
+        }
+    })
 }

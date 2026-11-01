@@ -12,24 +12,24 @@ use std::{
 const BIN: &str = env!("CARGO_BIN_EXE_ktask-dev");
 
 #[test]
-fn reset_to_pending_in_real_pty_preserves_attempt_and_uses_corrected_defaults() -> Result {
+fn stop_in_real_pty_keeps_attempt_evidence_stashes_work_and_uses_corrected_defaults() -> Result {
     // The provider responses are synthetic. The private project's supervisor, worker,
-    // checks, persistence, pause/reset, and terminal input all execute for real.
+    // checks, persistence, pause/stop, and terminal input all execute for real.
     for mouse in [false, true] {
         let f = Fixture::new()?;
         f.provider("slow-review")?;
-        f.add("Reset invalid effort")?;
+        f.add("Stop invalid effort")?;
         f.add("Later queued work")?;
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 40)?;
-        let evidence = start_and_pause_reset_worker(&f, &mut t, mouse)?;
-        reset_and_correct_task(&f, &mut t, mouse, &evidence)?;
-        run_reset_task_and_inspect_history(&f, &mut t, mouse)?;
-        verify_reset_attempts(&f, mouse, evidence)?;
+        let evidence = start_and_pause_worker(&f, &mut t, mouse)?;
+        stop_and_correct_task(&f, &mut t, mouse, &evidence)?;
+        run_stopped_task_and_inspect_history(&f, &mut t, mouse)?;
+        verify_stopped_attempts(&f, mouse, evidence)?;
     }
     Ok(())
 }
 
-struct ResetEvidence {
+struct StopEvidence {
     before: Value,
     attempt: i64,
     old_steps: Value,
@@ -40,12 +40,8 @@ struct ResetEvidence {
     progress: (String, String),
 }
 
-fn start_and_pause_reset_worker(
-    f: &Fixture,
-    t: &mut Terminal,
-    mouse: bool,
-) -> Result<ResetEvidence> {
-    t.screen("pending current", |s| s.contains("Reset invalid effort"))?;
+fn start_and_pause_worker(f: &Fixture, t: &mut Terminal, mouse: bool) -> Result<StopEvidence> {
+    t.screen("pending current", |s| s.contains("Stop invalid effort"))?;
     if mouse {
         t.click("r Run queue")?;
     } else {
@@ -59,9 +55,9 @@ fn start_and_pause_reset_worker(
             .then_some(()))
     })?;
     let running = t.screen("execution and checks reached review", |s| {
-        s.contains("RUNNING · supervisor alive") && s.contains("Step: Review")
+        s.contains("Running · supervisor alive") && s.contains("Step: Review")
     })?;
-    println!("RESET REAL WORK BEFORE PAUSE mouse={mouse}\n{running}");
+    println!("STOP REAL WORK BEFORE PAUSE mouse={mouse}\n{running}");
     assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
     // Reproduce an invalid stored setting only after the worker has made progress.
     f.db()?.connection().execute(
@@ -74,28 +70,24 @@ fn start_and_pause_reset_worker(
         t.send("p")?;
     }
     let paused = t.screen("real worker paused and released", |s| {
-        s.contains("PAUSED · runner stopped") && s.contains("P Reset to pending")
+        s.contains("Paused · runner stopped") && s.contains("[s Stop]")
     })?;
-    println!("RESET PAUSED mouse={mouse}\n{paused}");
+    println!("STOP PAUSED mouse={mouse}\n{paused}");
     f.guardian_finished()?;
     f.supervisor_stopped()?;
     let before = f.ok(&["show", "1"])?;
     let attempt = before["attempts"][0]["id"].as_i64().unwrap();
     let old_steps = before["attempts"][0]["steps"].clone();
-    assert!(
-        old_steps
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|s| s["role"] == "execution" && s["state"] == "succeeded")
-    );
-    assert!(
-        old_steps
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|s| s["role"] == "check" && s["state"] == "succeeded")
-    );
+    for role in ["execution", "check"] {
+        assert!(
+            old_steps
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["role"] == role && s["state"] == "succeeded"),
+            "{role} succeeded before the pause"
+        );
+    }
     let old_usage = before["attempts"][0]["role_usage"].clone();
     let db = f.db()?;
     let old_session: i64 = db.connection().query_row(
@@ -132,7 +124,7 @@ fn start_and_pause_reset_worker(
     )?;
     assert_eq!(progress.0, "review");
     drop(db);
-    Ok(ResetEvidence {
+    Ok(StopEvidence {
         before,
         attempt,
         old_steps,
@@ -144,47 +136,98 @@ fn start_and_pause_reset_worker(
     })
 }
 
-fn reset_and_correct_task(
+/// Opens Stop for the current task and applies it: the keyboard path types a reason and
+/// presses Enter, the mouse path clicks Stop and Apply without one.
+fn stop_current(t: &mut Terminal, mouse: bool, title: &str, reason: &str) -> Result<String> {
+    if mouse {
+        t.click("s Stop")?;
+    } else {
+        t.send("s")?;
+    }
+    let dialog = t.screen("stop dialog", |s| {
+        s.contains(&format!("Stop #1 {title}")) && s.contains("Reason (optional)")
+    })?;
+    println!("STOP DIALOG mouse={mouse}\n{dialog}");
+    if mouse {
+        t.click("Apply")?;
+    } else {
+        t.send(&format!("{reason}\r"))?;
+    }
+    t.screen("stopped task is pending", |s| {
+        s.contains("Current #1 · Pending") && !s.contains("Reason (optional)")
+    })
+}
+
+/// Clicks the readiness dialog's forward button, which is labelled for the task's state
+/// and run mode like the Current one.
+fn click_readiness_forward(t: &mut Terminal) -> Result {
+    let screen = t.current_screen();
+    let (row, line) = screen
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("[u Refresh]"))
+        .ok_or_else(|| format!("readiness buttons missing:\n{screen}"))?;
+    // The action bar behind the dialog can share this line; search from the dialog's own
+    // first button.
+    let dialog = line
+        .find("[c Checks]")
+        .ok_or_else(|| format!("readiness buttons missing:\n{screen}"))?;
+    let button = dialog
+        + line[dialog..]
+            .find("[r ")
+            .ok_or("readiness offers no forward button")?;
+    let (col, row) = (line[..button].chars().count() + 1, row + 1);
+    t.send(&format!("\x1b[<0;{col};{row}M\x1b[<0;{col};{row}m"))
+}
+
+/// Marks the task done through its dialog, which applies with Enter or a click on Apply.
+fn mark_done(t: &mut Terminal, mouse: bool, task: &str) -> Result {
+    if mouse {
+        t.click("D Mark done")?;
+    } else {
+        t.send("D")?;
+    }
+    let dialog = t.screen("mark done dialog", |s| {
+        s.contains(&format!("Mark done {task}"))
+    })?;
+    println!("MARK DONE DIALOG mouse={mouse}\n{dialog}");
+    if mouse {
+        t.click("Apply")
+    } else {
+        t.send("\r")
+    }
+}
+
+/// The stopped attempt's outcome: the typed reason, or the owner default without one.
+fn assert_stop_outcome(outcome: &Value, mouse: bool, reason: &str) {
+    let outcome = outcome.as_str().unwrap_or_default();
+    if mouse {
+        assert!(outcome.starts_with("Stopped"), "{outcome}");
+    } else {
+        assert_eq!(outcome, format!("Stopped: {reason}"));
+    }
+}
+
+fn stop_and_correct_task(
     f: &Fixture,
     t: &mut Terminal,
     mouse: bool,
-    evidence: &ResetEvidence,
+    evidence: &StopEvidence,
 ) -> Result {
-    let edit = f
-        .process()
-        .args(["--json", "edit", "1", "--goal", "blocked while paused"])
-        .output()?;
-    assert_eq!(edit.status.code(), Some(4));
-    assert!(String::from_utf8_lossy(&edit.stderr).contains("Reset to pending"));
-    assert_reset_edit_guidance(t, mouse, "paused")?;
-    if mouse {
-        t.click("P Reset to pending")?;
-    } else {
-        t.send("P")?;
-    }
-    println!(
-        "RESET CONFIRMATION mouse={mouse}\n{}",
-        t.screen("reset confirmation", |s| {
-            s.contains("< No >") && s.contains("Resume continues")
-        })?
+    let pending = stop_current(t, mouse, "Stop invalid effort", "Correct the effort")?;
+    println!("STOP PENDING mouse={mouse}\n{pending}");
+    let stopped = f.ok(&["show", "1"])?;
+    assert_eq!(stopped["id"], evidence.before["id"]);
+    assert_eq!(stopped["state"], "pending");
+    assert_eq!(stopped["attempts"][0]["state"], "interrupted");
+    assert_stop_outcome(
+        &stopped["attempts"][0]["outcome"],
+        mouse,
+        "Correct the effort",
     );
-    if mouse {
-        t.click("No")?;
-        t.screen("reset selected", |s| s.contains("< Reset to pending >"))?;
-        t.click("Apply")?;
-    } else {
-        t.send(" \r")?;
-    }
-    let pending = t.screen("pending after reset", |s| {
-        s.contains("Current #1 · PENDING")
-    })?;
-    println!("RESET PENDING mouse={mouse}\n{pending}");
-    let reset = f.ok(&["show", "1"])?;
-    assert_eq!(reset["id"], evidence.before["id"]);
-    assert_eq!(reset["attempts"][0]["state"], "interrupted");
-    assert_eq!(reset["attempts"][0]["steps"], evidence.old_steps);
-    assert_eq!(reset["attempts"][0]["role_usage"], evidence.old_usage);
-    assert_eq!(reset["attempts_used"], 0);
+    assert_eq!(stopped["attempts"][0]["steps"], evidence.old_steps);
+    assert_eq!(stopped["attempts"][0]["role_usage"], evidence.old_usage);
+    assert_eq!(stopped["attempts_used"], 0);
     assert_eq!(
         f.db()?.connection().query_row(
             "SELECT state FROM ai_sessions WHERE id=?1",
@@ -193,6 +236,13 @@ fn reset_and_correct_task(
         )?,
         "closed"
     );
+    // The worker's uncommitted result is saved as a named stash; the tree is clean again.
+    assert!(
+        f.git(&["stash", "list"])?
+            .contains("ktask: task #1 attempt #1")
+    );
+    assert_eq!(f.git(&["show", "stash@{0}^3:result.txt"])?, "verified\n");
+    assert_eq!(f.git(&["status", "--porcelain"])?, "");
     f.provider("normal")?;
     if mouse {
         t.click("c Models")?;
@@ -207,7 +257,7 @@ fn reset_and_correct_task(
             && s.contains("Remediation: codex/remediation")
             && s.contains("hight")
     })?;
-    println!("RESET DEFAULTS mouse={mouse}\n{preview}");
+    println!("STOP DEFAULTS mouse={mouse}\n{preview}");
     if mouse {
         t.click("Fields +")?;
         t.screen("model field page advanced", |s| {
@@ -223,7 +273,7 @@ fn reset_and_correct_task(
         t.send(" ")?;
     }
     println!(
-        "RESET DEFAULTS SELECTED mouse={mouse}\n{}",
+        "STOP DEFAULTS SELECTED mouse={mouse}\n{}",
         t.screen("defaults selected", |s| {
             s.contains("< Apply current project defaults >")
         })?
@@ -234,20 +284,15 @@ fn reset_and_correct_task(
         t.send("\r")?;
     }
     t.screen("corrected settings", |s| {
-        s.contains("Current #1 · PENDING") && !s.contains("Task models and limits")
+        s.contains("Current #1 · Pending") && !s.contains("Task models and limits")
     })?;
     assert_eq!(
         f.ok(&["show", "1"])?["definition"]["models"]["review"]["effort"],
         Value::Null
     );
-    f.ok(&[
-        "edit",
-        "1",
-        "--goal",
-        "Keep preserved result.txt and verify the revised reset goal",
-    ])?;
-    // Queue mode remains paused through reset and model editing. Neither this task
-    // nor its successor may start until a deliberate Run command.
+    f.ok(&["edit", "1", "--goal", "Verify the revised goal after Stop"])?;
+    // Stop also stops the queue. Neither this task nor its successor may start until a
+    // deliberate Run command.
     thread::sleep(Duration::from_millis(200));
     assert_eq!(
         f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
@@ -263,32 +308,30 @@ fn reset_and_correct_task(
         fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
         "execution\nreview\n"
     );
-    assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
+    assert!(!f.root.join("result.txt").exists());
     Ok(())
 }
 
-fn run_reset_task_and_inspect_history(f: &Fixture, t: &mut Terminal, mouse: bool) -> Result {
+fn run_stopped_task_and_inspect_history(f: &Fixture, t: &mut Terminal, mouse: bool) -> Result {
     if mouse {
-        // Staging the retained work changes the index, not the preserved source.
-        // The actual Run must accept it without treating it as unrelated work.
-        f.git(&["add", "result.txt"])?;
         t.click("r Run queue")?;
     } else {
         t.send("r")?;
     }
     println!(
-        "RESET EXPLICIT RUN COMPLETE mouse={mouse}\n{}",
+        "STOP EXPLICIT RUN COMPLETE mouse={mouse}\n{}",
         t.screen("new attempt completed", |s| s.contains("Queue complete."))?
     );
+    assert_eq!(f.ok(&["show", "1"])?["state"], "done");
     if mouse {
         t.click("3 History")?;
     } else {
         t.send("3")?;
     }
     t.screen("completed task history", |s| shows_view(s, "History"))?;
-    t.send("/Reset invalid effort\r")?;
+    t.send("/Stop invalid effort\r")?;
     // Search filters while typing, so wait for the Enter that closes the search box too.
-    t.screen("reset task selected in history", |s| {
+    t.screen("stopped task selected in history", |s| {
         s.contains("History · 1 shown / 2 total") && !s.contains("Cancel search")
     })?;
     if mouse {
@@ -302,11 +345,10 @@ fn run_reset_task_and_inspect_history(f: &Fixture, t: &mut Terminal, mouse: bool
     } else {
         t.send("[")?;
     }
-    let history = t.screen("reset attempt remains terminal in history", |s| {
-        s.contains("Attempt 1 / 2") && s.contains("interrupted") && s.contains("Reset to pending")
+    let history = t.screen("stopped attempt remains terminal in history", |s| {
+        s.contains("Attempt 1 / 2") && s.contains("interrupted") && s.contains("Stopped")
     })?;
-    println!("RESET HISTORY TERMINAL ATTEMPT mouse={mouse}\n{history}");
-    assert!(!history.contains("Task abandoned"));
+    println!("STOP HISTORY TERMINAL ATTEMPT mouse={mouse}\n{history}");
     t.send("\x1b")?;
     t.screen("history closed details", |s| !s.contains("Attempt 1 / 2"))?;
     t.send("q")?;
@@ -314,8 +356,8 @@ fn run_reset_task_and_inspect_history(f: &Fixture, t: &mut Terminal, mouse: bool
     Ok(())
 }
 
-fn verify_reset_attempts(f: &Fixture, mouse: bool, evidence: ResetEvidence) -> Result {
-    let ResetEvidence {
+fn verify_stopped_attempts(f: &Fixture, mouse: bool, evidence: StopEvidence) -> Result {
+    let StopEvidence {
         before,
         attempt,
         old_steps,
@@ -335,8 +377,8 @@ fn verify_reset_attempts(f: &Fixture, mouse: bool, evidence: ResetEvidence) -> R
     // Task 2 overwrites the execution prompt, so the provider keeps task 1's
     // fresh execution prompt separately for this revised-goal assertion.
     assert!(
-        fs::read_to_string(f.scratch.path().join("reset-revised-prompt"))?
-            .contains("Keep preserved result.txt and verify the revised reset goal")
+        fs::read_to_string(f.scratch.path().join("revised-prompt"))?
+            .contains("Verify the revised goal after Stop")
     );
     let fresh = after["attempts"][1]["id"].as_i64().unwrap();
     let db = f.db()?;
@@ -365,55 +407,29 @@ fn verify_reset_attempts(f: &Fixture, mouse: bool, evidence: ResetEvidence) -> R
         progress
     );
     assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
+    assert!(
+        f.git(&["stash", "list"])?
+            .contains("ktask: task #1 attempt #1")
+    );
     for (path, bytes) in old_artifacts {
         assert_eq!(fs::read(path)?, bytes, "old check transcript preserved");
     }
     println!(
-        "RESET PROOF mouse={mouse}: old attempt {attempt}, fresh attempt {fresh}; old steps, output, usage, progress and work retained; new session {new_session} differs from {old_session}; fresh execution/check/review/validation succeeded"
+        "STOP PROOF mouse={mouse}: old attempt {attempt}, fresh attempt {fresh}; old steps, output, usage and progress retained, work stashed; new session {new_session} differs from {old_session}; fresh execution/check/review/validation succeeded"
     );
     f.no_scratch()?;
     Ok(())
 }
 
-fn assert_reset_edit_guidance(t: &mut Terminal, mouse: bool, state: &str) -> Result {
-    for view in ["2", "1"] {
-        t.send(view)?;
-        t.screen("live edit target", |s| {
-            if view == "1" {
-                s.contains("Task brief · Enter")
-            } else {
-                shows_view(s, "Queue")
-            }
-        })?;
-        for key in ["e", "c"] {
-            // Clear the previous status so each action must produce fresh guidance.
-            t.send("v")?;
-            t.screen("unavailable approval", |s| s.contains("Unavailable here"))?;
-            if mouse {
-                t.click(if key == "e" { "e Edit" } else { "c Models" })?;
-            } else {
-                t.send(key)?;
-            }
-            let blocked = t.screen("live editing guidance", |s| {
-                s.contains("Task is live; use Reset to pending before editing models or the task")
-            })?;
-            println!(
-                "RESET BLOCKED EDIT state={state} view={view} key={key} mouse={mouse}\n{blocked}"
-            );
-        }
-    }
-    Ok(())
-}
-
 #[test]
-fn waiting_reset_guidance_and_question_retention_in_real_pty() -> Result {
+fn stop_needs_input_cancels_the_question_and_cli_changes_reach_the_open_tui() -> Result {
     for mouse in [false, true] {
         let f = Fixture::new()?;
         f.provider("question")?;
-        f.add("Reset waiting question")?;
+        f.add("Stop waiting question")?;
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 40)?;
         t.screen("waiting fixture ready", |s| {
-            s.contains("Reset waiting question")
+            s.contains("Stop waiting question")
         })?;
         if mouse {
             t.click("r Run queue")?;
@@ -421,41 +437,31 @@ fn waiting_reset_guidance_and_question_retention_in_real_pty() -> Result {
             t.send("r")?;
         }
         println!(
-            "RESET WAITING mouse={mouse}\n{}",
+            "STOP WAITING mouse={mouse}\n{}",
             t.screen("real question waiting", |s| {
-                s.contains("QUESTION · supervisor absent") && s.contains("P Reset to pending")
+                s.contains("Needs input · runner stopped") && s.contains("[s Stop]")
             })?
         );
         let old = f.ok(&["show", "1"])?;
-        assert_reset_edit_guidance(&mut t, mouse, "waiting")?;
-        if mouse {
-            t.click("P Reset to pending")?;
-        } else {
-            t.send("P")?;
-        }
-        t.screen("waiting reset confirmation", |s| {
-            s.contains("< No >") && s.contains("Resume continues")
-        })?;
-        if mouse {
-            t.click("No")?;
-            t.screen("waiting reset selected", |s| {
-                s.contains("< Reset to pending >")
-            })?;
-            t.click("Apply")?;
-        } else {
-            t.send(" \r")?;
-        }
-        println!(
-            "RESET WAITING NOW PENDING mouse={mouse}\n{}",
-            t.screen("waiting reset pending", |s| {
-                s.contains("Current #1 · PENDING") && !s.contains("Question from the worker")
-            })?
-        );
+        assert_eq!(old["state"], "needs_input");
+        let pending = stop_current(
+            &mut t,
+            mouse,
+            "Stop waiting question",
+            "Asked the wrong thing",
+        )?;
+        assert!(!pending.contains("Question from the worker"), "{pending}");
+        println!("STOP WAITING NOW PENDING mouse={mouse}\n{pending}");
         let after = f.ok(&["show", "1"])?;
         assert_eq!(after["id"], old["id"]);
         assert_eq!(after["attempts"][0]["id"], old["attempts"][0]["id"]);
         assert_eq!(after["attempts"][0]["steps"], old["attempts"][0]["steps"]);
         assert_eq!(after["attempts"][0]["state"], "interrupted");
+        assert_stop_outcome(
+            &after["attempts"][0]["outcome"],
+            mouse,
+            "Asked the wrong thing",
+        );
         assert_eq!(
             f.db()?
                 .connection()
@@ -465,34 +471,33 @@ fn waiting_reset_guidance_and_question_retention_in_real_pty() -> Result {
                 )))?,
             ("Which content?".into(), "cancelled".into())
         );
-        f.ok(&["delete", "1"])?;
+        f.ok(&["cancel", "1", "--reason", "Not needed now"])?;
         println!(
-            "RESET DELETED CURRENT mouse={mouse}\n{}",
-            t.screen("reset deleted from queue", |s| {
-                s.contains("Queue 0 · History 0")
+            "STOPPED TASK CANCELLED mouse={mouse}\n{}",
+            t.screen("cancelled from queue", |s| {
+                s.contains("Queue 0 · History 1")
             })?
         );
-        assert_eq!(f.ok(&["show", "1"])?["status"], "deleted");
-        f.ok(&["restore", "1"])?;
+        assert_eq!(f.ok(&["show", "1"])?["status"], "cancelled");
+        let copy = f.ok(&["copy", "1"])?;
+        assert_eq!(copy["tasks"][0]["id"], 2, "{copy}");
         println!(
-            "RESET RESTORED CURRENT mouse={mouse}\n{}",
-            t.screen("reset restored pending", |s| {
-                s.contains("Current #1 · PENDING")
-            })?
+            "STOPPED TASK COPIED mouse={mouse}\n{}",
+            t.screen("copy is current", |s| s.contains("Current #2 · Pending"))?
         );
         // Supply an explicitly synthetic planner definition through the same shared
         // application command used by the CLI/TUI, then inspect its persisted result.
         let mut service = ktask_rs_mk3::application::Service::find(f.db()?, &f.root)?.unwrap();
-        let restored = service.task(1)?.unwrap();
-        let mut subtask = restored.definition().definition.clone();
-        subtask.title = "Replacement after reset".into();
+        let copied = service.task(2)?.unwrap();
+        let mut subtask = copied.definition().definition.clone();
+        subtask.title = "Replacement after stop".into();
         service.apply_breakdown(
             ktask_rs_mk3::application::VersionedTask {
-                id: 1,
-                version: restored.version,
+                id: 2,
+                version: copied.version,
             },
             &[subtask],
-            "Synthetic planner fixture after reset",
+            "Synthetic planner fixture after stop",
             true,
         )?;
         if mouse {
@@ -500,18 +505,20 @@ fn waiting_reset_guidance_and_question_retention_in_real_pty() -> Result {
         } else {
             t.send("3")?;
         }
-        let history = t.screen("reset superseded history", |s| {
+        let history = t.screen("superseded copy in history", |s| {
             shows_view(s, "History")
-                && s.contains("REPLACED")
-                && s.contains("Reset waiting question")
+                && s.lines()
+                    .any(|line| line.contains("#2") && line.contains("Superseded"))
         })?;
-        println!("RESET SUPERSEDED HISTORY mouse={mouse}\n{history}");
-        assert_eq!(f.ok(&["show", "1"])?["status"], "superseded");
+        println!("STOPPED COPY SUPERSEDED HISTORY mouse={mouse}\n{history}");
         assert!(
-            !history
+            history
                 .lines()
-                .any(|line| line.contains("#1") && line.contains("PENDING"))
+                .any(|line| line.contains("#1") && line.contains("Cancelled")),
+            "{history}"
         );
+        assert_eq!(f.ok(&["show", "2"])?["status"], "superseded");
+        assert_eq!(f.ok(&["show", "3"])?["state"], "pending");
         t.send("q")?;
         t.finish()?;
         f.no_scratch()?;
@@ -520,15 +527,15 @@ fn waiting_reset_guidance_and_question_retention_in_real_pty() -> Result {
 }
 
 #[test]
-fn reset_to_pending_mouse_control_confirms_without_starting_work() -> Result {
+fn stop_mouse_control_applies_without_starting_work() -> Result {
     use ktask_rs_mk3::storage::execution::StartAttempt;
     let f = Fixture::new()?;
-    f.add("Mouse reset")?;
+    f.add("Mouse stop")?;
     let mut db = f.db()?;
     let attempt = db.start_attempt(StartAttempt {
         task_id: 1,
         expected_version: 1,
-        execution_token: "mouse-reset",
+        execution_token: "mouse-stop",
         now_ms: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_millis() as i64,
@@ -539,29 +546,23 @@ fn reset_to_pending_mouse_control_confirms_without_starting_work() -> Result {
     drop(db);
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
     t.screen("paused mouse current", |s| {
-        s.contains("Current #1 · PAUSED") && s.contains("[P Reset to pending]")
+        s.contains("Current #1 · Paused") && s.contains("[s Stop]")
     })?;
-    t.click("P Reset to pending")?;
-    t.screen("mouse reset confirmation", |s| {
-        s.contains("Reset to pending") && s.contains("< No >")
-    })?;
-    t.click("No")?;
-    t.screen("reset selected", |s| s.contains("< Reset to pending >"))?;
-    t.click("Apply")?;
-    let pending = t.screen("mouse reset pending", |s| {
-        s.contains("Current #1 · PENDING") && !s.contains("< Reset to pending >")
-    })?;
-    println!("MOUSE RESET PENDING\n{pending}");
+    let pending = stop_current(&mut t, true, "Mouse stop", "")?;
+    println!("MOUSE STOP PENDING\n{pending}");
     assert_eq!(
         f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
         1
     );
+    assert_eq!(f.git(&["stash", "list"])?, "", "nothing to stash");
     fs::write(f.root.join("unrelated.txt"), "later user change\n")?;
     let blocked = f.process().args(["--json", "run", "--one"]).output()?;
     assert_eq!(blocked.status.code(), Some(4));
     assert!(
         String::from_utf8_lossy(&blocked.stderr)
-            .contains("Worktree changed after Reset to pending")
+            .contains("uncommitted work from outside this task"),
+        "{}",
+        String::from_utf8_lossy(&blocked.stderr)
     );
     assert_eq!(
         f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
@@ -574,118 +575,194 @@ fn reset_to_pending_mouse_control_confirms_without_starting_work() -> Result {
 }
 
 #[test]
-fn reset_running_worker_reaps_before_editable_pending_and_stops_queue() -> Result {
-    let f = Fixture::new()?;
-    f.provider("usage-live")?;
-    f.add("Running reset")?;
-    f.ok(&["run", "--background"])?;
-    f.state("running")?;
-    support::eventually("provider entered", || {
-        Ok(f.scratch
-            .path()
-            .join("provider-invocations")
-            .exists()
-            .then_some(()))
-    })?;
-    let reset = f.ok(&[
-        "reset-to-pending",
-        "1",
-        "--confirm",
-        "--reason",
-        "Correct setup",
-    ])?;
-    assert_eq!(reset["action"], "reset_to_pending");
-    f.state("ready")?;
-    let shown = f.ok(&["show", "1"])?;
-    assert_eq!(shown["attempts"][0]["state"], "interrupted");
-    assert!(
-        shown["attempts"][0]["outcome"]
-            .as_str()
-            .unwrap()
-            .contains("Correct setup")
-    );
-    thread::sleep(Duration::from_millis(200));
-    assert_eq!(
-        f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
-        1
-    );
-    f.ok(&["edit", "1", "--goal", "Corrected setup"])?;
-    f.no_scratch()?;
-    Ok(())
-}
-
-#[test]
-fn running_current_mouse_reset_waits_for_worker_cleanup_in_real_pty() -> Result {
-    let f = Fixture::new()?;
-    f.provider("usage-live")?;
-    f.add("Running PTY reset")?;
-    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 105, 31)?;
-    t.screen("ready current", |s| {
-        s.contains("Running PTY reset") && s.contains("PENDING")
-    })?;
-    t.send("r")?;
-    let running = t.screen("running reset control", |s| {
-        s.contains("Current #1 · RUNNING") && s.contains("[P Reset to pending]")
-    })?;
-    println!("RUNNING RESET\n{running}");
-    t.click("P Reset to pending")?;
-    t.screen("running reset confirmation", |s| {
-        s.contains("Reset to pending") && s.contains("worker must stop")
-    })?;
-    t.send(" \r")?;
-    let stopped = t.screen("worker reaped and pending", |s| {
-        s.contains("Current #1 · PENDING") && s.contains("[e Edit]")
-    })?;
-    println!("RUNNING RESET STOPPED\n{stopped}");
-    t.send("q")?;
-    t.finish()?;
-    let shown = f.ok(&["show", "1"])?;
-    assert_eq!(shown["attempts"][0]["state"], "interrupted");
-    assert_eq!(shown["attempts"].as_array().unwrap().len(), 1);
-    f.no_scratch()?;
-    Ok(())
-}
-
-#[test]
-fn reset_refuses_unconfirmed_worker_cleanup_and_keeps_attempt_locked() -> Result {
-    use ktask_rs_mk3::storage::execution::StartAttempt;
-    let f = Fixture::new()?;
-    f.add("Cleanup gate")?;
-    let mut db = f.db()?;
-    let attempt = db.start_attempt(StartAttempt {
-        task_id: 1,
-        expected_version: 1,
-        execution_token: "cleanup-reset",
-        now_ms: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_millis() as i64,
-    })?;
-    db.connection()
-        .execute("UPDATE attempts SET state='paused' WHERE id=?1", [attempt])?;
-    drop(db);
-    fs::write(
-        f.root.join(".git/ktask-worker.lock"),
-        "unconfirmed guardian cleanup\n",
-    )?;
-    let output = f
-        .process()
-        .args(["--json", "reset-to-pending", "1", "--confirm"])
-        .output()?;
-    assert_eq!(output.status.code(), Some(4));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("cleanup confirmation"));
-    let shown = f.ok(&["show", "1"])?;
-    assert_eq!(shown["status"], "paused");
-    assert_eq!(shown["attempts"][0]["state"], "paused");
-    assert_eq!(shown["version"], 2);
-    Ok(())
-}
-
-#[test]
-fn reset_accepts_waiting_failed_and_interrupted_current_without_losing_history() -> Result {
-    use ktask_rs_mk3::storage::execution::StartAttempt;
-    for state in ["waiting", "failed", "interrupted"] {
+fn stop_running_task_in_real_pty_reaps_worker_stashes_changes_and_runs_fresh() -> Result {
+    for mouse in [false, true] {
         let f = Fixture::new()?;
-        f.add("Reset state")?;
+        f.provider("dirty-live")?;
+        f.add("Running stop")?;
+        f.ok(&["edit", "1", "--attempt-limit", "1"])?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 40)?;
+        t.screen("ready current", |s| s.contains("Current #1 · Pending"))?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        let worker = f.dirty_worker()?;
+        let running = t.screen("running stop control", |s| {
+            s.contains("Current #1 · Running · supervisor alive") && s.contains("[s Stop]")
+        })?;
+        println!("RUNNING STOP mouse={mouse}\n{running}");
+        assert!(!running.contains("[e Edit]"), "{running}");
+        t.send("e")?;
+        t.screen("edit refused while running", |s| {
+            s.contains(
+                "#1: Edit is not available for a running task; it offers Pause, Stop, Mark done",
+            )
+        })?;
+        let pending = stop_current(&mut t, mouse, "Running stop", "Wrong approach")?;
+        println!("RUNNING STOP PENDING mouse={mouse}\n{pending}");
+        // Stop completes only after the runner exited and its guardian reaped the worker.
+        f.supervisor_stopped()?;
+        f.guardian_finished()?;
+        assert!(
+            !Path::new(&format!("/proc/{worker}")).exists(),
+            "worker {worker} survived Stop"
+        );
+        t.screen("stash named in the notice", |s| {
+            s.contains("changes stashed as \"ktask: task #1 attempt #1\"")
+        })?;
+        assert!(
+            f.git(&["stash", "list"])?
+                .contains("ktask: task #1 attempt #1")
+        );
+        assert_eq!(f.git(&["show", "stash@{0}^3:partial.txt"])?, "partial");
+        assert_eq!(f.git(&["status", "--porcelain"])?, "");
+        let stopped = f.ok(&["show", "1"])?;
+        assert_eq!(stopped["state"], "pending");
+        assert_eq!(stopped["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(stopped["attempts"][0]["state"], "interrupted");
+        assert_stop_outcome(&stopped["attempts"][0]["outcome"], mouse, "Wrong approach");
+        // A new Run starts fresh: a new attempt and session, its limits counted from it.
+        f.provider("normal")?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        t.screen("fresh run completed", |s| s.contains("Queue complete."))?;
+        let done = f.ok(&["show", "1"])?;
+        assert_eq!(done["state"], "done", "{done}");
+        assert_eq!(done["attempts"].as_array().unwrap().len(), 2);
+        assert_eq!(done["attempts"][1]["state"], "succeeded");
+        assert_eq!(done["attempts_used"], 1, "only the fresh attempt counts");
+        let db = f.db()?;
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT counted_from FROM tasks WHERE id=1", [], |r| r
+                    .get::<_, i64>(0))?,
+            1
+        );
+        let sessions: i64 = db.connection().query_row(
+            "SELECT count(DISTINCT session_id) FROM attempt_steps WHERE role='execution'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(sessions, 2, "the fresh attempt opened a new session");
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn cli_stop_and_done_wait_for_the_running_worker_and_report_the_stash() -> Result {
+    let f = Fixture::new()?;
+    f.provider("dirty-live")?;
+    f.add("CLI stop")?;
+    f.ok(&["run", "--background"])?;
+    let worker = f.dirty_worker()?;
+    let stopped = f.ok(&["stop", "1", "--reason", "Correct setup"])?;
+    assert_eq!(stopped["action"], "stopped");
+    assert_eq!(stopped["id"], 1);
+    assert_eq!(stopped["stash"], "ktask: task #1 attempt #1");
+    // The command returned only after the runner had exited and the worker was reaped.
+    f.runner_gone(worker)?;
+    let shown = f.ok(&["show", "1"])?;
+    assert_eq!(shown["version"], stopped["version"]);
+    assert_eq!(shown["state"], "pending");
+    assert_eq!(shown["attempts"][0]["state"], "interrupted");
+    assert_eq!(shown["attempts"][0]["outcome"], "Stopped: Correct setup");
+    assert_eq!(f.git(&["show", "stash@{0}^3:partial.txt"])?, "partial");
+    assert_eq!(f.git(&["status", "--porcelain"])?, "");
+    f.ok(&["edit", "1", "--goal", "Corrected setup"])?;
+
+    fs::remove_file(f.scratch.path().join("dirty-started"))?;
+    f.ok(&["run", "--background"])?;
+    let worker = f.dirty_worker()?;
+    let done = f.ok(&["done", "1", "--reason", "Good enough"])?;
+    assert_eq!(done["action"], "done");
+    assert_eq!(done["stash"], "ktask: task #1 attempt #2");
+    f.runner_gone(worker)?;
+    let shown = f.ok(&["show", "1"])?;
+    assert_eq!(shown["state"], "done");
+    // The owner's verdict overrides the supervisor's for AI work.
+    assert_eq!(shown["status"], "succeeded_override");
+    assert_eq!(shown["attempts"].as_array().unwrap().len(), 2);
+    assert_eq!(shown["attempts"][1]["state"], "interrupted");
+    assert_eq!(shown["attempts"][1]["outcome"], "Marked done: Good enough");
+    let stashes = f.git(&["stash", "list"])?;
+    assert!(
+        stashes.contains("ktask: task #1 attempt #1")
+            && stashes.contains("ktask: task #1 attempt #2"),
+        "{stashes}"
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn killed_supervisor_settles_to_paused_and_resume_continues_the_same_attempt() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("slow-review")?;
+        f.add("Survive a killed runner")?;
+        f.ok(&["run", "--background"])?;
+        support::eventually("review worker entered", || {
+            Ok(f.scratch
+                .path()
+                .join("review-started")
+                .exists()
+                .then_some(()))
+        })?;
+        let supervisor = f.supervisor_pid()?;
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(supervisor),
+            nix::sys::signal::Signal::SIGKILL,
+        )?;
+        // The guardian outlives the killed supervisor and reaps its worker.
+        f.guardian_finished()?;
+        f.supervisor_stopped()?;
+        assert_eq!(f.ok(&["show", "1"])?["status"], "running");
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
+        let paused = t.screen("orphan settled to paused", |s| {
+            s.contains("Current #1 · Paused · runner stopped") && s.contains("[r Resume]")
+        })?;
+        println!("KILLED SUPERVISOR SETTLED mouse={mouse}\n{paused}");
+        assert!(!paused.contains("Running"), "{paused}");
+        let before = f.ok(&["show", "1"])?;
+        assert_eq!(before["state"], "paused");
+        assert_eq!(before["attempts"].as_array().unwrap().len(), 1);
+        f.provider("normal")?;
+        if mouse {
+            t.click("r Resume")?;
+        } else {
+            t.send("r")?;
+        }
+        println!(
+            "KILLED SUPERVISOR RESUMED mouse={mouse}\n{}",
+            t.screen("resumed attempt completed", |s| s
+                .contains("Queue complete."))?
+        );
+        let after = f.ok(&["show", "1"])?;
+        assert_eq!(after["state"], "done");
+        assert_eq!(after["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(after["attempts"][0]["id"], before["attempts"][0]["id"]);
+        assert_eq!(after["attempts"][0]["state"], "succeeded");
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn stop_accepts_needs_input_failed_and_paused_current_without_losing_history() -> Result {
+    use ktask_rs_mk3::storage::execution::StartAttempt;
+    for state in ["waiting", "failed", "paused"] {
+        let f = Fixture::new()?;
+        f.add("Stop state")?;
         let mut db = f.db()?;
         let started = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
@@ -693,27 +770,35 @@ fn reset_accepts_waiting_failed_and_interrupted_current_without_losing_history()
         let attempt = db.start_attempt(StartAttempt {
             task_id: 1,
             expected_version: 1,
-            execution_token: "state-reset",
+            execution_token: "state-stop",
             now_ms: started,
         })?;
-        if state == "waiting" {
-            db.connection().execute("UPDATE attempts SET state='waiting',wait_reason='question',waiting_since_ms=?2 WHERE id=?1", rusqlite::params![attempt,started])?;
-            db.connection().execute("INSERT INTO questions(attempt_id,prompt,state,created_at_ms) VALUES (?1,'Which setting?','open',?2)", rusqlite::params![attempt,started])?;
-            db.connection().execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (1,1,?1,?2,'supervisor.released','info','Fixture handoff')", rusqlite::params![attempt,started])?;
-        } else {
-            db.connection().execute("UPDATE attempts SET state=?2,finished_at_ms=?3,outcome='prior result',failure_category=?4,report='prior result' WHERE id=?1", rusqlite::params![attempt,state,started,if state == "failed" { "configuration" } else { "interrupted" }])?;
+        match state {
+            "waiting" => {
+                db.connection().execute("UPDATE attempts SET state='waiting',wait_reason='question',waiting_since_ms=?2 WHERE id=?1", rusqlite::params![attempt,started])?;
+                db.connection().execute("INSERT INTO questions(attempt_id,prompt,state,created_at_ms) VALUES (?1,'Which setting?','open',?2)", rusqlite::params![attempt,started])?;
+            }
+            "paused" => {
+                db.connection()
+                    .execute("UPDATE attempts SET state='paused' WHERE id=?1", [attempt])?;
+            }
+            _ => {
+                db.connection().execute("UPDATE attempts SET state='failed',finished_at_ms=?2,outcome='prior result',failure_category='configuration',report='prior result' WHERE id=?1", rusqlite::params![attempt,started])?;
+            }
         }
+        db.connection().execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (1,1,?1,?2,'supervisor.released','info','Fixture handoff')", rusqlite::params![attempt,started])?;
         drop(db);
-        f.ok(&["reset-to-pending", "1", "--confirm"])?;
+        f.ok(&["stop", "1"])?;
         let shown = f.ok(&["show", "1"])?;
         assert_eq!(shown["status"], "ready", "{state}");
+        assert_eq!(shown["state"], "pending", "{state}");
         assert_eq!(shown["attempts"].as_array().unwrap().len(), 1);
         assert_eq!(
             shown["attempts"][0]["state"],
-            if state == "waiting" {
-                "interrupted"
+            if state == "failed" {
+                "failed"
             } else {
-                state
+                "interrupted"
             }
         );
         assert_eq!(shown["attempts_used"], 0);
@@ -798,7 +883,6 @@ fn native_model_metadata_is_exact_and_missing_metadata_is_actionable() -> Result
 
 #[test]
 fn model_aliases_cannot_bypass_judge_separation_at_start_or_judge_revision() -> Result {
-    use ktask_rs_mk3::application::{Service, VersionedTask};
     let f = Fixture::new()?;
     let path = f.scratch.path().join("state/ktask-dev/model-catalog.json");
     let mut catalog: Value = serde_json::from_slice(&fs::read(&path)?)?;
@@ -821,44 +905,48 @@ fn model_aliases_cannot_bypass_judge_separation_at_start_or_judge_revision() -> 
     );
     assert!(!f.scratch.path().join("provider-invocations").exists());
     f.ok(&["edit", "1", "--model", "review=codex/review"])?;
-    let mut service = Service::open(f.db()?, &f.root, None)?;
-    let current = service.task(1)?.unwrap();
-    let run = service.begin_run(
-        VersionedTask {
-            id: 1,
-            version: current.version,
-        },
-        "alias-test",
-        "base",
-    )?;
-    service.finish_run(&run, "failed", Some("check"), "Fixture failure", None)?;
-    let current = service.task(1)?.unwrap();
-    let before = current.revisions.len();
-    let judgment = serde_json::from_value(
-        serde_json::json!({"action":"revise","title":"Alias revision","goal":"Keep judge independent","criteria":["Distinct models"],"models":{"execution":null,"review":{"provider":"codex","model":"execution-alias","effort":null},"validation":null,"remediation":null},"reason":"Test exact alias identity"}),
-    )?;
-    let error = ktask_rs_mk3::runner::remediation::apply_judgment(
-        &mut service,
-        VersionedTask {
-            id: 1,
-            version: current.version,
-        },
-        &judgment,
-        true,
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(
-        error.contains("review") && error.contains("distinct") && error.contains("alias"),
-        "{error}"
+    // The first attempt fails; the failure judge then revises the task with an alias of
+    // the implementation model as its reviewer.
+    f.provider("malformed-work")?;
+    let provider = f.scratch.path().join("bin/codex");
+    let script = fs::read_to_string(&provider)?;
+    for anchor in ["judge_mode='malformed-work'", r#"\"models\":null"#] {
+        assert_eq!(
+            script.matches(anchor).count(),
+            1,
+            "provider anchor {anchor} changed"
+        );
+    }
+    let script = script.replace("judge_mode='malformed-work'", "judge_mode=judge-revise").replace(
+        r#"\"models\":null"#,
+        r#"\"models\":{\"execution\":null,\"review\":{\"provider\":\"codex\",\"model\":\"execution-alias\",\"effort\":null},\"validation\":null,\"remediation\":null}"#,
     );
-    assert_eq!(service.task(1)?.unwrap().revisions.len(), before);
-    assert_eq!(service.task(1)?.unwrap().version, current.version);
+    support::write_executable(&provider, script)?;
+    let before = f.ok(&["show", "1"])?["revisions"].as_array().unwrap().len();
+    let rejected = f.process().args(["--json", "run", "--one"]).output()?;
+    assert_eq!(rejected.status.code(), Some(4));
+    let message = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        message.contains("review") && message.contains("distinct") && message.contains("alias"),
+        "{message}"
+    );
+    assert!(f.scratch.path().join("judge-revised").exists());
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(
+        task["revisions"].as_array().unwrap().len(),
+        before,
+        "{task}"
+    );
+    assert!(
+        !task["revisions"].to_string().contains("Clarified task"),
+        "{task}"
+    );
+    assert_eq!(task["definition"]["models"]["review"]["model"], "review");
     Ok(())
 }
 
 #[test]
-fn invalid_models_preflight_every_pinned_role_before_start_or_resume() -> Result {
+fn invalid_models_preflight_every_role_before_start_or_resume() -> Result {
     use ktask_rs_mk3::storage::execution::StartAttempt;
     for resume in [false, true] {
         for role in ["execution", "review", "validation", "remediation"] {
@@ -878,9 +966,6 @@ fn invalid_models_preflight_every_pinned_role_before_start_or_resume() -> Result
                     db.connection()
                         .execute("UPDATE attempts SET state='paused' WHERE id=?1", [attempt])?;
                     db.connection().execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) SELECT project_id,task_id,id,started_at_ms,'supervisor.released','info','Fixture handoff' FROM attempts WHERE id=?1", [attempt])?;
-                    db.connection().execute("INSERT INTO task_revisions SELECT task_id,2,lifecycle,kind,title,goal,change_reason,created_by_kind,created_by,attempt_limit,attempt_timeout_ms,stage_timeout_ms,created_at_ms,decided_at_ms,decided_by_kind,decided_by FROM task_revisions WHERE task_id=1 AND revision=1", [])?;
-                    db.connection().execute("INSERT INTO revision_models SELECT task_id,2,role,provider,model,effort FROM revision_models WHERE task_id=1 AND revision=1", [])?;
-                    db.connection().execute("INSERT INTO acceptance_criteria SELECT task_id,2,ordinal,description FROM acceptance_criteria WHERE task_id=1 AND revision=1", [])?;
                 }
                 db.connection().execute("UPDATE revision_models SET model='typo-model' WHERE task_id=1 AND revision=1 AND role=?1", [role])?;
                 drop(db);
@@ -908,7 +993,7 @@ fn invalid_models_preflight_every_pinned_role_before_start_or_resume() -> Result
                         && s.contains("typo-model")
                 })?;
                 if mouse {
-                    terminal.click("r Run")?;
+                    click_readiness_forward(&mut terminal)?;
                 } else {
                     terminal.send("r")?;
                 }
@@ -1115,7 +1200,7 @@ exit 2
 }
 
 #[test]
-fn resume_preflights_pinned_revision_even_with_newer_ready_settings() -> Result {
+fn resume_preflights_the_revision_it_will_run() -> Result {
     use ktask_rs_mk3::storage::execution::StartAttempt;
     let f = Fixture::new()?;
     f.add("Pinned settings")?;
@@ -1130,15 +1215,8 @@ fn resume_preflights_pinned_revision_even_with_newer_ready_settings() -> Result 
     })?;
     db.connection()
         .execute("UPDATE attempts SET state='paused' WHERE id=?1", [attempt])?;
-    // Simulate a definition written by an older binary, then a later ready revision.
+    // Simulate a definition written by an older binary.
     db.connection().execute("UPDATE revision_models SET effort='hight' WHERE task_id=1 AND revision=1 AND role='review'", [])?;
-    db.connection().execute("INSERT INTO task_revisions SELECT task_id,2,lifecycle,kind,title,goal,change_reason,created_by_kind,created_by,attempt_limit,attempt_timeout_ms,stage_timeout_ms,created_at_ms,decided_at_ms,decided_by_kind,decided_by FROM task_revisions WHERE task_id=1 AND revision=1", [])?;
-    db.connection().execute("INSERT INTO revision_models SELECT task_id,2,role,provider,model,effort FROM revision_models WHERE task_id=1 AND revision=1", [])?;
-    db.connection().execute(
-        "UPDATE revision_models SET effort='high' WHERE task_id=1 AND revision=2 AND role='review'",
-        [],
-    )?;
-    db.connection().execute("INSERT INTO acceptance_criteria SELECT task_id,2,ordinal,description FROM acceptance_criteria WHERE task_id=1 AND revision=1", [])?;
     drop(db);
     let rejected = f.process().args(["--json", "run", "--one"]).output()?;
     assert!(!rejected.status.success());
@@ -1147,13 +1225,15 @@ fn resume_preflights_pinned_revision_even_with_newer_ready_settings() -> Result 
         error.contains("review") && error.contains("hight") && error.contains("accepted values"),
         "{error}"
     );
-    let db = f.db()?;
-    let (count, state, revision): (i64, String, i64) = db.connection().query_row(
-        "SELECT (SELECT count(*) FROM attempts WHERE task_id=1),state,revision FROM attempts WHERE id=?1",
-        [attempt], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
-    assert_eq!((count, state.as_str(), revision), (1, "paused", 1));
+    let attempts = |f: &Fixture| -> Result<Vec<(String, i64)>> {
+        Ok(f.db()?
+            .connection()
+            .prepare("SELECT state,revision FROM attempts WHERE task_id=1 ORDER BY id")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?)
+    };
+    assert_eq!(attempts(&f)?, [("paused".to_owned(), 1)]);
     assert!(!f.scratch.path().join("provider-invocations").exists());
-    drop(db);
     for mouse in [false, true] {
         let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 40)?;
         terminal.screen("pinned effort current", |s| s.contains("Pinned settings"))?;
@@ -1176,11 +1256,40 @@ fn resume_preflights_pinned_revision_even_with_newer_ready_settings() -> Result 
         terminal.send("q")?;
         terminal.finish()?;
     }
-    let db = f.db()?;
-    let (count, state, revision): (i64, String, i64) = db.connection().query_row(
-        "SELECT (SELECT count(*) FROM attempts WHERE task_id=1),state,revision FROM attempts WHERE id=?1", [attempt], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
-    assert_eq!((count, state.as_str(), revision), (1, "paused", 1));
+    assert_eq!(attempts(&f)?, [("paused".to_owned(), 1)]);
     assert!(!f.scratch.path().join("provider-invocations").exists());
+
+    // An edit while paused is what the next Resume runs: readiness checks it, and the
+    // work continues in a new attempt on that revision.
+    let db = f.db()?;
+    db.connection().execute("INSERT INTO task_revisions SELECT task_id,2,lifecycle,kind,title,goal,change_reason,created_by_kind,created_by,attempt_limit,attempt_timeout_ms,stage_timeout_ms,created_at_ms,decided_at_ms,decided_by_kind,decided_by FROM task_revisions WHERE task_id=1 AND revision=1", [])?;
+    db.connection().execute("INSERT INTO revision_models SELECT task_id,2,role,provider,model,effort FROM revision_models WHERE task_id=1 AND revision=1", [])?;
+    db.connection().execute(
+        "UPDATE revision_models SET effort='high' WHERE task_id=1 AND revision=2 AND role='review'",
+        [],
+    )?;
+    db.connection().execute("INSERT INTO acceptance_criteria SELECT task_id,2,ordinal,description FROM acceptance_criteria WHERE task_id=1 AND revision=1", [])?;
+    drop(db);
+    let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 40)?;
+    terminal.screen("edited paused current", |s| s.contains("Pinned settings"))?;
+    terminal.send("u")?;
+    let screen = terminal.screen("edited revision readiness", |s| {
+        s.contains("Can run · 0 blocker")
+    })?;
+    println!("EDITED REVISION READINESS\n{screen}");
+    assert!(screen.contains("OK · review model"), "{screen}");
+    terminal.send("\x1b")?;
+    terminal.screen("edited readiness closed", |s| {
+        !s.contains("Execution readiness")
+    })?;
+    terminal.send("q")?;
+    terminal.finish()?;
+    f.ok(&["run", "--one"])?;
+    f.state("succeeded")?;
+    let after = attempts(&f)?;
+    assert_eq!(after[1], ("succeeded".to_owned(), 2), "{after:?}");
+    assert_eq!(after.len(), 2, "{after:?}");
+    f.no_scratch()?;
     Ok(())
 }
 
@@ -1475,7 +1584,7 @@ fi"#,
             .exists()
             .then_some(()))
     })?;
-    f.ok(&["pause", "1"])?;
+    f.ok(&["pause"])?;
     assert!(runner.0.wait()?.success());
     assert_eq!(f.ok(&["show", "1"])?["status"], "paused");
     assert!(f.root.join(".git/rebase-merge").exists());
@@ -1722,8 +1831,8 @@ if [ '{mode}' = check-launch-failure ]; then
 fi
 prompt=$(cat)
 printf '%s' "$prompt" > "$HOME/prompt-$model"
-case "$prompt" in *"Keep preserved result.txt and verify the revised reset goal"*)
- if [ "$model" = execution ]; then printf '%s' "$prompt" > "$HOME/reset-revised-prompt"; fi;;
+case "$prompt" in *"Verify the revised goal after Stop"*)
+ if [ "$model" = execution ]; then printf '%s' "$prompt" > "$HOME/revised-prompt"; fi;;
 esac
 if [ "$model" = review ] && [ -f "$HOME/first-review-prompt" ] && [ ! -f "$HOME/second-review-prompt" ]; then printf '%s' "$prompt" > "$HOME/second-review-prompt"; fi
 if [ "$model" = review ] && [ ! -f "$HOME/first-review-prompt" ]; then printf '%s' "$prompt" > "$HOME/first-review-prompt"; fi
@@ -1858,6 +1967,7 @@ case '{mode}' in
  slow-review) if [ "$model" = review ]; then touch "$HOME/review-started"; sleep 30; fi;;
  slow) sleep 3;;
  usage-live) if [ "$model" = execution ]; then sleep 30; fi;;
+ dirty-live) if [ "$model" = execution ]; then printf partial > partial.txt; printf '%s' "$$" > "$HOME/dirty-pid"; touch "$HOME/dirty-started"; sleep 30; fi;;
  overlap) if [ "$model" = execution ]; then
   pwd -P >> "$HOME/overlap-started"
   i=0; while [ ! -f "$HOME/release" ] && [ "$i" -lt 6000 ]; do sleep 0.01; i=$((i + 1)); done
@@ -1875,6 +1985,7 @@ case '{mode}' in
  malformed-work) printf 'verified\n' > result.txt; printf '{{"type":"turn.completed","usage":{{}}}}\n'; exit 0;;
  malformed) printf '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}\n'; exit 0;;
  fail) printf '{{"type":"turn.failed","error":{{"message":"transport lost"}}}}\n'; exit 2;;
+ worker-unsure) if [ "$model" = execution ]; then printf 'verified\n' > result.txt; printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"changes_requested\",\"summary\":\"Done; the supervisor check proves it\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":false,\"evidence\":\"Left to the supervisor check\"}}],\"findings\":[{{\"severity\":\"critical\",\"description\":\"Full check not run by the worker\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0; fi;;
  question) case "$prompt" in *"Human answer"*) :;; *) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"blocked\",\"summary\":\"Need direction\",\"question\":\"Which content?\",\"criteria\":[]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;; esac;;
  ask-once) case "$prompt" in *"You returned blocked"*) :;; *) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"blocked\",\"summary\":\"Need direction\",\"question\":\"Which content?\",\"criteria\":[]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;; esac;;
  review-asks) case "$model" in review) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"blocked\",\"summary\":\"Need direction\",\"question\":\"Which content?\",\"criteria\":[]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;; esac;;
@@ -1972,14 +2083,82 @@ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":
     /// The /proc stat fields after the command name (state, ppid, pgrp, session, tty_nr,
     /// ...) of this fixture's detached supervisor.
     fn supervisor_stat(&self) -> Result<Vec<String>> {
+        let stat = fs::read_to_string(format!("/proc/{}/stat", self.supervisor_pid()?))?;
+        let fields = stat[stat.rfind(')').ok_or("bad stat")? + 2..].split(' ');
+        Ok(fields.map(String::from).collect())
+    }
+    /// Starts Run one in the background and waits until its attempt records a provider-limit
+    /// wait. The runner keeps waiting through the limit until the owner pauses it.
+    fn limit_wait(&self) -> Result<Running> {
+        let run = Running(
+            self.process()
+                .args(["run", "--one"])
+                .stdout(Stdio::null())
+                .spawn()?,
+        );
+        self.next_limit_wait()?;
+        Ok(run)
+    }
+    /// Waits for a provider-limit wait whose resume time is still ahead of its start, as
+    /// every newly recorded wait's is.
+    fn next_limit_wait(&self) -> Result {
+        support::eventually("provider-limit wait recorded", || {
+            let waits: i64 = self.db()?.connection().query_row(
+                "SELECT count(*) FROM attempts WHERE task_id=1 AND state='waiting' AND wait_reason='rate_limit' AND resume_at_ms>waiting_since_ms",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok((waits == 1).then_some(()))
+        })
+    }
+    /// Pauses the runner and reaps the process that ran it.
+    fn pause_runner(&self, mut run: Running) -> Result {
+        self.ok(&["pause"])?;
+        assert!(run.0.wait()?.success());
+        assert_eq!(self.ok(&["show", "1"])?["state"], "paused");
+        Ok(())
+    }
+    /// Waits until the dirty-live worker has written its partial change; returns its pid.
+    fn dirty_worker(&self) -> Result<i32> {
+        support::eventually("worker wrote its partial change", || {
+            Ok(self
+                .scratch
+                .path()
+                .join("dirty-started")
+                .exists()
+                .then_some(()))
+        })?;
+        Ok(fs::read_to_string(self.scratch.path().join("dirty-pid"))?.parse()?)
+    }
+    /// At this moment, not eventually: the supervisor has exited, its guardian has emptied
+    /// and released the worker lease, and `worker` no longer exists.
+    fn runner_gone(&self, worker: i32) -> Result {
+        let git = self.root.join(".git");
+        let runner = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(git.join("ktask-runner.lock"))?;
+        runner.try_lock()?;
+        let lease = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(git.join("ktask-worker.lock"))?;
+        lease.try_lock()?;
+        assert_eq!(lease.metadata()?.len(), 0, "worker lease still marked");
+        assert!(
+            !Path::new(&format!("/proc/{worker}")).exists(),
+            "worker {worker} survived"
+        );
+        Ok(())
+    }
+    /// The pid of this fixture's detached supervisor.
+    fn supervisor_pid(&self) -> Result<i32> {
         let project = self.root.to_string_lossy().into_owned();
         for entry in fs::read_dir("/proc")?.flatten() {
             let cmdline = fs::read(entry.path().join("cmdline")).unwrap_or_default();
             let cmdline = String::from_utf8_lossy(&cmdline).replace('\0', " ");
             if cmdline.contains(&project) && cmdline.contains(" run --notify") {
-                let stat = fs::read_to_string(entry.path().join("stat"))?;
-                let fields = stat[stat.rfind(')').ok_or("bad stat")? + 2..].split(' ');
-                return Ok(fields.map(String::from).collect());
+                return Ok(entry.file_name().to_string_lossy().parse()?);
             }
         }
         Err("no detached supervisor for this fixture".into())
@@ -2075,7 +2254,7 @@ fn worker_callback_files_only_linked_drafts_and_terminal_shows_both_links() -> R
             println!(
                 "FOLLOW-UP RUNNING CURRENT {cols}x{rows}\n{}",
                 t.screen("running source with both follow-ups", |s| {
-                    s.contains("Current #1 · RUNNING") && s.contains("Follow-ups: #3, #4")
+                    s.contains("Current #1 · Running") && s.contains("Follow-ups: #3, #4")
                 })?
             );
             if mouse {
@@ -2135,7 +2314,8 @@ fn worker_callback_files_only_linked_drafts_and_terminal_shows_both_links() -> R
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 105, 30)?;
     println!(
         "FOLLOW-UP CURRENT\n{}",
-        t.screen("draft current", |s| s.contains("Current #3 · NEW"))?
+        t.screen("draft current", |s| s
+            .contains("Current #3 · Needs approval"))?
     );
     t.send("2")?;
     println!(
@@ -2327,7 +2507,7 @@ fn pause_at_tenth_review_resumes_the_phase_without_an_eleventh_repair() -> Resul
         println!(
             "TENTH REVIEW PAUSED mouse={mouse}\n{}",
             t.screen("paused", |s| {
-                s.contains("PAUSED · runner stopped") && s.contains("r Resume")
+                s.contains("Paused · runner stopped") && s.contains("r Resume")
             })?
         );
         f.provider("review-critical")?;
@@ -2472,7 +2652,7 @@ fn mandatory_criteria_and_validation_findings_still_block_after_ten_rounds() -> 
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
         println!(
             "MANDATORY DECISION {mode}\n{}",
-            t.screen("failure", |s| s.contains("FAILED"))?
+            t.screen("failure", |s| s.contains("Current #1 · Failed"))?
         );
         if mouse {
             t.click("Enter Details")?;
@@ -2487,7 +2667,7 @@ fn mandatory_criteria_and_validation_findings_still_block_after_ten_rounds() -> 
         );
         t.send("\x1b")?;
         t.screen("details closed", |s| {
-            s.contains("FAILED") && !s.contains("Task details / attempts")
+            s.contains("Current #1 · Failed") && !s.contains("Task details / attempts")
         })?;
         t.send("q")?;
         t.finish()?;
@@ -2527,7 +2707,7 @@ fn changing_source_while_review_is_paused_invalidates_saved_proof() -> Result {
     );
     t.click("p Pause")?;
     t.screen("paused", |s| {
-        s.contains("PAUSED · runner stopped") && s.contains("r Resume")
+        s.contains("Paused · runner stopped") && s.contains("r Resume")
     })?;
     fs::write(f.root.join("result.txt"), "unverified change\n")?;
     fs::write(f.root.join(".gitignore"), "included.secret\n")?;
@@ -2802,7 +2982,7 @@ fn real_terminal_checkpoints_attribute_change_after_verified_checks() -> Result 
     })?;
     t.send("3")?;
     let screen = t.screen("attribute task checkpointed", |s| {
-        s.contains("DONE") && s.contains("Checkpoint attribute change")
+        s.contains(" Done ") && s.contains("Checkpoint attribute change")
     })?;
     println!("ATTRIBUTE CHECKPOINT PTY\n{screen}");
     t.send("q")?;
@@ -2848,7 +3028,7 @@ fn real_terminal_checkpoints_sparse_checkout_after_verified_checks() -> Result {
     })?;
     t.send("3")?;
     let screen = t.screen("sparse task checkpointed", |s| {
-        s.contains("DONE") && s.contains("Checkpoint sparse worktree")
+        s.contains(" Done ") && s.contains("Checkpoint sparse worktree")
     })?;
     println!("SPARSE CHECKPOINT PTY\n{screen}");
     t.send("q")?;
@@ -3223,9 +3403,9 @@ fn current_screen_shows_recorded_check_counts_in_real_terminal() -> Result {
         s.contains("Check build: 3 passed, 0 failed, 1 ignored")
     })?;
     println!("CURRENT COUNTS\n{screen}");
-    f.ok(&["pause", "1"])?;
+    f.ok(&["pause"])?;
     assert!(runner.wait()?.success());
-    t.screen("paused current", |s| s.contains("Current #1 · PAUSED"))?;
+    t.screen("paused current", |s| s.contains("Current #1 · Paused"))?;
     t.send("o")?;
     let report = t.screen("paused current count report", |s| {
         s.contains("Report · attempt 1") && s.contains("Check build: 3 passed, 0 failed, 1 ignored")
@@ -3423,24 +3603,33 @@ fn judge_evidence_stays_within_the_provider_input_limit() -> Result {
     Ok(())
 }
 #[test]
-fn failure_judge_asks_the_owner_only_as_a_product_question() -> Result {
+fn failure_judge_question_inside_the_ten_round_cycle_is_a_protocol_failure() -> Result {
     let f = Fixture::new()?;
     f.fail_first_review()?;
     f.add("Ambiguous task")?;
-    f.fail_provider()?;
     f.provider("judge-ask")?;
-    f.ok(&["run"])?;
-    f.state("waiting")?;
+    let run = f.process().args(["--json", "run"]).output()?;
+    assert_eq!(run.status.code(), Some(4));
+    let error = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        error.contains("owner questions wait for the final critical decision"),
+        "{error}"
+    );
     let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["state"], "failed");
     let attempts = task["attempts"].as_array().unwrap();
-    assert_eq!(attempts.len(), 4);
-    assert_eq!(attempts[3]["question"], "Keep or drop the legacy export?");
+    assert_eq!(attempts.len(), 3);
+    for attempt in attempts {
+        assert_eq!(attempt["failure_category"], "protocol", "{attempt}");
+        assert_eq!(attempt["question"], Value::Null);
+    }
+    // A judge that asks instead of planning spends no coding budget and asks no one.
     assert_eq!(task["attempts_used"], 0);
-    f.ok(&["answer", "1", "--text", "Human answer: keep it"])?;
-    f.state("succeeded")?;
     assert_eq!(
-        f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
-        4
+        f.db()?
+            .connection()
+            .query_row("SELECT count(*) FROM questions", [], |r| r.get::<_, i64>(0))?,
+        0
     );
     f.no_scratch()?;
     Ok(())
@@ -3453,12 +3642,9 @@ fn pause_resume_keeps_attempt_session_and_cleans_worker_tmp() -> Result {
     let mut run = Running(f.process().args(["run"]).stdout(Stdio::null()).spawn()?);
     f.state("running")?;
     thread::sleep(Duration::from_millis(200));
-    f.ok(&["pause", "1"])?;
+    f.ok(&["pause"])?;
     run.0.wait()?;
     f.state("paused")?;
-    let recover = f.process().arg("recover").output()?;
-    assert_eq!(recover.status.code(), Some(4));
-    assert!(String::from_utf8_lossy(&recover.stderr).contains("yielded this attempt normally"));
     f.no_scratch()?;
     f.provider("normal")?;
     f.ok(&["resume"])?;
@@ -3496,7 +3682,7 @@ fn paused_repair_resumes_its_reserved_round_and_same_attempt() -> Result {
                 .then_some(()))
         })?;
         let running = t.screen("repair running", |s| {
-            s.contains("RUNNING · supervisor alive")
+            s.contains("Running · supervisor alive")
                 && s.contains("p Pause")
                 && s.contains("Attempt 1")
                 && s.contains("Step: Repair")
@@ -3510,7 +3696,7 @@ fn paused_repair_resumes_its_reserved_round_and_same_attempt() -> Result {
         println!(
             "REPAIR PAUSED mouse={mouse}\n{}",
             t.screen("repair paused", |s| s.contains("[r Resume]")
-                && s.contains("PAUSED · runner stopped"))?
+                && s.contains("Paused · runner stopped"))?
         );
         let before = f.ok(&["show", "1"])?;
         let attempt = before["attempts"][0]["id"].clone();
@@ -3545,11 +3731,9 @@ fn questions_require_answer_and_reuse_attempt() -> Result {
     f.add("Question")?;
     f.ok(&["run"])?;
     f.state("waiting")?;
-    let recover = f.process().arg("recover").output()?;
-    assert_eq!(recover.status.code(), Some(4));
-    assert!(String::from_utf8_lossy(&recover.stderr).contains("yielded this attempt normally"));
-    let failed = f.process().arg("resume").output()?;
-    assert!(!failed.status.success());
+    let failed = f.process().args(["--json", "resume"]).output()?;
+    assert_eq!(failed.status.code(), Some(4));
+    assert_eq!(f.ok(&["show", "1"])?["state"], "needs_input");
     f.ok(&["answer", "1", "--text", "Human answer: verified"])?;
     f.ok(&["resume"])?;
     assert_eq!(
@@ -3650,44 +3834,33 @@ fn reviewer_that_keeps_asking_stops_the_task_without_a_question_or_budget() -> R
     Ok(())
 }
 #[test]
-fn waiting_attempt_can_be_dropped_then_the_task_abandoned_without_spending_budget() -> Result {
+fn needs_input_is_stopped_then_cancelled_without_spending_budget() -> Result {
     let f = Fixture::new()?;
     f.provider("question")?;
     f.add("Question")?;
-    for args in [
-        vec!["abandon", "1", "--reason", "x", "--attempt"],
-        vec!["abandon", "1", "--reason", "x"],
-    ] {
-        let refused = f.process().args(&args).output()?;
-        assert_eq!(
-            refused.status.code(),
-            Some(4),
-            "pending work is deleted, not abandoned"
-        );
-    }
+    let refused = f.process().args(["--json", "stop", "1"]).output()?;
+    assert_eq!(
+        refused.status.code(),
+        Some(4),
+        "pending work is cancelled, not stopped"
+    );
+    assert!(
+        String::from_utf8_lossy(&refused.stderr)
+            .contains("Stop is not available for a pending task")
+    );
     f.ok(&["run"])?;
     f.state("waiting")?;
-    let dropped = f.ok(&[
-        "abandon",
-        "1",
-        "--reason",
-        "Owner stopped this attempt",
-        "--attempt",
-    ])?;
-    assert_eq!(dropped["scope"], "attempt");
-    f.state("interrupted")?;
+    let refused = f.process().args(["--json", "cancel", "1"]).output()?;
+    assert_eq!(refused.status.code(), Some(4), "live work is stopped first");
+    let stopped = f.ok(&["stop", "1", "--reason", "Owner stopped this attempt"])?;
+    assert_eq!(stopped["action"], "stopped");
+    f.state("ready")?;
     let shown = f.ok(&["show", "1"])?;
     assert_eq!(shown["attempts_used"], 0);
     let attempt = &shown["attempts"].as_array().unwrap()[0];
     assert_eq!(attempt["state"], "interrupted");
-    assert!(
-        attempt["outcome"]
-            .as_str()
-            .unwrap()
-            .contains("Owner stopped")
-    );
-    let abandoned = f.ok(&["abandon", "1", "--reason", "Not worth another attempt"])?;
-    assert_eq!(abandoned["scope"], "task");
+    assert_eq!(attempt["outcome"], "Stopped: Owner stopped this attempt");
+    f.ok(&["cancel", "1", "--reason", "Not worth another attempt"])?;
     let history = f.ok(&["list", "--scope", "history"])?;
     assert_eq!(history["count"], 1);
     assert_eq!(history["tasks"][0]["status"], "cancelled");
@@ -3698,15 +3871,16 @@ fn waiting_attempt_can_be_dropped_then_the_task_abandoned_without_spending_budge
     Ok(())
 }
 #[test]
-fn waiting_task_is_abandoned_whole_in_one_command() -> Result {
+fn needs_input_task_is_marked_done_in_one_command() -> Result {
     let f = Fixture::new()?;
     f.provider("question")?;
     f.add("Question")?;
     f.ok(&["run"])?;
     f.state("waiting")?;
-    f.ok(&["abandon", "1", "--reason", "Wrong direction"])?;
+    f.ok(&["done", "1", "--reason", "Settled by hand"])?;
     let shown = f.ok(&["show", "1"])?;
-    assert_eq!(shown["lifecycle"], "cancelled");
+    assert_eq!(shown["state"], "done");
+    assert_eq!(shown["resolution_reason"], "Settled by hand");
     assert_eq!(shown["attempts_used"], 0);
     assert_eq!(shown["attempts"][0]["state"], "interrupted");
     assert_eq!(f.ok(&["list"])?["count"], 0);
@@ -3714,7 +3888,7 @@ fn waiting_task_is_abandoned_whole_in_one_command() -> Result {
     Ok(())
 }
 #[test]
-fn real_tui_shows_the_open_question_and_abandons_by_keyboard_and_mouse() -> Result {
+fn real_tui_shows_the_open_question_and_stops_or_marks_done_by_keyboard_and_mouse() -> Result {
     for mouse in [false, true] {
         let f = Fixture::new()?;
         f.provider("question")?;
@@ -3731,61 +3905,58 @@ fn real_tui_shows_the_open_question_and_abandons_by_keyboard_and_mouse() -> Resu
         assert!(waiting.contains("Attempt 1"));
         assert!(waiting.contains("Execution   ✓ succeeded"));
         assert!(waiting.contains("Activity · #1"));
-        assert!(!waiting.contains("Execution controls always target current"));
-        assert!(waiting.contains("[w Answer]") && waiting.contains("[x Abandon]"));
+        assert!(
+            waiting.contains("[r Answer]")
+                && waiting.contains("[s Stop]")
+                && waiting.contains("[D Mark done]")
+        );
         if mouse {
             t.click("Which content?")?;
             t.screen("click opens answer", |s| s.contains("Answer AI question"))?;
             t.send("\x1b")?;
             t.screen("closed", |s| !s.contains("Answer AI question"))?;
-            t.click("x Abandon")?;
-        } else {
-            t.send("x")?;
-        }
-        let form = t.screen("abandon form", |s| s.contains("Abandon #1 · Ask owner"))?;
-        println!("ABANDON FORM (mouse={mouse})\n{form}");
-        assert!(form.contains("Whole task") && form.contains("History as cancelled"));
-        t.send("Not worth answering")?;
-        t.screen("reason typed", |s| s.contains("Not worth answering"))?;
-        if mouse {
-            // Default scope: the whole task leaves the queue in one step.
+            t.click("D Mark done")?;
+            let form = t.screen("mark done form", |s| {
+                s.contains("Mark done #1 Ask owner") && s.contains("Reason (optional)")
+            })?;
+            println!("MARK DONE FORM (mouse={mouse})\n{form}");
+            t.send("Not worth answering")?;
+            t.screen("reason typed", |s| s.contains("Not worth answering"))?;
             t.click("Apply")?;
             let empty = t.screen("queue empty", |s| s.contains("No current task"))?;
-            println!("AFTER ABANDON (mouse={mouse})\n{empty}");
-            t.send("3")?;
-            let history = t.screen("history", |s| s.contains("CANCELLED"))?;
-            assert!(history.contains("Ask owner"));
-        } else {
-            // Tab to Scope, Space switches it to this attempt only.
-            t.send("\t ")?;
-            t.screen("attempt scope", |s| s.contains("< This attempt >"))?;
-            t.send("\r")?;
-            let interrupted = t.screen("interrupted", |s| {
-                s.contains("Current #1 · INTERRUPTED") && s.contains("Report · attempt 1")
+            println!("AFTER MARK DONE (mouse={mouse})\n{empty}");
+            t.click("3 History")?;
+            let history = t.screen("history", |s| {
+                s.lines()
+                    .any(|line| line.contains(" Done ") && line.contains("Ask owner"))
             })?;
-            println!("ATTEMPT DROPPED (mouse={mouse})\n{interrupted}");
-            assert!(interrupted.contains("Abandoned: Not worth answering"));
-            assert!(interrupted.contains("[t Retry]") && interrupted.contains("[x Abandon]"));
-            assert!(
-                interrupted
-                    .contains("Failed · t Retry · P Reset to pending · d Remediate · x Abandon")
-            );
-            assert!(!interrupted.contains("Question from the worker"));
+            println!("DONE IN HISTORY (mouse={mouse})\n{history}");
+            assert_eq!(f.ok(&["show", "1"])?["state"], "done");
+        } else {
+            t.send("s")?;
+            t.screen("stop form", |s| s.contains("Stop #1 Ask owner"))?;
+            t.send("Not worth answering\r")?;
+            let stopped = t.screen("stopped", |s| {
+                s.contains("Current #1 · Pending") && s.contains("Report · attempt 1")
+            })?;
+            println!("ATTEMPT STOPPED (mouse={mouse})\n{stopped}");
+            assert!(stopped.contains("Stopped: Not worth answering"));
+            assert!(stopped.contains("[r Run queue]") && stopped.contains("[x Cancel]"));
+            assert!(!stopped.contains("Question from the worker"));
             t.send("o")?;
             t.screen("raw log", |s| {
                 s.contains("Log · following · attempt 1 · o: report")
             })?;
-            // Queue's Delete on a failed task is the same abandon.
+            // Queue's Cancel on the stopped task moves it to History.
             t.send("2")?;
-            t.screen("queue", |s| s.contains("[d Delete]"))?;
-            t.send("d")?;
-            let form = t.screen("task form", |s| s.contains("Abandon #1 · Ask owner"))?;
-            assert!(
-                !form.contains("Whole task"),
-                "a failed task has no attempt to keep"
-            );
+            t.screen("queue", |s| {
+                shows_view(s, "Queue") && s.contains("[x Cancel]")
+            })?;
+            t.send("x")?;
+            t.screen("cancel form", |s| s.contains("Cancel #1 Ask owner"))?;
             t.send("Done by hand\r")?;
             t.screen("queue empty", |s| s.contains("No tasks here."))?;
+            assert_eq!(f.ok(&["show", "1"])?["status"], "cancelled");
         }
         t.send("q")?;
         t.finish()?;
@@ -3797,7 +3968,7 @@ fn real_tui_shows_the_open_question_and_abandons_by_keyboard_and_mouse() -> Resu
     Ok(())
 }
 #[test]
-fn supervisor_death_stops_worker_and_recovery_is_explicit() -> Result {
+fn supervisor_death_stops_worker_and_stop_ends_its_unfinished_work() -> Result {
     let f = Fixture::new()?;
     f.provider("slow")?;
     f.add("Crash")?;
@@ -3806,18 +3977,15 @@ fn supervisor_death_stops_worker_and_recovery_is_explicit() -> Result {
     thread::sleep(Duration::from_millis(200));
     run.0.kill()?;
     run.0.wait()?;
-    let mut refusal = String::new();
-    support::eventually("recover succeeds", || {
-        let out = f.process().arg("recover").output()?;
-        refusal = String::from_utf8_lossy(&out.stderr).into_owned();
-        Ok(out.status.success().then_some(()))
-    })
-    .map_err(|error| format!("{error}; last refusal: {refusal}"))?;
-    f.state("interrupted")?;
+    f.guardian_finished()?;
     f.no_scratch()?;
     assert!(!f.root.join("result.txt").exists());
-    // Recovery ends the dead attempt's unfinished step and provider call with it, so a
-    // resolved task never blocks storage cleanup as if its work were still live.
+    // Stop settles the dead attempt first, ending its unfinished step and provider call, so
+    // a closed task never blocks storage cleanup as if its work were still live.
+    f.ok(&["stop", "1", "--reason", "crashed"])?;
+    let shown = f.ok(&["show", "1"])?;
+    assert_eq!(shown["state"], "pending");
+    assert_eq!(shown["attempts"][0]["state"], "interrupted");
     let db = f.db()?;
     let live = |table: &str| -> Result<i64> {
         Ok(db.connection().query_row(
@@ -3827,14 +3995,7 @@ fn supervisor_death_stops_worker_and_recovery_is_explicit() -> Result {
         )?)
     };
     assert_eq!((live("attempt_steps")?, live("model_calls")?), (0, 0));
-    f.ok(&[
-        "resolve",
-        "1",
-        "--outcome",
-        "failed-skipped",
-        "--reason",
-        "crashed",
-    ])?;
+    f.ok(&["cancel", "1", "--reason", "crashed"])?;
     f.ok(&["retention", "0"])?;
     let storage = f.ok(&["storage"])?;
     assert_eq!(
@@ -3848,35 +4009,29 @@ fn supervisor_death_stops_worker_and_recovery_is_explicit() -> Result {
     Ok(())
 }
 #[test]
-fn real_tui_shows_liveness_and_recovers_with_both_inputs_and_cleanup_guard() -> Result {
-    for (mouse, unconfirmed_worker) in [(true, false), (false, true)] {
+fn real_tui_shows_liveness_and_settles_a_dead_supervisor_on_every_screen() -> Result {
+    for mouse in [true, false] {
         let f = Fixture::new()?;
         f.provider("slow")?;
-        f.add("Recover orphaned attempt")?;
+        f.add("Settle orphaned attempt")?;
         let mut run = Running(f.process().arg("run").stdout(Stdio::null()).spawn()?);
         f.state("running")?;
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
         println!(
             "LIVE\n{}",
             t.screen("live supervisor", |s| {
-                s.contains("RUNNING · supervisor alive")
+                s.contains("Running · supervisor alive")
             })?
         );
+        let before = f.ok(&["show", "1"])?;
+        let head = f.git(&["rev-parse", "HEAD"])?;
         run.0.kill()?;
         run.0.wait()?;
-        let runner_lock = f.root.join(".git/ktask-runner.lock");
-        support::eventually("guardian releases its lease", || {
-            let lock = fs::File::open(&runner_lock)?;
-            Ok((lock.try_lock().is_ok()
-                && fs::metadata(f.root.join(".git/ktask-worker.lock"))?.len() == 0)
-                .then_some(()))
+        f.guardian_finished()?;
+        let paused = t.screen("orphan settled", |s| {
+            s.contains("Current #1 · Paused · runner stopped") && s.contains("[r Resume]")
         })?;
-        println!(
-            "ABANDONED\n{}",
-            t.screen("abandoned current", |s| {
-                s.contains("ABANDONED · supervisor absent") && s.contains("R Recover")
-            })?
-        );
+        println!("SETTLED\n{paused}");
         for (key, name) in [
             ("2", "Queue"),
             ("3", "History"),
@@ -3885,71 +4040,17 @@ fn real_tui_shows_liveness_and_recovers_with_both_inputs_and_cleanup_guard() -> 
         ] {
             t.send(key)?;
             let screen = t.screen(name, |s| {
-                s.contains("ABANDONED · supervisor absent") && shows_view(s, name)
+                s.contains("Paused · runner stopped") && shows_view(s, name)
             })?;
             println!("{name}\n{screen}");
         }
         t.send("1")?;
-        t.screen("current again", |s| s.contains("R Recover"))?;
-        if mouse {
-            t.click("R Recover")?;
-        } else {
-            t.send("R")?;
-        }
-        println!(
-            "RECOVER DIALOG\n{}",
-            t.screen("recover dialog", |s| s
-                .contains("Recover abandoned attempt")
-                && s.contains("Worker cleanup"))?
-        );
-
-        // The lease check is repeated at Apply, even if the dialog opened while free.
-        let live_guardian = fs::File::open(&runner_lock)?;
-        live_guardian.lock()?;
-        if mouse {
-            t.click("Apply")?;
-        } else {
-            t.send("\r")?;
-        }
-        println!(
-            "LIVE GUARD\n{}",
-            t.screen("live guardian refused", |s| s
-                .contains("already owned by a runner/worker"))?
-        );
-        drop(live_guardian);
-
-        let before = f.ok(&["show", "1"])?;
-        let head = f.git(&["rev-parse", "HEAD"])?;
-        let files = f.git(&["status", "--porcelain"])?;
-        if unconfirmed_worker {
-            fs::write(
-                f.root.join(".git/ktask-worker.lock"),
-                "guardian interrupted\n",
-            )?;
-            t.send("\r")?;
-            println!(
-                "CLEANUP REQUIRED\n{}",
-                t.screen("cleanup required", |s| {
-                    s.contains("Worker died without cleanup confirmation")
-                })?
-            );
-            assert_eq!(f.ok(&["show", "1"])?["status"], "running");
-            t.send(" ")?;
-            t.send("\r")?;
-        } else {
-            t.click("Apply")?;
-        }
-        println!(
-            "RECOVERED\n{}",
-            t.screen("recovered", |s| s.contains("INTERRUPTED")
-                && s.contains("Recover orphaned attempt"))?
-        );
-        let after = f.ok(&["show", "1"])?;
-        assert_eq!(after["status"], "interrupted");
-        assert_eq!(before["attempts"][0]["logs"], after["attempts"][0]["logs"]);
+        t.screen("current again", |s| s.contains("[r Resume]"))?;
+        let settled = f.ok(&["show", "1"])?;
+        assert_eq!(settled["state"], "paused");
         // Finished steps keep their records; the step the dead supervisor left running ends.
         let steps = |task: &Value| task["attempts"][0]["steps"].as_array().cloned().unwrap();
-        for (before, after) in steps(&before).iter().zip(&steps(&after)) {
+        for (before, after) in steps(&before).iter().zip(&steps(&settled)) {
             if before["state"] == "running" {
                 assert_eq!(after["state"], "interrupted", "{after}");
                 assert_eq!(before["role"], after["role"]);
@@ -3957,12 +4058,21 @@ fn real_tui_shows_liveness_and_recovers_with_both_inputs_and_cleanup_guard() -> 
                 assert_eq!(before, after);
             }
         }
-        assert_eq!(
-            before["attempts"][0]["report"],
-            after["attempts"][0]["report"]
-        );
         assert_eq!(f.git(&["rev-parse", "HEAD"])?, head);
-        assert_eq!(f.git(&["status", "--porcelain"])?, files);
+        f.provider("normal")?;
+        if mouse {
+            t.click("r Resume")?;
+        } else {
+            t.send("r")?;
+        }
+        println!(
+            "RESUMED\n{}",
+            t.screen("resumed", |s| s.contains("Queue complete."))?
+        );
+        let after = f.ok(&["show", "1"])?;
+        assert_eq!(after["state"], "done");
+        assert_eq!(after["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(after["attempts"][0]["id"], before["attempts"][0]["id"]);
         t.send("q")?;
         t.finish()?;
         f.no_scratch()?;
@@ -3970,24 +4080,20 @@ fn real_tui_shows_liveness_and_recovers_with_both_inputs_and_cleanup_guard() -> 
     Ok(())
 }
 #[test]
-fn real_tui_recovers_lost_paused_and_waiting_supervisors() -> Result {
+fn real_tui_shows_lost_paused_and_rate_wait_supervisors_as_paused() -> Result {
     for (state, mouse) in [("paused", false), ("waiting", true)] {
         let f = Fixture::new()?;
         f.provider(if state == "paused" { "slow" } else { "rate" })?;
-        f.add("Recover stopped supervisor")?;
+        f.add("Lost supervisor")?;
         let mut run = Running(
             f.process()
-                .args(if state == "paused" {
-                    vec!["run"]
-                } else {
-                    vec!["run", "--queue"]
-                })
+                .args(["run", "--queue"])
                 .stdout(Stdio::null())
                 .spawn()?,
         );
         if state == "paused" {
             f.state("running")?;
-            f.ok(&["pause", "1"])?;
+            f.ok(&["pause"])?;
             run.0.wait()?;
             f.state("paused")?;
             // Reproduce a crash after the state commit and before the handoff event.
@@ -4001,7 +4107,7 @@ fn real_tui_recovers_lost_paused_and_waiting_supervisors() -> Result {
             println!(
                 "LIVE WAIT\n{}",
                 live.screen("waiting supervisor alive", |s| {
-                    s.contains("WAITING · supervisor alive")
+                    s.contains("Current #1 · Running · supervisor alive")
                 })?
             );
             live.send("q")?;
@@ -4009,21 +4115,15 @@ fn real_tui_recovers_lost_paused_and_waiting_supervisors() -> Result {
             run.0.kill()?;
             run.0.wait()?;
         }
-        let runner_lock = f.root.join(".git/ktask-runner.lock");
-        support::eventually("supervisor releases its lease", || {
-            Ok(fs::File::open(&runner_lock)?
-                .try_lock()
-                .is_ok()
-                .then_some(()))
-        })?;
+        f.supervisor_stopped()?;
         let before = f.ok(&["show", "1"])?;
         let head = f.git(&["rev-parse", "HEAD"])?;
         let files = f.git(&["status", "--porcelain"])?;
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
         println!(
-            "ABANDONED {state}\n{}",
-            t.screen("abandoned attempt", |s| {
-                s.contains("ABANDONED · supervisor absent") && s.contains("[R Recover]")
+            "LOST {state}\n{}",
+            t.screen("lost supervisor shows paused", |s| {
+                s.contains("Current #1 · Paused · runner stopped") && s.contains("[r Resume]")
             })?
         );
         for (key, screen_name) in [
@@ -4035,33 +4135,34 @@ fn real_tui_recovers_lost_paused_and_waiting_supervisors() -> Result {
             t.send(key)?;
             println!(
                 "{state} {screen_name}\n{}",
-                t.screen(screen_name, |s| s.contains("ABANDONED · supervisor absent")
+                t.screen(screen_name, |s| s.contains("Paused · runner stopped")
                     && shows_view(s, screen_name))?
             );
         }
         t.send("1")?;
-        t.screen("current recovery control", |s| s.contains("[R Recover]"))?;
-        if mouse {
-            t.click("R Recover")?;
-            t.screen("recover dialog", |s| {
-                s.contains("Recover abandoned attempt")
-            })?;
-            t.click("Apply")?;
-        } else {
-            t.send("R")?;
-            t.send("\r")?;
-        }
-        println!(
-            "RECOVERED {state}\n{}",
-            t.screen("recovered attempt", |s| s.contains("INTERRUPTED"))?
-        );
+        t.screen("current resume control", |s| s.contains("[r Resume]"))?;
         let after = f.ok(&["show", "1"])?;
-        assert_eq!(after["status"], "interrupted");
-        for field in ["logs", "steps", "report"] {
+        assert_eq!(after["state"], "paused");
+        assert_eq!(before["attempts"][0]["id"], after["attempts"][0]["id"]);
+        for field in ["logs", "steps"] {
             assert_eq!(before["attempts"][0][field], after["attempts"][0][field]);
         }
         assert_eq!(f.git(&["rev-parse", "HEAD"])?, head);
         assert_eq!(f.git(&["status", "--porcelain"])?, files);
+        f.provider("normal")?;
+        if mouse {
+            t.click("r Resume")?;
+        } else {
+            t.send("r")?;
+        }
+        println!(
+            "RESUMED {state}\n{}",
+            t.screen("resumed attempt completed", |s| s
+                .contains("Queue complete."))?
+        );
+        let done = f.ok(&["show", "1"])?;
+        assert_eq!(done["state"], "done");
+        assert_eq!(done["attempts"].as_array().unwrap().len(), 1);
         t.send("q")?;
         t.finish()?;
         f.no_scratch()?;
@@ -4069,10 +4170,10 @@ fn real_tui_recovers_lost_paused_and_waiting_supervisors() -> Result {
     Ok(())
 }
 #[test]
-fn real_tui_recovers_lost_question_and_rejects_stale_dialog() -> Result {
+fn real_tui_lost_question_handoff_keeps_the_question_and_rejects_a_stale_stop() -> Result {
     let f = Fixture::new()?;
     f.provider("question")?;
-    f.add("Recover unanswered question")?;
+    f.add("Unanswered question")?;
     f.ok(&["run"])?;
     f.state("waiting")?;
     let before = f.ok(&["show", "1"])?;
@@ -4082,45 +4183,46 @@ fn real_tui_recovers_lost_question_and_rejects_stale_dialog() -> Result {
     )?;
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
     println!(
-        "ABANDONED QUESTION\n{}",
-        t.screen("lost question supervisor", |s| {
-            s.contains("ABANDONED · supervisor absent") && s.contains("[R Recover]")
+        "LOST QUESTION HANDOFF\n{}",
+        t.screen("question still needs input", |s| {
+            s.contains("Current #1 · Needs input · runner stopped")
+                && s.contains("Which content?")
+                && s.contains("[s Stop]")
         })?
     );
-    t.send("R")?;
+    t.send("s")?;
     println!(
-        "QUESTION RECOVER DIALOG\n{}",
-        t.screen("question recovery dialog", |s| s
-            .contains("Recover abandoned attempt"))?
+        "QUESTION STOP DIALOG\n{}",
+        t.screen("stop dialog", |s| s.contains("Stop #1 Unanswered question"))?
     );
     f.ok(&["answer", "1", "--text", "Human answer: verified"])?;
     t.send("\r")?;
     println!(
-        "STALE RECOVER REFUSED\n{}",
-        t.screen("stale recovery", |s| s
-            .contains("Current task changed; reopen Recover"))?
+        "STALE STOP REFUSED\n{}",
+        t.screen("stale stop", |s| s
+            .contains("Task changed elsewhere; refresh the task"))?
     );
     assert_eq!(f.ok(&["show", "1"])?["status"], "waiting");
     t.send("\x1b")?;
-    t.screen("abandoned after refresh", |s| {
-        s.contains("[R Recover]")
-            && s.contains("Answer saved; resume")
-            && !s.contains("Recover abandoned attempt")
+    // The view refreshes once the dialog closes; the answered question then resumes.
+    t.screen("refreshed after the answer", |s| {
+        s.contains("Answer saved · r Resume") && !s.contains("Stop #1 Unanswered question")
     })?;
-    t.send("R")?;
-    t.screen("fresh recovery dialog", |s| {
-        s.contains("Recover abandoned attempt")
+    t.send("s")?;
+    t.screen("fresh stop dialog", |s| {
+        s.contains("Stop #1 Unanswered question")
     })?;
     t.send("\r")?;
     println!(
-        "RECOVERED QUESTION\n{}",
-        t.screen("recovered question", |s| s.contains("INTERRUPTED"))?
+        "STOPPED QUESTION\n{}",
+        t.screen("stopped question", |s| s.contains("Current #1 · Pending"))?
     );
     let after = f.ok(&["show", "1"])?;
-    assert_eq!(after["status"], "interrupted");
-    for field in ["logs", "steps", "report"] {
-        assert_eq!(before["attempts"][0][field], after["attempts"][0][field]);
-    }
+    assert_eq!(after["attempts"][0]["state"], "interrupted");
+    assert_eq!(
+        before["attempts"][0]["steps"],
+        after["attempts"][0]["steps"]
+    );
     assert_eq!(
         f.db()?.connection().query_row(
             "SELECT state FROM questions WHERE attempt_id=(SELECT id FROM attempts WHERE task_id=1)",
@@ -4144,15 +4246,14 @@ fn real_tui_runner_mouse_pause_keyboard_resume_and_live_history() -> Result {
     t.click("r Run queue")?;
     println!(
         "RUNNING\n{}",
-        t.screen("running", |s| s.contains("RUNNING")
+        t.screen("running", |s| s.contains("Current #1 · Running")
             && s.contains("new session"))?
     );
     t.click("p Pause")?;
     println!(
         "PAUSED\n{}",
-        t.screen("paused", |s| s.contains("PAUSED · runner stopped")
-            && s.contains("[r Resume]")
-            && !s.contains("[R Recover]"))?
+        t.screen("paused", |s| s.contains("Paused · runner stopped")
+            && s.contains("[r Resume]"))?
     );
     f.provider("normal")?;
     t.send("r")?;
@@ -4165,7 +4266,7 @@ fn real_tui_runner_mouse_pause_keyboard_resume_and_live_history() -> Result {
     println!(
         "HISTORY\n{}",
         t.screen("history", |s| s.contains("Observed execution")
-            && s.contains("DONE"))?
+            && s.contains(" Done "))?
     );
     t.send("q")?;
     t.finish()?;
@@ -4293,7 +4394,7 @@ fn live_codex_executes_reviews_and_validates_an_isolated_project() -> Result {
         "LIVE HISTORY MOUSE\n{}",
         t.screen("live history", |s| s
             .contains("Live automatic continuation")
-            && s.contains("DONE"))?
+            && s.contains(" Done "))?
     );
     t.send("1")?;
     println!(
@@ -4388,7 +4489,7 @@ fn failed_attempts_are_repaired_automatically_and_real_stops_show_a_red_banner()
             s.contains("EXECUTION STOPPED")
                 && s.contains("Reason: Active time limit reached")
                 && s.contains("Not resolved automatically: The task time limit (200 ms")
-                && s.contains("Next: c Models")
+                && s.contains("Next: r Retry restarts the time limit")
         })?;
         println!("STOP BANNER mouse={mouse}\n{stopped}");
         assert_eq!(
@@ -4517,7 +4618,7 @@ fn queue_shows_the_model_each_task_will_use_by_keyboard_and_mouse() -> Result {
         let row = |id: &str| {
             queue
                 .lines()
-                .find(|l| l.contains(&format!("#{id}   PENDING")))
+                .find(|l| l.contains(&format!("#{id}   Pending")))
         };
         let mixed = row("1").unwrap();
         assert!(mixed.contains("codex/execution (mixed)"), "{mixed}");
@@ -4539,14 +4640,20 @@ fn rate_limit_keeps_same_attempt_and_stores_resume_time_without_spending_budget(
     let f = Fixture::new()?;
     f.provider("rate")?;
     f.add("Wait")?;
-    f.ok(&["run", "--one"])?;
+    let run = f.limit_wait()?;
     let task = f.ok(&["show", "1"])?;
     assert_eq!(task["status"], "waiting");
+    assert_eq!(
+        task["state"], "running",
+        "the supervisor resumes a limit wait by itself"
+    );
     assert_eq!(task["attempts_used"], 0);
     assert_eq!(task["attempts"][0]["wait_reason"], "rate_limit");
     assert!(task["attempts"][0]["resume_at_ms"].is_i64());
-    // Resume asks the provider again at once; a limit that still holds waits again.
-    f.ok(&["resume"])?;
+    // After Pause, Resume asks the provider again at once; a limit that still holds waits
+    // again in the same attempt.
+    f.pause_runner(run)?;
+    let run = f.limit_wait()?;
     let task = f.ok(&["show", "1"])?;
     assert_eq!(task["status"], "waiting");
     assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
@@ -4554,6 +4661,7 @@ fn rate_limit_keeps_same_attempt_and_stores_resume_time_without_spending_budget(
         fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
         "execution\nexecution\n"
     );
+    f.pause_runner(run)?;
     let db = f.db()?;
     assert_eq!(
         db.connection()
@@ -4579,7 +4687,7 @@ fn escaped_descendants_are_stopped_and_duplicate_runners_are_rejected() -> Resul
     let started = support::start_time(pid)?.ok_or("descendant exited before cleanup")?;
     let duplicate = f.process().arg("run").output()?;
     assert_eq!(duplicate.status.code(), Some(4));
-    f.ok(&["pause", "1"])?;
+    f.ok(&["pause"])?;
     run.0.wait()?;
     f.state("paused")?;
     f.guardian_finished()?;
@@ -4615,10 +4723,9 @@ fn real_tui_question_answer_mouse_and_keyboard_automatically_resume() -> Result 
             t.send("r")?;
         }
         // The supervisor records the question, then releases the session and exits.
-        let waiting = t.screen("question", |s| s.contains("QUESTION · supervisor absent"))?;
+        let waiting = t.screen("question", |s| s.contains("Needs input · runner stopped"))?;
         println!("QUESTION CONTROLS (mouse={mouse})\n{waiting}");
-        assert!(waiting.contains("w Answer"));
-        assert!(!waiting.contains("[R Recover]"));
+        assert!(waiting.contains("[r Answer]"));
         assert!(!waiting.contains("[r R"));
         let waiting_task = f.ok(&["show", "1"])?;
         let attempts = waiting_task["attempts"].as_array().unwrap();
@@ -4630,12 +4737,20 @@ fn real_tui_question_answer_mouse_and_keyboard_automatically_resume() -> Result 
         assert_eq!(calls_before, "execution\nexecution\n");
         let log = f.scratch.path().join("state/ktask-dev/runner-1.log");
         let log_before = fs::read(&log)?;
-        t.send("r")?;
-        let still_waiting = t.screen("premature Run rejected", |s| {
-            s.contains("Unavailable here") && s.contains("QUESTION")
+        // The forward key asks for the answer; closing the form runs nothing.
+        if mouse {
+            t.click("r Answer")?;
+        } else {
+            t.send("r")?;
+        }
+        let form = t.screen("forward opens the answer", |s| {
+            s.contains("Answer AI question") && s.contains("Which content?")
         })?;
-        println!("PREMATURE RUN REJECTED (mouse={mouse})\n{still_waiting}");
-        assert!(still_waiting.contains("w Answer"));
+        println!("FORWARD ASKS FOR THE ANSWER (mouse={mouse})\n{form}");
+        t.send("\x1b")?;
+        let still_waiting = t.screen("answer form closed", |s| {
+            !s.contains("Answer AI question") && s.contains("[r Answer]")
+        })?;
         assert!(!still_waiting.contains("[r R"));
         let after_rejected = f.ok(&["show", "1"])?;
         assert!(
@@ -4666,7 +4781,7 @@ fn real_tui_question_answer_mouse_and_keyboard_automatically_resume() -> Result 
         assert_eq!(fs::read_to_string(&invocations)?, calls_before);
         assert_eq!(fs::read(&log)?, log_before);
         if mouse {
-            t.click("w Answer")?;
+            t.click("r Answer")?;
         } else {
             t.send("w")?;
         }
@@ -4864,7 +4979,7 @@ fn closing_tui_does_not_stop_supervisor() -> Result {
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
     t.screen("current", |s| s.contains("Keep running"))?;
     t.send("r")?;
-    t.screen("running", |s| s.contains("RUNNING"))?;
+    t.screen("running", |s| s.contains("Current #1 · Running"))?;
     // The supervisor left the TUI's session, so the terminal cannot signal it.
     let terminal = f.supervisor_stat()?[4].clone();
     assert_eq!(
@@ -4887,7 +5002,7 @@ fn live_usage_keeps_step_and_pause_visible_at_minimum_size() -> Result {
         let mut run = Running(f.process().arg("run").stdout(Stdio::null()).spawn()?);
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
         t.screen("live execution", |s| {
-            s.contains("RUNNING · supervisor alive") && s.contains("Step: Execution")
+            s.contains("Running · supervisor alive") && s.contains("Step: Execution")
         })?;
         let db = f.db()?;
         let changed = db.connection().execute(
@@ -4897,7 +5012,7 @@ fn live_usage_keeps_step_and_pause_visible_at_minimum_size() -> Result {
         assert_eq!(changed, 1);
         drop(db);
         let screen = t.screen("live usage and execution control", |s| {
-            s.contains("RUNNING · supervisor alive")
+            s.contains("Running · supervisor alive")
                 && s.contains("Step: Execution")
                 && s.contains("in 123G, cache 186G, out 76G")
                 && s.contains("p Pause")
@@ -4909,7 +5024,7 @@ fn live_usage_keeps_step_and_pause_visible_at_minimum_size() -> Result {
             t.send("p")?;
         }
         let paused = t.screen("paused live usage", |s| {
-            s.contains("PAUSED · runner stopped")
+            s.contains("Paused · runner stopped")
         })?;
         println!("LIVE USAGE PAUSED 70x22 mouse={mouse}\n{paused}");
         run.0.wait()?;
@@ -4967,7 +5082,7 @@ fn real_tui_rate_wait_pause_with_mouse_and_keyboard_stops_automatic_retry() -> R
         t.send("r")?;
         println!(
             "RATE WAIT mouse={mouse}\n{}",
-            t.screen("waiting", |s| s.contains("WAITING")
+            t.screen("waiting", |s| s.contains("Current #1 · Running")
                 && s.contains("Resumes in"))?
         );
         if mouse {
@@ -4990,25 +5105,14 @@ fn real_tui_rate_wait_pause_with_mouse_and_keyboard_stops_automatic_retry() -> R
 }
 
 #[test]
-fn unconfirmed_worker_death_blocks_execution_until_explicit_operator_confirmation() -> Result {
+fn dead_guardian_marker_is_cleared_automatically_before_execution() -> Result {
     let f = Fixture::new()?;
     f.add("Guard against orphaned work")?;
     let marker = f.root.join(".git/ktask-worker.lock");
     fs::write(&marker, "guardian interrupted\n")?;
-    for args in [vec!["run"], vec!["recover"]] {
-        let output = f.process().args(args).output()?;
-        assert_eq!(output.status.code(), Some(4));
-        assert!(String::from_utf8_lossy(&output.stderr).contains("cleanup confirmation"));
-    }
-    assert!(
-        f.ok(&["show", "1"])?["attempts"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
-    f.ok(&["recover", "--confirm-worker-cleanup"])?;
-    assert_eq!(fs::metadata(marker)?.len(), 0);
     f.ok(&["run"])?;
+    assert_eq!(fs::metadata(marker)?.len(), 0);
+    assert_eq!(f.ok(&["show", "1"])?["state"], "done");
     f.no_scratch()?;
     Ok(())
 }
@@ -5061,14 +5165,14 @@ fn real_tui_queue_runs_current_with_keyboard_and_mouse_in_both_modes() -> Result
                     shows_view(s, "Queue")
                         && s.contains(if queue { "r Run queue" } else { "r Run one" })
                 })?;
-                t.click("#2   PENDING  Second configured task")?;
+                t.click("#2   Pending  Second configured task")?;
             } else {
                 t.send("2j")?;
             }
             let selected = t.screen("later task selected while current remains first", |s| {
-                s.contains("› #2   PENDING")
-                    && s.contains("Current #1 · PENDING")
-                    && s.contains("#2 · PENDING · AI")
+                s.contains("› #2   Pending")
+                    && s.contains("Current #1 · Pending")
+                    && s.contains("#2 · Pending · AI")
             })?;
             println!("QUEUE BEFORE RUN mouse={mouse} queue={queue}\n{selected}");
             if mouse {
@@ -5148,7 +5252,7 @@ fn real_tui_configuration_errors_and_live_check_guard() -> Result {
     )?;
     f.provider("rate")?;
     t.send("r")?;
-    t.screen("rate wait", |s| s.contains("WAITING"))?;
+    t.screen("rate wait", |s| s.contains("Current #1 · Running"))?;
     t.send("4c \r")?;
     t.screen("edit check", |s| s.contains("Edit project check"))?;
     t.send("\t\x01false\x13")?;
@@ -5161,7 +5265,7 @@ fn real_tui_configuration_errors_and_live_check_guard() -> Result {
     t.send("\x1b\x03")?;
     t.finish()?;
     // The provider-limit wait would otherwise retry forever.
-    f.ok(&["pause", "1"])?;
+    f.ok(&["pause"])?;
     f.supervisor_stopped()?;
     f.no_scratch()?;
     Ok(())
@@ -5241,7 +5345,7 @@ fn readiness_launch_failure_reopens_and_retries_with_mouse_and_keyboard() -> Res
             reopened.screen("readiness refreshed", |s| s.contains("Can run · 0 blocker"))?;
         println!("READINESS REPAIRED mouse={mouse}\n{ready}");
         if mouse {
-            reopened.click("r Run")?;
+            click_readiness_forward(&mut reopened)?;
         } else {
             reopened.send("r")?;
         }
@@ -5255,7 +5359,7 @@ fn readiness_launch_failure_reopens_and_retries_with_mouse_and_keyboard() -> Res
 }
 
 #[test]
-fn readiness_lists_independent_blockers_and_recovers_stale_worker() -> Result {
+fn readiness_lists_independent_blockers_and_ignores_a_dead_workers_marker() -> Result {
     use ktask_rs_mk3::application::{Service, VersionedTask};
     let f = Fixture::new()?;
     f.add("Blocked setup")?;
@@ -5282,8 +5386,9 @@ fn readiness_lists_independent_blockers_and_recovers_stale_worker() -> Result {
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 38)?;
     t.send("u")?;
     let details = t.screen("all readiness blockers", |s| {
-        s.contains("Worker cleanup is unconfirmed")
+        s.contains("Uncommitted work outside this task")
     })?;
+    assert!(details.contains("OK · Worker ownership"), "{details}");
     for cause in [
         "No enabled check",
         "validation model",
@@ -5298,18 +5403,9 @@ fn readiness_lists_independent_blockers_and_recovers_stale_worker() -> Result {
     println!("READINESS CHECK ACTION\n{check_form}");
     t.send("\x1b")?;
     t.screen("checks closed", |s| !s.contains("Project checks"))?;
-    t.send("u")?;
-    t.screen("readiness again", |s| s.contains("Execution readiness"))?;
-    t.click("R Recover")?;
-    t.screen("recover action", |s| {
-        s.contains("Recover workspace ownership")
-    })?;
-    t.send(" \r")?;
-    let recovered = t.screen("worker ownership recovered", |s| {
-        s.contains("Saved to SQLite")
-    })?;
-    println!("READINESS WORKER RECOVERED\n{recovered}");
-    assert_eq!(fs::metadata(&worker_marker)?.len(), 0);
+    // Inspection changes nothing: the next runner stops what the dead guardian left and
+    // clears its marker.
+    assert_eq!(fs::read_to_string(&worker_marker)?, "stale guardian marker");
     assert_eq!(
         fs::read_to_string(f.root.join("outside.txt"))?,
         "preserve me"
@@ -5376,7 +5472,7 @@ fn missing_project_git_identity_blocks_init_readiness_and_run_before_attempt() -
 }
 
 #[test]
-fn readiness_recovers_worker_marker_on_failed_current_without_losing_attempt() -> Result {
+fn failed_current_with_a_dead_workers_marker_retries_without_losing_attempts() -> Result {
     for mouse in [false, true] {
         let f = Fixture::new()?;
         f.add("Failed with stale worker")?;
@@ -5394,26 +5490,26 @@ fn readiness_recovers_worker_marker_on_failed_current_without_losing_attempt() -
         } else {
             t.send("u")?;
         }
-        let blocked = t.screen("failed worker blocker", |s| {
-            s.contains("Worker cleanup is unconfirmed")
+        let ready = t.screen("dead worker is no blocker", |s| {
+            s.contains("OK · Worker ownership") && s.contains("Can run")
         })?;
-        assert!(blocked.contains("R Recover"));
-        println!("READINESS FAILED WORKER mouse={mouse}\n{blocked}");
+        println!("READINESS FAILED WORKER mouse={mouse}\n{ready}");
+        t.send("\x1b")?;
+        t.screen("readiness closed", |s| !s.contains("Execution readiness"))?;
         if mouse {
-            t.click("R Recover")?;
+            t.click("r Retry")?;
         } else {
-            t.send("R")?;
+            t.send("r")?;
         }
-        t.screen("recover failed worker", |s| {
-            s.contains("Recover workspace ownership")
-        })?;
-        t.send(" \r")?;
-        let recovered = t.screen("failed worker recovered", |s| s.contains("Saved to SQLite"))?;
-        println!("READINESS FAILED RECOVERED mouse={mouse}\n{recovered}");
-        assert_eq!(fs::metadata(marker)?.len(), 0);
+        let retried = t.screen("retry completed", |s| s.contains("Queue complete."))?;
+        println!("FAILED WORKER RETRIED mouse={mouse}\n{retried}");
+        assert_eq!(fs::metadata(&marker)?.len(), 0);
         let after = f.ok(&["show", "1"])?;
-        assert_eq!(after["status"], "failed");
-        assert_eq!(after["attempts"], before["attempts"]);
+        assert_eq!(after["state"], "done");
+        let attempts = after["attempts"].as_array().unwrap();
+        let earlier = before["attempts"].as_array().unwrap();
+        assert_eq!(&attempts[..earlier.len()], &earlier[..]);
+        assert_eq!(attempts.len(), earlier.len() + 1);
         t.send("q")?;
         t.finish()?;
         f.no_scratch()?;
@@ -5551,7 +5647,7 @@ fn readiness_approval_action_is_available_with_mouse_and_keyboard() -> Result {
 }
 
 #[test]
-fn readiness_distinguishes_open_and_answered_questions() -> Result {
+fn readiness_offers_answer_and_the_answer_continues_the_attempt() -> Result {
     for mouse in [false, true] {
         let f = Fixture::new()?;
         f.provider("question")?;
@@ -5566,12 +5662,13 @@ fn readiness_distinguishes_open_and_answered_questions() -> Result {
         } else {
             t.send("u")?;
         }
-        let waiting = t.screen("open question blocks", |s| {
-            s.contains("Answer the open question")
+        // An open question's way forward is its answer.
+        let waiting = t.screen("open question asks for the answer", |s| {
+            s.contains("Can run · 0 blocker") && s.contains("[r Answer] [u Refresh]")
         })?;
         println!("READINESS QUESTION OPEN mouse={mouse}\n{waiting}");
         if mouse {
-            t.click("w Answer")?;
+            click_readiness_forward(&mut t)?;
         } else {
             t.send("w")?;
         }
@@ -5582,21 +5679,7 @@ fn readiness_distinguishes_open_and_answered_questions() -> Result {
         } else {
             t.send("\x13")?;
         }
-        t.screen("answer saved", |s| s.contains("Answer saved"))?;
-        if mouse {
-            t.click("u Readiness")?;
-        } else {
-            t.send("u")?;
-        }
-        let ready = t.screen("answered question is ready", |s| {
-            s.contains("Can run · 0 blocker")
-        })?;
-        println!("READINESS QUESTION ANSWERED mouse={mouse}\n{ready}");
-        if mouse {
-            t.click("r Run")?;
-        } else {
-            t.send("r")?;
-        }
+        // The answer continues the same attempt at once; no second key is needed.
         t.screen("same attempt resumes", |s| s.contains("Queue complete."))?;
         assert_eq!(f.ok(&["show", "1"])?["attempts"][0]["id"], attempt);
         t.send("q")?;
@@ -5607,7 +5690,7 @@ fn readiness_distinguishes_open_and_answered_questions() -> Result {
 }
 
 #[test]
-fn readiness_refreshes_answered_question_while_browsing_queue() -> Result {
+fn cli_answer_while_browsing_queue_continues_and_current_refreshes() -> Result {
     let f = Fixture::new()?;
     f.provider("question")?;
     f.add("Question while browsing")?;
@@ -5620,19 +5703,13 @@ fn readiness_refreshes_answered_question_while_browsing_queue() -> Result {
     t.send("2")?;
     let queue = t.screen("browsing queue", |s| s.contains("Queue · 1 shown"))?;
     println!("READINESS QUEUE BEFORE ANSWER\n{queue}");
+    f.provider("normal")?;
+    // An answer from the CLI continues the attempt; Current shows it when the owner returns.
     f.ok(&["answer", "1", "--text", "Human answer: verified"])?;
     t.send("1")?;
-    let current = t.screen("answer becomes runnable", |s| {
-        s.contains("Can run · u Readiness")
-    })?;
-    println!("READINESS CURRENT AFTER QUEUE ANSWER\n{current}");
-    t.send("u")?;
-    let details = t.screen("readiness after queue answer", |s| {
-        s.contains("Can run · 0 blocker")
-    })?;
-    println!("READINESS DETAILS AFTER QUEUE ANSWER\n{details}");
-    t.send("\x1b")?;
-    t.screen("readiness closed", |s| !s.contains("Execution readiness"))?;
+    let current = t.screen("answered task completes", |s| s.contains("Queue complete."))?;
+    println!("CURRENT AFTER QUEUE ANSWER\n{current}");
+    assert_eq!(f.ok(&["show", "1"])?["state"], "done");
     t.send("q")?;
     t.finish()?;
     Ok(())
@@ -5700,7 +5777,7 @@ fn readiness_shows_live_supervisor_and_worker_owners_without_taking_their_locks(
         println!("READINESS OWNERS RELEASED mouse={mouse}\n{ready}");
         assert_eq!(fs::read(f.root.join("README.md"))?, original);
         if mouse {
-            t.click("r Run")?;
+            click_readiness_forward(&mut t)?;
         } else {
             t.send("r")?;
         }
@@ -5766,7 +5843,7 @@ fn real_tui_recovers_connection_and_checks_then_continues_queue() -> Result {
 }
 
 #[test]
-fn real_tui_approval_and_human_ack_continue_with_mouse_and_keyboard() -> Result {
+fn real_tui_approval_and_human_mark_done_continue_with_mouse_and_keyboard() -> Result {
     for mouse in [false, true] {
         for human in [false, true] {
             let f = Fixture::new()?;
@@ -5797,10 +5874,12 @@ fn real_tui_approval_and_human_ack_continue_with_mouse_and_keyboard() -> Result 
                 t.screen("owner gate", |s| s.contains("Current #2")
                     && s.contains("Owner gate"))?
             );
-            if mouse {
-                t.click(if human { "y Acknowledge" } else { "v Approve" })?;
+            if human {
+                mark_done(&mut t, mouse, "#2 Owner gate")?;
+            } else if mouse {
+                t.click("v Approve")?;
             } else {
-                t.send(if human { "y" } else { "v" })?;
+                t.send("v")?;
             }
             println!(
                 "GATE CLEARED mouse={mouse} human={human}\n{}",
@@ -5873,7 +5952,7 @@ fn durable_session_survives_closed_tui_and_cli_intervention() -> Result {
         println!("DURABLE GATE queue={queue} human={human} mouse={mouse}\n{gate}");
         t.send("q")?;
         t.finish()?;
-        f.ok(&[if human { "ack" } else { "approve" }, "2"])?;
+        f.ok(&[if human { "done" } else { "approve" }, "2"])?;
         let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
         let after = reopened.screen("restored session", |s| {
             if queue {
@@ -5906,14 +5985,14 @@ fn two_windows_share_one_session_and_pause_blocks_handoff() -> Result {
     first.screen("ready", |s| s.contains("r Run queue"))?;
     first.send("r")?;
     let live = second.screen("shared live session", |s| {
-        s.contains("Current #1 · RUNNING") && s.contains("Session: Queue · running")
+        s.contains("Current #1 · Running") && s.contains("Session: Queue · running")
     })?;
     println!("SECOND WINDOW LIVE\n{live}");
     let duplicate = f.process().args(["run", "--background"]).output()?;
     assert_eq!(duplicate.status.code(), Some(4));
     second.click("p Pause")?;
     let paused = first.screen("cross window pause", |s| {
-        s.contains("Current #1 · PAUSED") && s.contains("Session: Queue · paused")
+        s.contains("Current #1 · Paused") && s.contains("Session: Queue · paused")
     })?;
     println!("FIRST WINDOW PAUSED\n{paused}");
     assert!(
@@ -5969,7 +6048,7 @@ exec /usr/bin/git "$@"
     // and the screen may already be final. Wait for it first.
     support::eventually("handoff held at Git", || Ok(marker.exists().then_some(())))?;
     let handoff = t.screen("ready handoff", |s| {
-        s.contains("Current #2 · PENDING")
+        s.contains("Current #2 · Pending")
             && s.contains("Session: Queue · running")
             && s.contains("p Pause")
     })?;
@@ -6004,7 +6083,7 @@ fn cli_answer_after_tui_exit_resumes_the_same_queue_attempt() -> Result {
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
     t.send("r")?;
     let question = t.screen("question waiting", |s| {
-        s.contains("QUESTION · supervisor absent") && s.contains("Session: Queue · waiting")
+        s.contains("Needs input · runner stopped") && s.contains("Session: Queue · waiting")
     })?;
     println!("QUESTION BEFORE EXIT\n{question}");
     let attempt = f.ok(&["show", "1"])?["attempts"][0]["id"].clone();
@@ -6056,7 +6135,7 @@ fn intervention_marker_survives_supervisor_handoff_and_is_claimed_once() -> Resu
         .truncate(false)
         .open(f.root.join(".git/ktask-runner.lock"))?;
     lease.lock()?;
-    let receipt = f.ok(&["ack", "1"])?;
+    let receipt = f.ok(&["done", "1"])?;
     assert!(receipt.get("continuation_error").is_none());
     assert_eq!(
         first.execution_session()?.unwrap().state,
@@ -6104,7 +6183,7 @@ fn live_supervisor_consumes_intervention_marker_before_next_attempt() -> Result 
         .truncate(false)
         .open(f.root.join(".git/ktask-runner.lock"))?;
     lease.lock()?;
-    f.ok(&["ack", "1"])?;
+    f.ok(&["done", "1"])?;
     assert_eq!(
         service.execution_session()?.unwrap().state,
         "resume_requested"
@@ -6119,7 +6198,7 @@ fn live_supervisor_consumes_intervention_marker_before_next_attempt() -> Result 
 }
 
 #[test]
-fn final_human_ack_completes_queue_session_with_mouse_and_keyboard() -> Result {
+fn final_human_mark_done_completes_queue_session_with_mouse_and_keyboard() -> Result {
     for mouse in [false, true] {
         let f = Fixture::new()?;
         f.add("Complete before final gate")?;
@@ -6146,12 +6225,8 @@ fn final_human_ack_completes_queue_session_with_mouse_and_keyboard() -> Result {
         t.screen("final owner gate", |s| {
             s.contains("Current #2") && s.contains("Session: Queue · waiting")
         })?;
-        if mouse {
-            t.click("y Acknowledge")?;
-        } else {
-            t.send("y")?;
-        }
-        let complete = t.screen("final human ack", |s| {
+        mark_done(&mut t, mouse, "#2 Final owner gate")?;
+        let complete = t.screen("final human mark done", |s| {
             s.contains("Queue complete.") && s.contains("Session: Queue · complete")
         })?;
         println!("FINAL HUMAN ACK mouse={mouse}\n{complete}");
@@ -6159,8 +6234,7 @@ fn final_human_ack_completes_queue_session_with_mouse_and_keyboard() -> Result {
         t.finish()?;
         let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
         let restored = reopened.screen("final ack retained", |s| {
-            s.contains("Session: Queue · complete")
-                && s.contains("Queue complete after intervention")
+            s.contains("Session: Queue · complete · no queued work")
         })?;
         println!("FINAL HUMAN ACK REOPENED mouse={mouse}\n{restored}");
         reopened.send("q")?;
@@ -6171,7 +6245,7 @@ fn final_human_ack_completes_queue_session_with_mouse_and_keyboard() -> Result {
 }
 
 #[test]
-fn run_one_answer_updates_stop_reason_and_waits_for_explicit_resume() -> Result {
+fn run_one_answer_continues_that_task_and_never_the_next() -> Result {
     use ktask_rs_mk3::application::{Service, preferences::Continuation};
 
     let f = Fixture::new()?;
@@ -6188,29 +6262,30 @@ fn run_one_answer_updates_stop_reason_and_waits_for_explicit_resume() -> Result 
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
     t.send("r")?;
     t.screen("run one question", |s| {
-        s.contains("Current #1 · QUESTION") && s.contains("Session: Run one · waiting")
+        s.contains("Current #1 · Needs input") && s.contains("Session: Run one · waiting")
     })?;
     t.send("q")?;
     t.finish()?;
     f.provider("normal")?;
+    let attempt = f.ok(&["show", "1"])?["attempts"][0]["id"].clone();
+    // An answer is the go-ahead for that task: its attempt continues at once.
     f.ok(&["answer", "1", "--text", "Human answer: verified"])?;
     let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
-    let stopped = reopened.screen("answered Run one waits", |s| {
-        s.contains("Session: Run one · stopped")
-            && s.contains("Run one awaits explicit Run or Resume")
+    let next = reopened.screen("answered task finished; Run one stops", |s| {
+        s.contains("Current #2 · Pending") && s.contains("History 1")
     })?;
-    println!("RUN ONE ANSWER STOPPED\n{stopped}");
+    println!("RUN ONE ANSWER CONTINUED\n{next}");
+    let done = f.ok(&["show", "1"])?;
+    assert_eq!(done["state"], "done");
+    assert_eq!(done["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(done["attempts"][0]["id"], attempt);
+    // Run one never moves on to the next task by itself.
     assert!(
         f.ok(&["show", "2"])?["attempts"]
             .as_array()
             .unwrap()
             .is_empty()
     );
-    reopened.send("r")?;
-    let next = reopened.screen("Run one resumed only current", |s| {
-        s.contains("Current #2 · PENDING") && s.contains("Session: Run one · stopped")
-    })?;
-    println!("RUN ONE ANSWER RESUMED\n{next}");
     reopened.send("q")?;
     reopened.finish()?;
     f.no_scratch()?;
@@ -6243,7 +6318,7 @@ fn cli_intervention_records_lease_inspection_failure_on_reopened_screen() -> Res
 
     let lease = f.root.join(".git/ktask-runner.lock");
     fs::set_permissions(&lease, fs::Permissions::from_mode(0o000))?;
-    let receipt = f.ok(&["ack", "2"])?;
+    let receipt = f.ok(&["done", "2"])?;
     assert!(
         receipt["continuation_error"]
             .as_str()
@@ -6310,7 +6385,7 @@ fn real_tui_pause_during_connection_recovery_stops_queue() -> Result {
         println!(
             "RETRY BEFORE PAUSE mouse={mouse}\n{}",
             t.screen("retrying", |s| s.contains("retry 1/2")
-                && s.contains("RUNNING"))?
+                && s.contains("Current #1 · Running"))?
         );
         if mouse {
             t.click("p Pause")?;
@@ -6319,7 +6394,7 @@ fn real_tui_pause_during_connection_recovery_stops_queue() -> Result {
         }
         println!(
             "RETRY PAUSED mouse={mouse}\n{}",
-            t.screen("paused", |s| s.contains("PAUSED")
+            t.screen("paused", |s| s.contains("Current #1 · Paused")
                 && s.contains("runner stopped"))?
         );
         let task = f.ok(&["show", "1"])?;
@@ -6453,7 +6528,7 @@ fn automatic_prerequisite_preserves_work_and_original_repair_round() -> Result {
 }
 
 #[test]
-fn exhausted_original_gets_one_retry_after_prerequisite_in_mouse_and_keyboard_tuis() -> Result {
+fn exhausted_original_retries_with_restarted_limits_in_mouse_and_keyboard_tuis() -> Result {
     for mouse in [false, true] {
         let f = Fixture::new()?;
         f.provider("review-critical")?;
@@ -6464,7 +6539,7 @@ fn exhausted_original_gets_one_retry_after_prerequisite_in_mouse_and_keyboard_tu
             Some(4)
         );
         assert_eq!(f.ok(&["show", "1"])?["attempts_used"], 1);
-        f.provider("judge-insert")?;
+        f.provider("normal")?;
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 40)?;
         println!(
             "EXHAUSTED CURRENT mouse={mouse}\n{}",
@@ -6473,71 +6548,79 @@ fn exhausted_original_gets_one_retry_after_prerequisite_in_mouse_and_keyboard_tu
                 && s.contains("Budget 1 of 1 used"))?
         );
         if mouse {
-            t.click("t Retry")?;
+            t.click("r Retry")?;
         } else {
-            t.send("t")?;
+            t.send("r")?;
         }
         println!(
-            "RECOVERED CURRENT mouse={mouse}\n{}",
-            t.screen("prerequisite and original completed", |s| s
-                .contains("Queue complete.")
-                && s.contains("History 2"))?
+            "RETRIED CURRENT mouse={mouse}\n{}",
+            t.screen("original completed", |s| s.contains("Queue complete.")
+                && s.contains("History 1"))?
         );
         t.send("q")?;
         t.finish()?;
+        // Retry kept the code and restarted the limits: the one allowed attempt counts anew.
         let original = f.ok(&["show", "1"])?;
         assert_eq!(original["lifecycle"], "succeeded");
-        assert_eq!(original["attempts_used"], 2);
-        assert_eq!(original["definition"]["attempt_limit"], 2);
-        assert_eq!(original["attempts"].as_array().unwrap().len(), 3);
-        assert_eq!(original["attempts"][0]["revision"], 2);
-        assert_eq!(original["revisions"][1]["definition"]["attempt_limit"], 1);
-        assert_eq!(original["revisions"][2]["definition"]["attempt_limit"], 2);
+        assert_eq!(original["attempts_used"], 1);
+        assert_eq!(original["definition"]["attempt_limit"], 1);
+        assert_eq!(original["attempts"].as_array().unwrap().len(), 2);
+        assert_eq!(original["attempts"][1]["state"], "succeeded");
         let db = f.db()?;
         assert_eq!(
-            db.connection().query_row(
-                "SELECT recovery_root_id FROM tasks WHERE id=2",
-                [],
-                |r| r.get::<_, i64>(0)
-            )?,
+            db.connection()
+                .query_row("SELECT counted_from FROM tasks WHERE id=1", [], |r| r
+                    .get::<_, i64>(0))?,
             1
         );
-        assert_eq!(db.connection().query_row("SELECT count(*) FROM attempt_steps s JOIN attempts a ON a.id=s.attempt_id WHERE a.task_id=1 AND s.role='remediation' AND s.report LIKE 'Repair:%'", [], |r| r.get::<_,i64>(0))?, 11);
+        let retry_opening: String = db.connection().query_row(
+            "SELECT role FROM attempt_steps s JOIN attempts a ON a.id=s.attempt_id WHERE a.task_id=1 AND a.number=2 ORDER BY s.id LIMIT 1",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(retry_opening, "check", "Retry continues from the checks");
         f.no_scratch()?;
     }
     Ok(())
 }
 
 #[test]
-fn configured_task_deadline_counts_earlier_attempt_time_and_identifies_the_limit() -> Result {
+fn configured_task_deadline_counts_earlier_repairs_and_retry_restarts_it() -> Result {
     let f = Fixture::new()?;
     f.provider("malformed-work")?;
-    f.add("Deadline across retries")?;
-    assert!(f.ok(&["show", "1"])?["definition"]["timeout_ms"].is_null());
-    // Three automatic repairs of the provider failure, then the streak stop.
-    assert_eq!(
-        f.process().args(["run", "--one"]).output()?.status.code(),
-        Some(4)
-    );
-    f.ok(&["edit", "1", "--timeout-ms", "10000"])?;
-    f.db()?
-        .connection()
-        .execute("UPDATE attempts SET active_ms=9999 WHERE task_id=1", [])?;
-    f.provider("normal")?;
+    // The first attempt fails after about 3 s of provider retries; its repair worker then
+    // runs until the task-wide limit stops it.
+    let provider = f.scratch.path().join("bin/codex");
+    let script = fs::read_to_string(&provider)?;
+    let anchor = r"malformed-work) printf 'verified\n' > result.txt;";
+    assert_eq!(script.matches(anchor).count(), 1, "provider anchor changed");
+    let held = r#"malformed-work) if [ "$repair" = yes ]; then sleep 30; fi; printf 'verified\n' > result.txt;"#;
+    support::write_executable(&provider, script.replace(anchor, held))?;
+    f.add("Deadline across repairs")?;
+    let limit = 6000;
+    f.ok(&["edit", "1", "--timeout-ms", &limit.to_string()])?;
     assert_eq!(
         f.process().args(["run", "--one"]).output()?.status.code(),
         Some(4)
     );
     let task = f.ok(&["show", "1"])?;
     assert_eq!(task["status"], "failed");
-    // Three automatic repairs of the provider failure, then the deadline stop.
-    assert_eq!(task["attempts"].as_array().unwrap().len(), 4);
-    assert!(
-        task["attempts"][3]["outcome"]
-            .as_str()
-            .unwrap()
-            .contains("configured task-wide limit")
-    );
+    let attempts = task["attempts"].as_array().unwrap();
+    assert_eq!(attempts.len(), 2, "{task}");
+    let active = |n: usize| attempts[n]["active_ms"].as_i64().unwrap();
+    println!("DEADLINE ACTIVE first={} repair={}", active(0), active(1));
+    // The repair stopped at the limit that both attempts used up together.
+    let outcome = attempts[1]["outcome"].as_str().unwrap();
+    assert!(outcome.contains("configured task-wide limit"), "{outcome}");
+    assert!(active(0) < limit && active(1) < limit, "{task}");
+    assert!(active(0) + active(1) >= limit, "{task}");
+
+    // Retry restarts the limit along with the attempt count.
+    f.provider("normal")?;
+    f.ok(&["run", "--one"])?;
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "succeeded");
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 3);
     assert_eq!(task["attempts_used"], 1);
     f.no_scratch()?;
     Ok(())
@@ -6618,8 +6701,11 @@ fn repeated_rate_limits_keep_waiting_with_capped_backoff_and_never_fail() -> Res
     let f = Fixture::new()?;
     f.provider("rate")?;
     f.add("Rate limit must not fail the task")?;
+    let run = f.limit_wait()?;
     for (wait, minutes) in [1, 2, 4, 8, 8, 8].into_iter().enumerate() {
-        f.ok(&["run", "--one"])?;
+        if wait > 0 {
+            f.next_limit_wait()?;
+        }
         let task = f.ok(&["show", "1"])?;
         assert_eq!(task["status"], "waiting", "wait {wait}");
         assert_eq!(task["attempts_used"], 0);
@@ -6630,11 +6716,14 @@ fn repeated_rate_limits_keep_waiting_with_capped_backoff_and_never_fail() -> Res
             |r| r.get(0),
         )?;
         assert_eq!(backoff, minutes * 60_000, "wait {wait}");
+        // Advance the recorded deadline instead of sleeping in the test suite.
         f.db()?.connection().execute(
             "UPDATE attempts SET resume_at_ms=waiting_since_ms WHERE task_id=1",
             [],
         )?;
     }
+    f.next_limit_wait()?;
+    f.pause_runner(run)?;
     f.no_scratch()?;
     Ok(())
 }
@@ -6644,19 +6733,19 @@ fn provider_errors_right_after_a_usage_limit_wait_keep_waiting_instead_of_failin
     let f = Fixture::new()?;
     f.provider("usage")?;
     f.add("Outage")?;
-    f.ok(&["run", "--one"])?;
+    let mut run = f.limit_wait()?;
     let expire = "UPDATE attempts SET resume_at_ms=waiting_since_ms WHERE task_id=1";
-    f.db()?.connection().execute(expire, [])?;
     // Codex failed compaction with "Bad Request" while still out of quota.
     f.provider("fail")?;
-    f.ok(&["run", "--one"])?;
+    f.db()?.connection().execute(expire, [])?;
+    f.next_limit_wait()?;
     let task = f.ok(&["show", "1"])?;
     assert_eq!(task["status"], "waiting");
     assert_eq!(task["attempts_used"], 0);
     assert_eq!(task["attempts"][0]["wait_reason"], "rate_limit");
-    f.db()?.connection().execute(expire, [])?;
     f.provider("normal")?;
-    f.ok(&["run", "--one"])?;
+    f.db()?.connection().execute(expire, [])?;
+    assert!(run.0.wait()?.success());
     let task = f.ok(&["show", "1"])?;
     assert_eq!(task["lifecycle"], "succeeded");
     assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
@@ -6677,7 +6766,7 @@ fn usage_limit_waits_for_the_reset_but_owner_resume_asks_the_provider_now() -> R
         let f = Fixture::new()?;
         f.provider("usage")?;
         f.add("Quota wait")?;
-        f.ok(&["run", "--one"])?;
+        let mut run = f.limit_wait()?;
         let task = f.ok(&["show", "1"])?;
         assert_eq!(task["status"], "waiting");
         assert_eq!(task["attempts_used"], 0);
@@ -6694,44 +6783,46 @@ fn usage_limit_waits_for_the_reset_but_owner_resume_asks_the_provider_now() -> R
         );
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
         let current = t.screen("usage limit current", |s| {
-            s.contains("Provider limit until Oct 26 2099 23:33 · r Resume")
-                && s.contains("Limit resets in 2")
+            s.contains("Provider limit until Oct 26 2099 23:33") && s.contains("Resumes in 2")
         })?;
         println!("USAGE LIMIT CURRENT mouse={mouse}\n{current}");
-        let resets = current.split("Limit resets in ").nth(1).unwrap_or_default();
+        let resets = current.split("Resumes in ").nth(1).unwrap_or_default();
         assert!(
             resets.split(' ').next().is_some_and(|n| n.ends_with('d')),
             "status shows days, not raw seconds"
         );
+        // The limit lifted early (credits bought): the owner pauses the wait, and Resume
+        // asks the provider now.
+        if mouse {
+            t.click("p Pause")?;
+        } else {
+            t.send("p")?;
+        }
+        t.screen("usage limit paused", |s| {
+            s.contains("Current #1 · Paused") && s.contains("[r Resume]")
+        })?;
+        assert!(run.0.wait()?.success());
         if mouse {
             t.click("u Readiness")?;
         } else {
             t.send("u")?;
         }
         let ready = t.screen("usage limit readiness", |s| {
-            s.contains("Can run · 0 blocker") && s.contains("[r Run]")
+            s.contains("Can run · 0 blocker") && s.contains("[r Resume]")
         })?;
         println!("USAGE LIMIT READINESS mouse={mouse}\n{ready}");
-        // The limit lifted early (credits bought): the owner's Resume asks the provider now.
         f.provider("normal")?;
         if mouse {
-            t.click("r Run")?;
+            click_readiness_forward(&mut t)?;
         } else {
             t.send("r")?;
         }
         let complete = t.screen("resumed before reset", |s| s.contains("Queue complete."))?;
         println!("USAGE LIMIT RESUMED NOW mouse={mouse}\n{complete}");
-        let task = f.ok(&["show", "1"])?;
-        assert_eq!(task["lifecycle"], "succeeded");
-        assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
-        assert_eq!(
-            f.db()?.connection().query_row(
-                "SELECT count(*) FROM events WHERE kind='attempt.wait_ended'",
-                [],
-                |r| r.get::<_, i64>(0)
-            )?,
-            1
-        );
+        let done = f.ok(&["show", "1"])?;
+        assert_eq!(done["lifecycle"], "succeeded");
+        assert_eq!(done["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(done["attempts"][0]["id"], task["attempts"][0]["id"]);
         t.send("q")?;
         t.finish()?;
         f.no_scratch()?;
@@ -6742,22 +6833,37 @@ fn usage_limit_waits_for_the_reset_but_owner_resume_asks_the_provider_now() -> R
 #[test]
 fn zero_round_replan_rejudges_before_the_next_worker() -> Result {
     let f = Fixture::new()?;
-    f.provider("malformed-work")?;
+    // The first attempt's three execution turns are malformed; the failure judge opening the
+    // repair attempt revises the task, and the one after that must be judged again.
+    f.provider("fail-first-attempt")?;
+    let provider = f.scratch.path().join("bin/codex");
+    let script = fs::read_to_string(&provider)?;
+    let anchor = "judge_mode='fail-first-attempt'";
+    assert_eq!(script.matches(anchor).count(), 1, "provider anchor changed");
+    support::write_executable(&provider, script.replace(anchor, "judge_mode=judge-revise"))?;
     f.add("Judge every replan")?;
-    assert_eq!(
-        f.process().args(["run", "--one"]).output()?.status.code(),
-        Some(4)
-    );
-    f.provider("judge-revise")?;
     f.ok(&["run", "--one"])?;
     assert_eq!(f.ok(&["show", "1"])?["lifecycle"], "succeeded");
-    let reports: Vec<String> = f.db()?.connection().prepare("SELECT report FROM attempt_steps WHERE role='remediation' AND report IS NOT NULL ORDER BY id")?.query_map([], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
-    assert!(
-        reports
-            .iter()
-            .any(|report| report.contains("Task revised by the failure judge"))
+    let steps: Vec<(i64, String, String)> = f
+        .db()?
+        .connection()
+        .prepare("SELECT attempt_id,role,coalesce(report,'') FROM attempt_steps ORDER BY id")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let revised = steps
+        .iter()
+        .position(|(_, role, report)| {
+            role == "remediation" && report.contains("Task revised by the failure judge")
+        })
+        .ok_or("no revision by the judge")?;
+    let (_, role, report) = &steps[revised + 1];
+    assert_eq!(role, "remediation", "{steps:?}");
+    assert!(report.starts_with("Repair:"), "{steps:?}");
+    assert_ne!(
+        steps[revised].0,
+        steps[revised + 1].0,
+        "a new attempt opened"
     );
-    assert!(reports.iter().any(|report| report.starts_with("Repair:")));
     assert_eq!(
         f.db()?.connection().query_row(
             "SELECT automatic_replans FROM tasks WHERE id=1",
@@ -6789,14 +6895,7 @@ fn retry_reservation_preserves_revision_history_and_rejects_stale_edit() -> Resu
     };
     let mut repair = original.definition().definition.clone();
     repair.title = "Prerequisite".into();
-    ktask_rs_mk3::runner::remediation::apply(
-        &mut service,
-        target,
-        None,
-        &[repair],
-        "Repair first",
-        true,
-    )?;
+    service.apply_remediation(target, None, &[repair], "Repair first", true)?;
     let revised = service.task(target.id)?.unwrap();
     assert!(revised.version > target.version);
     assert_eq!(revised.revisions[1].definition.attempt_limit, Some(1));
@@ -6863,87 +6962,6 @@ fn background_startup_returns_actual_error_in_cli_and_tui() -> Result {
 }
 
 #[test]
-fn tui_remediation_handoff_preserves_dirty_work_and_failed_attempt() -> Result {
-    use ktask_rs_mk3::application::{Service, preferences::Continuation};
-    for (mouse, cols, rows) in [(false, 70, 22), (true, 120, 30)] {
-        let f = Fixture::new()?;
-        f.add("Failed original with partial result")?;
-        f.ok(&[
-            "edit",
-            "1",
-            "--attempt-limit",
-            "1",
-            "--timeout-ms",
-            "unlimited",
-        ])?;
-        f.ok(&["check-set", "build", "--command", "false"])?;
-        f.provider("malformed-work")?;
-        let failed = f.process().args(["run", "--one"]).output()?;
-        assert_eq!(failed.status.code(), Some(4));
-        assert!(String::from_utf8(failed.stderr)?.contains("protocol"));
-        f.provider("normal")?;
-        let before = f.ok(&["show", "1"])?;
-        assert!(!f.git(&["status", "--porcelain"])?.trim().is_empty());
-        let service = Service::open(f.db()?, &f.root, None)?;
-        let config = f.scratch.path().join("config/ktask-dev");
-        let old = service.preferences(&config)?;
-        let mut single = old.clone();
-        single.continuation = Continuation::Single;
-        service.save_preferences(&config, &old, &single)?;
-        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
-        t.screen("failed original", |s| s.contains("Current #1 · FAILED"))?;
-        if mouse {
-            t.click("d Remediate")?;
-        } else {
-            t.send("d")?;
-        }
-        println!(
-            "DIRTY HANDOFF PROPOSAL mouse={mouse}\n{}",
-            t.screen("proposal", |s| s.contains("Failure judgment"))?
-        );
-        if mouse {
-            t.click("Apply")?;
-        } else {
-            t.send("\x13")?;
-        }
-        println!(
-            "DIRTY HANDOFF APPLIED mouse={mouse}\n{}",
-            t.screen("repair ready", |s| s.contains("Current #2 · PENDING"))?
-        );
-        assert_eq!(f.ok(&["show", "1"])?["attempts"], before["attempts"]);
-        assert_eq!(
-            f.ok(&["show", "2"])?["definition"]["timeout_ms"],
-            Value::Null
-        );
-        assert!(f.git(&["status", "--porcelain"])?.trim().is_empty());
-        assert!(
-            f.git(&["log", "-1", "--format=%s"])?
-                .contains("preserve unfinished task #1, attempt #3")
-        );
-        assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
-        f.ok(&["check-set", "build", "--command", "test -f result.txt"])?;
-        f.ok(&["edit", "1", "--attempt-limit", "3"])?;
-        if mouse {
-            t.click("r Run one")?;
-        } else {
-            t.send("r")?;
-        }
-        println!(
-            "DIRTY HANDOFF REPAIR COMPLETE mouse={mouse}\n{}",
-            t.screen("original resumes eligibility", |s| s
-                .contains("Current #1 · FAILED")
-                && s.contains("History 1"))?
-        );
-        t.send("q")?;
-        t.finish()?;
-        f.ok(&["run", "--queue"])?;
-        assert_eq!(f.ok(&["show", "1"])?["lifecycle"], "succeeded");
-        f.no_scratch()?;
-    }
-    Ok(())
-}
-
-#[test]
 fn detached_runner_survives_launching_cli_and_keeps_stderr() -> Result {
     let f = Fixture::new()?;
     f.add("Detached task")?;
@@ -6969,67 +6987,6 @@ fn detached_runner_survives_launching_cli_and_keeps_stderr() -> Result {
             .to_string()
             .contains("detached diagnostic")
     );
-    f.no_scratch()?;
-    Ok(())
-}
-
-#[test]
-fn manual_handoff_rejects_stale_target_and_changed_baseline_without_committing() -> Result {
-    use ktask_rs_mk3::application::{Service, VersionedTask};
-    let f = Fixture::new()?;
-    f.add("Failed original")?;
-    f.ok(&["edit", "1", "--attempt-limit", "1"])?;
-    f.ok(&["check-set", "build", "--command", "false"])?;
-    f.fail_provider()?;
-    let mut service = Service::open(f.db()?, &f.root, None)?;
-    let original = service.current_task()?.unwrap();
-    let target = VersionedTask {
-        id: original.id,
-        version: original.version,
-    };
-    let mut repair = original.definition().definition.clone();
-    repair.title = "Repair".into();
-    let before = f.git(&["rev-parse", "HEAD"])?;
-    let stale = VersionedTask {
-        version: target.version - 1,
-        ..target
-    };
-    let error = ktask_rs_mk3::runner::remediation::apply(
-        &mut service,
-        stale,
-        None,
-        &[repair.clone()],
-        "Repair partial work",
-        true,
-    )
-    .unwrap_err();
-    assert!(error.to_string().contains("Current task changed"));
-    assert_eq!(f.git(&["rev-parse", "HEAD"])?, before);
-    f.git(&[
-        "-c",
-        "user.name=Test",
-        "-c",
-        "user.email=test@example.com",
-        "commit",
-        "--allow-empty",
-        "-qm",
-        "external baseline change",
-    ])?;
-    let changed = f.git(&["rev-parse", "HEAD"])?;
-    let error = ktask_rs_mk3::runner::remediation::apply(
-        &mut service,
-        target,
-        None,
-        &[repair],
-        "Repair partial work",
-        true,
-    )
-    .unwrap_err();
-    assert!(error.to_string().contains("changed HEAD"));
-    assert_eq!(f.git(&["rev-parse", "HEAD"])?, changed);
-    assert!(service.task(2)?.is_none());
-    assert_eq!(service.current_task()?.unwrap().version, original.version);
-    assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
     f.no_scratch()?;
     Ok(())
 }
@@ -7390,7 +7347,8 @@ fn real_tui_check_launch_failure_pause_cancels_backoff_and_resumes_same_attempt(
         }
         println!(
             "CHECK LAUNCH PAUSED mouse={mouse}\n{}",
-            t.screen("paused launch retries", |s| s.contains("PAUSED")
+            t.screen("paused launch retries", |s| s
+                .contains("Current #1 · Paused")
                 && s.contains("runner stopped")
                 && s.contains("r Resume"))?
         );
@@ -7462,34 +7420,8 @@ fn real_tui_check_launch_failure_pause_cancels_backoff_and_resumes_same_attempt(
     Ok(())
 }
 
-fn assert_deadline_retry_finished(f: &Fixture, first_attempt: &Value, limit: i64) -> Result {
-    let retried = support::eventually("deadline Retry finishes", || {
-        let task = f.ok(&["show", "1"])?;
-        Ok(
-            (task["attempts"].as_array().unwrap().len() == 2 && task["status"] == "failed")
-                .then_some(task),
-        )
-    })?;
-    println!("CHECK LAUNCH DEADLINE RETRY TASK {retried}");
-    assert_eq!(&retried["attempts"][0], first_attempt);
-    assert!(
-        retried["attempts"][1]["outcome"]
-            .as_str()
-            .unwrap()
-            .contains("configured task-wide limit")
-    );
-    let total = retried["attempts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|a| a["active_ms"].as_i64().unwrap())
-        .sum::<i64>();
-    assert!(total >= limit);
-    Ok(())
-}
-
 #[test]
-fn real_tui_check_launch_backoff_deadline_survives_restart_and_requires_explicit_increase() -> Result
+fn real_tui_check_launch_backoff_deadline_survives_restart_and_retry_restarts_the_limit() -> Result
 {
     for mouse in [false, true] {
         let f = Fixture::new()?;
@@ -7515,7 +7447,7 @@ fn real_tui_check_launch_backoff_deadline_survives_restart_and_requires_explicit
         );
         let expired = t
             .screen("configured deadline expired", |s| {
-                s.contains("FAILED") && s.contains("configured task-wide limit")
+                s.contains("Current #1 · Failed") && s.contains("configured task-wide limit")
             })
             .map_err(|error| {
                 let show = |id| f.ok(&["show", id]).map(|task| task.to_string());
@@ -7554,70 +7486,53 @@ fn real_tui_check_launch_backoff_deadline_survives_restart_and_requires_explicit
         println!(
             "CHECK LAUNCH DEADLINE RESTART mouse={mouse}\n{}",
             t.screen("restart retains configured deadline failure", |s| s
-                .contains("FAILED")
-                && s.contains("t Retry")
+                .contains("Current #1 · Failed")
+                && s.contains("[r Retry]")
                 && s.contains("configured task-wide limit"))?
         );
+        // Retry restarts the limit: the kept work is checked and judged with a full 3 s.
         if mouse {
-            t.click("t Retry")?;
+            t.click("r Retry")?;
         } else {
-            t.send("t")?;
-        }
-        assert_deadline_retry_finished(&f, &first_attempt, limit)?;
-        f.supervisor_stopped()?;
-        println!(
-            "CHECK LAUNCH DEADLINE RETRY BLOCKED mouse={mouse}\n{}",
-            t.screen("retry still blocked by configured deadline", |s| s
-                .contains("FAILED")
-                && s.contains("Attempt 2")
-                && s.contains("configured task-wide limit"))?
-        );
-        assert_eq!(
-            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-            "execution\n",
-            "expired retry must not start even a judge worker"
-        );
-        assert_eq!(
-            assert_check_launch_records(&f, launches.len()..=launches.len(), false)?,
-            launches
-        );
-        assert!(
-            f.ok(&["show", "2"])?["attempts"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
-        assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
-        f.launch_workers_reaped()?;
-
-        f.ok(&["edit", "1", "--timeout-ms", "30000"])?;
-        t.screen("increased task deadline ready for retry", |s| {
-            s.contains("t Retry")
-        })?;
-        if mouse {
-            t.click("t Retry")?;
-        } else {
-            t.send("t")?;
+            t.send("r")?;
         }
         println!(
-            "CHECK LAUNCH DEADLINE INCREASE RECOVERED mouse={mouse}\n{}",
-            t.screen("increased deadline permits judged recovery", |s| s
+            "CHECK LAUNCH DEADLINE RETRY RECOVERED mouse={mouse}\n{}",
+            t.screen("retry with a restarted limit recovers", |s| s
                 .contains("Queue complete.")
                 && s.contains("History 2"))?
         );
         let recovered = f.ok(&["show", "1"])?;
         assert_eq!(recovered["status"], "succeeded");
         assert_eq!(recovered["attempts"][0], first_attempt);
-        assert_eq!(recovered["attempts"].as_array().unwrap().len(), 3);
+        assert_eq!(recovered["attempts"].as_array().unwrap().len(), 2);
+        assert!(
+            recovered["attempts"][1]["active_ms"].as_i64().unwrap() < limit,
+            "{recovered}"
+        );
+        let db = f.db()?;
+        let counted_from: i64 =
+            db.connection()
+                .query_row("SELECT counted_from FROM tasks WHERE id=1", [], |r| {
+                    r.get(0)
+                })?;
+        assert_eq!(counted_from, 1);
+        let checks: Vec<(i64, String, Option<i32>)> = db
+            .connection()
+            .prepare("SELECT attempt_id,state,exit_code FROM attempt_steps WHERE task_id=1 AND role='check' ORDER BY id")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        let (first, retry) = checks.split_at(launches.len());
+        assert!(
+            first.iter().all(|c| c.0 == 1 && c.1 == "failed"),
+            "{checks:?}"
+        );
+        assert_eq!(retry, [(2, "succeeded".to_owned(), Some(0))]);
         assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-            "execution\nremediation\nexecution\nreview\nvalidation\nexecution\nreview\nvalidation\n"
+            "execution\nreview\nvalidation\nexecution\nreview\nvalidation\n"
         );
-        let judge_prompt = fs::read_to_string(f.scratch.path().join("prompt-judge"))?;
-        assert!(judge_prompt.contains("You are the failure judge"));
-        assert!(judge_prompt.contains("read-only"));
-        println!("CHECK LAUNCH DEADLINE RECOVERY JUDGE\n{judge_prompt}");
         t.send("q")?;
         t.finish()?;
         f.supervisor_stopped()?;
@@ -7688,7 +7603,7 @@ fn readiness_refreshes_external_models_and_reports_reload_errors() -> Result {
             s.contains("BLOCK · Refresh failed:")
         })?;
         assert!(!error.contains("Can run · 0 blocker"));
-        assert!(!error.contains("[r Run]"));
+        assert!(!error.contains("[r Run queue]"));
         println!("READINESS REFRESH ERROR mouse={mouse}\n{error}");
         db.connection()
             .execute_batch("ALTER TABLE unavailable_sessions RENAME TO execution_sessions")?;
@@ -7699,7 +7614,7 @@ fn readiness_refreshes_external_models_and_reports_reload_errors() -> Result {
         }
         t.screen("reload recovered", |s| s.contains("Can run · 0 blocker"))?;
         if mouse {
-            t.click("r Run")?;
+            click_readiness_forward(&mut t)?;
         } else {
             t.send("r")?;
         }
@@ -7718,7 +7633,7 @@ fn readiness_lets_the_owner_resume_a_rate_limit_wait_at_once() -> Result {
         let f = Fixture::new()?;
         f.provider("rate")?;
         f.add("Readiness rate wait")?;
-        f.ok(&["run", "--one"])?;
+        let mut run = f.limit_wait()?;
         let before = f.ok(&["show", "1"])?;
         let attempt = before["attempts"][0]["id"].clone();
         let db = f.db()?;
@@ -7733,16 +7648,32 @@ fn readiness_lets_the_owner_resume_a_rate_limit_wait_at_once() -> Result {
         } else {
             t.send("u")?;
         }
-        // A provider-limit wait never blocks the owner: Run asks the provider again now.
+        let live = t.screen("live rate wait readiness", |s| {
+            s.contains("The runner is working on it · p Pause, s Stop")
+        })?;
+        println!("READINESS LIVE RATE WAIT mouse={mouse}\n{live}");
+        t.send("\x1b")?;
+        t.screen("readiness closed", |s| !s.contains("Execution readiness"))?;
+        if mouse {
+            t.click("p Pause")?;
+        } else {
+            t.send("p")?;
+        }
+        t.screen("rate wait paused", |s| s.contains("Current #1 · Paused"))?;
+        assert!(run.0.wait()?.success());
+        if mouse {
+            t.click("u Readiness")?;
+        } else {
+            t.send("u")?;
+        }
+        // A paused provider-limit wait never blocks the owner: Run asks the provider now.
         let ready = t.screen("rate limit readiness", |s| {
-            s.contains("Can run · 0 blocker")
-                && s.contains("[r Run]")
-                && s.contains("Limit resets in")
+            s.contains("Can run · 0 blocker") && s.contains("[r Resume]")
         })?;
         println!("READINESS RATE WAIT mouse={mouse}\n{ready}");
         f.provider("normal")?;
         if mouse {
-            t.click("r Run")?;
+            click_readiness_forward(&mut t)?;
         } else {
             t.send("r")?;
         }
@@ -7829,7 +7760,7 @@ fn many_projects_streaming_output_at_once_all_finish() -> Result {
 }
 
 #[test]
-fn stop_ends_runners_gracefully_from_the_cli_and_any_tui_screen() -> Result {
+fn pause_ends_runners_gracefully_from_the_cli_and_any_tui_screen() -> Result {
     let f = Fixture::new()?;
     let second = f.second_project("second")?;
     f.provider("overlap")?;
@@ -7846,7 +7777,9 @@ fn stop_ends_runners_gracefully_from_the_cli_and_any_tui_screen() -> Result {
             "result.txt contains verified",
         ],
     )?;
-    assert_eq!(f.ok(&["stop"])?["stopped"], serde_json::json!([]));
+    let idle = f.ok(&["pause"])?;
+    assert_eq!(idle["runner_was_running"], false, "{idle}");
+    assert_eq!(idle["id"], Value::Null);
     f.ok(&["run", "--background"])?;
     f.ok_in(&second, &["run", "--background"])?;
     support::eventually("both executions running", || {
@@ -7854,17 +7787,17 @@ fn stop_ends_runners_gracefully_from_the_cli_and_any_tui_screen() -> Result {
             fs::read_to_string(f.scratch.path().join("overlap-started")).unwrap_or_default();
         Ok((started.lines().count() == 2).then_some(()))
     })?;
-    // One command stops every runner; it returns only after each one has exited.
-    let stopped = f.ok(&["stop", "--all"])?["stopped"].clone();
-    assert_eq!(stopped.as_array().unwrap().len(), 2, "{stopped}");
-    assert!(
-        stopped
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|s| s["paused_task"].is_i64())
-    );
-    f.supervisor_stopped()?;
+    // Pause stops this project's runner and returns only after it has exited.
+    for project in [&f.root, &second] {
+        let paused = f.ok_in(project, &["pause"])?;
+        assert_eq!(paused["runner_was_running"], true, "{paused}");
+        assert!(paused["id"].is_i64(), "{paused}");
+        let lease = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(project.join(".git/ktask-runner.lock"))?;
+        lease.try_lock()?;
+    }
     assert_eq!(f.ok(&["show", "1"])?["status"], "paused");
     assert_eq!(f.ok_in(&second, &["current"])?["status"], "paused");
     fs::write(f.scratch.path().join("release"), "go")?;
@@ -7882,7 +7815,7 @@ fn stop_ends_runners_gracefully_from_the_cli_and_any_tui_screen() -> Result {
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
         t.screen("ready", |s| s.contains("r Run queue"))?;
         t.send("r")?;
-        t.screen("running", |s| s.contains("RUNNING · supervisor alive"))?;
+        t.screen("running", |s| s.contains("Running · supervisor alive"))?;
         if mouse {
             t.click("2 Queue")?;
         } else {
@@ -7898,7 +7831,7 @@ fn stop_ends_runners_gracefully_from_the_cli_and_any_tui_screen() -> Result {
             t.send("p")?;
         }
         f.supervisor_stopped()?;
-        let paused = t.screen("paused from queue", |s| s.contains("Current #1 · PAUSED"))?;
+        let paused = t.screen("paused from queue", |s| s.contains("Current #1 · Paused"))?;
         println!("PAUSED FROM QUEUE mouse={mouse}\n{paused}");
         assert_eq!(f.ok(&["show", "1"])?["status"], "paused");
         t.send("q")?;
@@ -7944,7 +7877,7 @@ fn two_projects_run_at_once_and_stay_separate() -> Result {
     for (t, name) in [(&a, "first"), (&b, "second")] {
         println!(
             "{name} RUNNING\n{}",
-            t.screen(name, |s| s.contains("RUNNING · supervisor alive"))?
+            t.screen(name, |s| s.contains("Running · supervisor alive"))?
         );
     }
     // Pausing one project leaves the other one running.
@@ -7952,7 +7885,7 @@ fn two_projects_run_at_once_and_stay_separate() -> Result {
     println!(
         "SECOND PAUSED\n{}",
         b.screen("second paused", |s| {
-            s.contains("PAUSED · runner stopped")
+            s.contains("Paused · runner stopped")
                 && s.contains("r Resume")
                 && s.contains("Paused; worker stopped, Resume continues the same attempt")
         })?
@@ -8146,6 +8079,28 @@ fn a_running_fix_round_shows_why_in_status_and_activity() -> Result {
     f.state("succeeded")?;
     t.send("q")?;
     t.finish()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn a_workers_own_doubts_go_to_the_checks_not_a_judge() -> Result {
+    let f = Fixture::new()?;
+    f.provider("worker-unsure")?;
+    f.add("Unsure worker")?;
+    f.ok(&["run", "--one"])?;
+    f.state("succeeded")?;
+    // The worker left its criterion to the supervisor: the checks and independent judges
+    // decide, so no failure judge or repair worker runs.
+    assert!(!f.scratch.path().join("prompt-judge").exists());
+    assert!(!f.scratch.path().join("prompt-repair-worker").exists());
+    let db = f.db()?;
+    let roles: Vec<String> = db
+        .connection()
+        .prepare("SELECT role FROM attempt_steps WHERE attempt_id=1 ORDER BY ordinal")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    assert_eq!(roles, ["execution", "check", "review", "validation"]);
     f.no_scratch()?;
     Ok(())
 }

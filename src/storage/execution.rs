@@ -46,7 +46,7 @@ impl Database {
             .query_row(
                 "SELECT project_id, revision, kind FROM current_tasks
              WHERE id = ?1 AND row_version = ?2 AND lifecycle = 'ready'
-               AND status IN ('ready', 'failed', 'interrupted', 'cancelled')
+               AND status IN ('ready', 'failed')
                AND revision_lifecycle = 'ready'
                AND (status='failed' OR attempt_limit IS NULL OR attempts_used < attempt_limit)",
                 params![command.task_id, command.expected_version],
@@ -79,30 +79,6 @@ impl Database {
              VALUES (?1, ?2, ?3, (SELECT coalesce(max(number), 0) + 1 FROM attempts WHERE task_id = ?2), 'running', ?4, ?5, ?6)",
             params![project, command.task_id, revision, command.execution_token, command.now_ms,base])?;
         let id = tx.last_insert_rowid();
-        // Reset retains historical proof and repair count, but a changed task
-        // definition needs a fresh worker turn before new checks and judges.
-        let reset: bool = tx.query_row(
-            "SELECT reset_pending FROM tasks WHERE id=?1",
-            [command.task_id],
-            |r| r.get(0),
-        )?;
-        if reset {
-            tx.execute(
-                "INSERT INTO attempt_progress(attempt_id,repair_round,phase,context,evidence,verified_tree,reset_fresh)
-                 SELECT ?1,coalesce(p.repair_round,0),
-                    CASE WHEN old.state='failed' OR p.phase IN ('judge','fix','replanned') THEN 'judge' ELSE 'implement' END,
-                    CASE WHEN old.state='failed' THEN 'Prior failure: ' || coalesce(old.outcome,'') || char(10) ELSE '' END
-                    || coalesce(p.context,'') || char(10) || 'Reset to pending; act on the current revision and regenerate all proof.', '', '', 1
-                 FROM attempts old LEFT JOIN attempt_progress p ON p.attempt_id=(
-                    SELECT p2.attempt_id FROM attempt_progress p2
-                    JOIN attempts earlier ON earlier.id=p2.attempt_id
-                    LEFT JOIN attempt_delivery d ON d.attempt_id=earlier.id
-                    WHERE (earlier.task_id=?2 OR d.repair_origin_task=?2) AND earlier.id<?1
-                    ORDER BY earlier.id DESC LIMIT 1)
-                 WHERE old.task_id=?2 AND old.id<?1 ORDER BY old.id DESC LIMIT 1",
-                params![id,command.task_id],
-            )?;
-        }
         tx.execute(
             "UPDATE tasks SET reset_pending=0,reset_worktree=NULL WHERE id=?1",
             [command.task_id],

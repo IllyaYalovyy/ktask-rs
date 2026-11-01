@@ -101,7 +101,7 @@ impl Service {
     /// starting another supervisor. Do not overwrite Pause or newly added work.
     pub fn complete_execution_session_if_empty(&mut self) -> Result<()> {
         self.db.connection().execute(
-            "UPDATE execution_sessions SET state='completed',reason='Queue complete after intervention',updated_at_ms=?2
+            "UPDATE execution_sessions SET state='completed',reason='Queue complete',updated_at_ms=?2
              WHERE project_id=?1 AND mode='queue'
                AND state IN ('running','waiting','resume_requested')
                AND NOT EXISTS (SELECT 1 FROM current_tasks WHERE project_id=?1)",
@@ -118,7 +118,7 @@ impl Service {
                             THEN 'stopped' ELSE 'completed' END,
                  reason=CASE WHEN EXISTS(SELECT 1 FROM current_tasks WHERE project_id=?1)
                              THEN 'Intervention resolved; Run one awaits explicit Run or Resume'
-                             ELSE 'Queue complete after intervention' END,
+                             ELSE 'Queue complete' END,
                  updated_at_ms=?2
              WHERE project_id=?1 AND mode='one'
                AND (state IN ('waiting','stopped')

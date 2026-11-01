@@ -48,15 +48,10 @@ impl OutputCache {
 fn status_color(status: Status) -> Color {
     match status {
         Status::Running => ACCENT,
-        Status::Done | Status::Override => OK,
-        Status::Abandoned
-        | Status::Failed
-        | Status::Interrupted
-        | Status::Cancelled
-        | Status::Rejected
-        | Status::Blocked => BAD,
-        Status::Question | Status::Waiting | Status::Paused => WARN,
-        _ => MUTED,
+        Status::Done => OK,
+        Status::Failed | Status::Cancelled => BAD,
+        Status::NeedsInput | Status::NeedsApproval | Status::Paused => WARN,
+        Status::Pending | Status::Superseded => MUTED,
     }
 }
 
@@ -123,22 +118,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         x += rect.width + 1;
     }
     let current = app.current().map_or("No current task".into(), |t| {
-        let supervisor = if app.service.is_some()
-            && matches!(
-                t.status(),
-                Status::Running
-                    | Status::Paused
-                    | Status::Waiting
-                    | Status::Question
-                    | Status::Abandoned
-            ) {
+        let live = matches!(
+            t.status(),
+            Status::Running | Status::Paused | Status::NeedsInput
+        );
+        let supervisor = if app.service.is_some() && live {
             if app.supervisor_alive {
                 " · supervisor alive"
-            } else if t.status() == Status::Paused {
-                // Pause stops the runner on purpose; "absent" would read like a crash.
-                " · runner stopped"
             } else {
-                " · supervisor absent"
+                " · runner stopped"
             }
         } else {
             ""
@@ -146,16 +134,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let time = t
             .attempts
             .last()
-            .filter(|_| {
-                matches!(
-                    t.status(),
-                    Status::Running
-                        | Status::Paused
-                        | Status::Waiting
-                        | Status::Question
-                        | Status::Abandoned
-                )
-            })
+            .filter(|_| live)
             .map_or(String::new(), |a| {
                 format!(" · {}", history_time(a.elapsed_ms))
             });
@@ -295,7 +274,7 @@ fn queue_progress(app: &App, width: u16) -> String {
         } else if matches!(session.state.as_str(), "running" | "resume_requested")
             && !app.supervisor_alive
         {
-            "Supervisor absent; inspect current and Run or Recover"
+            "Supervisor absent; the next refresh pauses current, then r Resume"
         } else if session.reason.starts_with("Waiting for answer:") {
             "Awaiting answer to current task"
         } else {
@@ -307,8 +286,14 @@ fn queue_progress(app: &App, width: u16) -> String {
             .filter(|t| t.status() == crate::presentation::Status::Running)
             .map(|t| format!(" · {}", active_phase(t)))
             .unwrap_or_default();
+        // "complete · no queued work" already says the queue is complete.
+        let reason = if session.state == "completed" && reason.starts_with("Queue complete") {
+            String::new()
+        } else {
+            format!(" · {reason}")
+        };
         return shortened(
-            &format!(" Session: {mode} · {state}{phase}{next} · {reason}"),
+            &format!(" Session: {mode} · {state}{phase}{next}{reason}"),
             width as usize,
         );
     }
@@ -342,31 +327,33 @@ fn controls(app: &App) -> Vec<(&'static str, Action)> {
             ("a Add", Action::Add),
             ("i Insert", Action::Insert),
             ("e Edit", Action::Edit),
-            ("d Delete", Action::Delete),
-            ("u Undo", Action::Undo),
             ("m Move", Action::Move),
             ("b Break down", Action::Breakdown),
-            ("o Import", Action::Import),
             ("v Approve", Action::Approve),
             ("n Reject", Action::Reject),
             ("c Models", Action::Models),
-            ("x Export", Action::Export),
+            ("s Stop", Action::Stop),
+            ("D Mark done", Action::MarkDone),
+            ("x Cancel", Action::CancelTask),
+            ("R Supersede", Action::Supersede),
+            ("o Import", Action::Import),
+            ("E Export", Action::Export),
             ("Enter Details", Action::Inspect),
             ("f Filter", Action::Filter),
             ("/ Search", Action::Search),
             ("Esc Clear", Action::Clear),
-            ("s Stats", Action::Stats),
+            ("S Stats", Action::Stats),
         ],
         View::History => vec![
-            ("R Reopen", Action::Reopen),
+            ("C Copy to queue", Action::CopyToQueue),
             ("Enter Details", Action::Inspect),
             ("V Reviews", Action::InspectSection(4)),
             ("F Failures", Action::InspectSection(5)),
             ("f Filter", Action::Filter),
             ("/ Search", Action::Search),
             ("Esc Clear", Action::Clear),
-            ("x Export", Action::Export),
-            ("s Stats", Action::Stats),
+            ("E Export", Action::Export),
+            ("S Stats", Action::Stats),
         ],
         View::Config if app.service.is_some() => vec![
             ("m Defaults", Action::ProjectModels),
@@ -379,88 +366,34 @@ fn controls(app: &App) -> Vec<(&'static str, Action)> {
         View::Config => vec![
             ("e Configure", Action::Configure),
             ("Esc Back", Action::Back),
-            ("s Stats", Action::Stats),
+            ("S Stats", Action::Stats),
         ],
         View::About => vec![("Esc Back", Action::Back)],
     };
     if app.view != View::Current {
         controls.insert(0, ("p Pause", Action::Pause));
     }
-    controls.retain(|(_, action)| {
-        app.enabled(*action)
-            || (app.service.is_some()
-                && matches!(action, Action::Edit | Action::Models)
-                && app.selected_task().is_some_and(|task| {
-                    matches!(
-                        task.status(),
-                        Status::Running | Status::Paused | Status::Waiting | Status::Question
-                    )
-                }))
-    });
+    controls.retain(|(_, action)| app.enabled(*action));
     controls
 }
 
-/// The one or two actions the current situation calls for come first; browsing follows.
+/// What the current task's state offers comes first, its forward move leading; browsing
+/// follows. Every button is a state-machine action, so none is offered and then refused.
 fn current_controls(app: &App) -> Vec<(&'static str, Action)> {
-    let status = app.current().map(|t| t.status());
-    let run = run_label(app);
-    let mut controls = match status {
-        Some(Status::Abandoned) => vec![("R Recover", Action::Recover)],
-        Some(Status::Question) => vec![
-            ("w Answer", Action::Answer),
-            (run, Action::Run),
-            ("x Abandon", Action::Abandon),
-        ],
-        Some(Status::Waiting) => vec![
-            ("p Pause", Action::Pause),
-            (run, Action::Run),
-            ("x Abandon", Action::Abandon),
-        ],
-        Some(Status::Running) => vec![
-            ("p Pause", Action::Pause),
-            ("P Reset to pending", Action::ResetToPending),
-        ],
-        Some(Status::Paused) => vec![
-            (run, Action::Run),
-            ("P Reset to pending", Action::ResetToPending),
-            ("x Abandon", Action::Abandon),
-        ],
-        Some(s) if s.failed() => vec![
-            ("t Retry", Action::Retry),
-            ("d Remediate", Action::Diagnose),
-            ("w Answer", Action::Answer),
-            ("x Abandon", Action::Abandon),
-            ("z Resolve", Action::Resolve),
-        ],
-        _ => vec![
-            (run, Action::Run),
-            ("y Acknowledge", Action::Acknowledge),
-            ("v Approve", Action::Approve),
-            ("n Reject", Action::Reject),
-        ],
-    };
-    if app.service.is_some()
-        && app.enabled(Action::Pause)
-        && !controls
-            .iter()
-            .any(|(_, action)| matches!(action, Action::Pause))
-    {
-        controls.insert(0, ("p Pause", Action::Pause));
-    }
-    if app.enabled(Action::ResetToPending)
-        && !controls
-            .iter()
-            .any(|(_, action)| matches!(action, Action::ResetToPending))
-    {
-        controls.insert(0, ("P Reset to pending", Action::ResetToPending));
-    }
-    if matches!(status, Some(s) if s.failed()) {
-        controls.extend([("v Approve", Action::Approve), ("n Reject", Action::Reject)]);
-    }
-    controls.extend([
+    let mut controls = vec![
+        (run_label(app), Action::Run),
+        ("p Pause", Action::Pause),
+        ("v Approve", Action::Approve),
+        ("n Reject", Action::Reject),
+        ("s Stop", Action::Stop),
+        ("D Mark done", Action::MarkDone),
+        ("x Cancel", Action::CancelTask),
+        ("R Supersede", Action::Supersede),
+        ("c Models", Action::Models),
+        ("e Edit", Action::Edit),
+        ("b Break down", Action::Breakdown),
         ("u Readiness", Action::Readiness),
         ("m Run mode", Action::Configure),
-        ("c Models", Action::Models),
         ("Enter Details", Action::Inspect),
         (
             if showing_report(app) {
@@ -471,29 +404,26 @@ fn current_controls(app: &App) -> Vec<(&'static str, Action)> {
             Action::Output,
         ),
         ("End Follow", Action::Follow),
-        ("e Edit", Action::Edit),
-        ("b Break down", Action::Breakdown),
         ("a Add", Action::Add),
-        ("s Stats", Action::Stats),
-    ]);
+        ("S Stats", Action::Stats),
+    ];
     if app.follow {
         controls.retain(|(label, _)| *label != "End Follow");
     }
     controls
 }
 
+/// The forward move for the current task's state.
 fn run_label(app: &App) -> &'static str {
-    if app.current().is_some_and(|task| {
-        matches!(
-            task.status(),
-            Status::Paused | Status::Question | Status::Waiting
-        )
-    }) {
-        "r Resume"
-    } else if app.auto_advance {
-        "r Run queue"
-    } else {
-        "r Run one"
+    match app
+        .current()
+        .map(|task| (task.status(), task.awaits_answer()))
+    {
+        Some((Status::NeedsInput, true)) => "r Answer",
+        Some((Status::Paused | Status::NeedsInput, _)) => "r Resume",
+        Some((Status::Failed, _)) => "r Retry",
+        _ if app.auto_advance => "r Run queue",
+        _ => "r Run one",
     }
 }
 
@@ -541,7 +471,8 @@ fn current_brief(task: &crate::presentation::Task, width: u16) -> Vec<Line<'stat
             width.saturating_sub(2) as usize,
         )),
         Line::raw(shortened(
-            &format!("Proof: {}", task.definition().check),
+            // Criteria are stored one per line; the one-line brief separates them.
+            &format!("Proof: {}", task.definition().check.replace('\n', "; ")),
             width.saturating_sub(2) as usize,
         )),
     ];
@@ -646,7 +577,7 @@ fn current_step_line(
     persistent: bool,
     width: usize,
 ) -> Option<Line<'static>> {
-    if !persistent || !matches!(task.status(), Status::Running | Status::Abandoned) {
+    if !persistent || task.status() != Status::Running {
         return None;
     }
     let step = task
@@ -775,34 +706,24 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
     lines.extend(current_step_line(task, app.service.is_some(), inner));
     lines.extend(why_lines(task, inner));
     match status {
-        Status::Waiting => {
+        Status::Running if task.waiting_for_limit() => {
             let seconds = attempt.and_then(|a| a.resume_at).map_or(0, |at| {
                 at.saturating_duration_since(std::time::Instant::now())
                     .as_millis()
                     .div_ceil(1000)
             });
             let seconds = crate::clock::format_remaining(seconds.try_into().unwrap_or(i64::MAX));
-            let automatic = app.supervisor_alive
-                && app.execution_session.as_ref().is_none_or(|session| {
-                    matches!(
-                        session.state.as_str(),
-                        "running" | "waiting" | "resume_requested"
-                    )
-                });
             lines.push(Line::styled(
-                if automatic {
-                    format!("Resumes in {seconds}")
-                } else {
-                    format!("Limit resets in {seconds} · r Resume tries now")
-                },
+                format!("Resumes in {seconds}"),
                 Style::new().fg(WARN),
             ));
         }
-        Status::Question if app.enabled(Action::Run) => {
-            lines.push(Line::styled("Answer saved · r Resume", Style::new().fg(OK)))
-        }
-        Status::Question => lines.push(Line::styled(
-            "Waiting for your answer",
+        Status::NeedsInput => lines.push(Line::styled(
+            if task.awaits_answer() {
+                "Waiting for your answer · r Answer"
+            } else {
+                "Answered · r Resume continues"
+            },
             Style::new().fg(WARN),
         )),
         _ => {}
@@ -874,7 +795,6 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
     }
     // An open question is the one thing that needs the owner; it gets its own panel.
     let question = attempt.and_then(|a| a.question.clone());
-    let failed_question = task.status().failed();
     let task_id = task.id;
     app.hits.push((purpose, Action::Inspect));
     app.selection.zone(content(purpose));
@@ -916,12 +836,7 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                     .collect::<Vec<_>>(),
             )
             .block(
-                panel(if failed_question {
-                    " Owner decision · w: answer "
-                } else {
-                    " Question from the worker · w: answer "
-                })
-                .border_style(Style::new().fg(WARN)),
+                panel(" Question from the worker · r: answer ").border_style(Style::new().fg(WARN)),
             ),
             ask,
         );
@@ -1016,7 +931,7 @@ fn stop_banner(app: &App, task: &crate::presentation::Task) -> Option<Vec<Line<'
             ]),
         ]
     };
-    if task.status().failed() {
+    if task.status() == Status::Failed {
         let stored = app.stored.get(&task.id)?;
         // A repairable failure is the supervisor's job; only a real stop gets the banner.
         let stop = crate::application::stop::unresolvable(stored)?;
@@ -1074,68 +989,35 @@ fn situation(app: &App, task: &crate::presentation::Task) -> (String, Color) {
         );
     }
     let human = task.definition().kind == crate::presentation::Kind::Human;
-    let abandon = if app.service.is_some() {
-        " · x Abandon"
-    } else {
-        ""
-    };
     match task.status() {
-        Status::Abandoned => (
-            "Supervisor absent · R Recover after inspecting the workspace".into(),
-            BAD,
-        ),
-        Status::Question if app.enabled(Action::Run) => (
-            "Answer saved · r Resume continues the same attempt · P Reset to pending".into(),
-            OK,
-        ),
-        Status::Question => (
-            format!("The worker needs your answer · w Answer · P Reset to pending{abandon}"),
+        Status::NeedsInput if task.awaits_answer() => (
+            "The worker needs your answer · r Answer · s Stop returns it to Pending".into(),
             WARN,
         ),
-        Status::Waiting
-            if app
-                .execution_session
-                .as_ref()
-                .is_some_and(|s| s.state == "paused") =>
-        {
-            (
-                format!(
-                    "Provider limit{} · paused · r Resume · P Reset to pending{abandon}",
-                    until(task)
-                ),
-                WARN,
-            )
+        Status::NeedsInput => (
+            "Answer saved · r Resume continues the attempt · s Stop returns it to Pending".into(),
+            WARN,
+        ),
+        Status::Running if task.waiting_for_limit() => (
+            format!(
+                "Provider limit{} · resumes by itself · p Pause · s Stop",
+                until(task)
+            ),
+            WARN,
+        ),
+        Status::Running if app.service.is_some() => {
+            (format!("{} · p Pause · s Stop", active_phase(task)), ACCENT)
         }
-        Status::Waiting if app.supervisor_alive => (
-            format!(
-                "Provider limit{} · resumes by itself · P Reset to pending{abandon}",
-                until(task)
-            ),
-            WARN,
-        ),
-        Status::Waiting => (
-            format!(
-                "Provider limit{} · r Resume · P Reset to pending{abandon}",
-                until(task)
-            ),
-            WARN,
-        ),
-        Status::Running if app.service.is_some() => (
-            format!("{} · p Pause · P Reset to pending", active_phase(task)),
-            ACCENT,
-        ),
-        Status::Running => ("Running (simulated) · p Pause".into(), ACCENT),
+        Status::Running => ("Running (simulated) · p Pause · s Stop".into(), ACCENT),
         Status::Paused => (
-            format!("Paused · r Resume · P Reset to pending{abandon}"),
+            "Paused · r Resume continues this attempt · s Stop returns it to Pending".into(),
             WARN,
         ),
-        s if s.failed() => (
-            format!(
-                "Failed · t Retry · P Reset to pending · d Remediate{abandon} · z Resolve as done"
-            ),
+        Status::Failed => (
+            "Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done".into(),
             BAD,
         ),
-        Status::Pending if human => ("Human task · y Acknowledge when it is done".into(), MUTED),
+        Status::Pending if human => ("Human task · D Mark done when it is done".into(), MUTED),
         Status::Pending
             if app.service.is_some()
                 && app
@@ -1166,8 +1048,8 @@ fn situation(app: &App, task: &crate::presentation::Task) -> (String, Color) {
             MUTED,
         ),
         Status::Pending => ("Ready · r Run starts a simulated attempt".into(), MUTED),
-        Status::New => ("Draft · needs approval before it can run".into(), MUTED),
-        _ => ("Execution controls always target current".into(), MUTED),
+        Status::NeedsApproval => ("Draft · v Approve / n Reject".into(), WARN),
+        Status::Done | Status::Cancelled | Status::Superseded => ("Finished".into(), MUTED),
     }
 }
 
@@ -1177,7 +1059,7 @@ fn showing_report(app: &App) -> bool {
     app.current()
         .and_then(|t| t.attempts.last())
         .is_some_and(|a| {
-            let settled = !matches!(a.state, Status::Running | Status::Waiting | Status::Paused);
+            let settled = !matches!(a.state, Status::Running | Status::Paused);
             !a.report.is_empty() && (settled != app.show_log)
         })
 }
@@ -1215,7 +1097,7 @@ fn draw_output(frame: &mut Frame, app: &mut App, output: Rect) {
             if task.ready().is_none() {
                 "Needs approval. Review the task, then Approve or Reject.".to_owned()
             } else if task.definition().kind == crate::presentation::Kind::Human {
-                "Human task: inspect the goal and acknowledge when done.".to_owned()
+                "Human task: do the work, then D Mark done.".to_owned()
             } else if app.service.is_some()
                 && app.readiness.as_ref().is_some_and(|r| r.blockers > 0)
             {
@@ -1671,10 +1553,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
             .style(Style::new().fg(if dialog.error.is_empty() { MUTED } else { WARN })),
         error,
     );
-    let mut controls = if matches!(
-        dialog.kind,
-        DialogKind::RemediationPending | DialogKind::BreakdownPending
-    ) {
+    let mut controls = if matches!(dialog.kind, DialogKind::BreakdownPending) {
         vec![("Cancel", Action::Cancel)]
     } else if dialog.read_only() {
         vec![("Close", Action::Cancel)]
@@ -1810,12 +1689,8 @@ fn readiness_controls(app: &App) -> Vec<(&'static str, Action)> {
     for (label, action) in [
         ("m Models", Action::Models),
         ("v Approve", Action::Approve),
-        ("w Answer", Action::Answer),
-        ("y Acknowledge", Action::Acknowledge),
         ("p Pause", Action::Pause),
-        ("R Recover", Action::Recover),
-        ("r Run", Action::Run),
-        ("t Retry", Action::Retry),
+        (run_label(app), Action::Run),
     ] {
         if app.enabled(action) {
             controls.push((label, action));

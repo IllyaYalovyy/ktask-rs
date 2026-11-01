@@ -28,7 +28,10 @@ pub(super) fn task(db: &Connection, project: i64, key: &str) -> rusqlite::Result
         [id],
     )?;
     for role in ["execution", "review", "validation", "remediation"] {
-        tx.execute("INSERT INTO revision_models VALUES (?1, 1, ?2, 'test-provider', 'test-model', 'medium')", params![id, role])?;
+        tx.execute(
+            "INSERT INTO revision_models VALUES (?1, 1, ?2, 'codex', 'test-model', 'medium')",
+            params![id, role],
+        )?;
     }
     tx.commit()?;
     Ok(id)
@@ -39,7 +42,7 @@ pub(super) fn scalar(db: &Connection, sql: &str) -> rusqlite::Result<i64> {
 }
 
 #[test]
-fn reset_cancels_failed_attempt_question_and_terminal_lifecycle_wins() -> Result {
+fn stop_cancels_failed_attempt_question_and_terminal_lifecycle_wins() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path().canonicalize()?;
     let mut db = Database::open_in(&root.join("state"))?;
@@ -63,8 +66,13 @@ fn reset_cancels_failed_attempt_question_and_terminal_lifecycle_wins() -> Result
         "INSERT INTO questions(attempt_id,prompt,state,created_at_ms) VALUES (?1,'Retained question','open',102)",
         [attempt],
     )?;
+    // Copy to queue validates the copied revision's models like any new task.
+    std::fs::write(
+        root.join("state/model-catalog.json"),
+        r#"[{"provider":"codex","model":"test-model"}]"#,
+    )?;
     let mut service = Service::find(db, &root)?.expect("registered project");
-    service.reset_to_pending(VersionedTask { id, version: 2 }, "edit settings", "tree")?;
+    service.stop_task(VersionedTask { id, version: 2 }, "edit settings")?;
     assert!(service.open_question(id)?.is_none());
     let mut db = Database::open_in(&root.join("state"))?;
     assert_eq!(
@@ -89,7 +97,7 @@ fn reset_cancels_failed_attempt_question_and_terminal_lifecycle_wins() -> Result
         now_ms: 103,
     })?;
     db.connection().execute(
-        "UPDATE attempts SET state='failed',failure_category='agent',finished_at_ms=104,outcome='Needs answer' WHERE id=?1",
+        "UPDATE attempts SET state='waiting',wait_reason='question',waiting_since_ms=104 WHERE id=?1",
         [new_attempt],
     )?;
     db.connection().execute(
@@ -100,49 +108,57 @@ fn reset_cancels_failed_attempt_question_and_terminal_lifecycle_wins() -> Result
         service.open_question(id)?.expect("new question").1,
         "New question"
     );
-    let failed = service.task(id)?.expect("failed task");
+    let waiting = service.task(id)?.expect("waiting task");
     service.answer(
         VersionedTask {
             id,
-            version: failed.version,
+            version: waiting.version,
         },
         "New answer",
     )?;
     assert!(service.open_question(id)?.is_none());
     let answered = service.task(id)?.expect("answered task");
-    service.reset_to_pending(
+    service.stop_task(
         VersionedTask {
             id,
             version: answered.version,
         },
         "edit again",
-        "tree",
     )?;
-    let current = service.task(id)?.expect("reset task");
-    service.delete(VersionedTask {
-        id,
-        version: current.version,
-    })?;
+    let current = service.task(id)?.expect("stopped task");
+    service.cancel(
+        VersionedTask {
+            id,
+            version: current.version,
+        },
+        "",
+    )?;
     assert_eq!(
         db.connection()
             .query_row("SELECT status FROM task_details WHERE id=?1", [id], |r| {
                 r.get::<_, String>(0)
             })?,
-        "deleted"
+        "cancelled"
     );
-    let deleted = service.task(id)?.expect("deleted task");
+    let cancelled = service.task(id)?.expect("cancelled task");
     assert!(
         service
-            .delete(VersionedTask {
-                id,
-                version: deleted.version
-            })
+            .cancel(
+                VersionedTask {
+                    id,
+                    version: cancelled.version
+                },
+                ""
+            )
             .is_err()
     );
-    service.restore(VersionedTask {
-        id,
-        version: deleted.version,
-    })?;
+    let id = service.copy_to_queue(
+        VersionedTask {
+            id,
+            version: cancelled.version,
+        },
+        None,
+    )?;
     assert_eq!(
         db.connection()
             .query_row("SELECT status FROM task_details WHERE id=?1", [id], |r| {
@@ -150,7 +166,7 @@ fn reset_cancels_failed_attempt_question_and_terminal_lifecycle_wins() -> Result
             })?,
         "ready"
     );
-    let restored = service.task(id)?.expect("restored task");
+    let restored = service.task(id)?.expect("copied task");
     service.apply_breakdown(
         VersionedTask {
             id,
@@ -166,7 +182,7 @@ fn reset_cancels_failed_attempt_question_and_terminal_lifecycle_wins() -> Result
             timeout_ms: None,
             stage_timeout_ms: None,
         }],
-        "Break down reset work",
+        "Break down stopped work",
         true,
     )?;
     assert_eq!(
@@ -180,7 +196,7 @@ fn reset_cancels_failed_attempt_question_and_terminal_lifecycle_wins() -> Result
 }
 
 #[test]
-fn reset_successor_keeps_fresh_worker_phase_through_delivery_handoff() -> Result {
+fn stopped_successor_starts_fresh_and_rechecks_handed_off_delivery() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path().canonicalize()?;
     let mut db = Database::open_in(&root.join("state"))?;
@@ -207,7 +223,7 @@ fn reset_successor_keeps_fresh_worker_phase_through_delivery_handoff() -> Result
         params![old, "a".repeat(40)],
     )?;
     let mut service = Service::find(db, &root)?.expect("registered project");
-    service.reset_to_pending(VersionedTask { id, version: 2 }, "change task", "tree")?;
+    service.stop_task(VersionedTask { id, version: 2 }, "change task")?;
     let mut db = Database::open_in(&root.join("state"))?;
     let successor = db.start_attempt(StartAttempt {
         task_id: id,
@@ -233,20 +249,20 @@ fn reset_successor_keeps_fresh_worker_phase_through_delivery_handoff() -> Result
         active_ms: 0,
     };
     assert!(service.claim_delivery_handoff(&run)?);
-    let progress = service.progress(&run)?.expect("reset progress");
-    assert_eq!((progress.round, progress.phase.as_str()), (4, "implement"));
+    let progress = service.progress(&run)?.expect("restarted progress");
+    assert_eq!((progress.round, progress.phase.as_str()), (0, "check"));
+    assert!(progress.context.starts_with("Prior findings\n"));
     assert!(progress.evidence.is_empty());
     assert!(progress.verified_tree.is_empty());
     service.reset_delivery_verification(&run, &"b".repeat(40), "rebase finished")?;
-    assert_eq!(
-        service.progress(&run)?.expect("reconciled progress").phase,
-        "implement"
-    );
+    let reconciled = service.progress(&run)?.expect("reconciled progress");
+    assert_eq!((reconciled.round, reconciled.phase.as_str()), (0, "check"));
+    assert!(reconciled.evidence.ends_with("\nrebase finished"));
     Ok(())
 }
 
 #[test]
-fn concurrent_answer_and_reset_serialize_and_old_supervisor_cannot_resume() -> Result {
+fn concurrent_answer_and_stop_serialize_and_old_supervisor_cannot_resume() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path().canonicalize()?;
     let state = root.join("state");
@@ -272,7 +288,7 @@ fn concurrent_answer_and_reset_serialize_and_old_supervisor_cannot_resume() -> R
     let reset = thread::spawn(move || {
         reset_barrier.wait();
         reset_service
-            .reset_to_pending(VersionedTask { id, version: 2 }, "race", "tree")
+            .stop_task(VersionedTask { id, version: 2 }, "race")
             .is_ok()
     });
     let answer_barrier = barrier.clone();
@@ -292,13 +308,12 @@ fn concurrent_answer_and_reset_serialize_and_old_supervisor_cannot_resume() -> R
     let mut service = Service::find(Database::open_in(&state)?, &root)?.expect("project");
     if answer_won {
         let current = service.task(id)?.expect("task");
-        service.reset_to_pending(
+        service.stop_task(
             VersionedTask {
                 id,
                 version: current.version,
             },
             "after answer",
-            "tree",
         )?;
     }
     assert_eq!(service.task(id)?.expect("task").status, "ready");
@@ -506,6 +521,20 @@ fn rejected_and_retired_revisions_do_not_replace_ready_and_drafts_are_separate()
         execution_token: "exec",
         now_ms: 130,
     };
+    let status = |store: &Database| {
+        store
+            .connection()
+            .query_row("SELECT status FROM current_tasks", [], |r| {
+                r.get::<_, String>(0)
+            })
+    };
+    assert_eq!(status(&store)?, "new", "a draft needs approval first");
+    assert!(store.start_attempt(command(id, 1)).is_err());
+    store.connection().execute(
+        "UPDATE task_revisions SET lifecycle='rejected', decided_at_ms=125, decided_by_kind='human', decided_by='owner' WHERE task_id=?1 AND revision=4",
+        [id],
+    )?;
+    assert_eq!(status(&store)?, "ready");
     assert!(store.start_attempt(command(later, 1)).is_err());
     assert!(store.start_attempt(command(id, 99)).is_err());
     store.connection().execute(

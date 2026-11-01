@@ -2,7 +2,7 @@
 use crate::{
     app::App,
     application::{Kind, ROLES, Service},
-    presentation::Status,
+    presentation::TaskAction,
     runner::provider::Provider,
 };
 use std::{fs::File, path::Path, process::Command};
@@ -31,7 +31,6 @@ pub(crate) struct Readiness {
     pub lines: Vec<String>,
     pub blockers: usize,
     pub refresh_failed: bool,
-    pub resume_blocked: bool,
 }
 
 impl Readiness {
@@ -62,17 +61,16 @@ fn commit_identity(report: &mut Readiness, root: &Path) {
     }
 }
 
-fn ownership(common: &Path, name: &str, description: &str, marker: bool) -> Result<(), String> {
+/// Only a live owner blocks. A dead guardian's leftover marker does not: the next runner
+/// stops the workers it names and clears it before it starts.
+fn ownership(common: &Path, name: &str, description: &str) -> Result<(), String> {
     let path = common.join(name);
     let file = match File::open(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(format!("Cannot inspect {description} ownership: {error}")),
     };
-    match crate::runner::process::inspect(&file, |file| Ok(file.metadata()?.len())) {
-        Ok(Some(marked)) if marker && marked != 0 => {
-            Err("Worker cleanup is unconfirmed; inspect descendants, then use Recover".into())
-        }
+    match crate::runner::process::inspect(&file, |_| Ok(())) {
         Ok(Some(_)) => Ok(()),
         Ok(None) => Err(format!(
             "A live {description} owns the workspace; wait for release"
@@ -133,7 +131,6 @@ pub(crate) fn inspect(app: &App) -> Readiness {
         lines: Vec::new(),
         blockers: 0,
         refresh_failed: false,
-        resume_blocked: false,
     };
     let Some(service) = &app.service else {
         return report;
@@ -172,49 +169,20 @@ pub(crate) fn inspect(app: &App) -> Readiness {
         writable_network(&mut report, service, provider);
         return report;
     };
-    let definition = task.execution_revision();
+    let definition = task.definition();
     let root = service.project_root();
     let state = app.current().expect("current task").status();
-    let waiting = service
-        .waiting_resume(task.id)
-        .map_err(|error| error.to_string());
-    // A provider-limit wait never blocks the owner: Resume asks the provider again now.
-    report.resume_blocked =
-        state == Status::Waiting && !waiting.as_ref().is_ok_and(|waiting| waiting.is_some());
-    let open_question = service
-        .open_question(task.id)
-        .map(|question| question.is_some())
-        .map_err(|error| error.to_string());
     report.check(
         "Execution state",
-        match state {
-            Status::Pending => Ok(()),
-            Status::Failed | Status::Interrupted => match &open_question {
-                Ok(false) => Ok(()),
-                Ok(true) => Err("Answer the open question before retrying".into()),
-                Err(error) => Err(error.clone()),
-            },
-            Status::New => Err("Approve a revision before Run".into()),
-            Status::Abandoned => Err("Abandoned attempt needs recovery".into()),
-            Status::Question => match &open_question {
-                Ok(false) => Ok(()),
-                Ok(true) => Err("Answer the open question before resuming".into()),
-                Err(error) => Err(error.clone()),
-            },
-            Status::Running | Status::Waiting if app.supervisor_alive => {
-                Err("Supervisor already owns this attempt".into())
+        match state.forward() {
+            _ if app.supervisor_alive => {
+                Err("The runner is working on it · p Pause, s Stop".into())
             }
-            Status::Paused if app.supervisor_alive => {
-                Err("Supervisor is still stopping this attempt".into())
-            }
-            Status::Waiting => waiting.and_then(|waiting| match waiting {
-                Some(_) => Ok(()),
-                None => Err("Waiting attempt changed; Refresh before resuming".into()),
-            }),
-            Status::Paused => Ok(()),
-            _ => Err("Run is unavailable in this state".into()),
+            Some(TaskAction::Approve) => Err("Approve a revision before Run".into()),
+            Some(_) => Ok(()),
+            None => Err(state.refusal(TaskAction::Run)),
         },
-        "v Approve / w Answer / R Recover / r Run",
+        "v Approve / w Answer / r Run",
     );
     report.check(
         "Project checks",
@@ -244,9 +212,9 @@ pub(crate) fn inspect(app: &App) -> Readiness {
         if definition.definition.kind == Kind::Ai {
             Ok(())
         } else {
-            Err("Human work requires acknowledgment".into())
+            Err("Human work has no AI run".into())
         },
-        "y Acknowledge",
+        "D Mark done",
     );
     for (index, role) in ROLES.iter().enumerate() {
         let model = definition.definition.models[index].as_ref();
@@ -308,17 +276,19 @@ pub(crate) fn inspect(app: &App) -> Readiness {
             );
             report.check(
                 "Supervisor ownership",
-                common.as_ref().map_err(Clone::clone).and_then(|path| {
-                    ownership(Path::new(path), "ktask-runner.lock", "supervisor", false)
-                }),
+                common
+                    .as_ref()
+                    .map_err(Clone::clone)
+                    .and_then(|path| ownership(Path::new(path), "ktask-runner.lock", "supervisor")),
                 "wait for release",
             );
             report.check(
                 "Worker ownership",
-                common.as_ref().map_err(Clone::clone).and_then(|path| {
-                    ownership(Path::new(path), "ktask-worker.lock", "worker", true)
-                }),
-                "wait or R Recover",
+                common
+                    .as_ref()
+                    .map_err(Clone::clone)
+                    .and_then(|path| ownership(Path::new(path), "ktask-worker.lock", "worker")),
+                "wait for release",
             );
             report.check(
                 "Workspace baseline",

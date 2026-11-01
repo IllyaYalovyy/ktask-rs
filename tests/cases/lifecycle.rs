@@ -1,32 +1,44 @@
-use crate::support::{Result, Terminal};
+use crate::support::{self, Result, Terminal};
+use std::{path::Path, process::Command};
+
+const DEV: &str = env!("CARGO_BIN_EXE_ktask-dev");
 
 #[test]
 fn planner_subtasks_need_approval_only_by_policy() -> Result {
     let mut t = open()?;
     configure(&mut t, "\t\t\t ", "Planner approval: Review required")?;
-    key(&mut t, "b\r", "Current #241 · NEW")?;
+    // Breakdown replaces pending work, so the failed current is stopped first.
+    key(&mut t, "s\r", "Current #1 · Pending")?;
+    key(&mut t, "b\r", "Current #241 · Needs approval")?;
     key(&mut t, "v", "approved by Human")?;
     key(&mut t, "j", "› #242 ")?;
     key(&mut t, "nDiscard duplicate\r", "revision 1 rejected")?;
-    current(&mut t, "1", "Current #241 · PENDING")?;
-    click(&mut t, "r Run one", "Current #241 · RUNNING")?;
+    current(&mut t, "1", "Current #241 · Pending")?;
+    click(&mut t, "r Run one", "Current #241 · Running")?;
     quit(&mut t)
 }
 
 #[test]
 fn automatic_queue_continues_but_stops_for_human_and_questions() -> Result {
     let mut t = open()?;
-    dataset(&mut t, " ", "< Guided >")?;
+    // Waits: #1 succeeds after a provider wait, #2 is Human work, #3 asks a question.
+    dataset(&mut t, "    ", "< Waits >")?;
     configure(&mut t, "\t\x01100\t\t\t\t\t ", "Continue queue: Enabled")?;
-    key(&mut t, "d\r", "Current #1 · RUNNING")?;
+    key(&mut t, "aFollow-up\tGoal\tCheck\r", "Queue 4 · History 0")?;
+    current(&mut t, "1", "Current #1 · Pending")?;
+    key(&mut t, "r", "Current #1 · Running")?;
     t.screen("human blocks automatic queue", |s| {
-        s.contains("Current #2 · PENDING")
+        s.contains("Current #2 · Pending") && s.contains("History 1")
     })?;
-    key(&mut t, "y", "Current #3 · RUNNING")?;
-    t.screen("question blocks", |s| s.contains("Current #3 · QUESTION"))?;
+    // Marking Human work done does not start the next task; Run does.
+    key(&mut t, "D\r", "Current #3 · Pending")?;
+    key(&mut t, "r", "Current #3 · Running")?;
+    t.screen("question blocks", |s| {
+        s.contains("Current #3 · Needs input")
+    })?;
     key(&mut t, "wTSV\r", "Answer recorded")?;
-    t.screen("auto queue complete", |s| {
-        s.contains("Queue complete.") && s.contains("History 3")
+    t.screen("queue continues after the answer", |s| {
+        s.contains("Queue complete.") && s.contains("History 4")
     })?;
     quit(&mut t)
 }
@@ -46,11 +58,11 @@ fn current(t: &mut Terminal, keys: &str, header: &str) -> Result<String> {
         s.contains(header) && s.contains("Task brief · Enter: full details")
     })
 }
-/// Applies demo configuration fields, checks Config shows `applied`, and returns to the failed current.
+/// Applies demo configuration fields, checks Config shows `applied`, and returns to Current.
 fn configure(t: &mut Terminal, fields: &str, applied: &str) -> Result {
     t.send(&format!("4e{fields}\r"))?;
     t.screen(applied, |s| s.contains(applied) && !s.contains("[Apply]"))?;
-    current(t, "1", "Current #1 · FAILED")?;
+    current(t, "1", "Current #1 · ")?;
     Ok(())
 }
 /// Whether the text field under `label` shows the cursor.
@@ -60,7 +72,7 @@ fn focused(s: &str, label: &str) -> bool {
 }
 fn open() -> Result<Terminal> {
     let mut t = Terminal::open(70, 22)?;
-    t.screen("startup", |s| s.contains("Current #1 · FAILED"))?;
+    t.screen("startup", |s| s.contains("Current #1 · Failed"))?;
     // These interaction tests explicitly use Run one; the queue-default flow is tested separately.
     configure(&mut t, "\t\t\t\t\t\t ", "Continue queue: Disabled")?;
     t.screen("single task interaction mode", |s| {
@@ -111,7 +123,7 @@ fn model_form_all_fields_mouse_keyboard_validation_and_attempt_snapshot() -> Res
     key(&mut t, "c", "Execution model")?;
     key(&mut t, "\x01discard-this", "discard-this")?;
     click(&mut t, "Cancel", "Model worker-v2")?;
-    key(&mut t, "2x\r", "Exported to /demo/export.tsv")?;
+    key(&mut t, "2E\r", "Exported to /demo/export.tsv")?;
     key(&mut t, "o\x01/demo/export.tsv\r\r", "Imported 120 tasks")?;
     key(&mut t, "c", "worker-v2")?;
     t.screen("effort roundtrip", |s| s.contains("< none >"))?;
@@ -125,92 +137,112 @@ fn model_form_all_fields_mouse_keyboard_validation_and_attempt_snapshot() -> Res
 fn approval_and_rejection_use_normal_tasks_without_losing_ready_revision() -> Result {
     let mut t = open()?;
     dataset(&mut t, "     ", "< Approvals >")?;
-    let new = t.screen("new current", |s| s.contains("Current #1 · NEW"))?;
+    let new = t.screen("new current", |s| s.contains("Current #1 · Needs approval"))?;
     println!("NEEDS APPROVAL\n{new}");
-    key(&mut t, "r", "Unavailable here")?;
+    key(&mut t, "r", "Approve a revision first")?;
     click(&mut t, "v Approve", "approved by Human")?;
-    key(&mut t, "r", "Current #1 · RUNNING")?;
-    t.screen("failure", |s| s.contains("Current #1 · FAILED"))?;
-    configure(&mut t, "\t\t\t ", "Planner approval: Review required")?;
-    key(&mut t, "d\r", "Remediation needs approval")?;
+    key(&mut t, "r", "Current #1 · Running")?;
+    t.screen("failure", |s| s.contains("Current #1 · Failed"))?;
+    quit(&mut t)?;
+
+    // A newer draft over a ready revision: rejecting it keeps the ready inputs.
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    ktask(
+        root,
+        &[
+            "add",
+            "--title",
+            "Ready inputs",
+            "--goal",
+            "Goal",
+            "--criterion",
+            "Check",
+        ],
+    )?;
+    ktask(
+        root,
+        &["edit", "1", "--title", "First draft", "--approval", "draft"],
+    )?;
+    let mut t = Terminal::open_real(DEV, root, 70, 22)?;
+    t.screen("draft over ready", |s| {
+        s.contains("Current #1 · Needs approval") && s.contains("Ready inputs")
+    })?;
     println!(
         "REJECT REVISION\n{}",
-        key(&mut t, "n", "Reject pending revision")?
+        click(&mut t, "n Reject", "Reject pending revision")?
     );
     key(&mut t, "\r", "A reason is required")?;
-    key(
-        &mut t,
-        "Keep existing model\r",
-        "approved inputs and attempts retained",
+    key(&mut t, "Keep the ready inputs\r", "Current #1 · Pending")?;
+    t.screen("ready inputs kept", |s| {
+        s.contains("#1 Ready inputs") && !s.contains("First draft")
+    })?;
+    ktask(
+        root,
+        &[
+            "edit",
+            "1",
+            "--title",
+            "Second draft",
+            "--approval",
+            "draft",
+        ],
     )?;
-    t.screen("still usable", |s| {
-        s.contains("Model economy") && !s.contains("Pending revision")
+    t.screen("external draft", |s| {
+        s.contains("Current #1 · Needs approval")
     })?;
-    key(&mut t, "d\r", "Remediation needs approval")?;
-    click(&mut t, "v Approve", "approved by Human")?;
-    click(&mut t, "t Retry", "Current #1 · RUNNING")?;
-    t.screen("approved escalation succeeds", |s| {
-        s.contains("Current #2 · PENDING")
-    })?;
-    quit(&mut t)
+    key(&mut t, "v", "#1 Second draft")?;
+    t.screen("approved", |s| s.contains("Current #1 · Pending"))?;
+    quit(&mut t)?;
+    let shown = ktask(root, &["show", "1"])?;
+    let revisions: Vec<_> = shown["data"]["revisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["lifecycle"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(revisions, ["ready", "rejected", "ready"]);
+    assert_eq!(shown["data"]["title"], "Second draft");
+    Ok(())
 }
 
-const OUTCOMES: [&str; 3] = ["Succeeded override", "Failed skipped", "Superseded"];
-
 #[test]
-fn resolutions_preserve_failed_attempt_evidence_with_mouse_and_keyboard() -> Result {
+fn mark_done_preserves_failed_attempt_evidence_with_mouse_and_keyboard() -> Result {
     for mouse in [false, true] {
-        for (cycles, outcome, status) in [
-            (0, OUTCOMES[0], "OVERRIDE"),
-            (1, OUTCOMES[1], "SKIPPED"),
-            (2, OUTCOMES[2], "REPLACED"),
-        ] {
-            let mut t = open()?;
-            if mouse {
-                click(&mut t, "z Resolve", "Resolve failed current")?;
-            } else {
-                key(&mut t, "z", "Resolve failed current")?;
-            }
-            if mouse && cycles == 0 {
-                println!(
-                    "RESOLUTION FORM\n{}",
-                    t.screen("resolution form", |s| s.contains("Reason"))?
-                );
-            }
-            for next in &OUTCOMES[1..=cycles] {
-                if mouse {
-                    t.click("Outcome")?;
-                } else {
-                    t.send(" ")?;
-                }
-                let choice = format!("< {next} >");
-                t.screen(&choice, |s| s.contains(&choice))?;
-            }
-            t.screen("selected outcome", |s| s.contains(outcome))?;
-            if mouse {
-                t.click("Reason")?;
-            } else {
-                t.send("\t")?;
-            }
-            t.screen("reason focused", |s| focused(s, "Reason"))?;
-            key(&mut t, "\r", "A reason is required")?;
-            key(&mut t, "Accepted with evidence", "Accepted with evidence")?;
-            if mouse {
-                click(&mut t, "Apply", "failed attempts retained")?;
-            } else {
-                key(&mut t, "\r", "failed attempts retained")?;
-            }
-            key(&mut t, "3/#1 \r", status)?;
-            key(&mut t, "\r", "Attempt 1 / 1")?;
-            key(&mut t, "\x1b[F", "Accepted with evidence")?;
-            if cycles == 0 && mouse {
-                println!(
-                    "RESOLVED HISTORY\n{}",
-                    t.screen("resolution", |s| s.contains("Failed: final row omitted"))?
-                );
-            }
-            quit(&mut t)?;
+        let mut t = open()?;
+        let form = if mouse {
+            click(&mut t, "D Mark done", "Mark done #1 Recover a failed check")?
+        } else {
+            key(&mut t, "D", "Mark done #1 Recover a failed check")?
+        };
+        assert!(focused(&form, "Reason (optional)"), "{form}");
+        if mouse {
+            println!("MARK DONE FORM\n{form}");
         }
+        key(&mut t, "Accepted with evidence", "Accepted with evidence")?;
+        if mouse {
+            click(
+                &mut t,
+                "Apply",
+                "#1 done · Marked done: Accepted with evidence",
+            )?;
+        } else {
+            key(
+                &mut t,
+                "\r",
+                "#1 done · Marked done: Accepted with evidence",
+            )?;
+        }
+        t.screen("next current", |s| s.contains("Current #2 · Pending"))?;
+        key(&mut t, "3/#1 \r", "› #1 ")?;
+        let details = key(&mut t, "\r", "Attempt 1 / 1")?;
+        assert!(details.contains("Done · AI"), "{details}");
+        assert!(details.contains("Failed: final row omitted"), "{details}");
+        let resolution = key(&mut t, "\x1b[F", "Accepted with evidence")?;
+        if mouse {
+            println!("DONE HISTORY\n{details}\n{resolution}");
+        }
+        quit(&mut t)?;
     }
     Ok(())
 }
@@ -227,25 +259,25 @@ fn insertion_before_stopped_current_cleanup_failure_and_running_guard() -> Resul
     key(
         &mut t,
         "2iRepair first\tGoal\tCheck\t\t1\r",
-        "Current #241 · PENDING",
+        "Current #241 · Pending",
     )?;
     key(&mut t, "1r", "Cleanup blocked")?;
     println!(
         "CLEANUP BLOCKED\n{}",
         t.screen("blocked start", |s| s.contains("No attempts yet"))?
     );
-    key(&mut t, "r", "Current #241 · RUNNING")?;
+    key(&mut t, "r", "Current #241 · Running")?;
     key(
         &mut t,
         "2iCannot precede\tGoal\tCheck\t\t241\r",
         "Cannot insert before running",
     )?;
     key(&mut t, "\x1b", "Queue · 121 shown")?;
-    key(&mut t, "1p", "Current #241 · PAUSED")?;
+    key(&mut t, "1p", "Current #241 · Paused")?;
     key(
         &mut t,
         "2iCan precede paused\tGoal\tCheck\t\t241\r",
-        "Current #242 · PENDING",
+        "Current #242 · Pending",
     )?;
     key(&mut t, "1l", "Project events")?;
     println!(
@@ -257,36 +289,24 @@ fn insertion_before_stopped_current_cleanup_failure_and_running_guard() -> Resul
 }
 
 #[test]
-fn ordinary_remediation_task_runs_before_failure_and_continues_original() -> Result {
-    let mut t = open()?;
-    configure(&mut t, "\t\x01100", "Simulation step delay: 100 ms")?;
-    click(&mut t, "d Remediate", "Strategy")?;
-    click(&mut t, "Strategy", "< Insert repair task >")?;
-    click(&mut t, "Apply", "Current #241 · RUNNING")?;
-    t.screen("repair then original complete", |s| {
-        s.contains("Current #2 · PENDING")
-    })?;
-    key(&mut t, "3/#1 \r\r", "Attempt 2 / 2")?;
-    key(&mut t, "[", "Attempt 1 / 2")?;
-    key(&mut t, "\x1b[F", "Execution: economy / medium")?;
-    quit(&mut t)
-}
-
-#[test]
 fn timed_wait_keeps_attempt_session_and_active_time() -> Result {
     let mut t = open()?;
     dataset(&mut t, "    ", "< Waits >")?;
-    key(&mut t, "r", "Current #1 · RUNNING")?;
+    key(&mut t, "r", "Current #1 · Running")?;
+    // A provider wait stays Running: the supervisor resumes it by itself.
     println!(
         "RATE WAIT\n{}",
-        t.screen("rate wait", |s| s.contains("Current #1 · WAITING"))?
+        t.screen("rate wait", |s| s.contains("Current #1 · Running")
+            && s.contains("resumes by itself"))?
     );
     t.screen("same attempt resumes", |s| {
-        s.contains("Current #1 · RUNNING") && s.contains("Attempt 1")
+        s.contains("Current #1 · Running")
+            && s.contains("Attempt 1")
+            && !s.contains("resumes by itself")
     })?;
-    key(&mut t, "p", "Current #1 · PAUSED")?;
+    key(&mut t, "p", "Current #1 · Paused")?;
     // Each simulated step adds 0.4 s of execution time; the 3 s wait must add none.
-    let stats = key(&mut t, "s", "Elapsed execution")?;
+    let stats = key(&mut t, "S", "Elapsed execution")?;
     let value = |label: &str| -> Result<f64> {
         let line = stats
             .lines()
@@ -320,7 +340,7 @@ fn new_task_rejection_mouse_and_configuration_field_paging() -> Result {
     dataset(&mut t, "     ", "< Approvals >")?;
     click(&mut t, "n Reject", "Reject pending revision")?;
     key(&mut t, "Not needed", "Not needed")?;
-    click(&mut t, "Apply", "Current #2 · PENDING")?;
+    click(&mut t, "Apply", "Current #2 · Pending")?;
     key(&mut t, "4e", "Planner approval")?;
     println!(
         "CONFIG FIRST PAGE\n{}",
@@ -354,4 +374,26 @@ fn review_all_views_at_minimum_size() -> Result {
         println!("VIEW {tab}\n{screen}");
     }
     quit(&mut t)
+}
+
+/// The CLI on the project at `root`, as the owner; returns its JSON reply.
+fn ktask(root: &Path, args: &[&str]) -> Result<serde_json::Value> {
+    let output = Command::new(DEV)
+        .env_clear()
+        .env("HOME", root)
+        .env("XDG_STATE_HOME", root.join("state"))
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_CACHE_HOME", root.join("cache"))
+        .env("XDG_RUNTIME_DIR", root.join("runtime"))
+        .env("TMPDIR", root)
+        .current_dir(root)
+        .arg("--json")
+        .args(args)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(serde_json::from_slice(&output.stdout)?)
 }

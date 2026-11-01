@@ -75,11 +75,11 @@ fn step(screen: &str) -> Option<u32> {
         .parse()
         .ok()
 }
-/// Sends keys that must be refused. An earlier refusal's message may still show, so a
-/// copy with nothing selected, which only shows a hint, replaces it first.
-fn refused(t: &mut Terminal, keys: &str) -> Result<String> {
+/// Sends keys that the task's state must refuse with `refusal`. An earlier refusal's message
+/// may still show, so a copy with nothing selected, which only shows a hint, replaces it first.
+fn refused(t: &mut Terminal, keys: &str, refusal: &str) -> Result<String> {
     key(t, "\x1b[99;6u", "Drag text, or F2")?;
-    key(t, keys, "Unavailable here")
+    key(t, keys, refusal)
 }
 fn quit(t: &mut Terminal) -> Result {
     t.send("\x03")?;
@@ -147,7 +147,7 @@ fn text_selection_copy_and_native_fallback_in_real_terminals() -> Result {
             "decoration copied: {text:?}"
         );
         // F2 marks the first cell of the first pane, the queue list; Shift-End extends it.
-        let row_one = location(&selected, "#1   FAILED")?;
+        let row_one = location(&selected, "#1   Failed")?;
         let keyboard_after_mouse = select(
             &mut t,
             |t| t.send("\x1b[12~\x1b[1;2F"),
@@ -177,7 +177,7 @@ fn text_selection_copy_and_native_fallback_in_real_terminals() -> Result {
             copy(&mut t)?.contains("Goal:"),
             "reverse drag lost cross-line text"
         );
-        let row_two = location(&selected, "#2   PENDING")?;
+        let row_two = location(&selected, "#2   Pending")?;
         let reverse = highlighted(&t);
         let no_action = select(
             &mut t,
@@ -185,7 +185,7 @@ fn text_selection_copy_and_native_fallback_in_real_terminals() -> Result {
             |h| h != reverse && h.contains(&goal),
         )?;
         assert!(
-            no_action.contains("#1 · FAILED · AI"),
+            no_action.contains("#1 · Failed · AI"),
             "drag over row selected it:\n{no_action}"
         );
         assert!(no_action.contains("Goal: Include every task"));
@@ -197,7 +197,7 @@ fn text_selection_copy_and_native_fallback_in_real_terminals() -> Result {
             row_two.1 + 1
         ))?;
         t.screen("row click still selects", |s| {
-            s.contains("#2 · PENDING · Human")
+            s.contains("#2 · Pending · Human")
         })?;
         // Esc has nothing to clear here; the keyboard selection after it proves it was handled.
         t.send("\x1b")?;
@@ -237,9 +237,9 @@ fn text_selection_copy_and_native_fallback_in_real_terminals() -> Result {
 fn live_log_selection_stays_put_as_output_arrives() -> Result {
     let mut t = Terminal::open(120, 30)?;
     ready(&t)?;
-    t.send("t")?;
+    t.send("r")?;
     let running = t.screen("running log", |s| {
-        s.contains("RUNNING") && s.contains("Executor:")
+        s.contains("Running") && s.contains("Executor:")
     })?;
     let start = location(&running, "Executor:")?;
     let marked = select(
@@ -272,7 +272,7 @@ fn plain_log_click_keeps_following_as_output_arrives() -> Result {
         ready(&t)?;
         key(&mut t, "4e", "Step delay (ms)")?;
         key(&mut t, "\t\x012000\x13", "Configuration applied")?;
-        key(&mut t, "1t", "RUNNING")?;
+        key(&mut t, "1r", "Current #1 · Running")?;
         t.screen("log approaches capacity", |s| s.contains("step 2/6"))?;
         let before = t.screen("following before click", |s| {
             s.contains("step 3/6") && s.contains("Log · following")
@@ -305,14 +305,14 @@ fn selecting_modal_text_does_not_stop_the_underlying_log() -> Result {
         ready(&t)?;
         key(&mut t, "4e", "Step delay (ms)")?;
         key(&mut t, "\t\x012000\x13", "Configuration applied")?;
-        t.send("1t")?;
+        t.send("1r")?;
         let running = t.screen("running log", |s| {
-            s.contains("RUNNING") && s.contains("Log · following")
+            s.contains("Running") && s.contains("Log · following")
         })?;
         let log = location(&running, "Log · following")?;
 
-        let help = key(&mut t, "?", "w answer AI")?;
-        let (word_x, word_y) = location(&help, "w answer AI")?;
+        let help = key(&mut t, "?", "m run mode")?;
+        let (word_x, word_y) = location(&help, "m run mode")?;
         let phrase = (word_x + 1, word_y);
         assert!(
             phrase.0 >= log.0 && phrase.1 > log.1,
@@ -324,7 +324,7 @@ fn selecting_modal_text_does_not_stop_the_underlying_log() -> Result {
             |h| h.contains(&phrase),
         )?;
         println!("MODAL MOUSE SELECTED {cols}x{rows}\n{selected}");
-        assert!(mouse_copy(&mut t)?.contains("answer"));
+        assert!(mouse_copy(&mut t)?.contains("run mode"));
         t.click("Close")?;
         let after_mouse = t.screen("log still follows after modal mouse selection", |s| {
             s.contains("Log · following") && !s.contains("Keyboard help")
@@ -356,7 +356,7 @@ fn full_following_log_freezes_on_mouse_down_before_drag() -> Result {
     ready(&t)?;
     key(&mut t, "4e", "Step delay (ms)")?;
     key(&mut t, "\t\x012000\x13", "Configuration applied")?;
-    key(&mut t, "1t", "RUNNING")?;
+    key(&mut t, "1r", "Current #1 · Running")?;
     t.screen("log approaches capacity", |s| s.contains("step 2/6"))?;
     let full = t.screen("full following log", |s| {
         s.contains("step 4/6")
@@ -470,7 +470,7 @@ fn queue_search_filter_navigation_history_and_selection_are_independent() -> Res
     key(&mut t, "\x1b[6~", "› #18 ")?;
     key(&mut t, "\x1b[5~", "› #1 ")?;
     let queue = key(&mut t, "G", "› #120 ")?;
-    current(&mut t, "1", "Current #1 · FAILED")?;
+    current(&mut t, "1", "Current #1 · Failed")?;
     let restored = key(&mut t, "2", "› #120 ")?;
     assert_eq!(queue, restored);
     let before_search = key(&mut t, "kkkkk", "› #115 ")?;
@@ -511,7 +511,11 @@ fn queue_search_filter_navigation_history_and_selection_are_independent() -> Res
     t.screen("wheel back", |s| s.contains("› #1 "))?;
     key(&mut t, "3", "› #121 ")?;
     key(&mut t, "G", "› #240 ")?;
-    key(&mut t, "e", "History are read-only")?;
+    key(
+        &mut t,
+        "e",
+        "#240: Edit is not available for a done task; it offers Copy to queue",
+    )?;
     let details = key(&mut t, "\r", "Task details / attempts")?;
     println!("HISTORY DETAILS\n{details}");
     t.send("\x1b[F")?;
@@ -524,7 +528,7 @@ fn queue_search_filter_navigation_history_and_selection_are_independent() -> Res
 }
 
 #[test]
-fn keyboard_crud_reorder_insert_validation_and_undo() -> Result {
+fn keyboard_crud_reorder_insert_validation_cancel_and_copy() -> Result {
     let mut t = Terminal::open(100, 28)?;
     ready(&t)?;
     key(&mut t, "2a", "Add task")?;
@@ -546,35 +550,39 @@ fn keyboard_crud_reorder_insert_validation_and_undo() -> Result {
     t.screen("#241 saved", |s| {
         s.contains("#241 saved") && s.contains("Renamed task") && !s.contains("Edit task")
     })?;
-    key(&mut t, "d", "Delete pending task?")?;
+    key(&mut t, "x", "Cancel #241 Renamed task")?;
     t.send("\x1b")?;
-    closed(&t, "Delete pending task?", "› #241 ")?;
-    key(&mut t, "d\r", "#241 deleted")?;
-    key(&mut t, "u", "Deleted task restored")?;
+    closed(&t, "Cancel #241 Renamed task", "› #241 ")?;
+    key(&mut t, "x\r", "#241 cancelled")?;
+    key(&mut t, "3", "› #241 Cancelled Renamed task")?;
+    key(&mut t, "C", "Copy to queue #241 Renamed task")?;
+    key(&mut t, "\r", "#241 copied to the queue as #242")?;
+    key(&mut t, "2G", "› #242 Pending  Renamed task")?;
     t.send("m1")?;
     t.screen("move preview", |s| {
         s.contains("Before task ID") && s.contains("after start / before #1")
     })?;
     let position = key(&mut t, "\x012", "after #1 / before #2")?;
     println!("POSITION PREVIEW\n{position}");
-    key(&mut t, "\r", "#241 moved")?;
+    key(&mut t, "\r", "#242 moved")?;
     key(&mut t, "g", "› #1 ")?;
-    key(&mut t, "j", "› #241 ")?;
+    key(&mut t, "j", "› #242 ")?;
     key(&mut t, "i", "Insert task")?;
     let invalid = key(&mut t, "Inserted task\tGoal\tCheck\t\t9999", "9999")?;
     assert!(invalid.contains("not an insertion target"), "{invalid}");
     // Enter must be refused; editing the still open field next proves it was handled.
     t.send("\r")?;
-    let corrected = key(&mut t, "\x012", "after #241 / before #2")?;
-    assert!(!corrected.contains("#242 saved"), "{corrected}");
-    key(&mut t, "\r", "#242 saved")?;
+    let corrected = key(&mut t, "\x012", "after #242 / before #2")?;
+    assert!(!corrected.contains("#243 saved"), "{corrected}");
+    key(&mut t, "\r", "#243 saved")?;
     key(&mut t, "g", "› #1 ")?;
-    key(&mut t, "jj", "› #242 ")?;
+    key(&mut t, "jj", "› #243 ")?;
+    key(&mut t, "3", "› #241 Cancelled Renamed task")?;
     quit(&mut t)
 }
 
 #[test]
-fn mouse_crud_and_modal_focus() -> Result {
+fn mouse_crud_cancel_copy_and_modal_focus() -> Result {
     let mut t = Terminal::open(100, 28)?;
     ready(&t)?;
     click(&mut t, "2 Queue", "Queue · 120 shown")?;
@@ -599,12 +607,29 @@ fn mouse_crud_and_modal_focus() -> Result {
     click(&mut t, "m Move", "Move pending task")?;
     key(&mut t, "2", "after #1 / before #2")?;
     click(&mut t, "Apply", "#241 moved")?;
-    click(&mut t, "d Delete", "Delete pending task?")?;
+    click(&mut t, "x Cancel", "Cancel #241 Mouse changed")?;
     t.click("Cancel")?;
-    closed(&t, "Delete pending task?", "Mouse changed")?;
-    click(&mut t, "d Delete", "Delete pending task?")?;
-    click(&mut t, "Apply", "#241 deleted")?;
-    click(&mut t, "u Undo", "Deleted task restored")?;
+    closed(&t, "Cancel #241 Mouse changed", "Mouse changed")?;
+    click(&mut t, "x Cancel", "Cancel #241 Mouse changed")?;
+    key(&mut t, "Duplicate", "Duplicate")?;
+    click(&mut t, "Apply", "#241 cancelled · Cancelled: Duplicate")?;
+    click(&mut t, "3 History", "› #241 Cancelled Mouse changed")?;
+    click(
+        &mut t,
+        "C Copy to queue",
+        "Copy to queue #241 Mouse changed",
+    )?;
+    t.click("Cancel")?;
+    closed(&t, "Copy to queue #241", "› #241 Cancelled Mouse changed")?;
+    click(
+        &mut t,
+        "C Copy to queue",
+        "Copy to queue #241 Mouse changed",
+    )?;
+    key(&mut t, "2", "2▏")?;
+    click(&mut t, "Apply", "#241 copied to the queue as #242")?;
+    click(&mut t, "2 Queue", "Queue · 121 shown")?;
+    click(&mut t, "#242 Pending", "› #242 Pending  Mouse changed")?;
     click(&mut t, "i Insert", "Insert task")?;
     t.click("Cancel")?;
     closed(&t, "Insert task", "Queue · 121 shown")?;
@@ -615,49 +640,49 @@ fn mouse_crud_and_modal_focus() -> Result {
 }
 
 #[test]
-fn keyboard_execution_repair_pause_resume_human_question_and_completion() -> Result {
+fn keyboard_execution_retry_pause_resume_stop_human_question_and_completion() -> Result {
     let mut t = Terminal::open(120, 30)?;
     ready(&t)?;
     guided(&mut t)?;
-    key(&mut t, "r", "Unavailable here")?;
-    key(&mut t, "t", "Current #1 · RUNNING")?;
-    key(&mut t, "p", "Current #1 · PAUSED")?;
+    key(&mut t, "x", "#1: Cancel is not available for a failed task")?;
+    key(&mut t, "r", "Current #1 · Running")?;
+    key(&mut t, "p", "Current #1 · Paused")?;
     std::thread::sleep(std::time::Duration::from_millis(600));
     key(&mut t, "?", "Keyboard help")?;
     t.send("\x1b")?;
-    closed(&t, "Keyboard help", "Current #1 · PAUSED")?;
-    key(&mut t, "r", "Current #1 · RUNNING")?;
+    closed(&t, "Keyboard help", "Current #1 · Paused")?;
+    key(&mut t, "r", "Current #1 · Running")?;
     t.screen("unrepaired retry fails", |s| {
-        s.contains("Current #1 · FAILED") && s.contains("Attempt 2")
+        s.contains("Current #1 · Failed") && s.contains("Attempt 2")
     })?;
-    let repair = key(&mut t, "d", "Remediate failure")?;
-    println!("REPAIR REVIEW\n{repair}");
+    key(&mut t, "r", "Current #1 · Running")?;
+    key(&mut t, "p", "Current #1 · Paused")?;
+    let stop = key(&mut t, "s", "Stop #1 Recover a failed check")?;
+    println!("STOP\n{stop}");
     t.send("\x1b")?;
-    closed(&t, "Remediate failure", "Current #1 · FAILED")?;
-    key(&mut t, "d\r", "Remediation applied by AI")?;
-    t.screen("repair completes current only", |s| {
-        s.contains("Current #2 · PENDING")
+    closed(&t, "Stop #1", "Current #1 · Paused")?;
+    key(&mut t, "s\r", "Current #1 · Pending")?;
+    key(&mut t, "r", "Current #1 · Running")?;
+    t.screen("a fresh run fails again", |s| {
+        s.contains("Current #1 · Failed") && s.contains("Attempt 4")
     })?;
-    key(&mut t, "y", "Current #3 · PENDING")?;
-    key(&mut t, "r", "Current #3 · RUNNING")?;
-    t.screen("AI asks", |s| s.contains("Current #3 · QUESTION"))?;
+    key(&mut t, "D\r", "Current #2 · Pending")?;
+    key(&mut t, "D\r", "Current #3 · Pending")?;
+    key(&mut t, "r", "Current #3 · Running")?;
+    t.screen("AI asks", |s| s.contains("Current #3 · Needs input"))?;
     let question = key(&mut t, "w", "Answer AI question")?;
     println!("QUESTION\n{question}");
-    t.send("\r")?;
-    // The question already says an answer is required; the error repeats it.
-    t.screen("An answer is required", |s| {
-        s.matches("An answer is required").count() == 2
-    })?;
+    key(&mut t, "\r", "An answer is required")?;
     key(&mut t, "TSV\r", "Answer recorded")?;
     let done = t.screen("all work done", |s| {
         s.contains("Queue complete.") && s.contains("History 3")
     })?;
     println!("QUEUE COMPLETE\n{done}");
     key(&mut t, "3", "History · 3 shown")?;
-    key(&mut t, "/#1\r\r", "Attempt 3 / 3")?;
-    key(&mut t, "[", "Attempt 2 / 3")?;
-    key(&mut t, "[", "Attempt 1 / 3")?;
-    key(&mut t, "]", "Attempt 2 / 3")?;
+    key(&mut t, "/#1\r\r", "Attempt 4 / 4")?;
+    key(&mut t, "[", "Attempt 3 / 4")?;
+    key(&mut t, "[", "Attempt 2 / 4")?;
+    key(&mut t, "]", "Attempt 3 / 4")?;
     quit(&mut t)
 }
 
@@ -674,29 +699,35 @@ fn mouse_execution_logs_attempts_and_statistics() -> Result {
     click(&mut t, "End Follow", "Log · following")?;
     println!(
         "MINIMUM RUNNING\n{}",
-        click(&mut t, "t Retry", "Current #1 · RUNNING")?
+        click(&mut t, "r Retry", "Current #1 · Running")?
     );
     println!(
         "MINIMUM PAUSED\n{}",
-        click(&mut t, "p Pause", "Current #1 · PAUSED")?
+        click(&mut t, "p Pause", "Current #1 · Paused")?
     );
-    click(&mut t, "r Resume", "Current #1 · RUNNING")?;
-    t.screen("retry failed", |s| {
-        s.contains("Current #1 · FAILED") && s.contains("Attempt 2")
-    })?;
-    click(&mut t, "d Remediate", "Remediate failure")?;
+    click(&mut t, "r Resume", "Current #1 · Running")?;
+    click(&mut t, "p Pause", "Current #1 · Paused")?;
+    click(&mut t, "s Stop", "Stop #1 Recover a failed check")?;
     t.click("Cancel")?;
-    closed(&t, "Remediate failure", "Current #1 · FAILED")?;
-    click(&mut t, "d Remediate", "Remediate failure")?;
-    click(&mut t, "Apply", "Remediation applied by AI")?;
-    println!(
-        "MINIMUM HUMAN\n{}",
-        t.screen("next human", |s| s.contains("Current #2 · PENDING"))?
-    );
-    click(&mut t, "y Acknowledge", "Current #3 · PENDING")?;
-    click(&mut t, "r Run one", "Current #3 · RUNNING")?;
+    closed(&t, "Stop #1", "Current #1 · Paused")?;
+    click(&mut t, "s Stop", "Stop #1 Recover a failed check")?;
+    click(&mut t, "Apply", "Current #1 · Pending")?;
+    click(&mut t, "r Run one", "Current #1 · Running")?;
+    t.screen("fresh run failed", |s| {
+        s.contains("Current #1 · Failed") && s.contains("Attempt 3")
+    })?;
+    click(&mut t, "D Mark done", "Mark done #1 Recover a failed check")?;
+    click(&mut t, "Apply", "Current #2 · Pending")?;
+    println!("MINIMUM HUMAN\n{}", t.current_screen());
+    click(
+        &mut t,
+        "D Mark done",
+        "Mark done #2 Approve the queue interaction",
+    )?;
+    click(&mut t, "Apply", "Current #3 · Pending")?;
+    click(&mut t, "r Run one", "Current #3 · Running")?;
     let open_question = t.screen("question", |s| {
-        s.contains("Current #3 · QUESTION") && s.contains("Which export format")
+        s.contains("Current #3 · Needs input") && s.contains("Which export format")
     })?;
     let question_at = location(&open_question, "Which export format")?;
     let selected_question = select(
@@ -707,15 +738,15 @@ fn mouse_execution_logs_attempts_and_statistics() -> Result {
     println!("MINIMUM QUESTION SELECTED\n{selected_question}");
     assert!(copy(&mut t)?.starts_with("Which export format"));
     let cleared = select(&mut t, |t| t.send("\x1b"), |h| h.is_empty())?;
-    assert!(cleared.contains("Current #3 · QUESTION"), "{cleared}");
+    assert!(cleared.contains("Current #3 · Needs input"), "{cleared}");
     println!(
         "MINIMUM QUESTION\n{}",
-        click(&mut t, "w Answer", "Answer AI question")?
+        click(&mut t, "r Answer", "Answer AI question")?
     );
     key(&mut t, "JSON", "JSON")?;
     click(&mut t, "Apply", "Answer recorded")?;
     t.screen("complete", |s| s.contains("Queue complete."))?;
-    let stats = click(&mut t, "s Stats", "Project statistics")?;
+    let stats = click(&mut t, "S Stats", "Project statistics")?;
     for text in [
         "Completed: 3",
         "Failed attempts: 2",
@@ -731,7 +762,9 @@ fn mouse_execution_logs_attempts_and_statistics() -> Result {
     click(&mut t, "#1 ", "› #1 ")?;
     click(&mut t, "Enter Details", "Attempt 3 / 3")?;
     click(&mut t, "Prev", "Attempt 2 / 3")?;
-    click(&mut t, "Next", "Attempt 3 / 3")?;
+    let first = click(&mut t, "Prev", "Attempt 1 / 3")?;
+    assert!(first.contains("Failed: final row omitted"), "{first}");
+    click(&mut t, "Next", "Attempt 2 / 3")?;
     quit(&mut t)
 }
 
@@ -756,7 +789,7 @@ fn import_export_preview_validation_overwrite_and_roundtrip() -> Result {
     click(&mut t, "Apply", "Import preview")?;
     key(&mut t, "3", "after #2 / before #3")?;
     click(&mut t, "Apply", "Imported 2 tasks")?;
-    key(&mut t, "x", "Export · in-memory")?;
+    key(&mut t, "E", "Export · in-memory")?;
     key(&mut t, "\x01/not-real\r", "Use a virtual path")?;
     println!(
         "OVERWRITE CONFIRMATION\n{}",
@@ -764,7 +797,7 @@ fn import_export_preview_validation_overwrite_and_roundtrip() -> Result {
     );
     t.send("\x1b")?;
     closed(&t, "Overwrite mock file?", "Queue · 122 shown")?;
-    click(&mut t, "x Export", "Export · in-memory")?;
+    click(&mut t, "E Export", "Export · in-memory")?;
     key(&mut t, "\x01/demo/existing.tsv", "/demo/existing.tsv")?;
     click(&mut t, "Scope", "< History >")?;
     click(&mut t, "Apply", "Overwrite mock file?")?;
@@ -783,18 +816,25 @@ fn import_export_preview_validation_overwrite_and_roundtrip() -> Result {
 fn breakdown_review_edit_accept_cancel_and_history() -> Result {
     let mut t = Terminal::open(100, 28)?;
     ready(&t)?;
+    // Breakdown replaces pending work: a failed task returns to Pending first.
+    refused(
+        &mut t,
+        "b",
+        "#1: Supersede is not available for a failed task",
+    )?;
+    key(&mut t, "s\r", "Current #1 · Pending")?;
     let proposal = key(&mut t, "b", "Break down task")?;
     println!("BREAKDOWN\n{proposal}");
     key(&mut t, "\x01\r", "Both subtask titles are required")?;
     t.send("\x1b")?;
-    closed(&t, "Break down task", "Current #1 · FAILED")?;
+    closed(&t, "Break down task", "Current #1 · Pending")?;
     click(&mut t, "b Break down", "Break down task")?;
     key(&mut t, "\x01Fix boundary", "Fix boundary")?;
     focus(&mut t, "Step 2 title")?;
     key(&mut t, "\x01Verify boundary", "Verify boundary")?;
     let replaced = click(&mut t, "Apply", "#1 replaced by 2 subtasks")?;
     assert!(
-        replaced.contains("Current #241 · PENDING") && replaced.contains("› #241 "),
+        replaced.contains("Current #241 · Pending") && replaced.contains("› #241 "),
         "{replaced}"
     );
     key(&mut t, "3/#1 \r\r", "Attempt 1 / 1")?;
@@ -836,7 +876,7 @@ fn configuration_validation_cancel_mouse_toggle_and_empty_state() -> Result {
     println!("EMPTY WORKSPACE\n{empty}");
     click(&mut t, "a Add", "Add task")?;
     key(&mut t, "First task\tGoal\tCheck\r", "saved")?;
-    current(&mut t, "1", "Current #241 · PENDING")?;
+    current(&mut t, "1", "Current #241 · Pending")?;
     quit(&mut t)
 }
 
@@ -923,27 +963,34 @@ fn mouse_insertion_positions_paste_and_pending_breakdown() -> Result {
     key(&mut t, "\x1b[1;3B", "after #120 / before end")?;
     click(&mut t, "Earlier", "after #119 / before #120")?;
     let inserted = click(&mut t, "Apply", "#241 saved")?;
-    assert!(inserted.contains("Current #1 · FAILED"), "{inserted}");
+    assert!(inserted.contains("Current #1 · Failed"), "{inserted}");
     click(&mut t, "m Move", "Move pending task")?;
     click(&mut t, "Earlier", "after #119 / before #120")?;
     click(&mut t, "Earlier", "after #118 / before #119")?;
     click(&mut t, "Apply", "#241 moved")?;
     key(&mut t, "g", "› #1 ")?;
-    click(&mut t, "#2   PENDING", "› #2 ")?;
+    click(&mut t, "#2   Pending", "› #2 ")?;
     key(
         &mut t,
         "b\x01Review first\t\x01Approve next\r",
         "#2 replaced by 2 subtasks",
     )?;
-    current(&mut t, "1", "Current #1 · FAILED")?;
+    current(&mut t, "1", "Current #1 · Failed")?;
     key(&mut t, "e", "Edit task")?;
     key(&mut t, "\x01Updated failed task\r", "#1 saved")?;
-    key(&mut t, "1t", "Current #1 · RUNNING")?;
-    key(&mut t, "p", "Current #1 · PAUSED")?;
-    key(&mut t, "e", "Unavailable here")?;
+    key(&mut t, "1r", "Current #1 · Running")?;
+    key(&mut t, "p", "Current #1 · Paused")?;
+    // A paused task can be edited; the next Resume continues with the new revision.
+    key(&mut t, "e", "Edit task")?;
+    t.send("\x1b")?;
+    closed(&t, "Edit task", "Current #1 · Paused")?;
     key(&mut t, "2g", "› #1 ")?;
-    refused(&mut t, "d")?;
-    refused(&mut t, "m")?;
+    refused(
+        &mut t,
+        "x",
+        "#1: Cancel is not available for a paused task; it offers Resume, Edit, Stop, Mark done",
+    )?;
+    refused(&mut t, "m", "#1: Move is not available for a paused task")?;
     quit(&mut t)
 }
 
@@ -951,12 +998,12 @@ fn mouse_insertion_positions_paste_and_pending_breakdown() -> Result {
 fn virtual_export_new_all_and_overwrite_cancel_preserves_original() -> Result {
     let mut t = Terminal::open(100, 28)?;
     ready(&t)?;
-    key(&mut t, "2x", "Export · in-memory")?;
+    key(&mut t, "2E", "Export · in-memory")?;
     key(&mut t, "\t  ", "< All >")?;
     key(&mut t, "\r", "Exported to /demo/export.tsv")?;
     key(&mut t, "o\x01/demo/export.tsv\r", "Import preview")?;
     key(&mut t, "\r", "Imported 240 tasks")?;
-    key(&mut t, "x\x01/demo/existing.tsv\r", "Overwrite mock file?")?;
+    key(&mut t, "E\x01/demo/existing.tsv\r", "Overwrite mock file?")?;
     t.click("Cancel")?;
     closed(&t, "Overwrite mock file?", "Queue · 360 shown")?;
     key(&mut t, "o\x01/demo/existing.tsv\r", "Existing task")?;
@@ -976,11 +1023,11 @@ fn all_dialog_types_fit_at_minimum_and_mouse_search_cancel() -> Result {
     let mut t = Terminal::open(70, 22)?;
     ready(&t)?;
     for (keys, title) in [
-        ("d", "Remediate failure"),
-        ("b", "Break down task"),
+        ("s", "Stop #1 Recover a failed check"),
+        ("D", "Mark done #1 Recover a failed check"),
         ("e", "Edit task"),
         ("a", "Add task"),
-        ("s", "Project statistics"),
+        ("S", "Project statistics"),
         ("?", "Keyboard help"),
         ("\r", "Task details / attempts"),
     ] {
@@ -994,11 +1041,14 @@ fn all_dialog_types_fit_at_minimum_and_mouse_search_cancel() -> Result {
     }
     key(&mut t, "2j", "› #2 ")?;
     for (keys, title) in [
-        ("d", "Delete pending task?"),
+        ("x", "Cancel #2 Approve the queue interaction"),
+        ("R", "Supersede #2 Approve the queue interaction"),
+        ("D", "Mark done #2 Approve the queue interaction"),
+        ("b", "Break down task"),
         ("m", "Move pending task"),
         ("i", "Insert task"),
         ("o", "Import · in-memory"),
-        ("x", "Export · in-memory"),
+        ("E", "Export · in-memory"),
     ] {
         let screen = key(&mut t, keys, title)?;
         assert!(
@@ -1011,6 +1061,22 @@ fn all_dialog_types_fit_at_minimum_and_mouse_search_cancel() -> Result {
     click(&mut t, "/ Search", "Apply search")?;
     key(&mut t, "no-such-task", "No matching tasks.")?;
     click(&mut t, "Esc Cancel search", "› #2 ")?;
+    let history = key(&mut t, "3", "History · 120 shown")?;
+    let first = history
+        .lines()
+        .find_map(|line| line.split_once("› #"))
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .ok_or("no selected History row")?
+        .to_owned();
+    let title = format!("Copy to queue #{first} ");
+    let screen = key(&mut t, "C", &title)?;
+    assert!(
+        screen.contains("Apply") && screen.contains("Cancel"),
+        "{screen}"
+    );
+    println!("MINIMUM DIALOG Copy to queue\n{screen}");
+    t.send("\x1b")?;
+    closed(&t, &title, "History · 120 shown")?;
     key(&mut t, "4e", "Step delay (ms)")?;
     key(&mut t, "\t\t  \r", "Reset mock workspace?")?;
     let reset = t.screen("reset confirmation", |s| {
@@ -1019,7 +1085,7 @@ fn all_dialog_types_fit_at_minimum_and_mouse_search_cancel() -> Result {
     println!("MINIMUM RESET\n{reset}");
     key(&mut t, "\r1", "No current task.")?;
     key(&mut t, "3", "No tasks here.")?;
-    key(&mut t, "2x\r", "Exported to /demo/export.tsv")?;
+    key(&mut t, "2E\r", "Exported to /demo/export.tsv")?;
     key(
         &mut t,
         "o\x01/demo/export.tsv\r",

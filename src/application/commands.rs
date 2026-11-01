@@ -1,3 +1,4 @@
+use super::lifecycle::{Action, State};
 use super::*;
 use crate::storage::ordering;
 
@@ -6,18 +7,18 @@ fn checked(tx: &Transaction<'_>, project: i64, target: VersionedTask) -> Result<
         params![project, target.id, target.version], |r| Ok((r.get(0)?, r.get(1)?))).optional()?
         .ok_or_else(|| Error::Conflict("Task changed elsewhere; cancel and reopen this form".into()))
 }
-fn editable(lifecycle: &str, status: &str) -> Result<()> {
-    require(
-        !matches!(status, "paused" | "waiting"),
-        "Task is live; use Reset to pending before editing",
+/// Tasks are editable whenever they are not running or finished. Resume and Retry then
+/// continue the work with the new revision.
+fn editable(tx: &Transaction<'_>, project: i64, target: VersionedTask) -> Result<()> {
+    let lifecycle: String = tx.query_row(
+        "SELECT lifecycle FROM tasks WHERE id=?1 AND project_id=?2",
+        params![target.id, project],
+        |r| r.get(0),
     )?;
+    let state = allowed(tx, project, target, Action::Edit)?;
     require(
-        matches!(lifecycle, "new" | "ready")
-            && matches!(
-                status,
-                "new" | "ready" | "failed" | "interrupted" | "cancelled"
-            ),
-        "Task is read-only while live or resolved",
+        matches!(lifecycle.as_str(), "new" | "ready"),
+        &state.refusal(Action::Edit),
     )
 }
 fn insert_revision(
@@ -147,67 +148,6 @@ impl Service {
         tx.commit()?;
         Ok(())
     }
-    /// Retain an interactive failure judgment without changing the failed attempt.
-    pub fn record_failure_judgment(
-        &mut self,
-        target: VersionedTask,
-        action: &str,
-        detail: &str,
-        reason: &str,
-    ) -> Result<()> {
-        require(
-            matches!(action, "repair" | "ask"),
-            "Unknown failure judgment",
-        )?;
-        require(
-            !detail.trim().is_empty() && !reason.trim().is_empty(),
-            "Incomplete failure judgment",
-        )?;
-        let tx = self
-            .db
-            .connection_mut()
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (lifecycle, status) = checked(&tx, self.project_id, target)?;
-        let attempt: Option<i64> = tx.query_row(
-            "SELECT latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2 AND row_version=?3",
-            params![self.project_id, target.id, target.version], |row| row.get(0),
-        ).optional()?.flatten();
-        require(
-            lifecycle == "ready" && status == "failed" && attempt.is_some(),
-            "Only failed current can be remediated",
-        )?;
-        let attempt = attempt.unwrap();
-        let now = now_ms();
-        if action == "ask" {
-            require(
-                tx.query_row(
-                    "SELECT count(*) FROM questions WHERE attempt_id=?1 AND state='open'",
-                    [attempt],
-                    |row| row.get::<_, i64>(0),
-                )? == 0,
-                "Answer the open question first",
-            )?;
-            tx.execute("INSERT INTO questions(attempt_id,prompt,state,created_at_ms) VALUES (?1,?2,'open',?3)", params![attempt, detail, now])?;
-        }
-        event(
-            &tx,
-            self.project_id,
-            target.id,
-            now,
-            &format!("remediation.{action}"),
-            &format!(
-                "Reason: {reason}\n{}: {detail}",
-                if action == "ask" {
-                    "Question"
-                } else {
-                    "Repair plan"
-                }
-            ),
-        )?;
-        bump(&tx, target, now)?;
-        tx.commit()?;
-        Ok(())
-    }
     /// Replace pending work or failed current with planner tasks in one transaction.
     pub fn apply_breakdown(
         &mut self,
@@ -226,20 +166,8 @@ impl Service {
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (lifecycle, status) = checked(&tx, self.project_id, target)?;
-        let current: Option<i64> = tx
-            .query_row(
-                "SELECT id FROM current_tasks WHERE project_id=?1",
-                [self.project_id],
-                |r| r.get(0),
-            )
-            .optional()?;
-        require(
-            (matches!(lifecycle.as_str(), "new" | "ready")
-                && matches!(status.as_str(), "new" | "ready"))
-                || (lifecycle == "ready" && status == "failed" && current == Some(target.id)),
-            "Only pending work or failed current can be broken down",
-        )?;
+        // Breaking a task down supersedes it, so only Pending work qualifies.
+        allowed(&tx, self.project_id, target, Action::Supersede)?;
         let keys = ordering::keys_before(&tx, self.project_id, Some(target.id), subtasks.len())?;
         let now = now_ms();
         let planner = Actor {
@@ -318,10 +246,10 @@ impl Service {
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let (lifecycle, status) = checked(&tx, self.project_id, target)?;
+        // The failure judge applies its plan after ending the attempt it judged.
         require(
-            lifecycle == "ready"
-                && matches!(status.as_str(), "failed" | "interrupted" | "cancelled"),
-            "Only failed current can be remediated",
+            lifecycle == "ready" && matches!(status.as_str(), "ready" | "failed"),
+            "Only a stopped current task can be remediated",
         )?;
         let current: Option<i64> = tx
             .query_row(
@@ -511,26 +439,12 @@ impl Service {
         actor: &Actor,
         reason: Option<&str>,
     ) -> Result<()> {
-        let status: Option<String> = self
-            .db
-            .connection()
-            .query_row(
-                "SELECT status FROM task_details WHERE project_id=?1 AND id=?2 AND row_version=?3",
-                params![self.project_id, target.id, target.version],
-                |r| r.get(0),
-            )
-            .optional()?;
-        require(
-            !matches!(status.as_deref(), Some("paused" | "waiting")),
-            "Task is live; use Reset to pending before editing",
-        )?;
         self.validate_definition_models(definition)?;
         let tx = self
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (lifecycle, status) = checked(&tx, self.project_id, target)?;
-        editable(&lifecycle, &status)?;
+        editable(&tx, self.project_id, target)?;
         let (number, old_kind): (i64, String) = tx.query_row(
             "SELECT revision + 1, kind FROM task_revisions WHERE task_id = ?1 ORDER BY revision DESC LIMIT 1",
             [target.id],
@@ -585,8 +499,7 @@ impl Service {
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (lifecycle, status) = checked(&tx, self.project_id, target)?;
-        editable(&lifecycle, &status)?;
+        editable(&tx, self.project_id, target)?;
         let revision: Option<i64> = tx.query_row(
             "SELECT pending_revision FROM task_details WHERE id = ?1",
             [target.id],
@@ -598,8 +511,9 @@ impl Service {
             params![target.id, revision, if approve { "ready" } else { "rejected" }, now, reason, self.actor.kind.as_str(), self.actor.name])?;
         let has_ready: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM task_revisions WHERE task_id = ?1 AND lifecycle = 'ready')", [target.id], |r| r.get(0))?;
         if has_ready {
+            // A decided revision makes a stopped task Pending: the next Run starts fresh.
             tx.execute(
-                "UPDATE tasks SET lifecycle = 'ready' WHERE id = ?1",
+                "UPDATE tasks SET lifecycle = 'ready', reset_pending = CASE WHEN EXISTS(SELECT 1 FROM attempts WHERE task_id = ?1 AND state IN ('running','paused','waiting')) THEN reset_pending ELSE 1 END WHERE id = ?1",
                 [target.id],
             )?;
         } else {
@@ -642,11 +556,7 @@ impl Service {
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (_, status) = checked(&tx, self.project_id, target)?;
-        require(
-            matches!(status.as_str(), "ready" | "new"),
-            "Only pending work can move",
-        )?;
+        allowed(&tx, self.project_id, target, Action::Move)?;
         let key = ordering::keys_before(&tx, self.project_id, before, 1)?.remove(0);
         tx.execute(
             "UPDATE tasks SET order_key = ?2 WHERE id = ?1",
@@ -666,198 +576,124 @@ impl Service {
         Ok(())
     }
 
-    pub fn delete(&mut self, target: VersionedTask) -> Result<()> {
+    /// Pending only: give up on the task. It moves to History with any earlier attempts.
+    pub fn cancel(&mut self, target: VersionedTask, reason: &str) -> Result<()> {
         let tx = self
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (_, status) = checked(&tx, self.project_id, target)?;
-        require(
-            matches!(status.as_str(), "ready" | "new"),
-            "Only pending work can be deleted",
-        )?;
-        let now = now_ms();
-        tx.execute("UPDATE tasks SET lifecycle = 'deleted', closed_at_ms = max(created_at_ms, ?2), resolution_reason = 'Deleted by command', resolved_by_kind = ?3, resolved_by = ?4 WHERE id = ?1", params![target.id, now, self.actor.kind.as_str(), self.actor.name])?;
-        bump(&tx, target, now)?;
-        event(
-            &tx,
-            self.project_id,
-            target.id,
-            now,
-            "task.deleted",
-            &format!("#{} deleted; definition retained for Undo", target.id),
-        )?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// Restore the retained order key unless doing so would precede running work.
-    pub fn restore(&mut self, target: VersionedTask) -> Result<()> {
-        let tx = self
-            .db
-            .connection_mut()
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (lifecycle, _) = checked(&tx, self.project_id, target)?;
-        require(lifecycle == "deleted", "Task is no longer deleted")?;
-        let blocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM tasks t JOIN attempts a ON a.task_id = t.id WHERE t.project_id = ?1 AND a.state = 'running' AND t.order_key > (SELECT order_key FROM tasks WHERE id = ?2))", params![self.project_id, target.id], |r| r.get(0))?;
-        require(!blocked, "Cannot restore before running current work")?;
-        let now = now_ms();
-        tx.execute("UPDATE tasks SET lifecycle = CASE WHEN EXISTS(SELECT 1 FROM task_revisions WHERE task_id = ?1 AND lifecycle = 'ready') THEN 'ready' ELSE 'new' END, closed_at_ms = NULL, resolution_reason = NULL, resolved_by_kind = NULL, resolved_by = NULL WHERE id = ?1", [target.id])?;
-        bump(&tx, target, now)?;
-        event(
-            &tx,
-            self.project_id,
-            target.id,
-            now,
-            "task.restored",
-            &format!("#{} restored", target.id),
-        )?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// Requeue closed work without changing any revision or attempt. Retire unanswered
-    /// questions from prior attempts so they cannot block the new run.
-    pub fn reopen(&mut self, target: VersionedTask, reason: &str) -> Result<bool> {
-        require(!reason.trim().is_empty(), "A reason is required")?;
-        let tx = self
-            .db
-            .connection_mut()
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (lifecycle, _) = checked(&tx, self.project_id, target)?;
-        require(
-            matches!(
-                lifecycle.as_str(),
-                "succeeded" | "succeeded_override" | "failed_skipped" | "superseded" | "cancelled"
-            ),
-            "Only closed tasks can be reopened; deleted tasks use restore",
-        )?;
-        let old: (String, String, String, i64) = tx.query_row(
-            "SELECT coalesce(resolution_reason,'Resolved'), coalesce(resolved_by_kind,'system'), coalesce(resolved_by,'unknown'), closed_at_ms FROM tasks WHERE id=?1",
-            [target.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
-        // Older V1 databases had only the latest closure on tasks. Preserve it before clearing.
-        if !tx.query_row("SELECT EXISTS(SELECT 1 FROM task_lifecycle_events WHERE task_id=?1 AND action='closed')", [target.id], |r| r.get::<_, bool>(0))? {
-            lifecycle_event(&tx, target.id, "closed", Some(&lifecycle), (&old.1, &old.2), &old.0, old.3)?;
-        }
-        let running: Option<String> = tx.query_row(
-            "SELECT t.order_key FROM tasks t JOIN attempts a ON a.task_id=t.id WHERE t.project_id=?1 AND a.state='running' ORDER BY t.order_key LIMIT 1",
-            [self.project_id], |r| r.get(0)).optional()?;
-        let upper: Option<String> = tx.query_row(
-            "SELECT min(order_key) FROM tasks WHERE project_id=?1 AND id<>?2 AND (?3 IS NULL OR order_key>?3)",
-            params![self.project_id, target.id, running], |r| r.get(0))?;
-        let key = ordering::between(running.as_deref(), upper.as_deref())?;
-        let used: i64 = tx.query_row(
-            "SELECT attempts_used FROM task_details WHERE id=?1",
-            [target.id],
-            |r| r.get(0),
-        )?;
-        let limit: Option<i64> = tx.query_row("SELECT attempt_limit FROM task_revisions WHERE task_id=?1 ORDER BY CASE WHEN lifecycle='ready' THEN 0 ELSE 1 END,revision DESC LIMIT 1", [target.id], |r| r.get(0))?;
-        let exhausted = limit.is_some_and(|limit| used >= limit);
-        let now = now_ms();
-        tx.execute(
-            "UPDATE questions SET state='cancelled', resolved_at_ms=max(created_at_ms,?3)
-             WHERE state='open' AND attempt_id IN (
-                 SELECT id FROM attempts WHERE project_id=?1 AND task_id=?2)",
-            params![self.project_id, target.id, now],
-        )?;
-        let has_ready: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM task_revisions WHERE task_id=?1 AND lifecycle='ready')",
-            [target.id],
-            |r| r.get(0),
-        )?;
-        if !has_ready {
-            let revisions = super::queries::revisions(&tx, target.id)?;
-            let latest = revisions.last().expect("task has a revision");
-            insert_revision(
-                &tx,
-                target.id,
-                latest.number + 1,
-                &latest.definition,
-                true,
-                now,
-                &self.actor,
-            )?;
-        }
-        tx.execute("UPDATE tasks SET lifecycle='ready', order_key=?2, closed_at_ms=NULL, resolution_reason=NULL, resolved_by_kind=NULL, resolved_by=NULL, reset_pending=1, reset_worktree=NULL WHERE id=?1", params![target.id,key])?;
-        lifecycle_event(
-            &tx,
-            target.id,
-            "reopened",
-            None,
-            (self.actor.kind.as_str(), &self.actor.name),
-            reason,
-            now,
-        )?;
-        bump(&tx, target, now)?;
-        event(
-            &tx,
-            self.project_id,
-            target.id,
-            now,
-            "task.reopened",
-            &format!("#{} reopened by {}: {reason}", target.id, self.actor.name),
-        )?;
-        tx.commit()?;
-        Ok(exhausted)
-    }
-
-    pub fn resolve(
-        &mut self,
-        target: VersionedTask,
-        resolution: Resolution,
-        reason: &str,
-    ) -> Result<()> {
-        require(!reason.trim().is_empty(), "A reason is required")?;
-        self.close_current(target, resolution.as_str(), reason, false)
-    }
-    pub fn acknowledge(&mut self, target: VersionedTask) -> Result<()> {
-        require(
-            matches!(self.actor.kind, ActorKind::Human),
-            "A Human task requires human acknowledgment",
-        )?;
-        self.close_current(target, "succeeded", "Human task acknowledged", true)
-    }
-    fn close_current(
-        &mut self,
-        target: VersionedTask,
-        lifecycle: &str,
-        reason: &str,
-        human: bool,
-    ) -> Result<()> {
-        let tx = self
-            .db
-            .connection_mut()
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        checked(&tx, self.project_id, target)?;
-        let current: Option<(String, String)> = tx
-            .query_row(
-                "SELECT status, kind FROM current_tasks WHERE project_id = ?1 AND id = ?2",
-                params![self.project_id, target.id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
-        let valid = current.is_some_and(|(status, kind)| {
-            if human {
-                status == "ready" && kind == "human"
-            } else {
-                matches!(status.as_str(), "failed" | "interrupted" | "cancelled")
-            }
-        });
-        require(
-            valid,
-            "Only failed current can be resolved, or ready Human current acknowledged",
-        )?;
+        allowed(&tx, self.project_id, target, Action::Cancel)?;
+        let reason = reason_or(reason, "Cancelled", &self.actor);
         close(
             &tx,
             self.project_id,
             &self.actor,
             target,
-            lifecycle,
-            reason,
+            "cancelled",
+            &reason,
             now_ms(),
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Pending only: record that other tasks of this project replace this one.
+    pub fn supersede(&mut self, target: VersionedTask, by: &[i64], reason: &str) -> Result<()> {
+        require(
+            !by.is_empty(),
+            "Supersede needs at least one replacing task (--by ID)",
+        )?;
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        allowed(&tx, self.project_id, target, Action::Supersede)?;
+        for &id in by {
+            require(id != target.id, "A task cannot supersede itself")?;
+            require(
+                tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM tasks WHERE id=?1 AND project_id=?2)",
+                    params![id, self.project_id],
+                    |r| r.get::<_, bool>(0),
+                )?,
+                &format!("Task #{id} is not in this project"),
+            )?;
+            tx.execute("INSERT OR IGNORE INTO task_links(project_id,task_id,related_task_id,kind) VALUES (?1,?2,?3,'replaces')", params![self.project_id,id,target.id])?;
+        }
+        let list = by
+            .iter()
+            .map(|id| format!("#{id}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let reason = if reason.trim().is_empty() {
+            format!("Superseded by {list}")
+        } else {
+            format!("Superseded by {list}: {}", reason.trim())
+        };
+        close(
+            &tx,
+            self.project_id,
+            &self.actor,
+            target,
+            "superseded",
+            &reason,
+            now_ms(),
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// A finished task runs again as a new Pending task with the same definition, linked
+    /// to the original. The original and its attempts stay in History unchanged.
+    pub fn copy_to_queue(&mut self, target: VersionedTask, before: Option<i64>) -> Result<i64> {
+        let task = self
+            .task(target.id)?
+            .filter(|t| t.version == target.version)
+            .ok_or_else(|| Error::Conflict("Task changed elsewhere; refresh the task".into()))?;
+        task.require(Action::CopyToQueue)?;
+        let definition = task.definition().definition.clone();
+        let ready = matches!(self.actor.kind, ActorKind::Human);
+        let id = self.create(&[definition], before, ready)?.remove(0);
+        self.db.connection().execute("INSERT INTO task_links(project_id,task_id,related_task_id,kind) VALUES (?1,?2,?3,'derived_from')", params![self.project_id,id,target.id])?;
+        Ok(id)
+    }
+}
+
+/// Refuse `action` unless this exact task version's state offers it.
+pub(super) fn allowed(
+    tx: &Transaction<'_>,
+    project: i64,
+    target: VersionedTask,
+    action: Action,
+) -> Result<State> {
+    let (status, wait): (String, Option<String>) = tx
+        .query_row(
+            "SELECT status, wait_reason FROM task_details WHERE project_id=?1 AND id=?2 AND row_version=?3",
+            params![project, target.id, target.version],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| Error::Conflict("Task changed elsewhere; refresh the task".into()))?;
+    let state = State::of(&status, wait.as_deref());
+    require(state.allows(action), &state.refusal(action))?;
+    Ok(state)
+}
+
+/// The owner's reason, or who did it when none was given.
+pub(super) fn reason_or(reason: &str, verb: &str, actor: &Actor) -> String {
+    if reason.trim().is_empty() {
+        format!("{verb} by {}", actor.name)
+    } else {
+        reason.trim().to_owned()
+    }
+}
+
+/// What happened, with the owner's reason: "Stopped: too slow", or "Stopped by owner".
+pub(super) fn labelled(reason: &str, verb: &str, actor: &Actor) -> String {
+    if reason.trim().is_empty() {
+        format!("{verb} by {}", actor.name)
+    } else {
+        format!("{verb}: {}", reason.trim())
     }
 }
 

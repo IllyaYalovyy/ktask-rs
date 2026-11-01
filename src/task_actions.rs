@@ -2,7 +2,7 @@ use crate::{
     app::{App, View},
     application::limits,
     dialog::{Dialog, DialogKind, Field},
-    presentation::{ROLES, RevisionState, Status, Task},
+    presentation::{ROLES, RevisionState, Status, Task, TaskAction, badge},
 };
 
 impl App {
@@ -73,9 +73,7 @@ impl App {
         let task = self
             .queue
             .iter_mut()
-            .find(|t| {
-                t.id == id && matches!(t.status(), Status::New | Status::Pending | Status::Failed)
-            })
+            .find(|t| t.id == id && t.status().allows(TaskAction::Edit))
             .ok_or("Task is read-only")?;
         let mut revision = task.draft().unwrap_or_else(|| task.definition()).clone();
         for (n, model) in revision.settings.models.iter_mut().enumerate() {
@@ -155,7 +153,7 @@ impl App {
         revision.actor = format!("Human rejected: {}", dialog.value(0));
         if task.ready().is_none() {
             let mut task = self.queue.remove(index);
-            task.resolution = Some(Status::Rejected);
+            task.resolution = Some(Status::Cancelled);
             task.resolution_reason = format!("Human: {}", dialog.value(0));
             self.history.insert(0, task);
         }
@@ -165,98 +163,191 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn open_resolution(&mut self) {
-        let task = self.current().expect("failed current");
-        self.dialog = Some(Dialog::new(
-            DialogKind::Resolve(task.id),
-            "Resolve failed current",
-            "Moves this task to History. Its failed attempts and evidence are unchanged.",
-            vec![
-                Field::choice(
-                    "Outcome",
-                    &["Succeeded override", "Failed skipped", "Superseded"],
-                    "Succeeded override",
-                ),
-                Field::text("Reason", ""),
-            ],
-        ));
+    /// The dialog for a task control: Enter applies it, Esc changes nothing.
+    pub(crate) fn open_control(&mut self, action: crate::app::Action) {
+        use crate::app::Action;
+        let target = if action == Action::Stop {
+            self.stop_target()
+        } else {
+            self.selected_task()
+        };
+        let Some(task) = target else {
+            return;
+        };
+        let name = format!("#{} {}", task.id, task.definition().title);
+        let reason = || Field::text("Reason (optional)", "");
+        let (kind, title, body, fields) = match action {
+            Action::Stop => (
+                DialogKind::Stop(task.id),
+                format!("Stop {name}"),
+                "The worker stops and this attempt ends. Its uncommitted changes are saved as a git stash (git stash pop restores them).\nThe task returns to Pending; Run starts it fresh with full limits.",
+                vec![reason()],
+            ),
+            Action::MarkDone => (
+                DialogKind::MarkDone(task.id),
+                format!("Mark done {name}"),
+                "Records the task as done by your decision and moves it to History.\nA live attempt stops first and its uncommitted changes are stashed; commit them first to keep them in the tree.",
+                vec![reason()],
+            ),
+            Action::CancelTask => (
+                DialogKind::CancelTask(task.id),
+                format!("Cancel {name}"),
+                "The task moves to History as cancelled. Copy to queue brings it back as a new task.",
+                vec![reason()],
+            ),
+            Action::Supersede => (
+                DialogKind::Supersede(task.id),
+                format!("Supersede {name}"),
+                "Name the tasks that replace this one. It moves to History as superseded.",
+                vec![
+                    Field::text("Replaced by task IDs (comma separated)", ""),
+                    reason(),
+                ],
+            ),
+            Action::CopyToQueue => (
+                DialogKind::CopyToQueue(task.id),
+                format!("Copy to queue {name}"),
+                "Adds a new pending task with the same definition. The original stays in History unchanged.",
+                vec![Field::text("Before task ID (blank = end of Queue)", "")],
+            ),
+            _ => return,
+        };
+        self.dialog = Some(Dialog::new(kind, &title, body, fields));
     }
 
-    pub(crate) fn resolve_failed(&mut self, dialog: &Dialog, id: usize) -> Result<(), String> {
-        if dialog.value(1).is_empty() {
-            return Err("A reason is required".into());
+    /// Stop applies to the current task from every screen, as Pause does.
+    pub(crate) fn stop_target(&self) -> Option<&Task> {
+        if self.view == View::Current {
+            self.current()
+        } else {
+            self.selected_task()
+                .filter(|t| t.status().allows(TaskAction::Stop))
         }
-        if !self
-            .current()
-            .is_some_and(|t| t.id == id && t.status() == Status::Failed)
-        {
-            return Err("Only failed current can be resolved".into());
+    }
+
+    /// Task IDs typed by the owner: digits separated by commas or spaces, at least one.
+    pub(crate) fn task_ids(text: &str) -> Result<Vec<usize>, String> {
+        let ids = text
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                part.trim_start_matches('#')
+                    .parse::<usize>()
+                    .map_err(|_| format!("{part} is not a task ID"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if ids.is_empty() {
+            return Err("Name at least one replacing task".into());
         }
-        let mut task = self.queue.remove(0);
-        task.resolution = Some(match dialog.value(0) {
-            "Failed skipped" => Status::Skipped,
-            "Superseded" => Status::Superseded,
-            _ => Status::Override,
-        });
-        task.resolution_reason = format!("Human: owner · {}", dialog.value(1));
+        Ok(ids)
+    }
+
+    /// Demo mode: apply a task control dialog to the in-memory queue.
+    pub(crate) fn apply_demo_control(&mut self, dialog: &Dialog) -> Result<(), String> {
+        // Same wording as the real service: "Stopped by owner" or "Stopped: too slow".
+        let note = |reason: &str, verb: &str| {
+            if reason.trim().is_empty() {
+                format!("{verb} by owner")
+            } else {
+                format!("{verb}: {}", reason.trim())
+            }
+        };
+        match dialog.kind.clone() {
+            DialogKind::Stop(id) => {
+                let task = self
+                    .queue
+                    .iter_mut()
+                    .find(|t| t.id == id && t.status().allows(TaskAction::Stop))
+                    .ok_or("The task can no longer be stopped")?;
+                match task.attempts.last_mut() {
+                    // A failed attempt stays as recorded; only the task returns to Pending.
+                    Some(attempt) if attempt.state == Status::Failed => {
+                        task.stored_status = Some(Status::Pending)
+                    }
+                    Some(attempt) => {
+                        attempt.state = Status::Pending;
+                        attempt.resume_at = None;
+                        attempt.outcome = note(dialog.value(0), "Stopped");
+                        attempt.logs.push(attempt.outcome.clone());
+                    }
+                    None => {}
+                }
+                self.record(format!(
+                    "#{id} stopped · changes stashed (mock) · Run starts it fresh"
+                ));
+            }
+            DialogKind::MarkDone(id) => {
+                self.close_demo(id, Status::Done, &note(dialog.value(0), "Marked done"))?
+            }
+            DialogKind::CancelTask(id) => {
+                self.close_demo(id, Status::Cancelled, &note(dialog.value(0), "Cancelled"))?
+            }
+            DialogKind::Supersede(id) => {
+                let by = Self::task_ids(dialog.value(0))?;
+                for other in &by {
+                    if *other == id || self.task(*other).is_none() {
+                        return Err(format!("#{other} cannot replace #{id}"));
+                    }
+                }
+                let list = by
+                    .iter()
+                    .map(|n| format!("#{n}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.close_demo(id, Status::Superseded, &format!("Superseded by {list}"))?
+            }
+            DialogKind::CopyToQueue(id) => {
+                let source = self
+                    .history
+                    .iter()
+                    .find(|t| t.id == id)
+                    .ok_or("Only finished tasks can be copied")?;
+                let mut copy = Task::pending(self.next_id, &source.definition().title);
+                copy.revisions[0] = source.definition().clone();
+                copy.revisions[0].number = 1;
+                copy.revisions[0].state = RevisionState::Ready;
+                copy.revisions[0].actor = "Human: owner".into();
+                copy.id = self.next_id;
+                self.next_id += 1;
+                let position = self.insertion_position(dialog.value(0), None)?;
+                let new = copy.id;
+                self.queue.insert(position, copy);
+                self.record(format!("#{id} copied to the queue as #{new}"));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Demo mode: move a task to History with `status`.
+    fn close_demo(&mut self, id: usize, status: Status, reason: &str) -> Result<(), String> {
+        let action = match status {
+            Status::Done => TaskAction::MarkDone,
+            Status::Superseded => TaskAction::Supersede,
+            _ => TaskAction::Cancel,
+        };
+        let index = self
+            .queue
+            .iter()
+            .position(|t| t.id == id && t.status().allows(action))
+            .ok_or_else(|| format!("{} is no longer available for #{id}", action.label()))?;
+        let mut task = self.queue.remove(index);
+        if let Some(attempt) = task.attempts.last_mut().filter(|a| {
+            matches!(
+                a.state,
+                Status::Running | Status::Paused | Status::NeedsInput
+            )
+        }) {
+            attempt.state = Status::Pending;
+            attempt.outcome = format!("Ended: {reason}");
+        }
+        task.resolution = Some(status);
+        task.resolution_reason = format!("Human: owner · {reason}");
         self.history.insert(0, task);
         self.history_catalog.selected = Some(id);
         self.follow = true;
         self.log_offset = 0;
-        self.record(format!(
-            "#{id} resolved: {} · failed attempts retained",
-            dialog.value(0)
-        ));
-        Ok(())
-    }
-
-    pub(crate) fn remediate(&mut self, id: usize, insert: bool) -> Result<(), String> {
-        if !self
-            .current()
-            .is_some_and(|t| t.id == id && t.status() == Status::Failed)
-        {
-            return Err("Only failed current can be remediated".into());
-        }
-        if insert {
-            let mut repair =
-                Task::pending(self.next_id, &format!("Repair failing check for #{id}"));
-            self.next_id += 1;
-            repair.repairs = Some(id);
-            repair.revisions[0].actor = "AI: remediator".into();
-            repair.revisions[0].goal = self.queue[0].definition().goal.clone();
-            repair.revisions[0].check = self.queue[0].definition().check.clone();
-            if self.review_required {
-                repair.revisions[0].state = RevisionState::Draft;
-            }
-            self.queue.insert(0, repair);
-        } else {
-            let task = &mut self.queue[0];
-            let mut revision = task.definition().clone();
-            revision.settings.models[0] = revision.settings.models[3].clone();
-            revision.repaired = true;
-            revision.actor = "AI: remediator".into();
-            revision.state = if self.review_required {
-                RevisionState::Draft
-            } else {
-                RevisionState::Ready
-            };
-            task.revise(revision);
-        }
-        self.switch(View::Current);
-        if self.review_required {
-            self.record(
-                "Remediation needs approval · v Approve or n Reject · previous inputs unchanged",
-            );
-        } else {
-            self.start_current();
-            // Do not conceal a blocked handoff or exhausted budget.
-            if self
-                .current()
-                .is_some_and(|t| t.status() == Status::Running)
-            {
-                self.record("Remediation applied by AI · ordinary queue execution continues");
-            }
-        }
+        self.record(format!("#{id} {} · {reason}", badge(status).to_lowercase()));
         Ok(())
     }
 }

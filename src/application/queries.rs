@@ -14,7 +14,7 @@ pub struct Event {
     pub message: String,
 }
 
-const TASK_COLUMNS: &str = "id, row_version, lifecycle, status, order_key, resolution_reason, attempts_used, resolved_by_kind || ': ' || resolved_by, origin_task_id, origin_attempt_id";
+const TASK_COLUMNS: &str = "id, row_version, lifecycle, status, order_key, resolution_reason, attempts_used, resolved_by_kind || ': ' || resolved_by, origin_task_id, origin_attempt_id, counted_from";
 pub struct WaitingResume {
     pub resume_at_ms: Option<i64>,
 }
@@ -40,6 +40,7 @@ fn task_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         lifecycle_events: Vec::new(),
         revisions: Vec::new(),
         attempts: Vec::new(),
+        counted_from: r.get(10)?,
     })
 }
 fn complete_task(db: &Connection, mut task: Task) -> Result<Task> {
@@ -590,24 +591,6 @@ impl Service {
             params![self.project_id, task], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
         ).optional().map(|value| value.and_then(|(level, message)| (level == "error").then_some(message))).map_err(Into::into)
     }
-    /// Gather the latest attempt's durable output and retained check transcripts for a proposal.
-    pub fn remediation_evidence(
-        &self,
-        task: i64,
-        artifact_root: &std::path::Path,
-    ) -> Result<String> {
-        let attempt: Option<i64> = self.db.connection().query_row(
-            "SELECT id FROM attempts WHERE project_id=?1 AND task_id=?2 ORDER BY number DESC LIMIT 1",
-            params![self.project_id, task],
-            |r| r.get(0),
-        ).optional()?;
-        let Some(attempt) = attempt else {
-            return Ok("No previous attempt output is recorded.".into());
-        };
-        let mut evidence = self.attempt_evidence(attempt, artifact_root)?;
-        evidence.push_str(&self.failure_decisions(task)?);
-        Ok(evidence)
-    }
     pub fn failure_decisions(&self, task: i64) -> Result<String> {
         let mut evidence = String::new();
         let mut stmt = self.db.connection().prepare(
@@ -717,7 +700,7 @@ impl Service {
         evidence.push_str(&reports);
         Ok(evidence)
     }
-    /// Includes deleted tasks for inspection/restore, but never another project's task.
+    /// Any task of this project, finished or not; never another project's task.
     pub fn task(&mut self, id: i64) -> Result<Option<Task>> {
         let tx = self.db.connection_mut().transaction()?;
         let task = tx
@@ -732,20 +715,6 @@ impl Service {
         let task = task.map(|task| complete_task(&tx, task)).transpose()?;
         tx.commit()?;
         Ok(task)
-    }
-    pub fn deleted(&mut self) -> Result<Vec<Task>> {
-        let tx = self.db.connection_mut().transaction()?;
-        let tasks = {
-            let mut stmt = tx.prepare(&format!("SELECT {TASK_COLUMNS} FROM task_details WHERE project_id = ?1 AND lifecycle = 'deleted' ORDER BY closed_at_ms DESC, id DESC"))?;
-            let rows = stmt
-                .query_map([self.project_id], task_row)?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            rows.into_iter()
-                .map(|task| complete_task(&tx, task))
-                .collect::<Result<Vec<_>>>()?
-        };
-        tx.commit()?;
-        Ok(tasks)
     }
     /// Cursor-based event reads for scripts; ascending IDs and an explicit bounded page.
     pub fn events_after(&self, after: i64, limit: i64) -> Result<Vec<Event>> {
@@ -788,7 +757,7 @@ impl Service {
         let mut queue = Vec::new();
         let mut history = Vec::new();
         {
-            let mut stmt = tx.prepare_cached("SELECT id, row_version, lifecycle, status, order_key, resolution_reason, attempts_used, closed_at_ms, resolved_by_kind || ': ' || resolved_by, origin_task_id, origin_attempt_id FROM task_details WHERE project_id = ?1 AND lifecycle <> 'deleted' ORDER BY CASE WHEN closed_at_ms IS NULL THEN 0 ELSE 1 END, CASE WHEN attempt_state = 'running' THEN 0 ELSE 1 END, closed_at_ms DESC, CASE WHEN closed_at_ms IS NOT NULL THEN id END DESC, order_key")?;
+            let mut stmt = tx.prepare_cached("SELECT id, row_version, lifecycle, status, order_key, resolution_reason, attempts_used, closed_at_ms, resolved_by_kind || ': ' || resolved_by, origin_task_id, origin_attempt_id, counted_from FROM task_details WHERE project_id = ?1 ORDER BY CASE WHEN closed_at_ms IS NULL THEN 0 ELSE 1 END, CASE WHEN attempt_state = 'running' THEN 0 ELSE 1 END, closed_at_ms DESC, CASE WHEN closed_at_ms IS NOT NULL THEN id END DESC, order_key")?;
             let rows = stmt.query_map([self.project_id], |r| {
                 Ok((
                     Task {
@@ -806,6 +775,7 @@ impl Service {
                         attempts_used: r.get(6)?,
                         revisions: Vec::new(),
                         attempts: Vec::new(),
+                        counted_from: r.get(11)?,
                     },
                     r.get::<_, Option<i64>>(7)?,
                 ))

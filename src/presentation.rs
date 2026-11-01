@@ -1,51 +1,21 @@
 //! Terminal read models. Persistent projections are read-only; demo mutations stay in demo mode.
 use std::time::Instant;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Status {
-    New,
-    Pending,
-    Running,
-    Abandoned,
-    Paused,
-    Failed,
-    Question,
-    Waiting,
-    Done,
-    Override,
-    Skipped,
-    Superseded,
-    Cancelled,
-    Rejected,
-    Blocked,
-    Interrupted,
-}
-impl Status {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::New => "NEW",
-            Self::Pending => "PENDING",
-            Self::Running => "RUNNING",
-            Self::Abandoned => "ABANDONED",
-            Self::Paused => "PAUSED",
-            Self::Failed => "FAILED",
-            Self::Question => "QUESTION",
-            Self::Waiting => "WAITING",
-            Self::Done => "DONE",
-            Self::Override => "OVERRIDE",
-            Self::Skipped => "SKIPPED",
-            Self::Superseded => "REPLACED",
-            Self::Cancelled => "CANCELLED",
-            Self::Rejected => "REJECTED",
-            Self::Blocked => "BLOCKED",
-            Self::Interrupted => "INTERRUPTED",
-        }
-    }
-    pub fn pinned(self) -> bool {
-        self == Self::Running
-    }
-    pub fn failed(self) -> bool {
-        matches!(self, Self::Failed | Self::Interrupted | Self::Cancelled)
+/// The task state machine shared with the CLI and the runner (application::lifecycle).
+pub use crate::application::lifecycle::{Action as TaskAction, State as Status};
+
+/// The short upper-case badge a task row shows for its state.
+pub fn badge(status: Status) -> &'static str {
+    match status {
+        Status::NeedsApproval => "APPROVE?",
+        Status::Pending => "PENDING",
+        Status::Running => "RUNNING",
+        Status::Paused => "PAUSED",
+        Status::NeedsInput => "INPUT?",
+        Status::Failed => "FAILED",
+        Status::Done => "DONE",
+        Status::Cancelled => "CANCELLED",
+        Status::Superseded => "REPLACED",
     }
 }
 
@@ -204,7 +174,8 @@ impl Attempt {
 
 #[derive(Clone)]
 pub struct Task {
-    // Read projection only for SQLite mode; never written back as a task payload.
+    // SQLite mode: the stored state, never written back as a task payload. Demo mode: a
+    // stopped failure is Pending while its failed attempt stays as recorded.
     pub stored_status: Option<Status>,
     pub stored_budget: Option<usize>,
     pub id: usize,
@@ -270,15 +241,24 @@ impl Task {
             return status;
         }
         self.resolution.unwrap_or_else(|| {
-            self.attempts.last().map_or(
-                if self.ready().is_some() {
-                    Status::Pending
-                } else {
-                    Status::New
-                },
-                |a| a.state,
-            )
+            if self.ready().is_none() || self.draft().is_some() {
+                return Status::NeedsApproval;
+            }
+            self.attempts.last().map_or(Status::Pending, |a| a.state)
         })
+    }
+    /// Needs input with its question still open; once answered, the forward move resumes.
+    pub fn awaits_answer(&self) -> bool {
+        self.status() == Status::NeedsInput
+            && self.attempts.last().is_some_and(|a| a.question.is_some())
+    }
+    /// Running, but waiting for the provider to accept work again.
+    pub fn waiting_for_limit(&self) -> bool {
+        self.status() == Status::Running
+            && self
+                .attempts
+                .last()
+                .is_some_and(|a| a.resume_at.is_some() || a.resume_at_ms.is_some())
     }
     pub fn used(&self) -> usize {
         if let Some(used) = self.stored_budget {

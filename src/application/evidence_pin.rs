@@ -1,9 +1,10 @@
-//! Durable evidence ownership for interactive providers, independent of execution attempts.
+//! Recovery of evidence pins left by earlier interactive remediation: retention retires
+//! idle pins and their guard files before it deletes evidence.
 use super::*;
 use nix::{
     errno::Errno,
     fcntl::{OFlag, openat},
-    sys::stat::{Mode, mkdirat},
+    sys::stat::Mode,
     unistd::{UnlinkatFlags, unlinkat},
 };
 use std::{
@@ -13,18 +14,8 @@ use std::{
     path::PathBuf,
 };
 
-/// Written by the owner before spawning a guardian; the guardian replaces it on claim.
-pub const GUARDIAN_RESERVED: &[u8] = b"pending guardian\n";
-
-pub struct EvidencePin {
-    id: String,
-    // Open before the provider starts: release must never reopen a replaced state path.
-    db: rusqlite::Connection,
-    _root: File,
-    directory: File,
-    owner: File,
-    guardian: File,
-}
+/// A guardian's reservation marker: a pin whose guard still holds it was never claimed.
+const GUARDIAN_RESERVED: &[u8] = b"pending guardian\n";
 
 fn io(error: Errno) -> Error {
     Error::Io(std::io::Error::from_raw_os_error(error as i32))
@@ -170,100 +161,6 @@ fn remove(directory: &File, id: &str) -> Result<()> {
     }
     directory.sync_all()?;
     Ok(())
-}
-
-impl EvidencePin {
-    pub fn guardian_lock(&self) -> PathBuf {
-        // The worker reopens this particular inode, even if its directory is renamed.
-        descriptor_path(&self.guardian)
-    }
-}
-
-impl Drop for EvidencePin {
-    fn drop(&mut self) {
-        // A failed release stays durable and is retried by preview/cleanup.
-        let _ = (|| -> Result<()> {
-            let tx =
-                rusqlite::Transaction::new_unchecked(&self.db, TransactionBehavior::Immediate)?;
-            let owner = verify(&self.directory, &self.id, "owner", &identity(&self.owner)?)?;
-            let guardian = verify(
-                &self.directory,
-                &self.id,
-                "guardian",
-                &identity(&self.guardian)?,
-            )?;
-            if !idle(&guardian)? || guardian.metadata()?.len() != 0 {
-                return Ok(());
-            }
-            tx.execute("DELETE FROM evidence_pins WHERE id=?1", [&self.id])?;
-            tx.commit()?;
-            remove(&self.directory, &self.id)?;
-            drop(owner);
-            Ok(())
-        })();
-    }
-}
-
-impl Service {
-    /// Validate and pin before reading any failure output or artifact paths.
-    pub fn begin_remediation_evidence(&mut self, target: VersionedTask) -> Result<EvidencePin> {
-        let root = self.db.state_dir().try_clone()?;
-        // SQLite resolves the descriptor path while the original state directory is held.
-        // This connection survives pathname replacement and cannot create a replacement DB.
-        let db = self.db.evidence_connection()?;
-        db.busy_timeout(crate::storage::BUSY_TIMEOUT)?;
-        let tx = self
-            .db
-            .connection_mut()
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let valid: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM current_tasks WHERE project_id=?1 AND id=?2 AND row_version=?3 AND status='failed')",
-            params![self.project_id, target.id, target.version], |r| r.get(0),
-        )?;
-        require(
-            valid,
-            "Only failed current can be remediated; reopen Remediate",
-        )?;
-        match mkdirat(&root, "evidence-pins", Mode::S_IRWXU) {
-            Ok(()) | Err(Errno::EEXIST) => {}
-            Err(error) => return Err(io(error)),
-        }
-        let directory = directory(&root)?;
-        owned_directory(&root, &directory, true)?;
-        let mut bytes = [0_u8; 16];
-        File::open("/dev/urandom")?.read_exact(&mut bytes)?;
-        let id = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
-        let owner = open(&directory, &id, "owner", true)?;
-        owner.lock()?;
-        let guardian = open(&directory, &id, "guardian", true)?;
-        owner.sync_all()?;
-        guardian.sync_all()?;
-        directory.sync_all()?;
-        root.sync_all()?;
-        tx.execute(
-            "INSERT INTO evidence_pins(id,project_id,directory_identity,owner_identity,guardian_identity) VALUES (?1,?2,?3,?4,?5)",
-            params![id, self.project_id, identity(&directory)?, identity(&owner)?, identity(&guardian)?],
-        )?;
-        tx.commit()?;
-        // The independently opened connection must see the freshly generated pin.
-        // A state/database replacement during acquisition cannot bind release to it.
-        require(
-            db.query_row(
-                "SELECT EXISTS(SELECT 1 FROM evidence_pins WHERE id=?1)",
-                [&id],
-                |row| row.get(0),
-            )?,
-            "Evidence database identity changed; reopen Remediate",
-        )?;
-        Ok(EvidencePin {
-            id,
-            db,
-            _root: root,
-            directory,
-            owner,
-            guardian,
-        })
-    }
 }
 
 #[derive(Default)]

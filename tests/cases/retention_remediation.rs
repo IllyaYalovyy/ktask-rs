@@ -1,20 +1,15 @@
 use super::*;
-use ktask_rs_mk3::application::evidence_pin::GUARDIAN_RESERVED;
-use nix::{
-    sys::signal::{Signal, kill},
-    unistd::Pid,
-};
-use std::io::Read;
-use std::{
-    path::PathBuf,
-    process::{Child, Command, Output, Stdio},
-    thread,
-    time::{Duration, Instant},
-};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::MetadataExt;
+use std::path::PathBuf;
+use std::process::Command;
 
 const DEV: &str = env!("CARGO_BIN_EXE_ktask-dev");
 const PROD: &str = env!("CARGO_BIN_EXE_ktask");
 const TRANSCRIPT: &str = "retention must preserve this judge transcript";
+/// What an earlier owner wrote into the guardian lock before spawning its guardian.
+const GUARDIAN_RESERVED: &[u8] = b"pending guardian\n";
 
 fn command(binary: &str, root: &Path) -> Command {
     let mut command = Command::new(binary);
@@ -33,54 +28,6 @@ fn command(binary: &str, root: &Path) -> Command {
         .current_dir(project(root))
         .arg("--json");
     command
-}
-
-struct Running {
-    child: Option<Child>,
-    root: PathBuf,
-}
-impl Running {
-    fn start(root: &Path, id: i64) -> Result<Self> {
-        Ok(Self {
-            child: Some(
-                command(DEV, root)
-                    .args(["remediate", &id.to_string()])
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()?,
-            ),
-            root: root.to_owned(),
-        })
-    }
-
-    fn finish(&mut self) -> Result<Output> {
-        let child = self.child.as_mut().unwrap();
-        support::eventually("CLI judge finishes", || Ok(child.try_wait()?.map(drop)))?;
-        Ok(self.child.take().unwrap().wait_with_output()?)
-    }
-}
-impl Drop for Running {
-    fn drop(&mut self) {
-        if let Some(child) = &mut self.child {
-            let children = format!("/proc/{0}/task/{0}/children", child.id());
-            let guardians = fs::read_to_string(children).unwrap_or_default();
-            let _ = child.kill();
-            let _ = child.wait();
-            let deadline = Instant::now() + support::PATIENCE;
-            for pid in guardians.split_whitespace() {
-                while process_running(pid) && Instant::now() < deadline {
-                    thread::sleep(Duration::from_millis(10));
-                }
-            }
-            // The lifeline closes asynchronously. Wait for the owned provider tree
-            // before the surrounding managed sandbox can remove its scratch.
-            if let Ok(calls) = fs::read_dir(self.root.join("provider-calls")) {
-                for call in calls.flatten() {
-                    let _ = reaped(&call.path());
-                }
-            }
-        }
-    }
 }
 
 fn transcript(root: &Path, instance: &str, attempt: i64) -> Result<PathBuf> {
@@ -108,11 +55,11 @@ fn closed_attempt(writer: &mut Service, token: &str) -> Result<(i64, i64)> {
     }
     let id = writer.create(&[definition], None, true)?[0];
     let target = target(writer, id)?;
-    let run = writer.begin_run(target, token, "fixture-base")?;
+    let run = writer.begin_run(target, token, "fixture-base", false)?;
     writer.output(&run, "stderr", "previously closed output")?;
     writer.finish_run(&run, "failed", Some("check"), "Fixture failure", None)?;
     let target = super::target(writer, id)?;
-    writer.resolve(target, Resolution::FailedSkipped, "Reviewed fixture")?;
+    writer.mark_done(target, "Reviewed fixture")?;
     Ok((id, run.attempt))
 }
 
@@ -141,13 +88,9 @@ impl Evidence {
         })
     }
 
-    fn resolve(&self, writer: &mut Service) -> Result {
+    fn close(&self, writer: &mut Service) -> Result {
         let target = target(writer, self.failed)?;
-        writer.resolve(
-            target,
-            Resolution::FailedSkipped,
-            "Resolved while judges read",
-        )?;
+        writer.mark_done(target, "Closed while a pin is left")?;
         Ok(())
     }
 
@@ -194,53 +137,6 @@ impl Evidence {
     }
 }
 
-fn held_provider(root: &Path) -> Result {
-    provider_fixture(
-        root,
-        serde_json::json!({"action":"repair","plan":"Repair after inspecting retained evidence","reason":"The original goal remains correct"}),
-        false,
-    )?;
-    fs::create_dir(root.join("provider-calls"))?;
-    let quoted = format!("'{}'", root.to_string_lossy().replace('\'', "'\\''"));
-    support::write_executable(
-        &root.join("bin/codex"),
-        format!(
-            "#!/bin/sh\nset -eu\nfixture={quoted}\ncall=\"$fixture/provider-calls/$$\"\nmkdir \"$call\"\nprintf '%s\\n' \"$$\" > \"$call/provider-pid\"\ncat > \"$call/prompt\"\nsleep 60 &\nprintf '%s\\n' \"$!\" > \"$call/descendant.staged\"\nmv \"$call/descendant.staged\" \"$call/descendant-pid\"\nwhile [ ! -f \"$call/release\" ]; do sleep 0.02; done\nif [ -f \"$fixture/provider-fail\" ]; then echo held-provider-failed >&2; exit 9; fi\ncat \"$fixture/provider-events.jsonl\"\n"
-        ),
-    )?;
-    Ok(())
-}
-
-fn calls(root: &Path, count: usize) -> Result<Vec<PathBuf>> {
-    support::eventually(&format!("{count} held providers"), || {
-        let mut calls = fs::read_dir(root.join("provider-calls"))?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<std::io::Result<Vec<_>>>()?;
-        calls.retain(|path| path.join("descendant-pid").exists());
-        calls.sort();
-        Ok((calls.len() == count).then_some(calls))
-    })
-}
-
-fn reaped(call: &Path) -> Result {
-    for file in ["provider-pid", "descendant-pid"] {
-        let pid = fs::read_to_string(call.join(file))?;
-        let process = Path::new("/proc").join(pid.trim());
-        support::eventually(&format!("judge reaps {file} {pid}"), || {
-            Ok((!process.exists()).then_some(()))
-        })?;
-    }
-    Ok(())
-}
-
-fn process_running(pid: &str) -> bool {
-    fs::read_to_string(format!("/proc/{pid}/status")).is_ok_and(|status| {
-        !status
-            .lines()
-            .any(|line| line.starts_with("State:") && line.contains('Z'))
-    })
-}
-
 fn pin_count(root: &Path) -> Result<i64> {
     let db = Database::open_in(&root.join("state/ktask-dev"))?;
     Ok(db
@@ -249,13 +145,13 @@ fn pin_count(root: &Path) -> Result<i64> {
 }
 
 fn no_pins(root: &Path) -> Result {
-    assert_eq!(pin_count(root)?, 0, "judge left a durable pin behind");
+    assert_eq!(pin_count(root)?, 0, "retention left a durable pin behind");
     let directory = root.join("state/ktask-dev/evidence-pins");
     if directory.exists() {
         assert_eq!(
             fs::read_dir(directory)?.count(),
             0,
-            "judge left lock files behind"
+            "retention left lock files behind"
         );
     }
     Ok(())
@@ -274,208 +170,89 @@ fn blocked(root: &Path, evidence: &Evidence) -> Result {
     evidence.preserved(root)
 }
 
-#[test]
-fn retention_waits_for_overlapping_cli_and_tui_judges_and_is_instance_scoped() -> Result {
-    for mouse in [false, true] {
-        let scratch = support::sandbox()?;
-        let root = scratch.path();
-        let evidence = Evidence::new(root)?;
-        let mut writer = service(root)?;
-        let stale = writer.storage_preview()?;
-        assert_eq!(stale.candidates.len(), 1);
-        held_provider(root)?;
-        let mut cli = Running::start(root, evidence.failed)?;
-        let first = calls(root, 1)?.remove(0);
-        let mut t = Terminal::open_project(DEV, root, &project(root), 110, 42)?;
-        t.screen("failed current before held judge", |s| {
-            s.contains("Failed current")
-        })?;
-        if mouse {
-            t.click("d Remediate")?;
-        } else {
-            t.send("d")?;
-        }
-        println!(
-            "RETENTION HELD TUI mouse={mouse}\n{}",
-            t.screen("held TUI judge", |s| s
-                .contains("Requesting failure judgment"))?
-        );
-        let second = calls(root, 2)?
-            .into_iter()
-            .find(|path| path != &first)
-            .unwrap();
-        assert_eq!(pin_count(root)?, 2);
-        for call in [&first, &second] {
-            assert!(fs::read_to_string(call.join("prompt"))?.contains(TRANSCRIPT));
-        }
-        // Reject a preview captured before the pin even though its closed task did not change.
-        assert!(writer.cleanup_storage(&stale).is_err());
-        evidence.resolve(&mut writer)?;
-        blocked(root, &evidence)?;
+/// The files and row an earlier ktask's interactive judge left while it read evidence:
+/// the guard directory with its ownership record, the owner and guardian locks, and the
+/// pin. Holding a lock stands in for that judge's process still running.
+struct LeftoverPin {
+    owner: File,
+    guardian: File,
+}
 
-        // Development's judges must not defer retention in the production instance.
-        let mut production = Service::open(
-            Database::open_in(&root.join("state/ktask"))?,
-            &project(root),
-            None,
+fn identity(path: &Path) -> Result<String> {
+    let metadata = fs::metadata(path)?;
+    Ok(format!("{}:{}", metadata.dev(), metadata.ino()))
+}
+
+impl LeftoverPin {
+    fn new(root: &Path) -> Result<Self> {
+        let state = root.join("state/ktask-dev");
+        let directory = state.join("evidence-pins");
+        fs::create_dir(&directory)?;
+        fs::write(state.join("evidence-pins.identity"), identity(&directory)?)?;
+        let id = "0123456789abcdef0123456789abcdef";
+        let lock = |role: &str| -> Result<File> {
+            Ok(fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(directory.join(format!("{id}.{role}")))?)
+        };
+        let (owner, guardian) = (lock("owner")?, lock("guardian")?);
+        let project = service(root)?.project_id;
+        Database::open_in(&state)?.connection().execute(
+            "INSERT INTO evidence_pins(id,project_id,directory_identity,owner_identity,guardian_identity) VALUES (?1,?2,?3,?4,?5)",
+            rusqlite::params![
+                id,
+                project,
+                identity(&directory)?,
+                identity(&directory.join(format!("{id}.owner")))?,
+                identity(&directory.join(format!("{id}.guardian")))?
+            ],
         )?;
-        let (_, attempt) = closed_attempt(&mut production, "production-retention-token")?;
-        let production_transcript = transcript(root, "ktask", attempt)?;
-        let policy = production.retention_policy()?;
-        production.set_retention(policy, 0)?;
-        drop(production);
-        let output = command(PROD, root).args(["storage", "--apply"]).output()?;
-        assert!(output.status.success(), "{output:?}");
-        assert!(!production_transcript.exists());
-        blocked(root, &evidence)?;
-
-        fs::write(first.join("release"), "")?;
-        let output = cli.finish()?;
-        assert!(output.status.success(), "{output:?}");
-        let reply: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-        assert_eq!(reply["data"]["judgment"]["action"], "repair");
-        reaped(&first)?;
-        assert_eq!(pin_count(root)?, 1);
-        blocked(root, &evidence)?;
-        if mouse {
-            t.click("Cancel")?;
-        } else {
-            t.send("\x1b")?;
-        }
-        println!(
-            "RETENTION LAST JUDGE CANCELLED mouse={mouse}\n{}",
-            t.screen("held judge cancelled", |s| !s
-                .contains("Requesting failure judgment"))?
-        );
-        reaped(&second)?;
-        quit(&mut t)?;
-        evidence.preserved(root)?;
-        evidence.cleanup(root)?;
+        Ok(Self { owner, guardian })
     }
-    Ok(())
-}
 
-#[test]
-fn retention_releases_cli_and_tui_judge_pins_after_provider_errors_and_cancellation() -> Result {
-    for (input, mouse) in [
-        ("cli", false),
-        ("cancel", false),
-        ("tui", false),
-        ("tui", true),
-    ] {
-        let scratch = support::sandbox()?;
-        let root = scratch.path();
-        let evidence = Evidence::new(root)?;
-        held_provider(root)?;
-        fs::write(root.join("provider-fail"), "")?;
-        let mut cli = None;
-        let mut terminal = None;
-        if input != "tui" {
-            cli = Some(Running::start(root, evidence.failed)?);
-        } else {
-            let mut t = Terminal::open_project(DEV, root, &project(root), 110, 42)?;
-            t.screen("failed task before provider error", |s| {
-                s.contains("Failed current")
-            })?;
-            if mouse {
-                t.click("d Remediate")?;
-            } else {
-                t.send("d")?;
-            }
-            println!(
-                "RETENTION ERROR PENDING mouse={mouse}\n{}",
-                t.screen("provider error pending", |s| s
-                    .contains("Requesting failure judgment"))?
-            );
-            terminal = Some(t);
-        }
-        let call = calls(root, 1)?.remove(0);
-        evidence.resolve(&mut service(root)?)?;
-        blocked(root, &evidence)?;
-        if input == "cancel" {
-            kill(
-                Pid::from_raw(cli.as_ref().unwrap().child.as_ref().unwrap().id() as i32),
-                Signal::SIGTERM,
-            )?;
-        } else {
-            fs::write(call.join("release"), "")?;
-        }
-        if let Some(cli) = &mut cli {
-            let output = cli.finish()?;
-            assert_eq!(output.status.code(), Some(4), "{output:?}");
-            let expected = if input == "cancel" {
-                "cancelled"
-            } else {
-                "held-provider-failed"
-            };
-            assert!(
-                String::from_utf8_lossy(&output.stderr).contains(expected),
-                "{output:?}"
-            );
-        }
-        if let Some(t) = &mut terminal {
-            println!(
-                "RETENTION PROVIDER ERROR mouse={mouse}\n{}",
-                t.screen("provider failure rendered", |s| s
-                    .contains("held-provider-failed"))?
-            );
-            quit(t)?;
-        }
-        reaped(&call)?;
-        evidence.preserved(root)?;
-        evidence.cleanup(root)?;
-    }
-    Ok(())
-}
-
-struct PausedGuardian(Pid);
-impl Drop for PausedGuardian {
-    fn drop(&mut self) {
-        let _ = kill(self.0, Signal::SIGCONT);
+    /// The pin as a judge that is still reading left it: its owner lock is held.
+    fn live(root: &Path) -> Result<Self> {
+        let pin = Self::new(root)?;
+        pin.owner.lock()?;
+        Ok(pin)
     }
 }
 
 #[test]
-fn retention_recovers_killed_cli_owner_only_after_its_guardian_reaps_judge() -> Result {
+fn retention_waits_for_a_live_leftover_pin_and_is_instance_scoped() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();
     let evidence = Evidence::new(root)?;
-    held_provider(root)?;
-    let mut cli = Running::start(root, evidence.failed)?;
-    let call = calls(root, 1)?.remove(0);
-    let provider = fs::read_to_string(call.join("provider-pid"))?;
-    // The provider runs inside the read-only sandbox, so its guardian is an ancestor.
-    let mut guardian = provider.trim().parse::<i32>()?;
-    while !fs::read_to_string(format!("/proc/{guardian}/cmdline"))?.contains("__worker") {
-        guardian = fs::read_to_string(format!("/proc/{guardian}/status"))?
-            .lines()
-            .find_map(|line| line.strip_prefix("PPid:"))
-            .unwrap()
-            .trim()
-            .parse()?;
-        assert!(guardian > 1, "provider has no guardian ancestor");
-    }
-    let guardian = PausedGuardian(Pid::from_raw(guardian));
-    kill(guardian.0, Signal::SIGSTOP)?;
-    support::eventually("guardian stopped", || {
-        Ok(fs::read_to_string(format!("/proc/{}/status", guardian.0))?
-            .lines()
-            .any(|line| line.starts_with("State:") && line.contains('T'))
-            .then_some(()))
-    })?;
-    evidence.resolve(&mut service(root)?)?;
-    cli.child.as_mut().unwrap().kill()?;
-    let output = cli.finish()?;
-    assert!(!output.status.success());
-    assert!(Path::new("/proc").join(provider.trim()).exists());
+    let mut writer = service(root)?;
+    let stale = writer.storage_preview()?;
+    assert_eq!(stale.candidates.len(), 1);
+    let pin = LeftoverPin::live(root)?;
+    assert_eq!(pin_count(root)?, 1);
+    // Reject a preview captured before the pin even though its closed task did not change.
+    assert!(writer.cleanup_storage(&stale).is_err());
+    evidence.close(&mut writer)?;
     blocked(root, &evidence)?;
-    drop(guardian);
-    reaped(&call)?;
+
+    // A development pin must not defer retention in the production instance.
+    let mut production = Service::open(
+        Database::open_in(&root.join("state/ktask"))?,
+        &project(root),
+        None,
+    )?;
+    let (_, attempt) = closed_attempt(&mut production, "production-retention-token")?;
+    let production_transcript = transcript(root, "ktask", attempt)?;
+    let policy = production.retention_policy()?;
+    production.set_retention(policy, 0)?;
+    drop(production);
+    let output = command(PROD, root).args(["storage", "--apply"]).output()?;
+    assert!(output.status.success(), "{output:?}");
+    assert!(!production_transcript.exists());
+    blocked(root, &evidence)?;
+
+    drop(pin);
     evidence.preserved(root)?;
-    // Opening the service/preview reconciles the abandoned pin only after cleanup proof.
-    support::eventually("guardian releases the cleanup marker", || {
-        Ok((!service(root)?.storage_preview()?.deferred_for_live_work).then_some(()))
-    })?;
     evidence.cleanup(root)?;
     Ok(())
 }
@@ -485,91 +262,26 @@ fn retention_revokes_reservation_left_by_owner_that_died_before_guardian_claim()
     let scratch = support::sandbox()?;
     let root = scratch.path();
     let evidence = Evidence::new(root)?;
-    let mut writer = service(root)?;
-    let target = target(&mut writer, evidence.failed)?;
-    let pin = writer.begin_remediation_evidence(target)?;
-    let id: String = Database::open_in(&root.join("state/ktask-dev"))?
-        .connection()
-        .query_row("SELECT id FROM evidence_pins", [], |row| row.get(0))?;
-    let path = root.join(format!("state/ktask-dev/evidence-pins/{id}.guardian"));
-    // Persist the reservation exactly as the owner does before spawning a guardian.
-    fs::write(pin.guardian_lock(), GUARDIAN_RESERVED)?;
-    let delayed = fs::OpenOptions::new().read(true).write(true).open(&path)?;
+    let pin = LeftoverPin::live(root)?;
+    // The owner persisted its reservation and had not yet spawned a guardian.
+    (&pin.guardian).write_all(GUARDIAN_RESERVED)?;
     blocked(root, &evidence)?;
-    evidence.resolve(&mut service(root)?)?;
+    evidence.close(&mut service(root)?)?;
     // A live guardian that already claimed keeps the pin even after its owner is gone.
-    delayed.lock()?;
-    drop(pin);
+    pin.guardian.lock()?;
+    pin.owner.unlock()?;
     blocked(root, &evidence)?;
     assert_eq!(pin_count(root)?, 1);
-    delayed.unlock()?;
-    fs::write(&path, GUARDIAN_RESERVED)?;
+    pin.guardian.unlock()?;
     // The owner died before any guardian claimed: recovery revokes and retires the pin.
     evidence.cleanup(root)?;
     let mut marker = Vec::new();
-    (&delayed).read_to_end(&mut marker)?;
+    (&pin.guardian).seek(SeekFrom::Start(0))?;
+    (&pin.guardian).read_to_end(&mut marker)?;
     assert!(
         marker.is_empty(),
         "a delayed guardian could still claim the revoked reservation"
     );
-    Ok(())
-}
-
-#[test]
-fn retention_releases_cli_judge_pins_for_missing_launch_and_malformed_responses() -> Result {
-    for failure in ["missing", "launch", "malformed"] {
-        let scratch = support::sandbox()?;
-        let root = scratch.path();
-        let evidence = Evidence::new(root)?;
-        provider_fixture(root, serde_json::Value::Null, true)?;
-        match failure {
-            "missing" => fs::remove_file(root.join("bin/codex"))?,
-            "launch" => {
-                support::write_executable(&root.join("bin/codex"), "invalid executable format\n")?
-            }
-            _ => (),
-        }
-        let mut cli = command(DEV, root);
-        if failure == "missing" {
-            cli.env("PATH", root.join("bin"));
-        }
-        let output = cli
-            .args(["remediate", &evidence.failed.to_string()])
-            .output()?;
-        assert_eq!(output.status.code(), Some(4), "{failure}: {output:?}");
-        if failure == "malformed" {
-            assert!(String::from_utf8_lossy(&output.stderr).contains("Invalid Codex event"));
-        }
-        no_pins(root)?;
-        evidence.preserved(root)?;
-        evidence.resolve(&mut service(root)?)?;
-        evidence.cleanup(root)?;
-    }
-    Ok(())
-}
-
-#[test]
-fn remediation_evidence_pin_transaction_rejects_stale_version_and_resolved_current() -> Result {
-    let scratch = support::sandbox()?;
-    let root = scratch.path();
-    let evidence = Evidence::new(root)?;
-    let mut writer = service(root)?;
-    let original = target(&mut writer, evidence.failed)?;
-    let stale = VersionedTask {
-        id: original.id,
-        version: original.version - 1,
-    };
-    assert!(writer.begin_remediation_evidence(stale).is_err());
-    no_pins(root)?;
-    let pin = writer.begin_remediation_evidence(original)?;
-    assert_eq!(pin_count(root)?, 1);
-    blocked(root, &evidence)?;
-    drop(pin);
-    no_pins(root)?;
-    evidence.resolve(&mut service(root)?)?;
-    assert!(writer.begin_remediation_evidence(original).is_err());
-    no_pins(root)?;
-    evidence.cleanup(root)?;
     Ok(())
 }
 
@@ -672,7 +384,7 @@ fn tree_contents(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>> {
 }
 
 #[test]
-fn retention_does_not_retire_live_judge_when_pin_directory_is_replaced() -> Result {
+fn retention_does_not_retire_live_pin_when_pin_directory_is_replaced() -> Result {
     use std::os::unix::fs::symlink;
     for replacement in ["empty", "symlink"] {
         let scratch = support::sandbox()?;
@@ -682,10 +394,8 @@ fn retention_does_not_retire_live_judge_when_pin_directory_is_replaced() -> Resu
         let stale = writer.storage_preview()?;
         let state = root.join("state/ktask-dev");
         let original_db = Database::open_in(&state)?;
-        held_provider(root)?;
-        let mut cli = Running::start(root, evidence.failed)?;
-        let call = calls(root, 1)?.remove(0);
-        evidence.resolve(&mut writer)?;
+        let pin = LeftoverPin::live(root)?;
+        evidence.close(&mut writer)?;
         let directory = state.join("evidence-pins");
         let mut swapped = ReplacedPath::park(&directory, &root.join("original-pin-directory"))?;
         let replacement_directory = root.join("unrelated-pin-directory");
@@ -728,10 +438,7 @@ fn retention_does_not_retire_live_judge_when_pin_directory_is_replaced() -> Resu
         );
         swapped.restore()?;
         blocked(root, &evidence)?;
-        fs::write(call.join("release"), "")?;
-        let output = cli.finish()?;
-        assert!(output.status.success(), "{output:?}");
-        reaped(&call)?;
+        drop(pin);
         evidence.cleanup(root)?;
     }
     Ok(())
@@ -753,10 +460,8 @@ fn retention_never_recreates_missing_or_substituted_live_pin_locks() -> Result {
         let stale = writer.storage_preview()?;
         let state = root.join("state/ktask-dev");
         let original_db = Database::open_in(&state)?;
-        held_provider(root)?;
-        let mut cli = Running::start(root, evidence.failed)?;
-        let call = calls(root, 1)?.remove(0);
-        evidence.resolve(&mut writer)?;
+        let pin = LeftoverPin::live(root)?;
+        evidence.close(&mut writer)?;
         let directory = state.join("evidence-pins");
         let id: String =
             original_db
@@ -796,17 +501,14 @@ fn retention_never_recreates_missing_or_substituted_live_pin_locks() -> Result {
             swapped.restore()?;
         }
         blocked(root, &evidence)?;
-        fs::write(call.join("release"), "")?;
-        let output = cli.finish()?;
-        assert!(output.status.success(), "{output:?}");
-        reaped(&call)?;
+        drop(pin);
         evidence.cleanup(root)?;
     }
     Ok(())
 }
 
 #[test]
-fn retention_and_pin_drop_preserve_substituted_instance_and_project_state_trees() -> Result {
+fn retention_preserves_substituted_instance_and_project_state_trees() -> Result {
     use std::os::unix::fs::symlink;
     for replacement in ["instance", "project"] {
         let scratch = support::sandbox()?;
@@ -816,10 +518,8 @@ fn retention_and_pin_drop_preserve_substituted_instance_and_project_state_trees(
         let stale = writer.storage_preview()?;
         let state = root.join("state/ktask-dev");
         let original_db = Database::open_in(&state)?;
-        held_provider(root)?;
-        let mut cli = Running::start(root, evidence.failed)?;
-        let call = calls(root, 1)?.remove(0);
-        evidence.resolve(&mut writer)?;
+        let pin = LeftoverPin::live(root)?;
+        evidence.close(&mut writer)?;
         let replacement_state = if replacement == "instance" {
             root.join("state/ktask")
         } else {
@@ -827,7 +527,7 @@ fn retention_and_pin_drop_preserve_substituted_instance_and_project_state_trees(
         };
         fs::create_dir_all(replacement_state.join("evidence-pins"))?;
         // Include the same pin ID in a different database and idle decoy locks.
-        // A pathname-based Drop would delete this unrelated row and its files.
+        // Recovery that followed the pathname would delete this unrelated row and its files.
         original_db.connection().execute(
             "VACUUM INTO ?1",
             [replacement_state.join("ktask.sqlite3").to_str().unwrap()],
@@ -869,15 +569,7 @@ fn retention_and_pin_drop_preserve_substituted_instance_and_project_state_trees(
             before,
             "retention touched replacement state"
         );
-        fs::write(call.join("release"), "")?;
-        let output = cli.finish()?;
-        assert!(output.status.success(), "{output:?}");
-        reaped(&call)?;
-        assert_eq!(
-            tree_contents(visible_replacement)?,
-            before,
-            "pin Drop touched replacement state"
-        );
+        drop(pin);
         if replacement == "instance" {
             fs::rename(&state, &replacement_state)?;
         }

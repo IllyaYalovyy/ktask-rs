@@ -41,36 +41,34 @@ impl View {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     View(View),
     Back,
     Quit,
     Help,
     Copy,
+    /// The current task's forward move: Run, Resume, Retry, or Answer when it needs input.
     Run,
-    Recover,
     Readiness,
     Pause,
-    ResetToPending,
-    Retry,
-    Diagnose,
+    /// Return the task to Pending; its attempt ends and its changes are stashed.
+    Stop,
+    MarkDone,
+    /// Cancel a pending task (Action::Cancel closes a dialog).
+    CancelTask,
+    Supersede,
+    CopyToQueue,
     Approve,
     Reject,
     Models,
-    Resolve,
-    Reopen,
     Add,
     Insert,
     Edit,
-    Delete,
-    Undo,
     Move,
     Breakdown,
     Answer,
-    Abandon,
     Output,
-    Acknowledge,
     Stats,
     Events,
     Import,
@@ -200,8 +198,10 @@ pub struct App {
     pub service: Option<crate::application::Service>,
     pub supervisor_alive: bool,
     pub(crate) proposal_job: Option<crate::persistent::ProposalJob>,
+    pub(crate) pending_control: Option<crate::persistent::PendingControl>,
+    /// Shown instead of "Saved to SQLite" once the saved form's change is committed.
+    pub(crate) saved_notice: Option<String>,
     pub stored: BTreeMap<usize, crate::application::Task>,
-    pub durable_undo: Option<crate::application::VersionedTask>,
     pub project_name: String,
     pub instance: Instance,
     pub view: View,
@@ -218,7 +218,6 @@ pub struct App {
     pub task_events: Vec<String>,
     pub files: BTreeMap<String, String>,
     pub next_id: usize,
-    pub undo: Option<(usize, Task)>,
     pub mouse_enabled: bool,
     pub review_required: bool,
     pub cleanup_fail_once: bool,
@@ -270,8 +269,9 @@ impl App {
             service: None,
             supervisor_alive: false,
             proposal_job: None,
+            pending_control: None,
+            saved_notice: None,
             stored: BTreeMap::new(),
-            durable_undo: None,
             project_name: "demo workspace".into(),
             instance,
             view: View::Current,
@@ -293,7 +293,7 @@ impl App {
                 vec![
                     "Check failed · #1".into(),
                     "Execution stopped".into(),
-                    "Ready for diagnosis".into(),
+                    "Stopped for a decision".into(),
                 ]
             } else {
                 Vec::new()
@@ -302,14 +302,13 @@ impl App {
                 vec![
                     "Check failed · #1".into(),
                     "Execution stopped".into(),
-                    "Ready for diagnosis".into(),
+                    "Stopped for a decision".into(),
                 ]
             } else {
                 Vec::new()
             },
             files: if demo { mock::files() } else { BTreeMap::new() },
             next_id: 241,
-            undo: None,
             mouse_enabled: true,
             review_required: false,
             cleanup_fail_once: false,
@@ -505,7 +504,7 @@ impl App {
             }
             KeyCode::Esc if matches!(self.view, View::About | View::Config) => Some(Action::Back),
             KeyCode::Esc => Some(Action::Clear),
-            KeyCode::Char('s') => Some(Action::Stats),
+            KeyCode::Char('S') => Some(Action::Stats),
             KeyCode::Char('l') => Some(Action::Events),
             KeyCode::Char('a') => Some(Action::Add),
             code => self.view_key(code),
@@ -523,18 +522,15 @@ impl App {
                 KeyCode::Char('u') => Some(Action::Readiness),
                 KeyCode::Char('r') => Some(Action::Run),
                 KeyCode::Char('m') => Some(Action::Configure),
-                KeyCode::Char('R') => Some(Action::Recover),
                 KeyCode::Char('p') => Some(Action::Pause),
-                KeyCode::Char('P') => Some(Action::ResetToPending),
-                KeyCode::Char('t') => Some(Action::Retry),
-                KeyCode::Char('d') => Some(Action::Diagnose),
+                KeyCode::Char('s') => Some(Action::Stop),
+                KeyCode::Char('D') => Some(Action::MarkDone),
+                KeyCode::Char('x') => Some(Action::CancelTask),
+                KeyCode::Char('R') => Some(Action::Supersede),
                 KeyCode::Char('v') => Some(Action::Approve),
                 KeyCode::Char('n') => Some(Action::Reject),
                 KeyCode::Char('c') => Some(Action::Models),
-                KeyCode::Char('z') => Some(Action::Resolve),
-                KeyCode::Char('y') => Some(Action::Acknowledge),
                 KeyCode::Char('w') => Some(Action::Answer),
-                KeyCode::Char('x') => Some(Action::Abandon),
                 KeyCode::Char('o') => Some(Action::Output),
                 KeyCode::Char('e') => Some(Action::Edit),
                 KeyCode::Char('b') => Some(Action::Breakdown),
@@ -545,7 +541,7 @@ impl App {
                     None
                 }
             },
-            View::History if code == KeyCode::Char('R') => Some(Action::Reopen),
+            View::History if code == KeyCode::Char('C') => Some(Action::CopyToQueue),
             View::History if code == KeyCode::Char('V') => Some(Action::InspectSection(4)),
             View::History if code == KeyCode::Char('F') => Some(Action::InspectSection(5)),
             View::Queue | View::History => match code {
@@ -553,8 +549,10 @@ impl App {
                 KeyCode::Char('/') => Some(Action::Search),
                 KeyCode::Char('f') => Some(Action::Filter),
                 KeyCode::Char('e') => Some(Action::Edit),
-                KeyCode::Char('d') => Some(Action::Delete),
-                KeyCode::Char('u') => Some(Action::Undo),
+                KeyCode::Char('x') if self.view == View::Queue => Some(Action::CancelTask),
+                KeyCode::Char('s') if self.view == View::Queue => Some(Action::Stop),
+                KeyCode::Char('R') if self.view == View::Queue => Some(Action::Supersede),
+                KeyCode::Char('D') if self.view == View::Queue => Some(Action::MarkDone),
                 KeyCode::Char('m') => Some(Action::Move),
                 KeyCode::Char('i') => Some(Action::Insert),
                 KeyCode::Char('b') => Some(Action::Breakdown),
@@ -562,7 +560,7 @@ impl App {
                 KeyCode::Char('v') => Some(Action::Approve),
                 KeyCode::Char('n') => Some(Action::Reject),
                 KeyCode::Char('c') => Some(Action::Models),
-                KeyCode::Char('x') => Some(Action::Export),
+                KeyCode::Char('E') => Some(Action::Export),
                 KeyCode::Enter => Some(Action::Inspect),
                 _ => {
                     self.navigate(code, false);
@@ -599,11 +597,8 @@ impl App {
                 KeyCode::Char('m') => Some(Action::Models),
                 KeyCode::Char('v') => Some(Action::Approve),
                 KeyCode::Char('w') => Some(Action::Answer),
-                KeyCode::Char('y') => Some(Action::Acknowledge),
                 KeyCode::Char('p') => Some(Action::Pause),
-                KeyCode::Char('R') => Some(Action::Recover),
                 KeyCode::Char('r') => Some(Action::Run),
-                KeyCode::Char('t') => Some(Action::Retry),
                 KeyCode::Char('u') => Some(Action::Readiness),
                 _ => None,
             };
@@ -898,11 +893,7 @@ impl App {
                 if self.current().is_some_and(|t| {
                     matches!(
                         t.status(),
-                        Status::Running
-                            | Status::Paused
-                            | Status::Waiting
-                            | Status::Question
-                            | Status::Abandoned
+                        Status::Running | Status::Paused | Status::NeedsInput
                     )
                 }) {
                     // Nothing stored changed, so only the supervisor can have started or
@@ -922,7 +913,7 @@ impl App {
         true
     }
     pub fn tick(&mut self) -> bool {
-        if self.poll_remediation() {
+        if self.poll_remediation() || self.poll_control() {
             return true;
         }
         if self.service.is_some() {
@@ -940,20 +931,13 @@ impl App {
         }
         self.last_tick = Instant::now();
         if let Some(task) = self.queue.first_mut()
-            && task.status() == Status::Waiting
+            && task.waiting_for_limit()
         {
             let attempt = task.attempts.last_mut().expect("waiting attempt");
             if attempt.resume_at.is_some_and(|at| Instant::now() >= at) {
-                // A task that regained current after another workspace must pass handoff checks.
-                attempt.state = Status::Paused;
                 attempt.resume_at = None;
-                self.start_current();
-                if self
-                    .current()
-                    .is_some_and(|t| t.status() == Status::Running)
-                {
-                    self.record("Rate-limit wait ended · same attempt/session · no budget charged");
-                }
+                attempt.outcome = "Running".into();
+                self.record("Rate-limit wait ended · same attempt/session · no budget charged");
             }
             return true;
         }
@@ -974,11 +958,10 @@ impl App {
             attempt.state = Status::Failed;
             attempt.outcome = "Failed: active time limit reached".into();
             attempt.logs.push(attempt.outcome.clone());
-            self.record("Active time limit reached · increase limit in Models or resolve current");
+            self.record("Active time limit reached · r Retry restarts it; c Models raises it");
             return true;
         }
         if task.needs_rate_limit && attempt.step == 2 {
-            attempt.state = Status::Waiting;
             attempt.resume_at = Some(Instant::now() + Duration::from_secs(3));
             attempt.outcome = "Waiting: rate limit (3 seconds)".into();
             attempt.logs.push(
@@ -988,7 +971,7 @@ impl App {
             return true;
         }
         if task.needs_question && task.answer.is_empty() && attempt.step == 2 {
-            attempt.state = Status::Question;
+            attempt.state = Status::NeedsInput;
             attempt.outcome = "Waiting for answer".into();
             attempt.question = Some("Which export format should be used?".into());
             attempt
@@ -1012,9 +995,7 @@ impl App {
             if task.id == 1 && !attempt.revision.repaired {
                 attempt.state = Status::Failed;
                 attempt.outcome = "Failed: boundary error".into();
-                attempt
-                    .logs
-                    .push("FAIL: final row omitted. Request remediation.".into());
+                attempt.logs.push("FAIL: final row omitted.".into());
                 self.record("Check failed · later tasks remain pending");
             } else {
                 self.complete_current("Completed; checks and review passed");

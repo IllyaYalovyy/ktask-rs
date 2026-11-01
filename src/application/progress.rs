@@ -63,6 +63,16 @@ impl Service {
             .map_err(Into::into)
     }
 
+    /// Whether the task's latest attempt ended in a judge's replan, so its next attempt is
+    /// the supervisor's repair and keeps the task's repair-round count.
+    pub fn replan_pending(&self, task: i64) -> Result<bool> {
+        Ok(self.db.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM attempt_progress WHERE phase='replanned' AND attempt_id=(SELECT max(id) FROM attempts WHERE task_id=?1))",
+            [task],
+            |r| r.get(0),
+        )?)
+    }
+
     /// Only the supervisor that applied a judge's replan can authorize its next worker.
     pub fn replan_applied(&self, run: &Run) -> Result<()> {
         require(self.db.connection().execute(

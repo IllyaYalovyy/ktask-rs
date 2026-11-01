@@ -1,4 +1,6 @@
 //! Runner-facing commands. Attempts own live state; clients request control through events.
+use super::commands::{allowed, labelled, reason_or};
+use super::lifecycle::Action;
 use super::*;
 use crate::storage::{execution::StartAttempt, usage::TokenUsage};
 use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
@@ -59,222 +61,138 @@ impl Service {
         tx.commit()?;
         Ok(())
     }
-    pub fn recover_run(&mut self, expected: Option<VersionedTask>) -> Result<()> {
-        let task = self
-            .current_task()?
-            .ok_or_else(|| Error::Conflict("Queue is empty".into()))?;
-        if let Some(expected) = expected {
-            require(
-                task.id == expected.id && task.version == expected.version,
-                "Current task changed; reopen Recover",
-            )?;
-        }
-        require(
-            matches!(task.status.as_str(), "running" | "paused" | "waiting"),
-            "No abandoned attempt",
-        )?;
-        if matches!(task.status.as_str(), "paused" | "waiting") {
-            let attempt = task.attempts.last().expect("live attempt has a row");
-            require(
-                !self.supervisor_released(attempt.id)?,
-                "Supervisor yielded this attempt normally; resume or abandon it",
-            )?;
-        }
-        let attempt = task.attempts.last().expect("live attempt has a row").id;
-        let delivery_stage: Option<String> = self
+    /// A supervisor that died leaves its attempt marked running. Once the caller holds the
+    /// workspace lease (so no supervisor or worker owns it), that attempt becomes Paused:
+    /// Resume continues it from its recorded phase. False when nothing needed settling.
+    pub fn settle_orphan(&mut self) -> Result<bool> {
+        let tx = self
             .db
-            .connection()
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let orphan: Option<(i64, i64)> = tx
             .query_row(
-                "SELECT stage FROM attempt_delivery WHERE attempt_id=?1",
-                [attempt],
-                |r| r.get(0),
+                "SELECT a.id, a.task_id FROM attempts a WHERE a.project_id=?1
+                 AND (a.state='running' OR (a.state='waiting' AND a.wait_reason<>'question'))",
+                [self.project_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        if delivery_stage
-            .as_deref()
-            .is_some_and(|stage| stage != "work")
-        {
-            let tx = self
-                .db
-                .connection_mut()
-                .transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let now = now_ms();
-            require(tx.execute("UPDATE attempts SET state='paused',report='Recovered delivery supervisor; resume the same attempt',wait_reason=NULL,waiting_since_ms=NULL,resume_at_ms=NULL WHERE id=?1 AND state IN ('running','paused','waiting')",[attempt])? == 1,"Attempt changed during delivery recovery")?;
-            close_unfinished(
-                &tx,
-                attempt,
-                now,
-                "Recovered delivery supervisor",
-                "interrupted",
-            )?;
-            tx.execute(
-                "UPDATE tasks SET row_version=row_version+1,updated_at_ms=?2 WHERE id=?1",
-                params![task.id, now],
-            )?;
-            tx.execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'supervisor.released','info','Recovered delivery attempt for resume')",params![self.project_id,task.id,attempt,now])?;
-            tx.commit()?;
-            return Ok(());
-        }
-        let tx = self
-            .db
-            .connection_mut()
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some((attempt, task)) = orphan else {
+            return Ok(false);
+        };
         let now = now_ms();
-        require(tx.execute(
-            "UPDATE attempts SET state='interrupted', finished_at_ms=?3, failure_category='interrupted',
-             outcome='Recovered abandoned supervisor; work and evidence retained',
-             wait_reason=NULL, waiting_since_ms=NULL, resume_at_ms=NULL
-             WHERE id=(SELECT latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2 AND row_version=?4)
-             AND state IN ('running','paused','waiting')",
-            params![self.project_id, task.id, now, task.version],
-        )? == 1, "Attempt changed; refresh the task")?;
-        close_unfinished(
-            &tx,
-            attempt,
-            now,
-            "Supervisor lost; recovered as interrupted",
-            "interrupted",
-        )?;
+        let report = "The supervisor stopped unexpectedly; Resume continues this attempt";
+        tx.execute("UPDATE attempts SET state='paused',report=?2,wait_reason=NULL,waiting_since_ms=NULL,resume_at_ms=NULL WHERE id=?1", params![attempt,report])?;
+        close_unfinished(&tx, attempt, now, report, "interrupted")?;
         tx.execute(
-            "UPDATE questions SET state='cancelled', resolved_at_ms=?3
-             WHERE attempt_id=(SELECT latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2)
-             AND state='open'",
-            params![self.project_id, task.id, now],
+            "UPDATE tasks SET row_version=row_version+1, updated_at_ms=max(updated_at_ms,?2) WHERE id=?1",
+            params![task, now],
         )?;
-        tx.execute(
-            "UPDATE tasks SET row_version=row_version+1, updated_at_ms=?2 WHERE id=?1",
-            params![task.id, now],
-        )?;
-        event(
-            &tx,
-            self.project_id,
-            task.id,
-            now,
-            "attempt.interrupted",
-            "Recovered abandoned supervisor; work and evidence retained",
-        )?;
+        tx.execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'attempt.paused','warning',?5)", params![self.project_id,task,attempt,now,report])?;
+        tx.execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'supervisor.released','info',?5)", params![self.project_id,task,attempt,now,report])?;
+        tx.execute("UPDATE execution_sessions SET state='paused',reason=?2,updated_at_ms=?3 WHERE project_id=?1 AND state IN ('running','waiting','resume_requested')", params![self.project_id,report,now])?;
         tx.commit()?;
-        Ok(())
+        Ok(true)
     }
-    /// Abandon a paused or waiting attempt that nobody will resume. The caller must hold the
-    /// runner lease so no live supervisor owns it. Interrupted attempts spend no budget.
-    pub fn abandon_run(&mut self, target: VersionedTask, reason: &str) -> Result<()> {
-        require(!reason.trim().is_empty(), "A reason is required")?;
+    /// Stop: end the task's open attempt and return it to Pending; the next Run starts fresh
+    /// with full limits. The caller holds the workspace lease, so no worker is alive, and has
+    /// already saved the attempt's uncommitted changes.
+    pub fn stop_task(&mut self, target: VersionedTask, reason: &str) -> Result<()> {
         let tx = self
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (status, attempt) = current_status(&tx, self.project_id, target)?;
-        let attempt = attempt.filter(|_| matches!(status.as_str(), "paused" | "waiting"));
-        let attempt = attempt.ok_or_else(|| {
-            Error::Conflict(
-                "Only paused or waiting current can be abandoned; refresh the task".into(),
-            )
-        })?;
+        allowed(&tx, self.project_id, target, Action::Stop)?;
+        let attempt = latest_attempt(&tx, target.id)?;
         let now = now_ms();
-        interrupt(&tx, self.project_id, target.id, attempt, now, reason)?;
-        // Explicit abandonment authorizes a fresh bounded sync batch, while retaining
-        // the owned branch and checkpoint. Automatic replans never set restart_sync.
-        tx.execute("UPDATE attempt_delivery SET handoff_target=?2,repair_origin_task=coalesce(repair_origin_task,?2),restart_sync=1 WHERE attempt_id=?1 AND stage<>'work' AND handoff_claimed_by IS NULL",params![attempt,target.id])?;
-        bump(&tx, target, now)?;
-        tx.commit()?;
-        Ok(())
-    }
-    /// End the open attempt and leave the same current task editable. The workspace lease
-    /// must already be held, including confirmation that its worker has been reaped.
-    pub fn reset_to_pending(
-        &mut self,
-        target: VersionedTask,
-        reason: &str,
-        worktree: &str,
-    ) -> Result<()> {
-        require(!reason.trim().is_empty(), "A reset reason is required")?;
-        let tx = self
-            .db
-            .connection_mut()
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (status, attempt) = current_status(&tx, self.project_id, target)?;
-        require(
-            matches!(
-                status.as_str(),
-                "paused" | "waiting" | "failed" | "interrupted"
-            ),
-            "Reset to pending requires a stopped current attempt; refresh the task",
-        )?;
-        let now = now_ms();
-        if matches!(status.as_str(), "paused" | "waiting") {
-            let attempt =
-                attempt.ok_or_else(|| Error::Conflict("Current has no open attempt".into()))?;
-            interrupt(
-                &tx,
-                self.project_id,
-                target.id,
-                attempt,
-                now,
-                &format!("Reset to pending: {reason}"),
-            )?;
-        }
-        // Terminal failures can also retain an unanswered question. A new Run must
-        // never inherit it from the attempt being reset.
-        if let Some(attempt) = attempt {
-            tx.execute("UPDATE questions SET state='cancelled',resolved_at_ms=?2 WHERE attempt_id=?1 AND state='open'", params![attempt,now])?;
-        }
-        // Keep any unclaimed delivery work, but force the successor to recheck it
-        // against the current source before publication.
-        if let Some(attempt) = attempt {
-            tx.execute("UPDATE attempt_delivery SET handoff_target=?2,repair_origin_task=coalesce(repair_origin_task,?2),restart_sync=1 WHERE attempt_id=?1 AND stage<>'work' AND handoff_claimed_by IS NULL", params![attempt,target.id])?;
-        }
+        let reason = labelled(reason, "Stopped", &self.actor);
+        end_attempt(&tx, self.project_id, target.id, attempt, now, &reason)?;
         tx.execute("UPDATE ai_sessions SET state='closed' WHERE project_id=?1 AND task_id=?2 AND state='open'", params![self.project_id,target.id])?;
         tx.execute(
-            "UPDATE tasks SET reset_pending=1,reset_worktree=?2 WHERE id=?1",
-            params![target.id, worktree],
+            "UPDATE tasks SET reset_pending=1, reset_worktree=NULL WHERE id=?1",
+            [target.id],
         )?;
-        tx.execute("UPDATE execution_sessions SET state='paused',reason='Reset to pending; explicit Run required',updated_at_ms=?2 WHERE project_id=?1", params![self.project_id,now])?;
+        tx.execute("UPDATE execution_sessions SET state='stopped',reason=?2,updated_at_ms=?3 WHERE project_id=?1", params![self.project_id,reason,now])?;
         event(
             &tx,
             self.project_id,
             target.id,
             now,
-            "task.reset_pending",
-            &format!("Reset to pending: {reason}"),
+            "task.stopped",
+            "Back to Pending; the next Run starts fresh",
         )?;
         bump(&tx, target, now)?;
         tx.commit()?;
         Ok(())
     }
-    pub fn reset_worktree(&self, task: i64) -> Result<Option<String>> {
-        self.db.connection().query_row("SELECT reset_worktree FROM tasks WHERE project_id=?1 AND id=?2 AND reset_pending=1", params![self.project_id,task], |r| r.get(0)).optional().map(|value| value.flatten()).map_err(Into::into)
+    /// A provider-limit wait that the owner paused becomes Paused; Resume tries at once.
+    pub fn pause_wait(&mut self, run: &Run) -> Result<()> {
+        let now = now_ms();
+        require(self.db.connection().execute("UPDATE attempts SET state='paused',report='Paused during a provider limit wait; Resume tries again now',wait_reason=NULL,waiting_since_ms=NULL,resume_at_ms=NULL WHERE id=?1 AND execution_token=?2 AND state='waiting'", params![run.attempt,run.token])? == 1, "Attempt changed during its provider limit wait")?;
+        self.db.connection().execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'attempt.paused','info','Paused during a provider limit wait')", params![self.project_id,run.task,run.attempt,now])?;
+        Ok(())
     }
-    /// Give up on current: any paused or waiting attempt is interrupted without spending
-    /// budget, and the task moves to History as cancelled with its attempts and evidence.
-    /// The caller must hold the runner lease.
-    pub fn abandon_task(&mut self, target: VersionedTask, reason: &str) -> Result<()> {
-        require(!reason.trim().is_empty(), "A reason is required")?;
+    /// The task was edited while stopped: its open attempt ends so the work continues in a
+    /// new attempt with the new revision. The caller holds the workspace lease.
+    pub fn end_for_new_revision(&mut self, target: VersionedTask) -> Result<()> {
         let tx = self
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (status, attempt) = current_status(&tx, self.project_id, target)?;
+        let attempt = latest_attempt(&tx, target.id)?;
         let now = now_ms();
-        match (status.as_str(), attempt) {
-            ("paused" | "waiting", Some(attempt)) => {
-                interrupt(&tx, self.project_id, target.id, attempt, now, reason)?;
-            }
-            ("failed" | "interrupted" | "cancelled", _) => {}
-            _ => {
-                return Err(Error::Conflict(
-                    "Only failed, paused or waiting current can be abandoned; refresh the task"
-                        .into(),
-                ));
-            }
-        }
+        end_attempt(
+            &tx,
+            self.project_id,
+            target.id,
+            attempt,
+            now,
+            "Task edited while stopped; the work continues in a new attempt with the new revision",
+        )?;
+        bump(&tx, target, now)?;
+        tx.commit()?;
+        Ok(())
+    }
+    /// Mark done from any unfinished state: the owner's judgment overrides the supervisor's.
+    /// An open attempt ends first; the caller holds the workspace lease, as for Stop.
+    pub fn mark_done(&mut self, target: VersionedTask, reason: &str) -> Result<()> {
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        allowed(&tx, self.project_id, target, Action::MarkDone)?;
+        let now = now_ms();
+        let attempt = latest_attempt(&tx, target.id)?;
+        end_attempt(
+            &tx,
+            self.project_id,
+            target.id,
+            attempt,
+            now,
+            &labelled(reason, "Marked done", &self.actor),
+        )?;
+        let reason = reason_or(reason, "Marked done", &self.actor);
+        tx.execute("UPDATE ai_sessions SET state='closed' WHERE project_id=?1 AND task_id=?2 AND state='open'", params![self.project_id,target.id])?;
+        let human: bool = tx.query_row(
+            "SELECT kind='human' FROM task_details WHERE id=?1",
+            [target.id],
+            |r| r.get(0),
+        )?;
+        require(
+            !human || !matches!(self.actor.kind, super::ActorKind::Ai),
+            "Only the owner can mark Human work done",
+        )?;
         super::commands::close(
             &tx,
             self.project_id,
             &self.actor,
             target,
-            "cancelled",
-            reason,
+            if human {
+                "succeeded"
+            } else {
+                "succeeded_override"
+            },
+            &reason,
             now,
         )?;
         tx.commit()?;
@@ -350,7 +268,15 @@ impl Service {
         Ok(())
     }
     /// Called only after the supervisor owns both project/workspace leases and passes preflight.
-    pub fn begin_run(&mut self, target: VersionedTask, token: &str, base: &str) -> Result<Run> {
+    /// Start or resume current. `restart_limits` (Run and Retry) counts the task's attempt
+    /// and time limits again from this attempt; the supervisor's own repairs keep counting.
+    pub fn begin_run(
+        &mut self,
+        target: VersionedTask,
+        token: &str,
+        base: &str,
+        restart_limits: bool,
+    ) -> Result<Run> {
         let task = self
             .current_task()?
             .ok_or_else(|| Error::Conflict("Queue is empty".into()))?;
@@ -393,6 +319,12 @@ impl Service {
             })?;
             (id, rev, saved, active)
         } else {
+            if restart_limits {
+                self.db.connection().execute(
+                    "UPDATE tasks SET counted_from=(SELECT count(*) FROM attempts WHERE task_id=?1) WHERE id=?1",
+                    [task.id],
+                )?;
+            }
             let id = self.db.start_attempt_with_base(
                 StartAttempt {
                     task_id: task.id,
@@ -483,7 +415,7 @@ impl Service {
     }
     pub fn earlier_task_active_ms(&self, run: &Run) -> Result<i64> {
         Ok(self.db.connection().query_row(
-            "SELECT coalesce(sum(active_ms),0) FROM attempts WHERE task_id=?1 AND id<>?2",
+            "SELECT coalesce(sum(a.active_ms),0) FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE a.task_id=?1 AND a.id<>?2 AND a.number>t.counted_from",
             params![run.task, run.attempt],
             |row| row.get(0),
         )?)
@@ -636,7 +568,8 @@ impl Service {
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        require(tx.execute("UPDATE questions SET state='answered',answer=?4,answered_by=?5,resolved_at_ms=?6 WHERE state='open' AND attempt_id IN (SELECT latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2 AND row_version=?3 AND status IN ('waiting','failed'))", params![self.project_id,target.id,target.version,answer,self.actor.name,now_ms()])? > 0, "Question changed or task is not current")?;
+        allowed(&tx, self.project_id, target, Action::Answer)?;
+        require(tx.execute("UPDATE questions SET state='answered',answer=?4,answered_by=?5,resolved_at_ms=?6 WHERE state='open' AND attempt_id IN (SELECT latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2 AND row_version=?3)", params![self.project_id,target.id,target.version,answer,self.actor.name,now_ms()])? > 0, "Question changed or task is not current")?;
         bump(&tx, target, now_ms())?;
         event(
             &tx,
@@ -644,7 +577,7 @@ impl Service {
             target.id,
             now_ms(),
             "question.answered",
-            "Answer saved; resume current to continue",
+            "Answer saved; the task continues",
         )?;
         tx.commit()?;
         Ok(())
@@ -691,6 +624,38 @@ impl Service {
             params![step.session, session, now_ms()],
         )?;
         Ok(())
+    }
+    /// This step's share of a provider session's running totals: what the steps since the
+    /// session started recorded is subtracted. A step that starts a new provider session
+    /// reports its own usage; totals below the earlier steps mean the provider restarted.
+    pub fn step_share(&self, step: &Step, totals: TokenUsage) -> Result<TokenUsage> {
+        if step.provider_session.is_none() {
+            return Ok(totals);
+        }
+        let earlier: (i64, i64, i64, i64) = self.db.connection().query_row(
+            "SELECT coalesce(sum(coalesce(m.input_tokens,0)+coalesce(m.cache_read_tokens,0)+coalesce(m.cache_write_tokens,0)),0),
+                    coalesce(sum(m.cache_read_tokens),0), coalesce(sum(m.cache_write_tokens),0), coalesce(sum(m.output_tokens),0)
+             FROM model_calls m WHERE m.session_id=?1 AND m.step_id<?2
+             AND m.step_id>=(SELECT coalesce(max(id),0) FROM attempt_steps WHERE session_id=?1 AND invocation='start' AND id<?2)",
+            params![step.session, step.id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?;
+        let share = |now: Option<i64>, before: i64| now.map(|n| n - before);
+        let (total, read, write, output) = (
+            share(totals.total_input(), earlier.0),
+            share(totals.cache_read_tokens, earlier.1),
+            share(totals.cache_write_tokens, earlier.2),
+            share(totals.output_tokens, earlier.3),
+        );
+        if step.session.is_none()
+            || [total, read, write, output]
+                .into_iter()
+                .flatten()
+                .any(|n| n < 0)
+        {
+            return Ok(totals);
+        }
+        TokenUsage::from_inclusive(total, read, write, output).or_else(|_| Ok(totals))
     }
     /// Totals so far for this step; providers that report per step resend running totals.
     pub fn record_usage(
@@ -999,36 +964,38 @@ fn close_unfinished(
     Ok(())
 }
 
-/// Status and latest attempt of current, if it is this exact task version.
-fn current_status(
-    tx: &Transaction<'_>,
-    project: i64,
-    target: VersionedTask,
-) -> Result<(String, Option<i64>)> {
-    tx.query_row(
-        "SELECT status, latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2 AND row_version=?3",
-        params![project, target.id, target.version],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )
-    .optional()?
-    .ok_or_else(|| Error::Conflict("Task is not current, or changed elsewhere; refresh the task".into()))
+fn latest_attempt(tx: &Transaction<'_>, task: i64) -> Result<Option<(i64, String)>> {
+    Ok(tx
+        .query_row(
+            "SELECT id, state FROM attempts WHERE task_id=?1 ORDER BY number DESC LIMIT 1",
+            [task],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?)
 }
 
-fn interrupt(
+/// End a stopped attempt (paused, or waiting for an answer) without spending any budget;
+/// a finished attempt keeps its record. Open questions and unclaimed delivery work are
+/// retired so nothing carries into the task's next Run.
+fn end_attempt(
     tx: &Transaction<'_>,
     project: i64,
     task: i64,
-    attempt: i64,
+    attempt: Option<(i64, String)>,
     now: i64,
     reason: &str,
 ) -> Result<()> {
-    let report = if reason.starts_with("Reset to pending: ") {
-        reason.to_owned()
-    } else {
-        format!("Abandoned: {reason}")
+    let Some((attempt, state)) = attempt else {
+        return Ok(());
     };
-    require(tx.execute("UPDATE attempts SET state='interrupted',finished_at_ms=?2,outcome=?3,failure_category='interrupted',report=?3,wait_reason=NULL,waiting_since_ms=NULL,resume_at_ms=NULL WHERE id=?1 AND state IN ('paused','waiting')", params![attempt,now,report])? == 1, "Attempt changed; refresh the task")?;
+    if matches!(state.as_str(), "running" | "paused" | "waiting") {
+        require(tx.execute("UPDATE attempts SET state='interrupted',finished_at_ms=?2,outcome=?3,failure_category='interrupted',report=?3,wait_reason=NULL,waiting_since_ms=NULL,resume_at_ms=NULL WHERE id=?1 AND state IN ('paused','waiting')", params![attempt,now,reason])? == 1, "The task is still running; stop its worker first")?;
+        close_unfinished(tx, attempt, now, reason, "interrupted")?;
+        tx.execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'attempt.interrupted','info',?5)", params![project,task,attempt,now,reason])?;
+    }
     tx.execute("UPDATE questions SET state='cancelled',resolved_at_ms=?2 WHERE attempt_id=?1 AND state='open'", params![attempt,now])?;
-    tx.execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'attempt.interrupted','info',?5)", params![project,task,attempt,now,report])?;
+    // Keep unclaimed verified delivery work, but make its successor recheck it against the
+    // current source before publication.
+    tx.execute("UPDATE attempt_delivery SET handoff_target=?2,repair_origin_task=coalesce(repair_origin_task,?2),restart_sync=1 WHERE attempt_id=?1 AND stage<>'work' AND handoff_claimed_by IS NULL", params![attempt,task])?;
     Ok(())
 }

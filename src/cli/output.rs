@@ -25,7 +25,7 @@ impl Reply {
                             "{}\tv{}\t{}\t{}\n",
                             t.id,
                             t.version,
-                            t.status,
+                            t.state().label(),
                             safe(&t.definition().definition.title)
                         )
                     })
@@ -58,7 +58,8 @@ pub fn summary(task: &Task) -> Value {
     let pending = task.revisions.iter().rev().find(|r| {
         r.lifecycle == "draft" && (selected.lifecycle != "ready" || r.number > selected.number)
     });
-    json!({"id":task.id,"version":task.version,"lifecycle":task.lifecycle,"status":task.status,"order_key":task.order_key,
+    let state = task.state();
+    json!({"id":task.id,"version":task.version,"state":state,"actions":state.actions().iter().map(|a| a.label()).collect::<Vec<_>>(),"lifecycle":task.lifecycle,"status":task.status,"order_key":task.order_key,
         "title":selected.definition.title,"kind":selected.definition.kind,"selected_revision":selected.number,"pending_revision":pending.map(|r| r.number), "attempts_used":task.attempts_used,
         "origin_task_id":task.origin_task_id,"origin_attempt_id":task.origin_attempt_id,"follow_ups":task.follow_ups.iter().map(|(id,title)| json!({"id":id,"title":title})).collect::<Vec<_>>()})
 }
@@ -80,16 +81,23 @@ pub fn task_value(task: &Task) -> Value {
 fn task_text(task: &Task) -> String {
     let revision = task.definition();
     let d = &revision.definition;
+    let state = task.state();
     let mut text = format!(
-        "#{} v{} · {} · {}\n{}\nGoal: {}\nRevision: {} ({})\n",
+        "#{} v{} · {} · {}\n{}\nGoal: {}\nRevision: {} ({})\nActions: {}\n",
         task.id,
         task.version,
-        task.status,
+        state.label(),
         d.kind.as_str(),
         safe(&d.title),
         safe(&d.goal),
         revision.number,
-        revision.lifecycle
+        revision.lifecycle,
+        state
+            .actions()
+            .iter()
+            .map(|a| a.label())
+            .collect::<Vec<_>>()
+            .join(", ")
     );
     for c in &d.criteria {
         text.push_str(&format!("Check: {}\n", safe(c)));
@@ -128,9 +136,10 @@ fn task_text(task: &Task) -> String {
             safe(&r.definition.title)
         ));
     }
-    for a in &task.attempts {
+    for (number, a) in (1..).zip(&task.attempts) {
+        // The task's own count, then the id that stashes and commits name.
         text.push_str(&format!(
-            "Attempt {}: {} · revision {} · {}\n",
+            "Attempt {number} · #{}: {} · revision {} · {}\n",
             a.id,
             a.state,
             a.revision,

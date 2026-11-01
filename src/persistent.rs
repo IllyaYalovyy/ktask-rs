@@ -18,8 +18,15 @@ pub(crate) struct ProposalJob {
     handle: Option<std::thread::JoinHandle<Result<ProposalResult, String>>>,
 }
 pub(crate) enum ProposalResult {
-    Remediation(crate::runner::agent::Judgment),
     Breakdown(crate::runner::agent::BreakdownProposal),
+}
+
+/// Stop or Mark done on a running task: the worker was asked to pause, and the control
+/// completes once its runner has exited, without blocking the screen.
+pub(crate) struct PendingControl {
+    action: Action,
+    id: usize,
+    reason: String,
 }
 impl Drop for ProposalJob {
     fn drop(&mut self) {
@@ -30,9 +37,6 @@ impl Drop for ProposalJob {
         }
     }
 }
-
-const ABANDON_TASK: &str = "Whole task";
-const ABANDON_ATTEMPT: &str = "This attempt";
 
 impl App {
     pub(crate) fn open_readiness(&mut self) {
@@ -45,7 +49,6 @@ impl App {
                 )],
                 blockers: 1,
                 refresh_failed: true,
-                resume_blocked: true,
             },
         };
         self.readiness = Some(report.clone());
@@ -74,7 +77,7 @@ impl App {
                 session.state, session.reason
             ));
         }
-        body.push_str("\n\nAfter fixing setup, Refresh here or Run/Retry from Current. Inspection creates no attempt.");
+        body.push_str("\n\nAfter fixing setup, Refresh here or press r on Current. Inspection creates no attempt.");
         self.dialog = Some(Dialog::new(
             DialogKind::Readiness,
             "Execution readiness",
@@ -116,6 +119,11 @@ impl App {
         Ok(app)
     }
     pub(crate) fn reload(&mut self) -> Result<(), String> {
+        // A running attempt without a live runner was orphaned: settle it to Paused.
+        let service = self.service.as_mut().expect("SQLite mode");
+        if !crate::runner::supervisor_alive(service).map_err(|e| e.to_string())? {
+            crate::runner::control::settle(service).map_err(|e| e.to_string())?;
+        }
         self.execution_session = self
             .service
             .as_ref()
@@ -128,12 +136,12 @@ impl App {
             .expect("SQLite mode")
             .snapshot_brief()
             .map_err(|e| e.to_string())?;
-        let mut queue = snapshot
+        let queue = snapshot
             .queue
             .iter()
             .map(project_task)
             .collect::<Result<Vec<_>, _>>()?;
-        let mut history = snapshot
+        let history = snapshot
             .history
             .iter()
             .map(project_task)
@@ -145,35 +153,8 @@ impl App {
             .chain(snapshot.history)
             .map(|t| (t.id as usize, t))
             .collect();
-        let alive = crate::runner::supervisor_alive(self.service.as_ref().unwrap())
+        self.supervisor_alive = crate::runner::supervisor_alive(self.service.as_ref().unwrap())
             .map_err(|e| e.to_string())?;
-        self.supervisor_alive = alive;
-        if !alive {
-            for task in queue.iter_mut().chain(history.iter_mut()) {
-                let abandoned = match task.status() {
-                    Status::Running => true,
-                    Status::Paused | Status::Waiting | Status::Question => {
-                        let attempt = self.stored.get(&(task.id)).and_then(|t| t.attempts.last());
-                        match attempt {
-                            Some(attempt) => !self
-                                .service
-                                .as_ref()
-                                .unwrap()
-                                .supervisor_released(attempt.id)
-                                .map_err(|e| e.to_string())?,
-                            None => false,
-                        }
-                    }
-                    _ => false,
-                };
-                if abandoned {
-                    task.stored_status = Some(Status::Abandoned);
-                    if let Some(attempt) = task.attempts.last_mut() {
-                        attempt.state = Status::Abandoned;
-                    }
-                }
-            }
-        }
         self.queue = queue;
         self.history = history;
         self.launch_issue = match self.current().map(|task| task.id as i64) {
@@ -214,30 +195,6 @@ impl App {
         }
         self.readiness_running = running;
         Ok(())
-    }
-    /// Abandon gives up on the task. A waiting or paused attempt may be dropped alone instead.
-    fn open_abandon(&mut self, id: usize) {
-        let Some(task) = self.task(id) else {
-            return;
-        };
-        let live = !task.status().failed();
-        let title = format!("Abandon #{id} · {}", task.definition().title);
-        let mut fields = vec![Field::text("Reason", "")];
-        if live {
-            fields.push(Field::choice(
-                "Scope",
-                &[ABANDON_TASK, ABANDON_ATTEMPT],
-                ABANDON_TASK,
-            ));
-        }
-        let body = if live {
-            "Whole task: it moves to History as cancelled; the attempt is interrupted.\nThis attempt: interrupted without spending budget; the task stays current for Run."
-        } else {
-            "Gives up on this task. It moves to History as cancelled; attempts and evidence stay."
-        };
-        let mut dialog = Dialog::new(DialogKind::Abandon(id), &title, body, fields);
-        dialog.expected = self.target(id).ok();
-        self.dialog = Some(dialog);
     }
     fn target(&self, id: usize) -> Result<VersionedTask, String> {
         self.stored
@@ -281,62 +238,56 @@ impl App {
             }
             return true;
         }
-        if matches!(action, Action::Diagnose) {
-            if let Err(error) = self.propose_remediation() {
-                self.message(error);
+        if matches!(
+            action,
+            Action::Stop
+                | Action::MarkDone
+                | Action::CancelTask
+                | Action::Supersede
+                | Action::CopyToQueue
+        ) {
+            self.open_control(action);
+            if let Some(dialog) = &mut self.dialog {
+                dialog.expected = match dialog.kind {
+                    DialogKind::Stop(id)
+                    | DialogKind::MarkDone(id)
+                    | DialogKind::CancelTask(id)
+                    | DialogKind::Supersede(id)
+                    | DialogKind::CopyToQueue(id) => self.stored.get(&id).map(|t| VersionedTask {
+                        id: t.id,
+                        version: t.version,
+                    }),
+                    _ => None,
+                };
             }
             return true;
         }
-        if matches!(action, Action::Recover) {
-            let id = self.current().expect("enabled current").id;
-            let mut dialog = Dialog::new(
-                DialogKind::Recover,
-                if self
-                    .current()
-                    .is_some_and(|task| task.status() == Status::Abandoned)
-                {
-                    "Recover abandoned attempt"
-                } else {
-                    "Recover workspace ownership"
-                },
-                "The supervisor is absent. Inspect the workspace and any worker descendants before recovery.\nIf a worker died without cleanup confirmation, explicitly confirm its cleanup below. Recovery retains repository changes and evidence; retry explicitly.",
-                vec![Field::choice(
-                    "Worker cleanup",
-                    &["Not confirmed", "I confirm cleanup"],
-                    "Not confirmed",
-                )],
-            );
-            dialog.expected = self.target(id).ok();
-            self.dialog = Some(dialog);
-            return true;
-        }
+        let answering = self.current().is_some_and(|task| task.awaits_answer());
         let result = match action {
-            Action::Run | Action::Retry => self
-                .instance
-                .paths()
-                .map_err(|e| e.to_string())
-                .and_then(|paths| {
-                    let resume = self.current().is_some_and(|task| {
-                        matches!(
-                            task.status(),
-                            Status::Paused | Status::Waiting | Status::Question
-                        )
-                    });
-                    let queue = if resume {
-                        self.execution_session
-                            .as_ref()
-                            .map_or(self.auto_advance, |session| session.mode == "queue")
-                    } else {
-                        self.auto_advance
-                    };
-                    crate::runner::background(
-                        self.service.as_mut().expect("SQLite mode"),
-                        &paths,
-                        queue,
-                        false,
-                    )
+            Action::Run if !answering => {
+                self.instance
+                    .paths()
                     .map_err(|e| e.to_string())
-                }),
+                    .and_then(|paths| {
+                        let resume = self.current().is_some_and(|task| {
+                            matches!(task.status(), Status::Paused | Status::NeedsInput)
+                        });
+                        let queue = if resume {
+                            self.execution_session
+                                .as_ref()
+                                .map_or(self.auto_advance, |session| session.mode == "queue")
+                        } else {
+                            self.auto_advance
+                        };
+                        crate::runner::background(
+                            self.service.as_mut().expect("SQLite mode"),
+                            &paths,
+                            queue,
+                            false,
+                        )
+                        .map_err(|e| e.to_string())
+                    })
+            }
             Action::Pause => {
                 let id = self.current().expect("enabled current").id;
                 self.target(id).and_then(|target| {
@@ -347,7 +298,7 @@ impl App {
                         .map_err(|e| e.to_string())
                 })
             }
-            Action::Answer => {
+            Action::Answer | Action::Run => {
                 let id = self.current().expect("enabled current").id;
                 match self.service.as_ref().unwrap().open_question(id as i64) {
                     Ok(Some((_, question))) => {
@@ -360,61 +311,20 @@ impl App {
                         dialog.expected = self.target(id).ok();
                         self.dialog = Some(dialog);
                     }
-                    Ok(None) => self.message("No open question; use Run/resume to continue"),
+                    Ok(None) => self.message("No open question; refresh the task"),
                     Err(error) => self.message(error.to_string()),
                 }
                 return true;
             }
-            Action::Abandon => {
-                let id = self.current().expect("enabled current").id;
-                self.open_abandon(id);
-                return true;
-            }
-            Action::ResetToPending => {
-                let id = self.current().expect("enabled current").id;
-                let mut dialog = Dialog::new(
-                    DialogKind::ResetToPending(id),
-                    "Reset to pending",
-                    "This ends the current attempt, preserves its work and history, and makes this task editable. Resume continues the same attempt; Reset requires a fresh Run. If running, its worker must stop and be reaped first.",
-                    vec![Field::choice("Confirm", &["No", "Reset to pending"], "No")],
-                );
-                dialog.expected = self.target(id).ok();
-                self.dialog = Some(dialog);
-                return true;
-            }
-            Action::Delete
-                if self
-                    .selected_task()
-                    .is_some_and(|t| crate::actions::abandonable(t.status())) =>
-            {
-                let id = self.selected_task().expect("enabled task").id;
-                self.open_abandon(id);
-                return true;
-            }
-            Action::Approve | Action::Acknowledge => {
+            Action::Approve => {
                 let id = self.selected_task().expect("enabled task").id;
                 self.target(id).and_then(|target| {
-                    let service = self.service.as_mut().expect("SQLite mode");
-                    if matches!(action, Action::Approve) {
-                        service.decide(target, true, "Approved by owner")
-                    } else {
-                        service.acknowledge(target)
-                    }
-                    .map_err(|e| e.to_string())
+                    self.service
+                        .as_mut()
+                        .expect("SQLite mode")
+                        .decide(target, true, "Approved by owner")
+                        .map_err(|e| e.to_string())
                 })
-            }
-            Action::Undo => {
-                let target = self.durable_undo.expect("enabled undo");
-                let result = self
-                    .service
-                    .as_mut()
-                    .expect("SQLite mode")
-                    .restore(target)
-                    .map_err(|e| e.to_string());
-                if result.is_ok() {
-                    self.durable_undo = None;
-                }
-                result
             }
             Action::Stats => {
                 let usage = match self.service.as_ref().unwrap().project_usage() {
@@ -435,7 +345,7 @@ impl App {
                     DialogKind::Stats,
                     "Project statistics · SQLite",
                     &format!(
-                        "Queue: {}\nHistory: {}\nAttempts: {} ({} failed/interrupted)\nActive time: {}\nWaiting time: {}\nProject usage: {}\nHuman acknowledgments do not create AI attempts.",
+                        "Queue: {}\nHistory: {}\nAttempts: {} ({} failed/interrupted)\nActive time: {}\nWaiting time: {}\nProject usage: {}\nHuman tasks are marked done without AI attempts.",
                         self.queue.len(),
                         self.history.len(),
                         timing.attempts,
@@ -452,21 +362,18 @@ impl App {
         };
         match result {
             Ok(()) => {
-                if matches!(action, Action::Run | Action::Retry)
+                if action == Action::Run
                     && let Some(id) = self.current().map(|task| task.id as i64)
                 {
                     let _ = self.service.as_mut().unwrap().record_launch_result(id, "");
                 }
-                let continue_queue = matches!(action, Action::Acknowledge)
-                    || (matches!(action, Action::Approve)
-                        && self.selected_task().is_some_and(|selected| {
-                            self.current()
-                                .is_some_and(|current| current.id == selected.id)
-                        }));
+                let continue_queue = (matches!(action, Action::Approve)
+                    && self.selected_task().is_some_and(|selected| {
+                        self.current()
+                            .is_some_and(|current| current.id == selected.id)
+                    }));
                 self.committed(match action {
-                    Action::Run | Action::Retry => {
-                        "Supervisor started · close TUI safely · Pause stops execution"
-                    }
+                    Action::Run => "Supervisor started · close TUI safely · Pause stops execution",
                     Action::Pause => "Pause requested · waiting for worker shutdown and cleanup",
                     _ => "Saved to SQLite",
                 });
@@ -475,7 +382,7 @@ impl App {
                 }
             }
             Err(error) => {
-                if matches!(action, Action::Run | Action::Retry)
+                if action == Action::Run
                     && let Some(id) = self.current().map(|task| task.id as i64)
                 {
                     let _ = self
@@ -490,24 +397,46 @@ impl App {
         }
         true
     }
-    pub(crate) fn open_reopen(&mut self) {
-        let task = self.selected_task().expect("enabled history selection");
-        let id = task.id;
-        let mut dialog = Dialog::new(
-            DialogKind::Reopen(id),
-            "Reopen closed task",
-            &format!(
-                "#{} {}\nConfirm returns it to the front of Queue. All attempts and resolutions stay recorded.",
-                id,
-                task.definition().title
-            ),
-            vec![
-                Field::text("Reason", ""),
-                Field::choice("Confirm", &["No", "Reopen"], "No"),
-            ],
-        );
-        dialog.expected = self.target(id).ok();
-        self.dialog = Some(dialog);
+    /// Finish a Stop or Mark done that waited for the runner to stop its worker.
+    pub(crate) fn poll_control(&mut self) -> bool {
+        if self.pending_control.is_none() {
+            return false;
+        }
+        let service = self.service.as_mut().expect("SQLite mode");
+        if crate::runner::supervisor_alive(service).unwrap_or(true) {
+            return false;
+        }
+        let PendingControl { action, id, reason } = self.pending_control.take().expect("pending");
+        // The worker stopped at this request, so the task's newer version is its own doing.
+        let result = service
+            .task(id as i64)
+            .map_err(|e| e.to_string())
+            .and_then(|task| task.ok_or_else(|| format!("Task #{id} no longer exists")))
+            .and_then(|task| {
+                control(
+                    service,
+                    action,
+                    VersionedTask {
+                        id: task.id,
+                        version: task.version,
+                    },
+                    &reason,
+                )
+            });
+        match result {
+            Ok(notice) => {
+                self.committed(&notice);
+                if action == Action::MarkDone {
+                    self.continue_queue();
+                    self.message(notice);
+                }
+            }
+            Err(error) => {
+                let _ = self.reload();
+                self.message(error);
+            }
+        }
+        true
     }
 
     /// A committed intervention must not be presented as a failed form if starting fails.
@@ -521,7 +450,7 @@ impl App {
                     .map_err(|e| e.to_string())
             });
         match result {
-            Ok(true) => self.committed("Saved to SQLite · queue continuing automatically"),
+            Ok(true) => self.committed("Saved to SQLite · execution continuing"),
             Ok(false) => {
                 if let Err(error) = self.reload() {
                     self.message(format!("Saved to SQLite, but refresh failed: {error}"));
@@ -529,72 +458,6 @@ impl App {
             }
             Err(error) => self.committed(&format!("Saved to SQLite · queue waiting: {error}")),
         }
-    }
-
-    fn propose_remediation(&mut self) -> Result<(), String> {
-        let id = self.current().ok_or("No current task")?.id;
-        let task = self
-            .service
-            .as_mut()
-            .unwrap()
-            .task(id as i64)
-            .map_err(|e| e.to_string())?
-            .ok_or("Current task disappeared")?;
-        let definition = task.definition().definition.clone();
-        let model = definition.models[3]
-            .clone()
-            .ok_or("Configure a remediation model first")?;
-        self.service
-            .as_ref()
-            .unwrap()
-            .validate_model("remediation", &model)
-            .map_err(|error| error.to_string())?;
-        let paths = self.instance.paths().map_err(|e| e.to_string())?;
-        let target = self.target(id)?;
-        let pin = self
-            .service
-            .as_mut()
-            .unwrap()
-            .begin_remediation_evidence(target)
-            .map_err(|e| e.to_string())?;
-        let evidence = self
-            .service
-            .as_ref()
-            .unwrap()
-            .remediation_evidence(id as i64, &paths.state)
-            .map_err(|e| e.to_string())?;
-        let cwd = self
-            .service
-            .as_ref()
-            .unwrap()
-            .project_root()
-            .map_err(|e| e.to_string())?;
-        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let stop = cancelled.clone();
-        self.proposal_job = Some(ProposalJob {
-            target,
-            cancelled,
-            handle: Some(std::thread::spawn(move || {
-                crate::runner::agent::propose_remediation(
-                    &stop,
-                    &model,
-                    &definition,
-                    &evidence,
-                    &paths,
-                    &cwd,
-                    pin,
-                )
-                .map(ProposalResult::Remediation)
-                .map_err(|e| e.to_string())
-            })),
-        });
-        self.dialog = Some(Dialog::new(
-            DialogKind::RemediationPending,
-            "Requesting failure judgment",
-            "Reading failure evidence with the remediation model.\nCancel stops the request and changes nothing. Timeout: 120 seconds.",
-            vec![],
-        ));
-        Ok(())
     }
 
     fn propose_breakdown(&mut self) -> Result<(), String> {
@@ -662,7 +525,7 @@ impl App {
         };
         if !matches!(
             self.dialog.as_ref().map(|d| &d.kind),
-            Some(DialogKind::RemediationPending | DialogKind::BreakdownPending)
+            Some(DialogKind::BreakdownPending)
         ) {
             self.proposal_job.take();
             return true;
@@ -676,12 +539,9 @@ impl App {
             .take()
             .unwrap()
             .join()
-            .unwrap_or_else(|_| Err("Remediation worker panicked".into()));
+            .unwrap_or_else(|_| Err("Breakdown worker panicked".into()));
         self.dialog = None;
         match result {
-            Ok(ProposalResult::Remediation(judgment)) => {
-                self.show_remediation(job.target, judgment)
-            }
             Ok(ProposalResult::Breakdown(proposal)) => self.show_breakdown(job.target, proposal),
             Err(error) => self.message(error),
         }
@@ -719,93 +579,6 @@ impl App {
         self.dialog = Some(dialog);
     }
 
-    fn show_remediation(
-        &mut self,
-        target: VersionedTask,
-        judgment: crate::runner::agent::Judgment,
-    ) {
-        let id = target.id as usize;
-        let (title, body) = match &judgment {
-            crate::runner::agent::Judgment::Repair { plan, reason } => (
-                "Failure judgment · repair plan".to_owned(),
-                format!(
-                    "Plan: {plan}\nReason: {reason}\n\nApply records this plan for the next failure judge. Cancel changes nothing."
-                ),
-            ),
-            crate::runner::agent::Judgment::Revise {
-                title,
-                goal,
-                criteria,
-                models,
-                reason,
-            } => (
-                "Failure judgment · revise task".to_owned(),
-                format!(
-                    "Title: {title}\nGoal: {goal}\nCriteria: {}\nModel changes: {}\nReason: {reason}\n\nApply creates an AI judge revision. Cancel changes nothing.",
-                    criteria.join("; "),
-                    if models.effective().next().is_none() {
-                        "none".into()
-                    } else {
-                        models
-                            .effective()
-                            .map(|(role, model)| {
-                                format!(
-                                    "{role}: {}/{} · {}",
-                                    model.provider,
-                                    model.model,
-                                    model.effort.as_deref().unwrap_or("none")
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join("; ")
-                    }
-                ),
-            ),
-            crate::runner::agent::Judgment::Escalate { model, reason } => (
-                "Failure judgment · escalate model".to_owned(),
-                format!(
-                    "Execution model: {}/{} · {}\nReason: {reason}\n\nApply creates an approved revision; failed attempts remain unchanged. Cancel changes nothing.",
-                    model.provider,
-                    model.model,
-                    model.effort.as_deref().unwrap_or("no effort")
-                ),
-            ),
-            crate::runner::agent::Judgment::Insert { tasks, reason } => (
-                "Failure judgment · insert prerequisites".to_owned(),
-                format!(
-                    "{} repair task(s) before current:\n{}\nReason: {reason}\n\nApproval follows planner preference. Cancel changes nothing.",
-                    tasks.len(),
-                    tasks
-                        .iter()
-                        .map(|t| format!(
-                            "• {}\n  {}\n  Criteria: {}",
-                            t.title,
-                            t.goal,
-                            t.criteria.join("; ")
-                        ))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                ),
-            ),
-            crate::runner::agent::Judgment::Ask { question, reason } => (
-                "Failure judgment · ask owner".to_owned(),
-                format!(
-                    "Question: {question}\nReason: {reason}\n\nApply saves an answerable question on failed current. Cancel changes nothing."
-                ),
-            ),
-        };
-        let expected = Some(target);
-        self.dialog = Some(Dialog::new(
-            crate::dialog::DialogKind::RemediationReview { id, judgment },
-            &title,
-            &body,
-            vec![],
-        ));
-        if let Some(dialog) = &mut self.dialog {
-            dialog.expected = expected;
-        }
-    }
-
     /// Called after opening an existing form. Capture the revision version once, not at Save.
     pub(crate) fn prepare_persistent_dialog(&mut self) {
         let Some(dialog) = &mut self.dialog else {
@@ -813,15 +586,7 @@ impl App {
         };
         let id = match dialog.kind {
             DialogKind::Task { id, .. } => id,
-            DialogKind::Delete(id)
-            | DialogKind::Move(id)
-            | DialogKind::Models(id)
-            | DialogKind::Resolve(id)
-            | DialogKind::Reopen(id)
-            | DialogKind::Abandon(id)
-            | DialogKind::ResetToPending(id)
-            | DialogKind::Reject(id) => Some(id),
-            DialogKind::RemediationReview { id, .. } => Some(id),
+            DialogKind::Move(id) | DialogKind::Models(id) | DialogKind::Reject(id) => Some(id),
             _ => None,
         };
         if dialog.expected.is_some() {
@@ -1005,7 +770,7 @@ impl App {
                 }
             }
             DialogKind::Help => {
-                dialog.body = dialog.body.replace("All tasks, models, runs, and files are simulated.", "Changes save immediately. Run starts the configured agents in a background supervisor; Pause stops it.\nResume continues the paused or waiting attempt and its provider session. P Reset to pending ends it, preserves work and evidence, and requires an explicit new Run. Edit models after reset to preview and apply current project defaults.\nChecks, review and validation gate success. Review findings enter the normal fix loop, with up to ten repair rounds before critical findings need a decision.\nx Abandon moves the task to History. Break down uses the planning model.");
+                dialog.body = dialog.body.replace("All tasks, models, runs, and files are simulated.", "Changes save immediately. r runs the current task in a background supervisor; p pauses it.\nr on a paused task resumes the same attempt; on a failed task it retries, keeping the code and restarting the limits.\ns Stop returns any live task to Pending and stashes its uncommitted changes; the next Run starts fresh.\nD marks any unfinished task done. Pending tasks can be cancelled (x) or superseded (R); History offers C Copy to queue.\nChecks gate every result; review and validation judge it once the checks pass.");
             }
             _ => {}
         }
@@ -1066,29 +831,13 @@ impl App {
             } else {
                 "Saved to SQLite"
             });
-            if let DialogKind::Reopen(id) = dialog.kind
-                && let Some(task) = self.stored.get(&id)
-                && task
-                    .definition()
-                    .definition
-                    .attempt_limit
-                    .is_some_and(|limit| task.attempts_used >= limit)
-            {
-                self.message("Attempt budget used up; edit the attempt limit before running");
+            if let Some(notice) = self.saved_notice.take() {
+                self.message(notice);
             }
-            let continue_after_remediation = match &dialog.kind {
-                DialogKind::RemediationReview {
-                    judgment: crate::runner::agent::Judgment::Ask { .. },
-                    ..
-                } => false,
-                DialogKind::RemediationReview {
-                    judgment: crate::runner::agent::Judgment::Revise { .. },
-                    ..
-                } => !self.review_required,
-                DialogKind::RemediationReview { .. } => true,
-                _ => false,
-            };
-            if matches!(dialog.kind, DialogKind::Answer(_)) || continue_after_remediation {
+            if matches!(dialog.kind, DialogKind::Answer(_))
+                || (matches!(dialog.kind, DialogKind::MarkDone(_))
+                    && self.pending_control.is_none())
+            {
                 self.continue_queue();
             }
         }
@@ -1101,30 +850,71 @@ impl App {
                 .ok_or_else(|| "Missing task version; reopen the form".to_owned())
         };
         match &dialog.kind {
-            DialogKind::Recover => {
-                crate::runner::run(
-                    self.service.as_mut().unwrap(),
-                    &self.instance.paths().map_err(|e| e.to_string())?,
-                    &crate::runner::Options {
-                        recover: true,
-                        confirm_worker_cleanup: dialog.value(0) == "I confirm cleanup",
-                        recover_target: Some(target()?),
-                        ..Default::default()
-                    },
-                )
-                .map_err(|e| e.to_string())?;
-            }
-            DialogKind::RemediationPending | DialogKind::BreakdownPending => return Ok(false),
+            DialogKind::BreakdownPending => return Ok(false),
             DialogKind::BreakdownReview { .. } => unreachable!("handled before generic forms"),
-            DialogKind::RemediationReview { id: _, judgment } => {
-                let ready = !self.review_required;
-                crate::runner::remediation::apply_judgment(
-                    self.service.as_mut().unwrap(),
-                    target()?,
-                    judgment,
-                    ready,
-                )
-                .map_err(|e| e.to_string())?;
+            DialogKind::Stop(id) | DialogKind::MarkDone(id) => {
+                let action = if matches!(dialog.kind, DialogKind::Stop(_)) {
+                    Action::Stop
+                } else {
+                    Action::MarkDone
+                };
+                let id = *id;
+                let reason = dialog.value(0).to_owned();
+                let target = target()?;
+                let service = self.service.as_mut().unwrap();
+                let running = self
+                    .stored
+                    .get(&id)
+                    .is_some_and(|t| t.state() == domain::lifecycle::State::Running)
+                    && crate::runner::supervisor_alive(service).map_err(|e| e.to_string())?;
+                if running {
+                    service.request_pause(target).map_err(|e| e.to_string())?;
+                    self.pending_control = Some(PendingControl { action, id, reason });
+                    self.saved_notice = Some(format!(
+                        "#{id}: stopping the worker · {} completes when it exits",
+                        if action == Action::Stop {
+                            "Stop"
+                        } else {
+                            "Mark done"
+                        }
+                    ));
+                } else {
+                    self.saved_notice = Some(control(service, action, target, &reason)?);
+                }
+            }
+            DialogKind::CancelTask(_) => {
+                let reason = dialog.value(0).to_owned();
+                self.service
+                    .as_mut()
+                    .unwrap()
+                    .cancel(target()?, &reason)
+                    .map_err(|e| e.to_string())?;
+            }
+            DialogKind::Supersede(_) => {
+                let by = App::task_ids(dialog.value(0))?
+                    .into_iter()
+                    .map(|id| id as i64)
+                    .collect::<Vec<_>>();
+                let reason = dialog.value(1).to_owned();
+                self.service
+                    .as_mut()
+                    .unwrap()
+                    .supersede(target()?, &by, &reason)
+                    .map_err(|e| e.to_string())?;
+            }
+            DialogKind::CopyToQueue(_) => {
+                let before = before_id(dialog.value(0))?;
+                let id = self
+                    .service
+                    .as_mut()
+                    .unwrap()
+                    .copy_to_queue(target()?, before)
+                    .map_err(|e| e.to_string())?;
+                self.view = View::Queue;
+                self.queue_catalog.query.clear();
+                self.queue_catalog.filter = 0;
+                self.queue_catalog.selected = Some(id as usize);
+                self.saved_notice = Some(format!("Copied to the queue as #{id}"));
             }
             DialogKind::Answer(_) => {
                 self.service
@@ -1132,27 +922,6 @@ impl App {
                     .unwrap()
                     .answer(target()?, dialog.value(0))
                     .map_err(|e| e.to_string())?;
-            }
-            DialogKind::Abandon(_) => {
-                let service = self.service.as_mut().unwrap();
-                let attempt_only = dialog.fields.len() > 1 && dialog.value(1) == ABANDON_ATTEMPT;
-                if attempt_only {
-                    crate::runner::abandon(service, target()?, dialog.value(0))
-                } else {
-                    crate::runner::abandon_task(service, target()?, dialog.value(0))
-                }
-                .map_err(|e| e.to_string())?;
-            }
-            DialogKind::ResetToPending(_) => {
-                if dialog.value(0) != "Reset to pending" {
-                    return Ok(false);
-                }
-                crate::runner::reset_to_pending(
-                    self.service.as_mut().unwrap(),
-                    target()?,
-                    "Owner reset current to pending",
-                )
-                .map_err(|e| e.to_string())?;
             }
             DialogKind::Task { id, insert } => {
                 let mut definition = if let Some(id) = id {
@@ -1263,18 +1032,6 @@ impl App {
                     .revise(target()?, &definition, true)
                     .map_err(|e| e.to_string())?;
             }
-            DialogKind::Delete(_) => {
-                let target = target()?;
-                self.service
-                    .as_mut()
-                    .unwrap()
-                    .delete(target)
-                    .map_err(|e| e.to_string())?;
-                self.durable_undo = Some(VersionedTask {
-                    version: target.version + 1,
-                    ..target
-                });
-            }
             DialogKind::Move(_) => self
                 .service
                 .as_mut()
@@ -1287,32 +1044,6 @@ impl App {
                 .unwrap()
                 .decide(target()?, false, dialog.value(0))
                 .map_err(|e| e.to_string())?,
-            DialogKind::Resolve(_) => {
-                let outcome = match dialog.value(0) {
-                    "Failed skipped" => domain::Resolution::FailedSkipped,
-                    "Superseded" => domain::Resolution::Superseded,
-                    _ => domain::Resolution::SucceededOverride,
-                };
-                self.service
-                    .as_mut()
-                    .unwrap()
-                    .resolve(target()?, outcome, dialog.value(1))
-                    .map_err(|e| e.to_string())?;
-            }
-            DialogKind::Reopen(id) => {
-                if dialog.value(1) != "Reopen" {
-                    return Err("Confirm Reopen to return this task to Queue".into());
-                }
-                self.service
-                    .as_mut()
-                    .unwrap()
-                    .reopen(target()?, dialog.value(0))
-                    .map_err(|e| e.to_string())?;
-                self.view = View::Queue;
-                self.queue_catalog.query.clear();
-                self.queue_catalog.filter = 0;
-                self.queue_catalog.selected = Some(*id);
-            }
             DialogKind::Config => {
                 self.mouse_enabled = dialog.value(0) == "Enabled";
                 self.message("Mouse preference applied · session only");
@@ -1385,6 +1116,34 @@ impl App {
         }
         Ok(true)
     }
+}
+
+/// Stop or Mark done once no worker runs, naming the stash that holds the attempt's changes.
+fn control(
+    service: &mut Service,
+    action: Action,
+    target: VersionedTask,
+    reason: &str,
+) -> Result<String, String> {
+    let (saved, done) = if action == Action::Stop {
+        (
+            crate::runner::control::stop(service, target, reason),
+            "stopped · back to Pending",
+        )
+    } else {
+        (
+            crate::runner::control::mark_done(service, target, reason),
+            "marked done",
+        )
+    };
+    let saved = saved.map_err(|e| e.to_string())?;
+    Ok(match saved.stash {
+        Some(stash) => format!(
+            "#{} {done} · changes stashed as \"{stash}\" (git stash list)",
+            target.id
+        ),
+        None => format!("#{} {done}", target.id),
+    })
 }
 
 fn defaults_preview(defaults: &[Option<ModelConfig>; 4]) -> String {
@@ -1488,23 +1247,15 @@ fn short_token_line(usage: &crate::application::usage_report::UsageTotals) -> St
     )
 }
 
-fn status(value: &str) -> Result<Status, String> {
-    Ok(match value {
-        "new" => Status::New,
-        "ready" => Status::Pending,
-        "running" => Status::Running,
-        "paused" => Status::Paused,
-        "waiting" => Status::Waiting,
-        "failed" => Status::Failed,
-        "succeeded" => Status::Done,
-        "succeeded_override" => Status::Override,
-        "failed_skipped" => Status::Skipped,
-        "superseded" => Status::Superseded,
-        "cancelled" => Status::Cancelled,
-        "blocked" => Status::Blocked,
-        "interrupted" => Status::Interrupted,
-        _ => return Err(format!("Unsupported stored status: {value}")),
-    })
+/// An attempt's own state, as its row shows it: an ended attempt that did not succeed or
+/// fail was stopped.
+fn attempt_state(attempt: &domain::Attempt) -> Status {
+    match attempt.state.as_str() {
+        "running" | "paused" | "waiting" | "failed" | "succeeded" => {
+            Status::of(&attempt.state, attempt.wait_reason.as_deref())
+        }
+        _ => Status::Cancelled,
+    }
 }
 fn project_revision(revision: &domain::Revision) -> Result<model::Revision, String> {
     let d = &revision.definition;
@@ -1624,11 +1375,7 @@ fn project_task(task: &domain::Task) -> Result<model::Task, String> {
                 .find(|r| r.number == a.revision as usize)
                 .ok_or("Attempt references missing revision")?
                 .clone();
-            let state = if a.state == "waiting" && a.wait_reason.as_deref() == Some("question") {
-                Status::Question
-            } else {
-                status(&a.state)?
-            };
+            let state = attempt_state(a);
             Ok(model::Attempt {
                 revision,
                 session: a.session.map(|id| id as usize),
@@ -1670,15 +1417,7 @@ fn project_task(task: &domain::Task) -> Result<model::Task, String> {
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let mut stored_status = status(&task.status)?;
-    if task.lifecycle == "cancelled" && !revisions.iter().any(|r| r.state == RevisionState::Ready) {
-        stored_status = Status::Rejected;
-    }
-    if stored_status == Status::Waiting
-        && attempts.last().is_some_and(|a| a.state == Status::Question)
-    {
-        stored_status = Status::Question;
-    }
+    let stored_status = task.state();
     Ok(model::Task {
         id: task.id as usize,
         origin: task
@@ -1818,7 +1557,7 @@ fn task_overview(task: &domain::Task) -> String {
             if entry.action == "closed" {
                 "Resolution"
             } else {
-                "Reopen"
+                "Reopened"
             },
             entry.outcome.as_deref().unwrap_or("pending"),
             entry.actor,

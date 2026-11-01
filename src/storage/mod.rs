@@ -69,7 +69,6 @@ pub const BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct Database {
     connection: Connection,
     state_dir: fs::File,
-    database_identity: (u64, u64),
 }
 
 impl Database {
@@ -100,7 +99,7 @@ impl Database {
             Err(error) => return Err(error),
         };
         let connection = Self::open_connection(&state_dir, database_identity)?;
-        Self::configure(connection, state_dir, database_identity).map(Some)
+        Self::configure(connection, state_dir).map(Some)
     }
     /// One database per explicit instance state root; projects are rows, not directories.
     pub fn open(paths: &Paths) -> Result<Self> {
@@ -116,7 +115,7 @@ impl Database {
         let state_dir = Self::open_directory(state_root)?;
         let database_identity = Self::database_identity(&state_dir, true)?;
         let connection = Self::open_connection(&state_dir, database_identity)?;
-        Self::configure(connection, state_dir, database_identity)
+        Self::configure(connection, state_dir)
     }
 
     fn open_directory(path: &Path) -> Result<fs::File> {
@@ -178,15 +177,7 @@ impl Database {
         Ok(connection)
     }
 
-    pub(crate) fn evidence_connection(&self) -> Result<Connection> {
-        Self::open_connection(&self.state_dir, self.database_identity)
-    }
-
-    fn configure(
-        mut connection: Connection,
-        state_dir: fs::File,
-        database_identity: (u64, u64),
-    ) -> Result<Self> {
+    fn configure(mut connection: Connection, state_dir: fs::File) -> Result<Self> {
         connection.busy_timeout(BUSY_TIMEOUT)?;
         // The TUI's refresh alone reuses more statements than the default cache of 16 holds.
         connection.set_prepared_statement_cache_capacity(64);
@@ -207,7 +198,6 @@ impl Database {
         Ok(Self {
             connection,
             state_dir,
-            database_identity,
         })
     }
 

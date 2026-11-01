@@ -1,8 +1,8 @@
 use crate::support::{self, Result, Terminal, copy, copy_key, drag, location, mouse_copy};
 use ktask_rs_mk3::{
     application::{
-        Actor, ActorKind, Definition, EvidenceCursor, EvidenceSearch, Kind, ModelConfig,
-        Resolution, Service, VersionedTask, transfer,
+        Actor, ActorKind, Definition, EvidenceCursor, EvidenceSearch, Kind, ModelConfig, Service,
+        VersionedTask, transfer,
     },
     storage::Database,
 };
@@ -53,18 +53,37 @@ fn target(service: &mut Service, id: i64) -> Result<VersionedTask> {
     })
 }
 fn terminal(root: &Path) -> Result<Terminal> {
+    terminal_at(root, 70, 22)
+}
+fn terminal_at(root: &Path, cols: u16, rows: u16) -> Result<Terminal> {
     support::model_catalog(root)?;
     Terminal::open_project(
         env!("CARGO_BIN_EXE_ktask-dev"),
         root,
         &project(root),
-        70,
-        22,
+        cols,
+        rows,
     )
+}
+/// A task every role can run: begin_run needs all four models.
+fn runnable(title: &str) -> Definition {
+    let mut task = definition(title);
+    for (role, model) in task.models.iter_mut().enumerate() {
+        *model = Some(ModelConfig {
+            provider: "codex".into(),
+            model: if role == 0 {
+                "fixture-model".into()
+            } else {
+                format!("fixture-judge-{role}")
+            },
+            effort: None,
+        });
+    }
+    task
 }
 
 #[test]
-fn real_pty_reopens_succeeded_with_mouse_and_cancelled_with_keyboard() -> Result {
+fn real_pty_copies_succeeded_with_mouse_and_cancelled_with_keyboard_to_queue() -> Result {
     for (mouse, cancelled) in [(true, false), (false, true)] {
         let scratch = support::sandbox()?;
         let root = scratch.path();
@@ -72,15 +91,16 @@ fn real_pty_reopens_succeeded_with_mouse_and_cancelled_with_keyboard() -> Result
         let mut first = definition(if cancelled {
             "Cancelled before run"
         } else {
-            "Succeeded before reopen"
+            "Succeeded before copy"
         });
         first.kind = Kind::Human;
-        let id = writer.create(&[first, definition("Later pending")], None, !cancelled)?[0];
+        let ids = writer.create(&[first, definition("Later pending")], None, !cancelled)?;
+        let (id, later) = (ids[0], ids[1]);
         let old = target(&mut writer, id)?;
         if cancelled {
             writer.decide(old, false, "Initial cancellation")?;
         } else {
-            writer.acknowledge(old)?;
+            writer.mark_done(old, "Checked by hand")?;
         }
         let old_history = writer.task(id)?.unwrap();
         assert_eq!(old_history.lifecycle_events.len(), 1);
@@ -92,64 +112,84 @@ fn real_pty_reopens_succeeded_with_mouse_and_cancelled_with_keyboard() -> Result
             120,
             34,
         )?;
-        t.screen("current before reopen", |s| s.contains("3 History"))?;
+        t.screen("current before copy", |s| s.contains("3 History"))?;
         if mouse {
             t.click("3 History")?;
             t.screen("succeeded in history", |s| {
-                s.contains("Succeeded before reopen") && s.contains("R Reopen")
+                on_history(s) && row_shows(s, "Succeeded before copy", "Done")
             })?;
-            t.click("R Reopen")?;
-            t.screen("mouse reopen confirmation", |s| {
-                s.contains("Reopen closed task") && s.contains("< No >")
+            t.click("C Copy to queue")?;
+            t.screen("mouse copy dialog", |s| {
+                s.contains("Copy to queue #1 Succeeded before copy")
+                    && s.contains("Before task ID (blank = end of Queue)")
             })?;
-            t.click("Reason")?;
-            t.send("Another pass requested")?;
-            t.click("No")?;
-            t.screen("mouse confirms reopen", |s| s.contains("< Reopen >"))?;
+            t.click("Before task ID")?;
+            type_field(&mut t, &later.to_string())?;
             t.click("Apply")?;
         } else {
-            t.send("3R")?;
-            t.screen("keyboard reopen confirmation", |s| {
-                s.contains("Reopen closed task") && s.contains("Cancelled before run")
+            t.send("3")?;
+            t.screen("cancelled in history", |s| {
+                on_history(s) && row_shows(s, "Cancelled before run", "Cancelled")
             })?;
-            t.send("Owner restored work\t \r")?;
+            t.send("C")?;
+            t.screen("keyboard copy dialog", |s| {
+                s.contains("Copy to queue #1 Cancelled before run")
+                    && s.contains("Before task ID (blank = end of Queue)")
+            })?;
+            t.send("\r")?;
         }
-        let screen = t.screen("reopened at queue front", |s| {
-            s.contains("Queue 2")
-                && s.contains("History 0")
-                && !s.contains("R Reopen")
-                && s.contains(if cancelled {
-                    "Cancelled before run"
-                } else {
-                    "Succeeded before reopen"
-                })
-                && s.contains("Later pending")
+        let screen = t.screen("copied into the queue", |s| {
+            on_queue(s)
+                && s.contains("Copied to the queue as #3")
+                && s.contains("Queue 2")
+                && s.contains("History 1")
         })?;
-        println!("REOPENED PTY mouse={mouse}\n{screen}");
-        t.send("\r")?;
-        let details = t.screen("details open", |s| s.contains("Task details"))?;
-        println!("REOPENED DETAILS mouse={mouse}\n{details}");
-        assert!(details.contains("Reopen"));
-        println!("CLOSING DETAILS mouse={mouse}");
-        t.send("\x1b")?;
-        t.screen("details closed", |s| !s.contains("Task details / attempts"))?;
-        t.send("q")?;
-        println!("FINISHING PTY mouse={mouse}");
-        t.finish()?;
-        println!("READING SNAPSHOT mouse={mouse}");
-        let mut writer = service(root)?;
-        let snapshot = writer.snapshot()?;
-        assert_eq!(snapshot.queue[0].id, id);
-        assert_eq!(snapshot.queue[0].status, "ready");
-        assert_eq!(snapshot.queue[0].lifecycle_events.len(), 2);
-        assert!(snapshot.history.is_empty());
-        assert_eq!(snapshot.queue[0].attempts.len(), old_history.attempts.len());
+        println!("COPIED PTY mouse={mouse}\n{screen}");
+        // The Queue table is the first cell of its rows; the details pane shares the lines.
+        let row = |text: &str| {
+            screen
+                .lines()
+                .position(|line| line.split('│').nth(1).is_some_and(|row| row.contains(text)))
+        };
+        let copied = row(&old_history.definition().definition.title);
+        assert_eq!(copied < row("Later pending"), mouse, "{screen}");
+        t.send("3")?;
+        let history = t.screen("original stays in history", |s| {
+            let rows = s.lines().filter_map(|line| line.split('│').nth(1));
+            on_history(s)
+                && s.contains("› #1   ")
+                && rows.filter(|row| row.contains('#')).count() == 1
+        })?;
+        println!("COPIED ORIGINAL mouse={mouse}\n{history}");
+        quit(&mut t)?;
+        let mut reader = service(root)?;
+        let snapshot = reader.snapshot()?;
+        let order = snapshot.queue.iter().map(|t| t.id).collect::<Vec<_>>();
+        assert_eq!(order, if mouse { [3, later] } else { [later, 3] });
+        let copy = reader.task(3)?.unwrap();
+        assert_eq!(copy.status, "ready");
+        assert!(copy.attempts.is_empty());
+        assert_eq!(
+            copy.definition().definition,
+            old_history.definition().definition
+        );
+        let original = reader.task(id)?.unwrap();
+        assert_eq!(original.status, old_history.status);
+        assert_eq!(original.version, old_history.version);
+        assert_eq!(original.lifecycle_events.len(), 1);
+        let db = Database::open_in(&root.join("state/ktask-dev"))?;
+        let link: (i64, i64, String) = db.connection().query_row(
+            "SELECT task_id,related_task_id,kind FROM task_links",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(link, (3, id, "derived_from".to_owned()));
     }
     Ok(())
 }
 
 #[test]
-fn reopen_preserves_spent_attempt_and_waits_after_running_current() -> Result {
+fn copy_keeps_spent_attempt_in_history_and_waits_after_running_current() -> Result {
     use ktask_rs_mk3::storage::execution::StartAttempt;
     let scratch = support::sandbox()?;
     let root = scratch.path();
@@ -186,7 +226,7 @@ fn reopen_preserves_spent_attempt_and_waits_after_running_current() -> Result {
     db.connection().execute("UPDATE attempts SET state='failed', finished_at_ms=started_at_ms, outcome='Original failure', failure_category='check' WHERE id=?1", [attempt])?;
     db.connection().execute("INSERT INTO attempt_output(attempt_id,sequence,stream,recorded_at_ms,content) VALUES (?1,1,'system',?2,'Original evidence')", rusqlite::params![attempt,now])?;
     let spent_target = target(&mut service, spent_id)?;
-    service.resolve(spent_target, Resolution::FailedSkipped, "Skip for now")?;
+    service.mark_done(spent_target, "Accepted as is")?;
     let _running = db.start_attempt(StartAttempt {
         task_id: running_id,
         expected_version: 1,
@@ -195,163 +235,204 @@ fn reopen_preserves_spent_attempt_and_waits_after_running_current() -> Result {
     })?;
     let usage_before = service.project_usage()?.label();
     let closed_target = target(&mut service, spent_id)?;
-    assert!(service.reopen(closed_target, "Retry after limit edit")?);
+    let copy = service.copy_to_queue(closed_target, None)?;
     let snapshot = service.snapshot()?;
     assert_eq!(snapshot.queue[0].id, running_id);
-    assert_eq!(snapshot.queue[1].id, spent_id);
+    assert_eq!(snapshot.queue[1].id, copy);
     assert_eq!(snapshot.queue[1].status, "ready");
-    assert_eq!(snapshot.queue[1].attempts_used, 1);
-    assert_eq!(snapshot.queue[1].attempts[0].state, "failed");
-    assert_eq!(snapshot.queue[1].lifecycle_events.len(), 2);
+    assert_eq!(snapshot.queue[1].attempts_used, 0);
+    assert!(snapshot.queue[1].attempts.is_empty());
+    assert_eq!(
+        snapshot.queue[1].definition().definition.attempt_limit,
+        Some(1)
+    );
     assert_eq!(service.project_usage()?.label(), usage_before);
-    assert!(snapshot.history.is_empty());
+    assert_eq!(snapshot.history.len(), 1);
+    assert_eq!(snapshot.history[0].id, spent_id);
+    assert_eq!(snapshot.history[0].status, "succeeded_override");
+    assert_eq!(snapshot.history[0].attempts_used, 1);
+    assert_eq!(snapshot.history[0].attempts[0].state, "failed");
+    assert_eq!(snapshot.history[0].lifecycle_events.len(), 1);
     Ok(())
 }
 
+/// Ends `run` with an open owner question: the task needs input.
+fn ask(
+    service: &mut Service,
+    run: &ktask_rs_mk3::application::execution::Run,
+    question: &str,
+) -> Result<i64> {
+    service.finish_run(run, "waiting", None, question, None)?;
+    Ok(service.open_question(run.task)?.unwrap().0)
+}
+
+fn question_state(db: &Database, question: i64) -> Result<(String, Option<String>, bool)> {
+    Ok(db.connection().query_row(
+        "SELECT state,answer,resolved_at_ms IS NOT NULL FROM questions WHERE id=?1",
+        [question],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?)
+}
+
 #[test]
-fn reopen_cancels_historical_questions_and_allows_new_retry_questions() -> Result {
+fn stop_cancels_open_questions_and_later_runs_ask_new_ones_by_mouse_and_keyboard() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();
-    let (id, first_attempt) = failed_task(root)?;
     let mut writer = service(root)?;
-    let failed = target(&mut writer, id)?;
-    writer.record_failure_judgment(
-        failed,
-        "ask",
-        "What was the earlier owner decision?",
-        "Record the earlier decision",
+    let ids = writer.create(
+        &[runnable("Asks the owner"), runnable("Other asking task")],
+        None,
+        true,
     )?;
-    let answered_question = writer.open_question(id)?.unwrap().0;
-    let failed = target(&mut writer, id)?;
-    writer.answer(failed, "Keep the earlier behavior")?;
-    let failed = target(&mut writer, id)?;
-    writer.record_failure_judgment(
-        failed,
-        "ask",
+    let (id, other_id) = (ids[0], ids[1]);
+    let start = target(&mut writer, id)?;
+    let first = writer.begin_run(start, "first-attempt", "base", true)?;
+    let answered_question = ask(&mut writer, &first, "What was the earlier owner decision?")?;
+    let waiting = target(&mut writer, id)?;
+    writer.answer(waiting, "Keep the earlier behavior")?;
+    let resumed = target(&mut writer, id)?;
+    let resumed = writer.begin_run(resumed, "unused-token", "base", false)?;
+    assert_eq!(resumed.attempt, first.attempt);
+    let old_question = ask(
+        &mut writer,
+        &resumed,
         "Which behavior should the first attempt use?",
-        "Owner decision required",
     )?;
-    let old_question = writer.open_question(id)?.unwrap().0;
-    let mut other_definition = writer.task(id)?.unwrap().definition().definition.clone();
-    other_definition.title = "Unrelated failed task".into();
-    let failed = target(&mut writer, id)?;
-    writer.resolve(failed, Resolution::FailedSkipped, "Defer this task")?;
-    let other_id = writer.create(&[other_definition], None, true)?[0];
-    let other_target = target(&mut writer, other_id)?;
-    let other_run = writer.begin_run(other_target, "other-attempt", "base")?;
-    writer.finish_run(&other_run, "failed", Some("check"), "Other failure", None)?;
-    let other_target = target(&mut writer, other_id)?;
-    writer.record_failure_judgment(
-        other_target,
-        "ask",
+    let other = target(&mut writer, other_id)?;
+    writer.move_before(other, Some(id))?;
+    let other = target(&mut writer, other_id)?;
+    let other_run = writer.begin_run(other, "other-attempt", "base", true)?;
+    let other_question = ask(
+        &mut writer,
+        &other_run,
         "Keep the other task question open?",
-        "Other owner decision required",
     )?;
     let other_before = writer.task(other_id)?.unwrap();
-    let other_question = writer.open_question(other_id)?.unwrap();
-    let attempts_before = attempts_contents(root)?;
-    let closed = target(&mut writer, id)?;
-    assert!(!writer.reopen(closed, "Retry the deferred task")?);
+    let other_attempt = |root: &Path| -> Result<Vec<String>> {
+        let row = format!("Integer({})|", other_run.attempt);
+        Ok(attempts_contents(root)?
+            .into_iter()
+            .filter(|r| r.starts_with(&row))
+            .collect())
+    };
+    let other_attempt_before = other_attempt(root)?;
+
+    let asking = target(&mut writer, id)?;
+    writer.stop_task(asking, "Start over")?;
     assert!(writer.open_question(id)?.is_none());
     assert_eq!(
-        writer.open_question(other_id)?,
-        Some(other_question.clone())
+        writer.open_question(other_id)?.map(|q| q.0),
+        Some(other_question)
     );
     assert_eq!(
         writer.task(other_id)?.unwrap().version,
         other_before.version
     );
-    assert_eq!(attempts_contents(root)?, attempts_before);
+    assert_eq!(other_attempt(root)?, other_attempt_before);
+    let stopped = writer.task(id)?.unwrap();
+    assert_eq!(stopped.status, "ready");
+    assert_eq!(stopped.attempts[0].id, first.attempt);
+    assert_eq!(stopped.attempts[0].state, "interrupted");
+    assert_eq!(
+        stopped.attempts[0].outcome.as_deref(),
+        Some("Stopped: Start over")
+    );
     let db = Database::open_in(&root.join("state/ktask-dev"))?;
-    let (state, resolved): (String, Option<i64>) = db.connection().query_row(
-        "SELECT state,resolved_at_ms FROM questions WHERE id=?1",
-        [old_question],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
-    assert_eq!(state, "cancelled");
-    assert!(resolved.is_some());
-    let (answered_state, answer): (String, Option<String>) = db.connection().query_row(
-        "SELECT state,answer FROM questions WHERE id=?1",
-        [answered_question],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
-    assert_eq!(answered_state, "answered");
-    assert_eq!(answer.as_deref(), Some("Keep the earlier behavior"));
-    assert_eq!(writer.task(id)?.unwrap().attempts[0].id, first_attempt);
+    assert_eq!(
+        question_state(&db, old_question)?,
+        ("cancelled".into(), None, true)
+    );
+    assert_eq!(
+        question_state(&db, answered_question)?,
+        (
+            "answered".into(),
+            Some("Keep the earlier behavior".into()),
+            true
+        )
+    );
     let unchanged = storage_contents(root)?;
-    assert!(writer.reopen(closed, "Stale request").is_err());
+    assert!(writer.stop_task(asking, "Stale request").is_err());
     assert_eq!(storage_contents(root)?, unchanged);
 
-    let mut terminal = Terminal::open_project(
-        env!("CARGO_BIN_EXE_ktask-dev"),
-        root,
-        &project(root),
-        120,
-        34,
-    )?;
-    let ready = terminal.screen("reopened task has no old question", |screen| {
-        screen.contains("Current #1 · PENDING")
+    let mut terminal = terminal_at(root, 120, 34)?;
+    let other_screen = terminal.screen("other task still asks", |screen| {
+        screen.contains("Current #2 · Needs input")
+            && screen.contains("Keep the other task question open?")
             && !screen.contains("Which behavior should the first attempt use?")
     })?;
-    println!("REOPENED QUESTION CLEARED\n{ready}");
-    quit(&mut terminal)?;
-
-    let retry_target = target(&mut writer, id)?;
-    let second = writer.begin_run(retry_target, "second-attempt", "base")?;
-    writer.finish_run(&second, "failed", Some("check"), "Second failure", None)?;
-    let failed_again = target(&mut writer, id)?;
-    writer.record_failure_judgment(
-        failed_again,
-        "ask",
-        "Which behavior should the new attempt use?",
-        "New owner decision required",
-    )?;
-    let new_question = writer.open_question(id)?.unwrap().0;
-    assert_ne!(new_question, old_question);
-    let mut terminal = Terminal::open_project(
-        env!("CARGO_BIN_EXE_ktask-dev"),
-        root,
-        &project(root),
-        120,
-        34,
-    )?;
-    let question_screen = terminal.screen("new retry question", |screen| {
-        screen.contains("Which behavior should the new attempt use?")
-            && screen.contains("Owner decision")
+    println!("OTHER QUESTION STILL OPEN\n{other_screen}");
+    terminal.click("r Answer")?;
+    terminal.screen("mouse answer form", |screen| {
+        screen.contains("Answer AI question")
     })?;
-    println!("NEW RETRY QUESTION\n{question_screen}");
+    terminal.send("Keep it open no longer")?;
+    terminal.click("Apply")?;
+    let answered = terminal.screen("other question answered by mouse", |screen| {
+        !screen.contains("Answer AI question") && screen.contains("Saved to SQLite")
+    })?;
+    println!("OTHER QUESTION ANSWERED\n{answered}");
+    terminal.send("2")?;
+    let queue = terminal.screen("stopped task waits in the queue", |screen| {
+        on_queue(screen) && row_shows(screen, "Asks the owner", "Pending")
+    })?;
+    println!("STOPPED TASK PENDING\n{queue}");
+    quit(&mut terminal)?;
+    assert!(writer.open_question(other_id)?.is_none());
+    assert_eq!(
+        question_state(&db, other_question)?,
+        (
+            "answered".into(),
+            Some("Keep it open no longer".into()),
+            true
+        )
+    );
+
+    let other = target(&mut writer, other_id)?;
+    let other_resumed = writer.begin_run(other, "unused-token", "base", false)?;
+    writer.finish_run(&other_resumed, "succeeded", None, "Other task done", None)?;
+    let retry_target = target(&mut writer, id)?;
+    let second = writer.begin_run(retry_target, "second-attempt", "base", true)?;
+    let new_question = ask(
+        &mut writer,
+        &second,
+        "Which behavior should the new attempt use?",
+    )?;
+    assert_ne!(new_question, old_question);
+    let mut terminal = terminal_at(root, 120, 34)?;
+    let question_screen = terminal.screen("new question", |screen| {
+        screen.contains("Current #1 · Needs input")
+            && screen.contains("Which behavior should the new attempt use?")
+    })?;
+    println!("NEW QUESTION\n{question_screen}");
     terminal.send("w")?;
-    terminal.screen("answer new retry question", |screen| {
+    terminal.screen("keyboard answer form", |screen| {
         screen.contains("Answer AI question")
     })?;
     terminal.send("Use the updated behavior\x13")?;
-    let answered = terminal.screen("new retry question answered", |screen| {
-        !screen.contains("Answer AI question") && screen.contains("FAILED")
+    let answered = terminal.screen("new question answered by keyboard", |screen| {
+        !screen.contains("Answer AI question") && screen.contains("Saved to SQLite")
     })?;
-    println!("NEW RETRY ANSWERED\n{answered}");
+    println!("NEW QUESTION ANSWERED\n{answered}");
     quit(&mut terminal)?;
     assert!(writer.open_question(id)?.is_none());
     assert_eq!(
-        writer.open_question(other_id)?,
-        Some(other_question.clone())
+        question_state(&db, new_question)?,
+        (
+            "answered".into(),
+            Some("Use the updated behavior".into()),
+            true
+        )
     );
-    let (new_state, new_answer): (String, Option<String>) = db.connection().query_row(
-        "SELECT state,answer FROM questions WHERE id=?1",
-        [new_question],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
-    assert_eq!(new_state, "answered");
-    assert_eq!(new_answer.as_deref(), Some("Use the updated behavior"));
     let final_target = target(&mut writer, id)?;
-    let third = writer.begin_run(final_target, "third-attempt", "base")?;
-    writer.finish_run(&third, "succeeded", None, "Successful retry", None)?;
+    let third = writer.begin_run(final_target, "unused-token", "base", false)?;
+    assert_eq!(third.attempt, second.attempt);
+    writer.finish_run(&third, "succeeded", None, "Successful run", None)?;
     let done = writer.task(id)?.unwrap();
     assert_eq!(done.status, "succeeded");
-    assert_eq!(done.attempts.len(), 3);
-    assert_eq!(done.attempts[0].id, first_attempt);
-    assert_eq!(done.attempts[1].id, second.attempt);
-    assert_eq!(done.attempts[2].id, third.attempt);
-    assert_eq!(writer.open_question(other_id)?, Some(other_question));
+    assert_eq!(
+        done.attempts.iter().map(|a| a.id).collect::<Vec<_>>(),
+        [first.attempt, second.attempt]
+    );
     Ok(())
 }
 
@@ -380,7 +461,7 @@ fn task_details_show_each_revision_once_with_accurate_position() -> Result {
         48,
     )?;
     terminal.screen("ready revision is current", |screen| {
-        screen.contains("Current #1 · PENDING") && screen.contains("Current ready revision")
+        screen.contains("Current #1 · Needs approval") && screen.contains("Current ready revision")
     })?;
     terminal.send("\r")?;
     let details = terminal.screen("revision position in task details", |screen| {
@@ -468,7 +549,7 @@ fn current_activity_shows_multiple_readable_events_at_small_and_large_sizes() ->
 
     let mut writer = service(root)?;
     let current = target(&mut writer, task_id)?;
-    let run = writer.begin_run(current, "activity-stop", "fixture-base")?;
+    let run = writer.begin_run(current, "activity-stop", "fixture-base", false)?;
     writer.finish_run(&run, "failed", Some("check"), "Recorded failure", None)?;
     drop(writer);
     let db = Database::open_in(&root.join("state/ktask-dev"))?;
@@ -525,7 +606,7 @@ fn history_rows_show_attempts_total_time_and_cost_by_keyboard_and_mouse() -> Res
     drop(db);
     let mut writer = service(root)?;
     let current = target(&mut writer, known_id)?;
-    writer.resolve(current, Resolution::FailedSkipped, "Recorded")?;
+    writer.mark_done(current, "Recorded")?;
     drop(writer);
 
     let (unknown_id, unknown_attempt) = failed_task(root)?;
@@ -541,7 +622,7 @@ fn history_rows_show_attempts_total_time_and_cost_by_keyboard_and_mouse() -> Res
     drop(db);
     let mut writer = service(root)?;
     let current = target(&mut writer, unknown_id)?;
-    writer.resolve(current, Resolution::FailedSkipped, "Recorded")?;
+    writer.mark_done(current, "Recorded")?;
     drop(writer);
 
     for (cols, mouse) in [(70, false), (70, true), (100, false), (100, true)] {
@@ -627,7 +708,7 @@ fn recorded_usage_is_visible_in_current_details_history_and_statistics() -> Resu
     assert!(details.contains("new-review-model"));
     t.click("Close")?;
     t.screen("details closed", |s| !s.contains("Task details / attempts"))?;
-    t.click("s Stats")?;
+    t.click("S Stats")?;
     let stats = t.screen("project usage", |s| {
         s.contains("Project usage: 2 calls")
             && s.contains("(+1 call(s) unreported)")
@@ -638,7 +719,7 @@ fn recorded_usage_is_visible_in_current_details_history_and_statistics() -> Resu
     quit(&mut t)?;
     let mut service = self::service(root)?;
     let resolution_target = target(&mut service, id)?;
-    service.resolve(resolution_target, Resolution::FailedSkipped, "Reviewed")?;
+    service.mark_done(resolution_target, "Reviewed")?;
     drop(service);
     let mut t = Terminal::open_project(
         env!("CARGO_BIN_EXE_ktask-dev"),
@@ -733,12 +814,12 @@ fn exact_large_tokens_expand_by_keyboard_and_mouse_at_both_sizes() -> Result {
                 t.send("\x1b")?;
             }
             t.screen("usage details closed", |s| {
-                !s.contains("Task details / attempts") && s.contains("s Stats")
+                !s.contains("Task details / attempts") && s.contains("S Stats")
             })?;
             if mouse {
-                t.click("s Stats")?;
+                t.click("S Stats")?;
             } else {
-                t.send("s")?;
+                t.send("S")?;
             }
             t.screen("usage statistics opened", |s| {
                 s.contains("Project statistics")
@@ -758,14 +839,14 @@ fn exact_large_tokens_expand_by_keyboard_and_mouse_at_both_sizes() -> Result {
                 t.send("\x1b")?;
             }
             t.screen("usage statistics closed", |s| {
-                !s.contains("Project statistics") && s.contains("s Stats")
+                !s.contains("Project statistics") && s.contains("S Stats")
             })?;
             quit(&mut t)?;
         }
     }
     let mut writer = service(root)?;
     let target = target(&mut writer, id)?;
-    writer.resolve(target, Resolution::FailedSkipped, "Reviewed")?;
+    writer.mark_done(target, "Reviewed")?;
     drop(writer);
     for (cols, rows) in [(70, 22), (100, 45)] {
         for mouse in [false, true] {
@@ -886,7 +967,10 @@ fn recovered_open_intervals_and_json_timing_remain_fixed() -> Result {
             .unwrap()
             >= 200
     );
-    writer.recover_run(None)?;
+    // The runner died: its attempt settles to Paused, and Stop ends it.
+    assert!(writer.settle_orphan()?);
+    let paused = target(&mut writer, run.task)?;
+    writer.stop_task(paused, "Recovered after the runner died")?;
     let completed = writer.task(run.task)?.unwrap().attempts.pop().unwrap();
     let completed_json = serde_json::to_value(&completed)?;
     let waiting = completed.waiting_ms;
@@ -924,7 +1008,7 @@ fn running_step_and_token_expansion_stay_visible_at_minimum_size() -> Result {
     for mouse in [false, true] {
         let mut t = terminal(root)?;
         let screen = t.screen("minimum running step and exact token path", |s| {
-            s.contains("Current #1 · ABANDONED")
+            s.contains("Current #1 · Running · runner stopped")
                 && s.contains("Step: Execution")
                 && s.contains("in 123G, cache 186G, out 76G")
                 && s.contains("Run")
@@ -1014,7 +1098,7 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     let (id, first) = failed_task(root)?;
     let mut writer = service(root)?;
     let retry_target = target(&mut writer, id)?;
-    let second = writer.begin_run(retry_target, "retry-token", "retry-base")?;
+    let second = writer.begin_run(retry_target, "retry-token", "retry-base", false)?;
     writer.output(&second, "stdout", "SECOND ATTEMPT ONLY")?;
     writer.finish_run(&second, "failed", Some("check"), "Second failure", None)?;
     drop(writer);
@@ -1271,7 +1355,7 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     assert_eq!(evidence_contents(root)?, before_browsing);
     let mut writer = service(root)?;
     let resolve_target = target(&mut writer, id)?;
-    writer.resolve(resolve_target, Resolution::FailedSkipped, "Reviewed")?;
+    writer.mark_done(resolve_target, "Reviewed")?;
     drop(writer);
     let before_history = evidence_contents(root)?;
     let mut history = terminal(root)?;
@@ -1318,7 +1402,7 @@ fn history_opens_each_attempt_review_and_failure_without_log_scrolling() -> Resu
     let (id, _) = failed_task(root)?;
     let mut writer = service(root)?;
     let retry = target(&mut writer, id)?;
-    let run = writer.begin_run(retry, "review-navigation", "fixture-base")?;
+    let run = writer.begin_run(retry, "review-navigation", "fixture-base", false)?;
     let model = ModelConfig {
         provider: "codex".into(),
         model: "fixture-judge".into(),
@@ -1339,7 +1423,7 @@ fn history_opens_each_attempt_review_and_failure_without_log_scrolling() -> Resu
         None,
     )?;
     let resolution = target(&mut writer, id)?;
-    writer.resolve(resolution, Resolution::FailedSkipped, "Reviewed")?;
+    writer.mark_done(resolution, "Reviewed")?;
     drop(writer);
 
     let mut t = terminal(root)?;
@@ -1551,11 +1635,7 @@ fn attempt_browser_preserves_nul_suffixes_and_utf8_across_byte_chunks() -> Resul
     assert_eq!(evidence_contents(root)?, before_current);
     let mut writer = service(root)?;
     let resolve_target = target(&mut writer, id)?;
-    writer.resolve(
-        resolve_target,
-        Resolution::FailedSkipped,
-        "Reviewed NUL evidence",
-    )?;
+    writer.mark_done(resolve_target, "Reviewed NUL evidence")?;
     drop(writer);
     let before_history = evidence_contents(root)?;
     let mut history = terminal(root)?;
@@ -1740,7 +1820,7 @@ fn attempt_browser_shows_pinned_inputs_after_defaults_and_new_revisions_change()
     let approval = target(&mut writer, id)?;
     writer.decide(approval, true, "Explicit AI approval")?;
     let expected = target(&mut writer, id)?;
-    let run = writer.begin_run(expected, "history-input-token", "history-input-base")?;
+    let run = writer.begin_run(expected, "history-input-token", "history-input-base", false)?;
     let step = writer.start_ai_step(
         &run,
         "execution",
@@ -1838,21 +1918,9 @@ fn running_fixture(
     title: &str,
 ) -> Result<(Service, ktask_rs_mk3::application::execution::Run)> {
     let mut writer = service(root)?;
-    let mut task = definition(title);
-    for (role, model) in task.models.iter_mut().enumerate() {
-        *model = Some(ModelConfig {
-            provider: "codex".into(),
-            model: if role == 0 {
-                "fixture-model".into()
-            } else {
-                format!("fixture-judge-{role}")
-            },
-            effort: None,
-        });
-    }
-    let id = writer.create(&[task], None, true)?[0];
+    let id = writer.create(&[runnable(title)], None, true)?[0];
     let expected = target(&mut writer, id)?;
-    let run = writer.begin_run(expected, "test-token", "test-base")?;
+    let run = writer.begin_run(expected, "test-token", "test-base", false)?;
     Ok((writer, run))
 }
 
@@ -1971,7 +2039,7 @@ fn quit(t: &mut Terminal) -> Result {
     t.finish()
 }
 
-// Every screen shows the tab labels and the global status line ("Current #1 · FAILED |
+// Every screen shows the tab labels and the global status line ("Current #1 · Failed |
 // Queue 2 · History 0"), so waits for a view use what only that view draws.
 fn on_current(s: &str) -> bool {
     s.contains("Task brief · Enter") || s.contains("╭ Ready")
@@ -1981,6 +2049,11 @@ fn on_queue(s: &str) -> bool {
 }
 fn on_history(s: &str) -> bool {
     s.contains(" total · closed tasks")
+}
+/// A Queue or History row names the task's state beside its title.
+fn row_shows(s: &str, title: &str, state: &str) -> bool {
+    s.lines()
+        .any(|line| line.contains(title) && line.contains(&format!(" {state} ")))
 }
 fn close_details(t: &mut Terminal, view: fn(&str) -> bool) -> Result<String> {
     t.send("\x1b")?;
@@ -2273,7 +2346,12 @@ fn failed_task(root: &Path) -> Result<(i64, i64)> {
     }
     let id = service.create(&[d], None, true)?[0];
     let target = target(&mut service, id)?;
-    let run = service.begin_run(target, &format!("fixture-token-{id}"), "fixture-base")?;
+    let run = service.begin_run(
+        target,
+        &format!("fixture-token-{id}"),
+        "fixture-base",
+        false,
+    )?;
     service.output(&run, "stderr", "Check failed: transcript evidence")?;
     for role in ["review", "validation"] {
         let model = ModelConfig {
@@ -2293,6 +2371,15 @@ fn failed_task(root: &Path) -> Result<(i64, i64)> {
         None,
     )?;
     Ok((id, run.attempt))
+}
+
+/// A failed task the owner stopped: Pending again, its failed attempt kept.
+fn stopped_failure(root: &Path) -> Result<i64> {
+    let (id, _) = failed_task(root)?;
+    let mut service = service(root)?;
+    let failed = target(&mut service, id)?;
+    service.stop_task(failed, "Plan it differently")?;
+    Ok(id)
 }
 
 fn confirm_storage_cleanup_mouse(
@@ -2374,7 +2461,7 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
     let mut service = service(root)?;
     assert!(service.storage_preview()?.candidates.is_empty()); // unresolved failure
     let closed_target = target(&mut service, closed_id)?;
-    service.resolve(closed_target, Resolution::FailedSkipped, "Reviewed failure")?;
+    service.mark_done(closed_target, "Reviewed failure")?;
     let artifact_dir = root.join(format!("state/ktask-dev/evidence/attempt-{closed_attempt}"));
     fs::create_dir_all(&artifact_dir)?;
     fs::write(artifact_dir.join("step-777.log"), "transcript evidence")?;
@@ -2417,7 +2504,7 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
     assert!(preview.reclaimable_bytes > 0);
     let live_id = service.create(&[configured("Unresolved failure")], None, true)?[0];
     let live_target = target(&mut service, live_id)?;
-    let run = service.begin_run(live_target, "retention-live-token", "fixture-base")?;
+    let run = service.begin_run(live_target, "retention-live-token", "fixture-base", false)?;
     assert!(service.storage_preview()?.deferred_for_live_work);
     service.output(&run, "stderr", "unresolved evidence")?;
     service.finish_run(&run, "failed", Some("check"), "Keep live evidence", None)?;
@@ -2532,11 +2619,7 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
         service.task(unresolved_id)?.unwrap().attempts[0].id
     );
     let unresolved_target = target(&mut service, unresolved_id)?;
-    service.resolve(
-        unresolved_target,
-        Resolution::FailedSkipped,
-        "Resolved after review",
-    )?;
+    service.mark_done(unresolved_target, "Resolved after review")?;
     drop(service);
     let mut keyboard = Terminal::open_project(
         env!("CARGO_BIN_EXE_ktask-dev"),
@@ -2601,7 +2684,7 @@ fn retention_rechecks_live_work_and_recovers_partial_artifact_cleanup() -> Resul
     let (task_id, attempt) = failed_task(root)?;
     let mut service = self::service(root)?;
     let target = target(&mut service, task_id)?;
-    service.resolve(target, Resolution::FailedSkipped, "Closed after review")?;
+    service.mark_done(target, "Closed after review")?;
     let policy = service.retention_policy()?;
     service.set_retention(policy, 0)?;
     drop(service);
@@ -2743,16 +2826,16 @@ fn breakdown_proposal() -> serde_json::Value {
 }
 
 #[test]
-fn breakdown_pty_keyboard_mouse_pending_failed_approval_cancel() -> Result {
+fn breakdown_pty_keyboard_mouse_pending_stopped_approval_cancel() -> Result {
     use ktask_rs_mk3::application::preferences::{Continuation, PlannerApproval, Preferences};
     for mouse in [false, true] {
-        for failed in [false, true] {
+        for stopped in [false, true] {
             for approval in [PlannerApproval::Automatic, PlannerApproval::ReviewRequired] {
                 for cancel in [false, true] {
                     let scratch = support::sandbox()?;
                     let root = scratch.path();
-                    let id = if failed {
-                        failed_task(root)?.0
+                    let id = if stopped {
+                        stopped_failure(root)?
                     } else {
                         service(root)?.create(&[definition("Pending original")], None, true)?[0]
                     };
@@ -2784,7 +2867,7 @@ fn breakdown_pty_keyboard_mouse_pending_failed_approval_cancel() -> Result {
                     provider_fixture(root, breakdown_proposal(), false)?;
                     let mut terminal = terminal(root)?;
                     terminal.screen("original", |s| {
-                        s.contains(if failed {
+                        s.contains(if stopped {
                             "Failed current"
                         } else {
                             "Pending original"
@@ -2799,7 +2882,7 @@ fn breakdown_pty_keyboard_mouse_pending_failed_approval_cancel() -> Result {
                         s.contains("Breakdown proposal · replace task")
                     })?;
                     println!(
-                        "BREAKDOWN mouse={mouse} failed={failed} approval={approval:?} cancel={cancel} PROPOSAL\n{screen}"
+                        "BREAKDOWN mouse={mouse} stopped={stopped} approval={approval:?} cancel={cancel} PROPOSAL\n{screen}"
                     );
                     assert!(
                         fs::read_to_string(root.join("provider-prompt"))?
@@ -2949,11 +3032,11 @@ fn breakdown_pty_uses_approval_preference_at_apply() -> Result {
 fn breakdown_cli_preview_apply_and_version_guard() -> Result {
     use ktask_rs_mk3::application::preferences::{PlannerApproval, Preferences};
     use std::process::Command;
-    for failed in [false, true] {
+    for stopped in [false, true] {
         let scratch = support::sandbox()?;
         let root = scratch.path();
-        let id = if failed {
-            failed_task(root)?.0
+        let id = if stopped {
+            stopped_failure(root)?
         } else {
             service(root)?.create(&[definition("CLI original")], None, true)?[0]
         };
@@ -2968,7 +3051,7 @@ fn breakdown_cli_preview_apply_and_version_guard() -> Result {
         service.save_defaults(&old, &models)?;
         let config = root.join("config/ktask-dev");
         let previous = service.preferences(&config)?;
-        let initial = if failed {
+        let initial = if stopped {
             PlannerApproval::Automatic
         } else {
             PlannerApproval::ReviewRequired
@@ -3016,7 +3099,7 @@ fn breakdown_cli_preview_apply_and_version_guard() -> Result {
         );
         assert_eq!(storage_contents(root)?, before);
         let previous = service.preferences(&config)?;
-        let updated = if failed {
+        let updated = if stopped {
             PlannerApproval::ReviewRequired
         } else {
             PlannerApproval::Automatic
@@ -3051,7 +3134,7 @@ fn breakdown_cli_preview_apply_and_version_guard() -> Result {
             }));
         assert_eq!(
             snapshot.history[0].attempts.len(),
-            if failed { 1 } else { 0 }
+            if stopped { 1 } else { 0 }
         );
         let output = Command::new(env!("CARGO_BIN_EXE_ktask-dev"))
             .env_clear()
@@ -3112,7 +3195,7 @@ fn breakdown_pending_queue_row_keeps_failed_current_in_place() -> Result {
             on_queue(s) && s.contains("Pending after failure")
         })?;
         if mouse {
-            t.click("#2   PENDING")?;
+            t.click("#2   Pending")?;
         } else {
             t.send("j")?;
         }
@@ -3150,603 +3233,6 @@ fn breakdown_pending_queue_row_keeps_failed_current_in_place() -> Result {
 }
 
 #[test]
-fn failed_current_judgments_use_real_pty_apply_cancel_and_provider_errors() -> Result {
-    use ktask_rs_mk3::application::preferences::PlannerApproval;
-    for mouse in [false, true] {
-        for approval in [PlannerApproval::Automatic, PlannerApproval::ReviewRequired] {
-            for (name, proposal, expected) in [
-                (
-                    "repair",
-                    serde_json::json!({"action":"repair","plan":"Fix the check boundary and verify it.","reason":"The task remains correct."}),
-                    "Failure judgment · repair plan",
-                ),
-                (
-                    "revise",
-                    serde_json::json!({"action":"revise","title":"Revised failed task","goal":"Prove the corrected behavior","criteria":["Correct behavior is verified"],"models":{"execution":null,"review":{"provider":"codex","model":"judge-review","effort":"high"},"validation":null,"remediation":null},"reason":"The original goal missed the boundary."}),
-                    "Failure judgment · revise task",
-                ),
-                (
-                    "escalate",
-                    serde_json::json!({"action":"escalate","model":{"provider":"codex","model":"fixture-strong","effort":"max"},"reason":"The failed check needs a stronger execution model."}),
-                    "Failure judgment · escalate model",
-                ),
-                (
-                    "insert",
-                    serde_json::json!({"action":"insert","tasks":[{"title":"Repair the check boundary","goal":"Fix the failing boundary before retrying current.","criteria":["The check passes"]},{"title":"Verify repaired boundary","goal":"Confirm the repair.","criteria":["Regression passes"]}],"reason":"Isolate the failing boundary first."}),
-                    "Failure judgment · insert prerequisites",
-                ),
-                (
-                    "ask",
-                    serde_json::json!({"action":"ask","question":"Which boundary should be authoritative?","reason":"Only the owner can settle the product behavior."}),
-                    "Failure judgment · ask owner",
-                ),
-            ] {
-                exercise_remediation(name, proposal.clone(), expected, mouse, approval, false)?;
-                exercise_remediation(name, proposal, expected, mouse, approval, true)?;
-            }
-        }
-    }
-
-    let scratch = support::sandbox()?;
-    let root = scratch.path();
-    let (id, _) = failed_task(root)?;
-    let before = service(root)?.task(id)?.unwrap();
-    let storage_before = storage_contents(root)?;
-    let events_before = service(root)?.events_after(0, 1000)?.len();
-    provider_fixture(root, serde_json::Value::Null, true)?;
-    let mut terminal = terminal(root)?;
-    terminal.send("d")?;
-    let screen = terminal.screen("provider error", |s| s.contains("Invalid Codex event"))?;
-    println!("REMEDIATION INVALID PROVIDER\n{screen}");
-    assert_eq!(storage_contents(root)?, storage_before);
-    let after = service(root)?.task(id)?.unwrap();
-    assert_eq!(after.revisions.len(), 1);
-    assert_eq!(after.version, before.version);
-    assert_eq!(service(root)?.events_after(0, 1000)?.len(), events_before);
-    quit(&mut terminal)?;
-    Ok(())
-}
-
-fn exercise_remediation(
-    name: &str,
-    proposal: serde_json::Value,
-    expected: &str,
-    mouse: bool,
-    approval: ktask_rs_mk3::application::preferences::PlannerApproval,
-    cancel: bool,
-) -> Result {
-    use ktask_rs_mk3::application::preferences::{Continuation, PlannerApproval, Preferences};
-    let scratch = support::sandbox()?;
-    let root = scratch.path();
-    support::empty_repository(&project(root))?;
-    let (id, attempt) = failed_task(root)?;
-    let mut service = service(root)?;
-    let before = service.task(id)?.unwrap();
-    let event_count = service.events_after(0, 1000)?.len();
-    if approval == PlannerApproval::ReviewRequired {
-        let config = root.join("config/ktask-dev");
-        let expected_preferences = service.preferences(&config)?;
-        service.save_preferences(
-            &config,
-            &expected_preferences,
-            &Preferences {
-                version: 0,
-                mouse: true,
-                planner_approval: approval,
-                continuation: Continuation::Single,
-            },
-        )?;
-    }
-    let storage_before = storage_contents(root)?;
-    let attempts_before = attempts_contents(root)?;
-    provider_fixture(root, proposal, false)?;
-    let mut terminal = terminal(root)?;
-    terminal.screen("failed current", |s| s.contains("Failed current"))?;
-    if mouse {
-        terminal.click("d Remediate")?;
-    } else {
-        terminal.send("d")?;
-    }
-    let screen = terminal.screen(expected, |s| s.contains(expected))?;
-    println!("REMEDIATION {name} mouse={mouse} approval={approval:?} PROPOSAL\n{screen}");
-    assert!(fs::read_to_string(root.join("provider-args"))?.contains("sandbox_mode=\"read-only\""));
-    let schema: serde_json::Value =
-        serde_json::from_slice(&fs::read(root.join("provider-schema"))?)?;
-    assert_eq!(schema["type"], "object");
-    assert_eq!(schema["additionalProperties"], false);
-    assert_eq!(schema["required"], serde_json::json!(["judgment"]));
-    assert_eq!(
-        schema["properties"]["judgment"]["anyOf"]
-            .as_array()
-            .unwrap()
-            .len(),
-        5
-    );
-    assert!(fs::read_to_string(root.join("provider-prompt"))?.contains("transcript evidence"));
-    if cancel {
-        if mouse {
-            terminal.click("Cancel")?;
-        } else {
-            terminal.send("\x1b")?;
-        }
-    } else if mouse {
-        terminal.click("Apply")?;
-    } else {
-        terminal.send("\x13")?;
-    }
-    if !cancel {
-        println!(
-            "REMEDIATION {name} APPLIED\n{}",
-            terminal.screen("applied", |s| s.contains("Saved to SQLite"))?
-        );
-    } else {
-        println!(
-            "REMEDIATION CANCELLED\n{}",
-            terminal.screen("cancelled", |s| !s.contains("Failure judgment ·"))?
-        );
-    }
-    let after = service.task(id)?.unwrap();
-    assert_eq!(attempts_contents(root)?, attempts_before);
-    assert_eq!(after.attempts[0].id, attempt);
-    assert_eq!(after.attempts[0].state, "failed");
-    if cancel {
-        assert_eq!(storage_contents(root)?, storage_before);
-        assert_eq!(after.revisions.len(), before.revisions.len());
-        assert_eq!(after.version, before.version);
-        assert_eq!(service.events_after(0, 1000)?.len(), event_count);
-    } else {
-        verify_applied_remediation(root, id, name, approval)?;
-    }
-    quit(&mut terminal)?;
-    Ok(())
-}
-
-fn verify_applied_remediation(
-    root: &Path,
-    id: i64,
-    name: &str,
-    approval: ktask_rs_mk3::application::preferences::PlannerApproval,
-) -> Result {
-    let mut service = service(root)?;
-    let after = service.task(id)?.unwrap();
-    match name {
-        "repair" => {
-            assert_eq!(after.revisions.len(), 1);
-            assert!(
-                service
-                    .remediation_evidence(id, &root.join("state/ktask-dev"))?
-                    .contains("Fix the check boundary and verify it.")
-            );
-        }
-        "revise" => {
-            verify_revised_remediation(root, id, &after, approval)?;
-        }
-        "escalate" => {
-            assert_eq!(after.revisions.len(), 2);
-            let revision = after.revisions.last().unwrap();
-            assert_eq!(revision.lifecycle, "ready");
-            assert_eq!(after.definition().number, revision.number);
-            assert_eq!(revision.actor.as_deref(), Some("ai: remediator"));
-            assert_eq!(
-                revision.definition.models[0].as_ref().unwrap().model,
-                "fixture-strong"
-            );
-            let db = Database::open_in(&root.join("state/ktask-dev"))?;
-            let reason: String = db.connection().query_row(
-                "SELECT change_reason FROM task_revisions WHERE task_id=?1 AND revision=?2",
-                rusqlite::params![id, revision.number],
-                |row| row.get(0),
-            )?;
-            assert_eq!(reason, "The failed check needs a stronger execution model.");
-        }
-        "insert" => {
-            verify_inserted_remediation(&mut service, id, approval)?;
-        }
-        "ask" => {
-            assert_eq!(after.revisions.len(), 1);
-            assert_eq!(
-                service.open_question(id)?.unwrap().1,
-                "Which boundary should be authoritative?"
-            );
-            let db = Database::open_in(&root.join("state/ktask-dev"))?;
-            let reason: String = db.connection().query_row("SELECT message FROM events WHERE task_id=?1 AND kind='remediation.ask' ORDER BY id DESC LIMIT 1", [id], |row| row.get(0))?;
-            assert!(reason.contains("Only the owner can settle the product behavior."));
-        }
-        _ => unreachable!(),
-    }
-    Ok(())
-}
-
-fn verify_revised_remediation(
-    root: &Path,
-    id: i64,
-    task: &ktask_rs_mk3::application::Task,
-    approval: ktask_rs_mk3::application::preferences::PlannerApproval,
-) -> Result {
-    use ktask_rs_mk3::application::preferences::PlannerApproval;
-    assert_eq!(task.revisions.len(), 2);
-    let revision = task.revisions.last().unwrap();
-    assert_eq!(revision.definition.title, "Revised failed task");
-    assert_eq!(revision.definition.goal, "Prove the corrected behavior");
-    assert_eq!(
-        revision.definition.criteria,
-        ["Correct behavior is verified"]
-    );
-    assert_eq!(revision.actor.as_deref(), Some("ai: judge"));
-    assert_eq!(
-        revision.definition.models[1].as_ref().unwrap().model,
-        "judge-review"
-    );
-    assert_eq!(
-        revision.definition.models[1]
-            .as_ref()
-            .unwrap()
-            .effort
-            .as_deref(),
-        Some("high")
-    );
-    assert_eq!(
-        revision.lifecycle,
-        if approval == PlannerApproval::Automatic {
-            "ready"
-        } else {
-            "draft"
-        }
-    );
-    let db = Database::open_in(&root.join("state/ktask-dev"))?;
-    let reason: String = db.connection().query_row(
-        "SELECT change_reason FROM task_revisions WHERE task_id=?1 AND revision=?2",
-        rusqlite::params![id, revision.number],
-        |row| row.get(0),
-    )?;
-    assert_eq!(reason, "The original goal missed the boundary.");
-    Ok(())
-}
-
-#[test]
-fn revised_failure_waits_for_approval_before_queue_continues() -> Result {
-    use ktask_rs_mk3::application::preferences::{Continuation, PlannerApproval};
-    for mouse in [false, true] {
-        let scratch = support::sandbox()?;
-        let root = scratch.path();
-        support::empty_repository(&project(root))?;
-        let (id, attempt) = failed_task(root)?;
-        let mut writer = service(root)?;
-        writer.start_execution_session(true)?;
-        writer.execution_state("waiting", "Failed task awaiting owner revision")?;
-        writer.set_check("proof", "true", 60_000)?;
-        let config = root.join("config/ktask-dev");
-        let previous = writer.preferences(&config)?;
-        let mut review = previous.clone();
-        review.planner_approval = PlannerApproval::ReviewRequired;
-        review.continuation = Continuation::Queue;
-        writer.save_preferences(&config, &previous, &review)?;
-        let attempts_before = attempts_contents(root)?;
-        provider_fixture(
-            root,
-            serde_json::json!({"action":"revise","title":"Revised failed task","goal":"Prove the corrected behavior","criteria":["Correct behavior is verified"],"models":{"execution":null,"review":{"provider":"codex","model":"judge-review","effort":"high"},"validation":null,"remediation":null},"reason":"The original goal missed the boundary."}),
-            false,
-        )?;
-        let mut terminal = terminal(root)?;
-        terminal.screen("failed current", |s| s.contains("d Remediate"))?;
-        if mouse {
-            terminal.click("d Remediate")?;
-        } else {
-            terminal.send("d")?;
-        }
-        let proposal = terminal.screen("revise judgment", |s| {
-            s.contains("Failure judgment · revise task")
-        })?;
-        println!("REVISE BEFORE APPROVAL mouse={mouse}\n{proposal}");
-
-        // Any accidental continuation now has a configured check and reaches a real attempt.
-        // The replacement provider exits promptly so even a regression cannot leave a worker.
-        let approved_prompt = root.join("approved-prompt");
-        support::write_executable(
-            &root.join("bin/codex"),
-            format!("#!/bin/sh\ncat > '{}'\nexit 9\n", approved_prompt.display()),
-        )?;
-        if mouse {
-            terminal.click("Apply")?;
-        } else {
-            terminal.send("\x13")?;
-        }
-        terminal.screen("draft awaits approval", |s| {
-            s.contains("Pending revision 2 · needs approval")
-        })?;
-        terminal.send("2")?;
-        terminal.screen("queue event processed", |s| s.contains("Queue · 1 / 1"))?;
-        assert_eq!(attempts_contents(root)?, attempts_before);
-        assert!(!approved_prompt.exists());
-        let draft = writer.task(id)?.unwrap();
-        assert_eq!(draft.attempts.len(), 1);
-        assert_eq!(draft.attempts[0].id, attempt);
-        verify_revised_remediation(root, id, &draft, PlannerApproval::ReviewRequired)?;
-        terminal.send("1")?;
-        let pending = terminal.screen("owner approval pending", |s| {
-            on_current(s)
-                && s.contains("Pending revision 2 · needs approval")
-                && s.contains("v Approve")
-        })?;
-        println!("REVISE AWAITS APPROVAL mouse={mouse}\n{pending}");
-
-        if mouse {
-            terminal.click("v Approve")?;
-        } else {
-            terminal.send("v")?;
-        }
-        // The replacement provider always exits 9: the revised task is repaired automatically
-        // until three attempts in a row have failed, then the stop banner says so.
-        let after = terminal.screen("approved revision attempted", |s| {
-            s.contains("EXECUTION STOPPED")
-        })?;
-        println!("REVISE AFTER APPROVAL mouse={mouse}\n{after}");
-        let task = writer.task(id)?.unwrap();
-        assert_eq!(task.attempts.len(), 4);
-        assert_eq!(task.attempts[0].id, attempt);
-        assert_eq!(task.attempts[1].revision, 2);
-        assert_eq!(task.definition().number, 2);
-        assert!(fs::read_to_string(approved_prompt)?.contains("Task: Revised failed task"));
-        quit(&mut terminal)?;
-    }
-    Ok(())
-}
-
-fn verify_inserted_remediation(
-    service: &mut Service,
-    id: i64,
-    approval: ktask_rs_mk3::application::preferences::PlannerApproval,
-) -> Result {
-    use ktask_rs_mk3::application::preferences::PlannerApproval;
-    let snapshot = service.snapshot()?;
-    assert_eq!(snapshot.queue.len(), 3);
-    assert_eq!(
-        snapshot.queue[1].definition().definition.title,
-        "Verify repaired boundary"
-    );
-    assert_eq!(snapshot.queue[2].id, id);
-    assert_eq!(
-        snapshot.queue[0].definition().definition.title,
-        "Repair the check boundary"
-    );
-    assert_eq!(
-        snapshot.queue[0].definition().lifecycle,
-        if approval == PlannerApproval::Automatic {
-            "ready"
-        } else {
-            "draft"
-        }
-    );
-    assert_eq!(
-        snapshot.queue[0].revisions[0].actor.as_deref(),
-        Some("ai: remediator")
-    );
-    Ok(())
-}
-
-#[test]
-fn failed_judge_question_can_be_answered_by_mouse_and_keyboard() -> Result {
-    use ktask_rs_mk3::application::preferences::{Continuation, Preferences};
-    for mouse in [false, true] {
-        let scratch = support::sandbox()?;
-        let root = scratch.path();
-        support::empty_repository(&project(root))?;
-        let (id, _) = failed_task(root)?;
-        let writer = service(root)?;
-        let config = root.join("config/ktask-dev");
-        let previous = writer.preferences(&config)?;
-        writer.save_preferences(
-            &config,
-            &previous,
-            &Preferences {
-                version: 0,
-                mouse: true,
-                planner_approval: previous.planner_approval,
-                continuation: Continuation::Single,
-            },
-        )?;
-        provider_fixture(
-            root,
-            serde_json::json!({"action":"ask","question":"Which behavior is intended?","reason":"Product decision is missing."}),
-            false,
-        )?;
-        let mut terminal = terminal(root)?;
-        terminal.screen("failed current", |screen| screen.contains("d Remediate"))?;
-        if mouse {
-            terminal.click("d Remediate")?;
-        } else {
-            terminal.send("d")?;
-        }
-        terminal.screen("ask judgment", |screen| {
-            screen.contains("Failure judgment · ask owner")
-        })?;
-        if mouse {
-            terminal.click("Apply")?;
-        } else {
-            terminal.send("\x13")?;
-        }
-        let screen = terminal.screen("open question", |screen| {
-            screen.contains("Which behavior is intended?") && screen.contains("Owner decision")
-        })?;
-        if mouse {
-            terminal.click("Owner decision")?;
-        } else {
-            terminal.send("w")?;
-        }
-        terminal.screen("answer form", |screen| {
-            screen.contains("Answer AI question")
-        })?;
-        terminal.send("Keep the documented behavior")?;
-        if mouse {
-            terminal.click("Apply")?;
-        } else {
-            terminal.send("\x13")?;
-        }
-        terminal.screen("answered", |screen| {
-            !screen.contains("Answer AI question") && screen.contains("FAILED")
-        })?;
-        assert!(service(root)?.open_question(id)?.is_none());
-        assert!(
-            service(root)?
-                .failure_decisions(id)?
-                .contains("Keep the documented behavior")
-        );
-        println!("JUDGE QUESTION mouse={mouse}\n{screen}");
-        quit(&mut terminal)?;
-    }
-    Ok(())
-}
-
-#[test]
-fn remediation_stalled_provider_can_cancel_and_quit_without_leaking_children() -> Result {
-    for input in ["keyboard", "mouse", "quit"] {
-        let scratch = support::sandbox()?;
-        let root = scratch.path();
-        let (_, attempt) = failed_task(root)?;
-        // Fill stdin beyond pipe capacity, while the fixture never reads its prompt.
-        let db = Database::open_in(&root.join("state/ktask-dev"))?;
-        db.connection().execute(
-            "INSERT INTO attempt_output(attempt_id,sequence,recorded_at_ms,stream,content) VALUES (?1,2,1,'stderr',?2)",
-            rusqlite::params![attempt, "界".repeat(100_000)],
-        )?;
-        provider_fixture(root, serde_json::Value::Null, false)?;
-        support::write_executable(
-            &root.join("bin/codex"),
-            format!(
-                "#!/bin/sh\necho $$ > '{0}/provider-pid'\nsleep 60 &\necho $! > '{0}/descendant.staged'\nmv '{0}/descendant.staged' '{0}/descendant-pid'\nwait\n",
-                root.display()
-            ),
-        )?;
-        let before = storage_contents(root)?;
-        let mut terminal = terminal(root)?;
-        terminal.send("d")?;
-        println!(
-            "REMEDIATION STALLED {input}\n{}",
-            terminal.screen("pending proposal", |s| s
-                .contains("Requesting failure judgment"))?
-        );
-        support::eventually("stalled judge started its descendant", || {
-            Ok(root.join("descendant-pid").exists().then_some(()))
-        })?;
-        // F6 without a selection only shows a hint: input is handled in order, so the hint
-        // proves Enter was handled, and the request is still pending.
-        terminal.send("\r\x1b[17~")?;
-        terminal.screen("pending Enter is inert", |s| {
-            s.contains("Drag text, or F2")
-                && s.contains("Requesting failure judgment")
-                && !s.contains("Simulation")
-        })?;
-        match input {
-            "mouse" => terminal.click("Cancel")?,
-            "quit" => quit(&mut terminal)?,
-            _ => terminal.send("\x1b")?,
-        }
-        if input != "quit" {
-            println!(
-                "REMEDIATION REQUEST CANCELLED {input}\n{}",
-                terminal.screen("cancelled pending request", |s| !s
-                    .contains("Requesting failure judgment"))?
-            );
-            terminal.send("2")?;
-            println!(
-                "RESPONSIVE QUEUE {input}\n{}",
-                terminal.screen("responsive queue", |s| s.contains("Queue · 1 shown"))?
-            );
-            quit(&mut terminal)?;
-        }
-        for file in ["provider-pid", "descendant-pid"] {
-            let pid = fs::read_to_string(root.join(file))?;
-            assert!(
-                !Path::new("/proc").join(pid.trim()).exists(),
-                "leaked {file}: {pid}"
-            );
-        }
-        assert_eq!(storage_contents(root)?, before);
-        let workers = root.join("cache/ktask-dev/workers");
-        assert!(
-            !fs::read_dir(workers)?.any(|e| e
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with("run-"))
-        );
-    }
-    Ok(())
-}
-
-#[test]
-fn remediation_reaps_pipe_holding_descendants_and_reports_provider_failure() -> Result {
-    for fail in [false, true] {
-        let scratch = support::sandbox()?;
-        let root = scratch.path();
-        failed_task(root)?;
-        provider_fixture(
-            root,
-            serde_json::json!({"action":"escalate","model":{"provider":"codex","model":"stronger","effort":"high"},"reason":"Repair the failed boundary."}),
-            false,
-        )?;
-        support::write_executable(
-            &root.join("bin/codex"),
-            format!(
-                "#!/bin/sh\ncat >/dev/null\nsleep 60 &\necho $! > '{0}/descendant.staged'\nmv '{0}/descendant.staged' '{0}/descendant-pid'\n{1}\n",
-                root.display(),
-                if fail {
-                    "echo fixture-provider-failed >&2\nexit 9"
-                } else {
-                    "cat \"$HOME/provider-events.jsonl\""
-                }
-            ),
-        )?;
-        let before = storage_contents(root)?;
-        let mut terminal = terminal(root)?;
-        terminal.send("d")?;
-        let expected = if fail {
-            "fixture-provider-failed"
-        } else {
-            "Failure judgment · escalate model"
-        };
-        println!(
-            "REMEDIATION PIPE HOLDER fail={fail}\n{}",
-            terminal.screen(expected, |s| s.contains(expected))?
-        );
-        quit(&mut terminal)?;
-        let pid = fs::read_to_string(root.join("descendant-pid"))?;
-        assert!(!Path::new("/proc").join(pid.trim()).exists());
-        assert_eq!(storage_contents(root)?, before);
-    }
-    Ok(())
-}
-
-#[test]
-fn remediation_large_unicode_evidence_retains_latest_output_transcripts_and_findings() -> Result {
-    let scratch = support::sandbox()?;
-    let root = scratch.path();
-    let (id, attempt) = failed_task(root)?;
-    let db = Database::open_in(&root.join("state/ktask-dev"))?;
-    let output = format!("{}LATEST_OUTPUT", "界".repeat(1_500_000));
-    db.connection().execute(
-        "INSERT INTO attempt_output(attempt_id,sequence,recorded_at_ms,stream,content) VALUES (?1,2,1,'stderr',?2)",
-        rusqlite::params![attempt, output],
-    )?;
-    let transcript = format!("{}FAILED_TRANSCRIPT", "界".repeat(400_000));
-    fs::write(root.join("state/ktask-dev/check.log"), &transcript)?;
-    db.connection().execute("INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms) VALUES (?1,'failed check','text/plain','check.log',?2,1)", rusqlite::params![attempt,transcript.len() as i64])?;
-    let evidence = service(root)?.remediation_evidence(id, &root.join("state/ktask-dev"))?;
-    assert!(evidence.len() <= 4 * 1024 * 1024);
-    for expected in [
-        "LATEST_OUTPUT",
-        "FAILED_TRANSCRIPT",
-        "review structured finding",
-        "validation structured finding",
-        "review criterion evidence",
-        "validation criterion evidence",
-    ] {
-        assert!(evidence.contains(expected), "missing {expected}");
-    }
-    Ok(())
-}
-
-#[test]
 fn commands_are_atomic_versioned_relational_and_preserve_usable_revisions() -> Result {
     let scratch = support::sandbox()?;
     let mut a = service(scratch.path())?;
@@ -3761,7 +3247,7 @@ fn commands_are_atomic_versioned_relational_and_preserve_usable_revisions() -> R
     });
     b.revise(old, &draft, false)?;
     assert!(a.revise(old, &definition("Stale overwrite"), true).is_err());
-    assert!(a.delete(old).is_err());
+    assert!(a.cancel(old, "Stale cancel").is_err());
     assert_eq!(
         a.snapshot()?.queue[0].definition().definition.title,
         "Approved"
@@ -3813,7 +3299,7 @@ fn commands_are_atomic_versioned_relational_and_preserve_usable_revisions() -> R
 }
 
 #[test]
-fn commands_preserve_order_history_deleted_rows_and_human_evidence() -> Result {
+fn commands_preserve_order_history_cancelled_copies_and_human_evidence() -> Result {
     let scratch = support::sandbox()?;
     let mut s = service(scratch.path())?;
     let mut human = definition("Human checkpoint");
@@ -3828,27 +3314,41 @@ fn commands_preserve_order_history_deleted_rows_and_human_evidence() -> Result {
     )?;
     assert_eq!(
         s.snapshot()?.queue.iter().map(|t| t.id).collect::<Vec<_>>(),
-        [vec![ids[0]], inserted, vec![ids[1]]].concat()
+        [vec![ids[0]], inserted.clone(), vec![ids[1]]].concat()
     );
     let first = target(&mut s, ids[0])?;
     let last = target(&mut s, ids[1])?;
-    assert!(s.acknowledge(last).is_err());
-    s.acknowledge(first)?;
+    s.mark_done(first, "")?;
+    assert!(s.mark_done(first, "Stale").is_err());
     assert!(s.revise(first, &definition("Bad"), true).is_err());
     let snapshot = s.snapshot()?;
     assert_eq!(snapshot.history[0].lifecycle, "succeeded");
+    assert_eq!(
+        snapshot.history[0].resolution_reason.as_deref(),
+        Some("Marked done by owner")
+    );
     assert!(snapshot.history[0].attempts.is_empty());
-    s.delete(last)?;
-    s.restore(VersionedTask {
-        version: last.version + 1,
-        ..last
-    })?;
-    let last = target(&mut s, ids[1])?;
+    let ai = target(&mut s, inserted[0])?;
+    s.mark_done(ai, "Done outside ktask")?;
+    assert_eq!(s.task(inserted[0])?.unwrap().status, "succeeded_override");
+    s.cancel(last, "")?;
+    assert!(s.cancel(last, "Twice").is_err());
+    let cancelled = s.task(ids[1])?.unwrap();
+    assert_eq!(cancelled.status, "cancelled");
+    assert_eq!(
+        cancelled.resolution_reason.as_deref(),
+        Some("Cancelled by owner")
+    );
     let current = s.snapshot()?.queue[0].id;
-    s.move_before(last, Some(current))?;
-    assert_eq!(s.snapshot()?.queue[0].id, ids[1]);
+    let cancelled = target(&mut s, ids[1])?;
+    let copy = s.copy_to_queue(cancelled, Some(current))?;
+    assert_eq!(s.snapshot()?.queue[0].id, copy);
+    assert_eq!(s.task(copy)?.unwrap().definition().definition.title, "Last");
+    assert_eq!(s.task(ids[1])?.unwrap().status, "cancelled");
     drop(s);
-    assert_eq!(service(scratch.path())?.snapshot()?.queue[0].id, ids[1]);
+    let snapshot = service(scratch.path())?.snapshot()?;
+    assert_eq!(snapshot.queue[0].id, copy);
+    assert_eq!(snapshot.history.len(), 3);
     Ok(())
 }
 
@@ -3950,7 +3450,7 @@ fn real_tui_saves_across_kill_restart_and_never_simulates_real_tasks() -> Result
     println!(
         "REAL RESTART\n{}",
         t.screen("persisted", |s| s.contains("Real durable task")
-            && s.contains("PENDING"))?
+            && s.contains("Current #1 · Pending"))?
     );
     t.send("c")?;
     t.screen("stored model", |s| {
@@ -4169,28 +3669,43 @@ fn queue_add_whitespace_fields_keep_project_model_default() -> Result {
 }
 
 #[test]
-fn real_tui_mouse_approval_history_delete_undo_and_all_views() -> Result {
+fn real_tui_mouse_approval_mark_done_cancel_copy_and_all_views() -> Result {
     let scratch = support::sandbox()?;
     let mut s = service(scratch.path())?;
     let mut human = definition("Human approval");
     human.kind = Kind::Human;
-    s.create(&[human, definition("Delete and restore")], None, false)?;
+    s.create(&[human, definition("Cancel and copy")], None, false)?;
     let mut t = terminal(scratch.path())?;
-    t.screen("draft", |s| s.contains("Current #1 · NEW"))?;
+    t.screen("draft", |s| s.contains("Current #1 · Needs approval"))?;
     t.click("v Approve")?;
-    t.screen("ready", |s| s.contains("Current #1 · PENDING"))?;
-    t.click("y Acknowledge")?;
-    t.screen("next", |s| s.contains("Current #2 · NEW"))?;
-    t.click("v Approve")?;
-    t.screen("ready second", |s| s.contains("Current #2 · PENDING"))?;
-    t.click("2 Queue")?;
-    t.screen("queue", |s| on_queue(s) && s.contains("d Delete"))?;
-    t.click("d Delete")?;
-    t.screen("confirm", |s| s.contains("Delete pending task?"))?;
+    t.screen("ready", |s| s.contains("Current #1 · Pending"))?;
+    t.click("D Mark done")?;
+    t.screen("mark done form", |s| {
+        s.contains("Mark done #1 Human approval")
+    })?;
     t.click("Apply")?;
-    t.screen("deleted", |s| s.contains("Queue 0"))?;
-    t.click("u Undo")?;
-    t.screen("restored", |s| s.contains("Queue 1"))?;
+    t.screen("next", |s| s.contains("Current #2 · Needs approval"))?;
+    t.click("v Approve")?;
+    t.screen("ready second", |s| s.contains("Current #2 · Pending"))?;
+    t.click("2 Queue")?;
+    t.screen("queue", |s| on_queue(s) && s.contains("x Cancel"))?;
+    t.click("x Cancel")?;
+    t.screen("confirm", |s| s.contains("Cancel #2 Cancel and copy"))?;
+    t.click("Apply")?;
+    t.screen("cancelled", |s| s.contains("Queue 0"))?;
+    t.click("3 History")?;
+    // History lists the latest closed task first and selects it.
+    t.screen("history", |s| {
+        on_history(s) && s.contains("› #2") && row_shows(s, "Cancel and", "Cancelled")
+    })?;
+    t.click("C Copy to queue")?;
+    t.screen("copy form", |s| {
+        s.contains("Copy to queue #2 Cancel and copy")
+    })?;
+    t.click("Apply")?;
+    t.screen("copied", |s| {
+        s.contains("Queue 1") && s.contains("Copied to the queue as #3")
+    })?;
     // Config and About draw these only on their own screens.
     let anywhere: fn(&str) -> bool = |_| true;
     for (tab, view, text) in [
@@ -4199,8 +3714,8 @@ fn real_tui_mouse_approval_history_delete_undo_and_all_views() -> Result {
             on_current as fn(&str) -> bool,
             "No attempts yet",
         ),
-        ("2 Queue", on_queue, "Delete and restore"),
-        ("3 History", on_history, "Human approval"),
+        ("2 Queue", on_queue, "Cancel and copy"),
+        ("3 History", on_history, "Human approv"),
         ("4 Config", anywhere, "Storage: SQLite"),
         ("5 About", anywhere, "relational SQLite"),
     ] {
@@ -4217,7 +3732,7 @@ fn real_tui_mouse_approval_history_delete_undo_and_all_views() -> Result {
     submit(&mut t, "e \r", "Project preferences", "Mouse: Enabled")?;
     println!(
         "SQLITE STATS\n{}",
-        key(&mut t, "s", "Project statistics · SQLite")?
+        key(&mut t, "S", "Project statistics · SQLite")?
     );
     submit(&mut t, "\x1b", "Project statistics", "Mouse: Enabled")?;
     println!("SQLITE EVENTS\n{}", key(&mut t, "l", "Project events")?);
@@ -4228,9 +3743,10 @@ fn real_tui_mouse_approval_history_delete_undo_and_all_views() -> Result {
         key(&mut t, "\x1b[F", "Changes save immediately")?
     );
     quit(&mut t)?;
-    let snapshot = s.snapshot()?;
-    assert_eq!(snapshot.history[0].lifecycle, "succeeded");
-    assert!(snapshot.history[0].attempts.is_empty());
+    for (id, lifecycle) in [(1, "succeeded"), (2, "cancelled"), (3, "ready")] {
+        assert_eq!(s.task(id)?.unwrap().lifecycle, lifecycle);
+    }
+    assert!(s.task(1)?.unwrap().attempts.is_empty());
     Ok(())
 }
 
@@ -4268,18 +3784,18 @@ fn real_tui_disk_import_export_preview_overwrite_and_atomic_error() -> Result {
     service(scratch.path())?.create(&[definition("Transfer me")], None, true)?;
     let mut t = terminal(scratch.path())?;
     t.screen("startup", |s| s.contains("Transfer me"))?;
-    key(&mut t, "2x", "Export task definitions")?;
+    key(&mut t, "2E", "Export task definitions")?;
     key(&mut t, "\r", "Exported to disk")?;
     let exported = project(scratch.path()).join("tasks.tsv");
     assert!(exported.is_file());
     let definitions = fs::read_to_string(&exported)?;
     // A stale file shows whether a later export replaced it: the message stays the same.
     fs::write(&exported, "stale")?;
-    key(&mut t, "x\r", "Overwrite file?")?;
+    key(&mut t, "E\r", "Overwrite file?")?;
     t.click("Cancel")?;
     t.screen("cancelled", |s| !s.contains("Overwrite file?"))?;
     assert_eq!(fs::read_to_string(&exported)?, "stale");
-    key(&mut t, "x\r", "Overwrite file?")?;
+    key(&mut t, "E\r", "Overwrite file?")?;
     t.click("Apply")?;
     t.screen("exported", |s| {
         !s.contains("Overwrite file?") && s.contains("Exported to disk")
@@ -4336,6 +3852,8 @@ fn real_instances_and_demo_never_share_task_data() -> Result {
 fn running_guards_and_real_failure_resolution_preserve_attempt_evidence() -> Result {
     use ktask_rs_mk3::storage::execution::StartAttempt;
     let scratch = support::sandbox()?;
+    // Mark done stashes a failed attempt's changes, so the project is a Git checkout.
+    support::empty_repository(&project(scratch.path()))?;
     let mut s = service(scratch.path())?;
     let mut d = definition("Stored failure");
     d.models = std::array::from_fn(|_| {
@@ -4362,12 +3880,12 @@ fn running_guards_and_real_failure_resolution_preserve_attempt_evidence() -> Res
     );
     let running = target(&mut s, id)?;
     assert!(s.revise(running, &d, true).is_err());
-    assert!(s.delete(running).is_err());
+    assert!(s.cancel(running, "Running").is_err());
     assert!(s.move_before(running, None).is_err());
     db.connection().execute("UPDATE attempts SET state = 'failed', finished_at_ms = started_at_ms, outcome = 'Recorded fixture failure', failure_category = 'check' WHERE id = ?1", [attempt])?;
     db.connection().execute("INSERT INTO attempt_output(attempt_id, sequence, stream, recorded_at_ms, content) VALUES (?1, 1, 'system', ?2, 'Original evidence retained')", rusqlite::params![attempt, now])?;
     let mut t = terminal(scratch.path())?;
-    t.screen("failed", |s| s.contains("Current #1 · FAILED"))?;
+    t.screen("failed", |s| s.contains("Current #1 · Failed"))?;
     println!(
         "STORED FAILURE\n{}",
         key(&mut t, "\r", "Recorded fixture failure")?
@@ -4376,10 +3894,10 @@ fn running_guards_and_real_failure_resolution_preserve_attempt_evidence() -> Res
         &mut t,
         "\x1b",
         "Task details / attempts",
-        "Current #1 · FAILED",
+        "Current #1 · Failed",
     )?;
-    key(&mut t, "z", "Resolve failed current")?;
-    key(&mut t, "\tAccepted evidence\r", "History 1")?;
+    key(&mut t, "D", "Mark done #1 Stored failure")?;
+    key(&mut t, "Accepted evidence\r", "History 1")?;
     key(&mut t, "3\r", "Original evidence retained")?;
     println!(
         "STORED RESOLUTION\n{}",
@@ -4484,10 +4002,13 @@ fn sqlite_queue_and_history_handle_240_tasks_in_execution_order() -> Result {
         .collect::<Vec<_>>();
     let ids = s.create(&definitions, None, true)?;
     for id in &ids[..120] {
-        s.acknowledge(VersionedTask {
-            id: *id,
-            version: 1,
-        })?;
+        s.mark_done(
+            VersionedTask {
+                id: *id,
+                version: 1,
+            },
+            "",
+        )?;
     }
     let mut t = terminal(scratch.path())?;
     t.screen("large stored queue", |s| {
@@ -4605,5 +4126,402 @@ fn large_current_log_stays_responsive_to_mouse_motion_and_screen_switches() -> R
             exit_started.elapsed()
         );
     }
+    Ok(())
+}
+
+/// Applies the open dialog: Enter by keyboard, its [Apply] button by mouse.
+fn apply(t: &mut Terminal, mouse: bool) -> Result {
+    if mouse {
+        t.click("Apply")
+    } else {
+        t.send("\r")
+    }
+}
+/// Presses a task control by its key or clicks its labelled button, e.g. "x Cancel".
+fn control(t: &mut Terminal, mouse: bool, button: &str) -> Result {
+    if mouse {
+        t.click(button)
+    } else {
+        t.send(&button[..1])
+    }
+}
+fn tab(t: &mut Terminal, mouse: bool, label: &str) -> Result {
+    if mouse {
+        t.click(label)
+    } else {
+        t.send(&label[..1])
+    }
+}
+fn resolution(service: &mut Service, id: i64) -> Result<(String, Option<String>)> {
+    let task = service.task(id)?.unwrap();
+    Ok((task.status, task.resolution_reason))
+}
+
+#[test]
+fn cancel_pending_from_current_and_queue_by_keyboard_and_mouse() -> Result {
+    for mouse in [false, true] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        service(root)?.create(
+            &[
+                definition("Cancel from current"),
+                definition("Stays pending"),
+                definition("Cancel from queue"),
+            ],
+            None,
+            true,
+        )?;
+        let mut t = terminal_at(root, 120, 34)?;
+        t.screen("pending current", |s| s.contains("Current #1 · Pending"))?;
+        control(&mut t, mouse, "x Cancel")?;
+        let form = t.screen("cancel current form", |s| {
+            s.contains("Cancel #1 Cancel from current") && s.contains("Reason (optional)")
+        })?;
+        println!("CANCEL CURRENT FORM mouse={mouse}\n{form}");
+        if mouse {
+            t.click("Reason (optional)")?;
+        }
+        type_field(&mut t, "Not needed")?;
+        apply(&mut t, mouse)?;
+        t.screen("current cancelled", |s| {
+            !s.contains("Cancel #1") && s.contains("Current #2 · Pending")
+        })?;
+        tab(&mut t, mouse, "2 Queue")?;
+        t.screen("queue", |s| on_queue(s) && s.contains("› #2"))?;
+        if mouse {
+            t.click("#3   ")?;
+        } else {
+            t.send("j")?;
+        }
+        t.screen("queued task selected", |s| s.contains("› #3"))?;
+        control(&mut t, mouse, "x Cancel")?;
+        t.screen("cancel queued form", |s| {
+            s.contains("Cancel #3 Cancel from queue")
+        })?;
+        apply(&mut t, mouse)?;
+        let screen = t.screen("queued task cancelled", |s| {
+            !s.contains("Cancel #3") && s.contains("Queue 1 · History 2")
+        })?;
+        println!("CANCELLED FROM QUEUE mouse={mouse}\n{screen}");
+        tab(&mut t, mouse, "3 History")?;
+        let history = t.screen("both cancelled in history", |s| {
+            on_history(s)
+                && row_shows(s, "Cancel from current", "Cancelled")
+                && row_shows(s, "Cancel from queue", "Cancelled")
+        })?;
+        println!("CANCELLED HISTORY mouse={mouse}\n{history}");
+        quit(&mut t)?;
+        let mut reader = service(root)?;
+        assert_eq!(
+            resolution(&mut reader, 1)?,
+            ("cancelled".into(), Some("Not needed".into()))
+        );
+        assert_eq!(
+            resolution(&mut reader, 3)?,
+            ("cancelled".into(), Some("Cancelled by owner".into()))
+        );
+        assert_eq!(reader.task(2)?.unwrap().status, "ready");
+    }
+    Ok(())
+}
+
+#[test]
+fn supersede_pending_requires_known_replacing_ids_by_keyboard_and_mouse() -> Result {
+    for mouse in [false, true] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        service(root)?.create(
+            &[
+                definition("Replaced work"),
+                definition("Replacement one"),
+                definition("Replacement two"),
+            ],
+            None,
+            true,
+        )?;
+        let mut t = terminal_at(root, 120, 34)?;
+        t.screen("pending current", |s| s.contains("Current #1 · Pending"))?;
+        control(&mut t, mouse, "R Supersede")?;
+        let form = t.screen("supersede form", |s| {
+            s.contains("Supersede #1 Replaced work")
+                && s.contains("Replaced by task IDs (comma separated)")
+        })?;
+        println!("SUPERSEDE FORM mouse={mouse}\n{form}");
+        let before = storage_contents(root)?;
+        apply(&mut t, mouse)?;
+        let blank = t.screen("blank IDs refused", |s| {
+            s.contains("Name at least one replacing task") && s.contains("Supersede #1")
+        })?;
+        println!("SUPERSEDE BLANK mouse={mouse}\n{blank}");
+        if mouse {
+            t.click("Replaced by task IDs")?;
+        }
+        type_field(&mut t, "99")?;
+        apply(&mut t, mouse)?;
+        let unknown = t.screen("unknown ID refused", |s| {
+            s.contains("Task #99 is not in this project") && s.contains("Supersede #1")
+        })?;
+        println!("SUPERSEDE UNKNOWN mouse={mouse}\n{unknown}");
+        assert_eq!(storage_contents(root)?, before);
+        if mouse {
+            t.click("Replaced by task IDs")?;
+        }
+        t.send("\x01")?;
+        type_field(&mut t, "2, 3")?;
+        if mouse {
+            t.click("Reason (optional)")?;
+        } else {
+            t.send("\t")?;
+        }
+        type_field(&mut t, "Split up")?;
+        apply(&mut t, mouse)?;
+        t.screen("superseded", |s| {
+            !s.contains("Supersede #1") && s.contains("Current #2 · Pending")
+        })?;
+        tab(&mut t, mouse, "3 History")?;
+        let history = t.screen("superseded in history", |s| {
+            on_history(s) && row_shows(s, "Replaced work", "Superseded")
+        })?;
+        println!("SUPERSEDED HISTORY mouse={mouse}\n{history}");
+        quit(&mut t)?;
+        let mut reader = service(root)?;
+        assert_eq!(
+            resolution(&mut reader, 1)?,
+            (
+                "superseded".into(),
+                Some("Superseded by #2, #3: Split up".into())
+            )
+        );
+        let db = Database::open_in(&root.join("state/ktask-dev"))?;
+        let mut links = db
+            .connection()
+            .prepare("SELECT task_id,related_task_id,kind FROM task_links ORDER BY task_id")?;
+        let links = links
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<rusqlite::Result<Vec<(i64, i64, String)>>>()?;
+        assert_eq!(
+            links,
+            [(2, 1, "replaces".to_owned()), (3, 1, "replaces".to_owned())]
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn copy_to_queue_from_history_for_done_cancelled_and_superseded_by_keyboard_and_mouse() -> Result {
+    for mouse in [false, true] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        let mut writer = service(root)?;
+        writer.create(
+            &[
+                definition("Done original"),
+                definition("Cancelled original"),
+                definition("Superseded original"),
+                definition("Replacement"),
+            ],
+            None,
+            true,
+        )?;
+        let done = target(&mut writer, 1)?;
+        writer.mark_done(done, "Finished by hand")?;
+        let cancelled = target(&mut writer, 2)?;
+        writer.cancel(cancelled, "")?;
+        let superseded = target(&mut writer, 3)?;
+        writer.supersede(superseded, &[4], "")?;
+        let originals = (1..=3)
+            .map(|id| resolution(&mut writer, id))
+            .collect::<Result<Vec<_>>>()?;
+        drop(writer);
+        let mut t = terminal_at(root, 120, 34)?;
+        t.screen("startup", |s| s.contains("Queue 1 · History 3"))?;
+        // History lists #3, #2, #1; the copies become #5, #6 and #7.
+        for (id, title, state, copy) in [
+            (1, "Done original", "Done", 5),
+            (2, "Cancelled original", "Cancelled", 6),
+            (3, "Superseded original", "Superseded", 7),
+        ] {
+            tab(&mut t, mouse, "3 History")?;
+            t.screen("history", |s| on_history(s) && row_shows(s, title, state))?;
+            if mouse {
+                t.click(&format!("#{id}   "))?;
+            } else {
+                t.send(&format!("\x1b[H{}", "j".repeat(3 - id as usize)))?;
+            }
+            t.still("original selected", |s| s.contains(&format!("› #{id}")))?;
+            control(&mut t, mouse, "C Copy to queue")?;
+            let form = t.screen("copy form", |s| {
+                s.contains(&format!("Copy to queue #{id} {title}"))
+                    && s.contains("Before task ID (blank = end of Queue)")
+            })?;
+            println!("COPY FORM {state} mouse={mouse}\n{form}");
+            // The mouse copies the done task to the front, before #4.
+            if mouse && id == 1 {
+                t.click("Before task ID")?;
+                type_field(&mut t, "4")?;
+            }
+            apply(&mut t, mouse)?;
+            let queue = t.screen("copied", |s| {
+                on_queue(s) && s.contains(&format!("Copied to the queue as #{copy}"))
+            })?;
+            println!("COPIED {state} mouse={mouse}\n{queue}");
+        }
+        quit(&mut t)?;
+        let mut reader = service(root)?;
+        let order = reader
+            .snapshot()?
+            .queue
+            .iter()
+            .map(|t| t.id)
+            .collect::<Vec<_>>();
+        assert_eq!(order, if mouse { [5, 4, 6, 7] } else { [4, 5, 6, 7] });
+        for (offset, original) in originals.iter().enumerate() {
+            let id = offset as i64 + 1;
+            assert_eq!(&resolution(&mut reader, id)?, original);
+            let copy = reader.task(id + 4)?.unwrap();
+            assert_eq!(copy.status, "ready");
+            assert_eq!(
+                copy.definition().definition,
+                reader.task(id)?.unwrap().definition().definition
+            );
+        }
+        let db = Database::open_in(&root.join("state/ktask-dev"))?;
+        let derived: Vec<(i64, i64)> = db
+            .connection()
+            .prepare("SELECT task_id,related_task_id FROM task_links WHERE kind='derived_from' ORDER BY task_id")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        assert_eq!(derived, [(5, 1), (6, 2), (7, 3)]);
+    }
+    Ok(())
+}
+
+#[test]
+fn mark_done_failed_current_and_pending_queue_task_by_keyboard_and_mouse() -> Result {
+    for mouse in [false, true] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        // Mark done stashes a failed attempt's changes, so the project is a Git checkout.
+        support::empty_repository(&project(root))?;
+        let (failed, attempt) = failed_task(root)?;
+        let pending = service(root)?.create(&[definition("Pending done")], None, true)?[0];
+        let mut t = terminal_at(root, 120, 34)?;
+        t.screen("failed current", |s| s.contains("Current #1 · Failed"))?;
+        control(&mut t, mouse, "D Mark done")?;
+        let form = t.screen("mark done failed form", |s| {
+            s.contains("Mark done #1 Failed current") && s.contains("Reason (optional)")
+        })?;
+        println!("MARK DONE FAILED FORM mouse={mouse}\n{form}");
+        if mouse {
+            t.click("Reason (optional)")?;
+        }
+        type_field(&mut t, "Accepted as is")?;
+        apply(&mut t, mouse)?;
+        let done = t.screen("failed marked done", |s| {
+            s.contains("#1 marked done") && s.contains("Current #2 · Pending")
+        })?;
+        println!("MARKED FAILED DONE mouse={mouse}\n{done}");
+        tab(&mut t, mouse, "2 Queue")?;
+        t.screen("queue", |s| on_queue(s) && s.contains("› #2"))?;
+        control(&mut t, mouse, "D Mark done")?;
+        t.screen("mark done pending form", |s| {
+            s.contains("Mark done #2 Pending done")
+        })?;
+        apply(&mut t, mouse)?;
+        t.screen("pending marked done", |s| {
+            s.contains("#2 marked done") && s.contains("Queue 0 · History 2")
+        })?;
+        tab(&mut t, mouse, "3 History")?;
+        let history = t.screen("both done in history", |s| {
+            on_history(s)
+                && row_shows(s, "Failed current", "Done")
+                && row_shows(s, "Pending done", "Done")
+        })?;
+        println!("MARKED DONE HISTORY mouse={mouse}\n{history}");
+        quit(&mut t)?;
+        let mut reader = service(root)?;
+        assert_eq!(
+            resolution(&mut reader, failed)?,
+            ("succeeded_override".into(), Some("Accepted as is".into()))
+        );
+        let kept = reader.task(failed)?.unwrap().attempts.remove(0);
+        assert_eq!((kept.id, kept.state.as_str()), (attempt, "failed"));
+        assert_eq!(
+            kept.outcome.as_deref(),
+            Some("Failed check with review finding")
+        );
+        assert_eq!(
+            resolution(&mut reader, pending)?,
+            (
+                "succeeded_override".into(),
+                Some("Marked done by owner".into())
+            )
+        );
+        assert!(reader.task(pending)?.unwrap().attempts.is_empty());
+    }
+    Ok(())
+}
+
+#[test]
+fn reject_draft_only_task_cancels_it_by_keyboard_and_mouse() -> Result {
+    for mouse in [false, true] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        let mut writer = service(root)?;
+        writer.create(&[definition("Draft only")], None, false)?;
+        writer.create(&[definition("Next ready")], None, true)?;
+        drop(writer);
+        let mut t = terminal_at(root, 120, 34)?;
+        t.screen("draft current", |s| {
+            s.contains("Current #1 · Needs approval")
+        })?;
+        control(&mut t, mouse, "n Reject")?;
+        t.screen("reject form", |s| s.contains("Reject pending revision"))?;
+        if mouse {
+            t.click("Reason")?;
+        }
+        type_field(&mut t, "Not wanted")?;
+        apply(&mut t, mouse)?;
+        t.screen("rejected", |s| {
+            !s.contains("Reject pending revision") && s.contains("Current #2 · Pending")
+        })?;
+        tab(&mut t, mouse, "3 History")?;
+        let history = t.screen("cancelled in history", |s| {
+            on_history(s) && row_shows(s, "Draft only", "Cancelled")
+        })?;
+        println!("REJECTED DRAFT mouse={mouse}\n{history}");
+        quit(&mut t)?;
+        let task = service(root)?.task(1)?.unwrap();
+        assert_eq!(task.status, "cancelled");
+        assert_eq!(task.resolution_reason.as_deref(), Some("Not wanted"));
+        assert_eq!(task.revisions[0].lifecycle, "rejected");
+    }
+    Ok(())
+}
+
+#[test]
+fn refused_keys_on_failed_current_name_the_offered_actions() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    failed_task(root)?;
+    let before = storage_contents(root)?;
+    let mut t = terminal_at(root, 120, 34)?;
+    let screen = t.screen("failed current", |s| s.contains("Current #1 · Failed"))?;
+    // Every button shown is enabled, so the mouse is never offered a refused action.
+    for button in ["x Cancel", "R Supersede", "C Copy to queue"] {
+        assert!(!screen.contains(button), "{button} offered:\n{screen}");
+    }
+    for (key, action) in [("x", "Cancel"), ("R", "Supersede")] {
+        t.send(key)?;
+        let refused = t.screen("refusal", |s| {
+            s.contains(&format!(
+                "#1: {action} is not available for a failed task; it offers Retry, Edit, Stop, Mark done"
+            ))
+        })?;
+        println!("REFUSED {action}\n{refused}");
+        assert!(!refused.contains(&format!("{action} #1")));
+    }
+    quit(&mut t)?;
+    assert_eq!(storage_contents(root)?, before);
     Ok(())
 }

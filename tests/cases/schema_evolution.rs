@@ -131,7 +131,7 @@ fn previous_v1_opens_in_real_binary_with_history_and_tui_screen() -> Result {
 
     let mut terminal = Terminal::open_real(BINARY, root, 80, 25)?;
     let screen = terminal.screen("retained current task", |screen| {
-        screen.contains("Retained task") && screen.contains("FAILED")
+        screen.contains("Retained task") && screen.contains("Current #1 · Failed")
     })?;
     println!("RECONCILED CURRENT SCREEN\n{screen}");
     terminal.send("q")?;

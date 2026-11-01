@@ -87,7 +87,7 @@ exec /usr/bin/git "$@"
         }
         println!(
             "DELIVERY PAUSED mouse={mouse}\n{}",
-            t.screen("paused", |s| s.contains("PAUSED · runner stopped")
+            t.screen("paused", |s| s.contains("Paused · runner stopped")
                 && s.contains("r Resume"))?
         );
         fs::write(f.scratch.path().join("release-fetch"), "")?;
@@ -105,7 +105,7 @@ exec /usr/bin/git "$@"
         println!(
             "DELIVERY HISTORY mouse={mouse}\n{}",
             t.screen("delivery history", |s| s.contains("Pause Git preparation")
-                && s.contains("DONE"))?
+                && s.contains(" Done "))?
         );
         one_attempt(&f)?;
         t.send("\x03")?;
@@ -216,7 +216,7 @@ exec /usr/bin/git "$@"
     support::eventually("push completed before ack", || {
         Ok(f.scratch.path().join("push-done").exists().then_some(()))
     })?;
-    f.ok(&["pause", "1"])?;
+    f.ok(&["pause"])?;
     assert!(runner.0.wait()?.success());
     assert_eq!(f.ok(&["show", "1"])?["status"], "paused");
     peer_commit(&f, "main", "remote.txt")?;
@@ -290,7 +290,7 @@ fn delivery_config_rejects_invalid_refs_stale_edits_and_live_changes() -> Result
         .args(["--json", "delivery", "--mode", "direct"])
         .output()?;
     assert!(!out.status.success());
-    f.ok(&["pause", "1"])?;
+    f.ok(&["pause"])?;
     runner.0.wait()?;
     Ok(())
 }
@@ -333,11 +333,12 @@ exec /usr/bin/git "$@"
     support::eventually("rebase completed before save", || {
         Ok(f.scratch.path().join("rebase-done").exists().then_some(()))
     })?;
-    // A real supervisor crash, followed by guardian lifeline cleanup and explicit recovery.
+    // A real supervisor crash, followed by guardian lifeline cleanup. Run settles the
+    // orphaned attempt to Paused and resumes it.
     runner.0.kill()?;
     runner.0.wait()?;
     f.guardian_finished()?;
-    f.ok(&["recover"])?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "running");
     f.ok(&["run", "--one"])?;
     assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
     let calls = fs::read_to_string(f.scratch.path().join("provider-invocations"))?;
@@ -440,6 +441,7 @@ fn changed_delivery_policy_never_publishes_a_failed_local_tasks_unreviewed_basel
             },
             "fixture-local-failure",
             baseline.trim(),
+            false,
         )?;
         service.ensure_attempt_delivery(&run, &Default::default(), None, "")?;
         service.save_progress(
@@ -526,16 +528,16 @@ fi"#,
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 130, 36)?;
     println!(
         "BOUNDED REMOTE SYNC\n{}",
-        t.screen("retained synchronization", |s| s.contains("PAUSED")
+        t.screen("retained synchronization", |s| s
+            .contains("Current #1 · Paused")
             && s.contains("six synchronization cycles"))?
     );
     t.send("\x03")?;
     t.finish()?;
     fs::write(f.scratch.path().join("remote-settled"), "")?;
     f.ok(&[
-        "abandon",
+        "stop",
         "1",
-        "--attempt",
         "--reason",
         "Remote settled; explicitly restart bounded sync",
     ])?;

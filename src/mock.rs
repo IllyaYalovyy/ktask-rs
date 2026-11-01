@@ -36,7 +36,7 @@ pub fn dataset(name: &str) -> (Vec<Task>, Vec<Task>) {
     logs.extend([
         "FAIL  final_page_includes_last_row".into(),
         "Expected 240 tasks; received 239.".into(),
-        "Execution stopped. Diagnose the boundary error.".into(),
+        "Execution stopped after a failing check.".into(),
     ]);
     let failed_revision = queue[0].definition().clone();
     queue[0].attempts.push(Attempt {
@@ -50,7 +50,7 @@ pub fn dataset(name: &str) -> (Vec<Task>, Vec<Task>) {
     });
     queue[1].revisions[0].title = "Approve the queue interaction".into();
     queue[1].revisions[0].kind = Kind::Human;
-    queue[1].revisions[0].goal = "Inspect the queue and acknowledge the result.".into();
+    queue[1].revisions[0].goal = "Inspect the queue and mark the result done.".into();
     queue[1].revisions[0].check = "A person confirms the interaction works.".into();
     queue[2].revisions[0].title = "Choose the export format".into();
     queue[2].needs_question = true;

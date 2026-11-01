@@ -513,6 +513,7 @@ fn configuration_stale_writes_pinned_revisions_and_scope() -> Result {
         },
         "test-token",
         "base",
+        false,
     )?;
     check.enabled = false;
     for state in ["running", "paused", "waiting"] {
@@ -526,6 +527,7 @@ fn configuration_stale_writes_pinned_revisions_and_scope() -> Result {
                     },
                     "resume",
                     "base",
+                    false,
                 )?;
             }
             a.finish_run(&run, state, None, "test state", None)?;

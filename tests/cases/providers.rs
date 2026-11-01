@@ -243,7 +243,7 @@ fn claude_question_pause_and_resume_keep_one_attempt_and_its_session() -> Result
     let mut run = Running(f.process().arg("run").stdout(Stdio::null()).spawn()?);
     f.state("running")?;
     thread::sleep(Duration::from_millis(200));
-    f.ok(&["pause", "1"])?;
+    f.ok(&["pause"])?;
     run.0.wait()?;
     f.state("paused")?;
     f.mode("normal")?;
@@ -265,7 +265,7 @@ fn claude_limits_wait_for_the_reset_and_failures_spend_no_budget() -> Result {
     let f = Fixture::new()?;
     f.agent("claude", CLAUDE, "rate")?;
     f.add("Limited")?;
-    f.ok(&["run", "--one"])?;
+    let run = f.limit_wait()?;
     let task = f.ok(&["show", "1"])?;
     assert_eq!(task["status"], "waiting");
     assert_eq!(task["attempts_used"], 0);
@@ -274,6 +274,7 @@ fn claude_limits_wait_for_the_reset_and_failures_spend_no_budget() -> Result {
         task["attempts"][0]["resume_at_ms"],
         4_102_444_800_000_i64 + 60_000
     );
+    f.pause_runner(run)?;
 
     let f = Fixture::new()?;
     f.agent("claude", CLAUDE, "fail")?;
@@ -337,7 +338,7 @@ fn opencode_runs_every_role_read_only_where_required_and_sums_step_usage() -> Re
     f.agent("opencode", OPENCODE, "rate")?;
     f.add("Limited")?;
     let before = support_now();
-    f.ok(&["run", "--one"])?;
+    let run = f.limit_wait()?;
     let task = f.ok(&["show", "1"])?;
     assert_eq!(task["status"], "waiting");
     let resume = task["attempts"][0]["resume_at_ms"].as_i64().unwrap();
@@ -345,6 +346,7 @@ fn opencode_runs_every_role_read_only_where_required_and_sums_step_usage() -> Re
         resume >= before + 660_000 && resume < before + 700_000,
         "retry-after 600s plus a minute"
     );
+    f.pause_runner(run)?;
     f.no_scratch()?;
     Ok(())
 }
@@ -376,7 +378,7 @@ fn real_tui_runs_a_claude_task_by_keyboard_and_mouse() -> Result {
         })?;
         println!("CLAUDE READINESS mouse={mouse}\n{ready}");
         if mouse {
-            t.click("r Run")?;
+            click_readiness_forward(&mut t)?;
         } else {
             t.send("r")?;
         }

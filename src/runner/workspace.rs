@@ -70,7 +70,7 @@ impl ReviewScope {
 pub struct Workspace {
     pub root: PathBuf,
     pub worker_lock: PathBuf,
-    _lease: File,
+    _lease: super::process::Lease,
 }
 pub const GIT_IDENTITY_FIX: &str =
     "git config user.name 'Your Name' && git config user.email 'you@example.com'";
@@ -131,9 +131,6 @@ impl Workspace {
         Ok(super::process::inspect(&file, |_| Ok(()))?.is_none())
     }
     pub fn acquire(root: &Path) -> Result<Self> {
-        Self::acquire_with_cleanup_confirmation(root, false)
-    }
-    pub fn acquire_with_cleanup_confirmation(root: &Path, confirmed: bool) -> Result<Self> {
         let root = root.canonicalize()?;
         let top = PathBuf::from(git(&root, &["rev-parse", "--show-toplevel"])?).canonicalize()?;
         if root != top {
@@ -150,12 +147,10 @@ impl Workspace {
         // A guardian survives its supervisor long enough to stop/reap workers. Never overlap it.
         let worker = super::process::lock(&worker_lock)?;
         if worker.metadata()?.len() != 0 {
-            if !confirmed {
-                return Err(Error::Conflict(format!(
-                    "Worker died without cleanup confirmation. Execution is blocked. Inspect/stop its descendants and preserve work, then use recover --confirm-worker-cleanup. Marker: {}",
-                    worker_lock.display()
-                )));
-            }
+            // A guardian died without cleaning up: stop its workers, then clear its marker.
+            let mut marker = Vec::new();
+            std::io::Read::read_to_end(&mut &*worker, &mut marker)?;
+            super::process::stop_orphaned_workers(&marker)?;
             worker.set_len(0)?;
             worker.sync_all()?;
         }
@@ -172,15 +167,6 @@ impl Workspace {
     }
     pub fn clean(&self) -> Result<bool> {
         Ok(git(&self.root, &["status", "--porcelain"])?.is_empty())
-    }
-    /// Canonical tree identity of the current bytes and modes, independent of
-    /// whether a change is staged. The caller holds the workspace lease.
-    pub fn reset_fingerprint(&self) -> Result<String> {
-        // Scratch sweeps its root for abandoned run directories. Give it an
-        // owned private root so a normal launch with TMPDIR=/tmp cannot sweep
-        // another application's directories.
-        let root = tempfile::Builder::new().prefix("ktask-reset-").tempdir()?;
-        self.fingerprint(root.path())
     }
     /// Hash the exact tracked/untracked content a checkpoint would include, without
     /// changing the user's index. Git's tree identity includes paths, modes and bytes.
@@ -495,8 +481,13 @@ impl Workspace {
 }
 
 #[cfg(test)]
-mod reset_fingerprint_tests {
+mod fingerprint_tests {
     use super::*;
+
+    fn fingerprint(workspace: &Workspace) -> Result<String> {
+        let scratch_root = tempfile::tempdir()?;
+        workspace.fingerprint(scratch_root.path())
+    }
 
     fn run(root: &Path, args: &[&str]) {
         let output = Command::new("git")
@@ -538,15 +529,15 @@ mod reset_fingerprint_tests {
         let workspace = Workspace::acquire(root)?;
         std::fs::write(root.join("tracked.txt"), "reset bytes\n")?;
         std::fs::write(root.join("new.txt"), "new bytes\n")?;
-        let saved = workspace.reset_fingerprint()?;
+        let saved = fingerprint(&workspace)?;
         let index_before = std::fs::read(root.join(".git/index"))?;
         run(root, &["add", "tracked.txt", "new.txt"]);
         let staged_index = std::fs::read(root.join(".git/index"))?;
         assert_ne!(index_before, staged_index);
-        assert_eq!(workspace.reset_fingerprint()?, saved);
+        assert_eq!(fingerprint(&workspace)?, saved);
         assert_eq!(std::fs::read(root.join(".git/index"))?, staged_index);
         std::fs::write(root.join("new.txt"), "newer bytes\n")?;
-        assert_ne!(workspace.reset_fingerprint()?, saved);
+        assert_ne!(fingerprint(&workspace)?, saved);
         Ok(())
     }
 
@@ -590,9 +581,9 @@ mod reset_fingerprint_tests {
             .open(&file)?
             .set_times(std::fs::FileTimes::new().set_modified(original_mtime))?;
         let workspace = Workspace::acquire(root)?;
-        let first = workspace.reset_fingerprint()?;
+        let first = fingerprint(&workspace)?;
         assert_ne!(first, baseline, "same-size edit must be hashed");
-        assert_eq!(workspace.reset_fingerprint()?, first);
+        assert_eq!(fingerprint(&workspace)?, first);
         assert_eq!(std::fs::read(root.join(".git/index"))?, real_index);
         let committed = workspace.checkpoint(1, 1, &head, &first, false)?;
         assert_eq!(workspace.head()?, committed);

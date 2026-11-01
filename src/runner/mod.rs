@@ -1,6 +1,7 @@
 pub(crate) mod agent;
 pub(crate) mod callback;
 mod checks;
+pub mod control;
 mod cycle;
 mod delivery;
 mod failure_summary;
@@ -43,9 +44,6 @@ pub struct Options {
     pub queue: bool,
     pub notify: bool,
     pub continue_session: bool,
-    pub recover: bool,
-    pub confirm_worker_cleanup: bool,
-    pub recover_target: Option<VersionedTask>,
 }
 enum Outcome {
     Passed(String),
@@ -88,7 +86,7 @@ impl Context<'_> {
             .filter(|&limit| self.earlier_task_ms.saturating_add(self.active_ms()) >= limit)
             .map(|_| Outcome::Failed(
                 "agent",
-                "Active time limit reached (configured task-wide limit); work and evidence retained. Increase the task limit explicitly before retrying".into(),
+                "Active time limit reached (configured task-wide limit); work and evidence retained. Retry restarts the limit".into(),
             ))
     }
 }
@@ -138,7 +136,6 @@ pub(crate) fn provider_invocation(
         schema: launch.schema_file,
         scratch_root,
         worker_lock,
-        evidence_pin_guardian: None,
         callback: None,
         sandbox: match access {
             Access::ReadOnly => Some(sandbox::Sandbox::for_project(project, paths)?),
@@ -159,17 +156,9 @@ pub(crate) fn executable(name: &str) -> Result<PathBuf> {
     path.canonicalize().map_err(Into::into)
 }
 pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<String> {
-    if let Some(expected) = options.recover_target {
-        let current = service.current_task()?;
-        require(
-            current.is_some_and(|t| t.id == expected.id && t.version == expected.version),
-            "Current task changed; reopen Recover",
-        )?;
-    }
-    let workspace = Workspace::acquire_with_cleanup_confirmation(
-        &service.project_root()?,
-        options.recover && options.confirm_worker_cleanup,
-    )?;
+    let workspace = Workspace::acquire(&service.project_root()?)?;
+    // Holding the lease proves no supervisor owns the project: a running attempt is orphaned.
+    service.settle_orphan()?;
     workspace::git_identity(&workspace.root)?;
     let mut owns_session = false;
     let result = run_inner(service, paths, options, &workspace, &mut owns_session);
@@ -229,6 +218,75 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
     result
 }
 
+/// Why the queue stops before `task`, or None when it can run: Human work and approvals
+/// wait for the owner, and only a state that moves forward by running is run, or this
+/// runner's own provider-limit wait once the limit lifts.
+fn admit(
+    service: &Service,
+    task: &crate::application::Task,
+    notified: bool,
+) -> Result<Option<String>> {
+    use crate::application::lifecycle::{Action, State};
+    let human = task.definition().definition.kind == crate::application::Kind::Human;
+    if notified && (human || task.definition().lifecycle != "ready") {
+        return Ok(Some("Queue stopped for human work or approval".into()));
+    }
+    require(
+        !human,
+        "A Human task is done when you mark it done; there is nothing to run",
+    )?;
+    let state = task.state();
+    if state == State::NeedsApproval {
+        return Ok(Some(format!("Stopped: task #{} needs approval", task.id)));
+    }
+    let runs = matches!(
+        state.forward(),
+        Some(Action::Run | Action::Resume | Action::Retry)
+    ) || (state == State::Running && task.status == "waiting");
+    require(
+        runs || (state == State::NeedsInput && service.open_question(task.id)?.is_none()),
+        &format!(
+            "Task #{} is {}; nothing to run",
+            task.id,
+            state.label().to_lowercase()
+        ),
+    )?;
+    Ok(None)
+}
+
+/// Whether the task's last attempt failed because the checks were red before it started.
+fn red_start(task: &crate::application::Task) -> bool {
+    task.attempts.last().is_some_and(|a| {
+        a.outcome
+            .as_deref()
+            .is_some_and(|o| o.starts_with(crate::application::stop::BASELINE_RED))
+    })
+}
+
+/// A task edited while paused or waiting for an answer continues in a new attempt that uses
+/// the new revision, as Retry does. True when that happened.
+fn adopt_revision(
+    service: &mut Service,
+    task: crate::application::Task,
+) -> Result<(crate::application::Task, bool)> {
+    let revised = matches!(task.status.as_str(), "paused" | "waiting")
+        && task
+            .attempts
+            .last()
+            .is_some_and(|a| a.revision != task.definition().number);
+    if !revised {
+        return Ok((task, false));
+    }
+    service.end_for_new_revision(VersionedTask {
+        id: task.id,
+        version: task.version,
+    })?;
+    let task = service
+        .current_task()?
+        .ok_or_else(|| Error::Conflict("Current task disappeared".into()))?;
+    Ok((task, true))
+}
+
 fn run_inner(
     service: &mut Service,
     paths: &Paths,
@@ -236,17 +294,6 @@ fn run_inner(
     workspace: &Workspace,
     owns_session: &mut bool,
 ) -> Result<String> {
-    if options.recover {
-        if options.confirm_worker_cleanup
-            && service
-                .current_task()?
-                .is_none_or(|t| !matches!(t.status.as_str(), "running" | "paused" | "waiting"))
-        {
-            return Ok("Worker cleanup confirmed; retry current explicitly".into());
-        }
-        service.recover_run(options.recover_target)?;
-        return Ok("Recovered abandoned attempt; retry explicitly".into());
-    }
     if options.continue_session {
         require(
             service
@@ -267,6 +314,9 @@ fn run_inner(
     let mut notified = false;
     // Only a run the owner started skips a provider-limit wait; continuations honour it.
     let mut owner_start = !options.continue_session;
+    // Set by a failure: the next attempt is the supervisor's own repair. A replanned task's
+    // is too, whenever it is current again (after any inserted prerequisites).
+    let mut repairing = false;
     loop {
         if service
             .execution_session()?
@@ -283,28 +333,25 @@ fn run_inner(
         let Some(task) = service.current_task()? else {
             return Ok("Queue complete".into());
         };
-        if notified
-            && (task.definition().definition.kind == crate::application::Kind::Human
-                || task.definition().lifecycle != "ready")
-        {
-            return Ok("Queue stopped for human work or approval".into());
+        if let Some(stopped) = admit(service, &task, notified)? {
+            return Ok(stopped);
         }
-        require(
-            task.status != "running",
-            "An attempt is already running. If its supervisor died, use recover after inspecting the workspace",
-        )?;
-        require(
-            task.definition().definition.kind == crate::application::Kind::Ai,
-            "Current task requires human acknowledgment",
-        )?;
-        preflight(service, &task.execution_revision().definition)?;
+        let (task, revised) = adopt_revision(service, task)?;
+        let opening = if std::mem::take(&mut repairing) || service.replan_pending(task.id)? {
+            cycle::Opening::Repair
+        } else if revised || (task.status == "failed" && !red_start(&task)) {
+            cycle::Opening::Retry
+        } else {
+            // A task's own run, or a retry after a red start, begins from a verified green
+            // state. Inserted prerequisite tasks exist to repair, so they start at once.
+            cycle::Opening::Fresh {
+                verify: task.origin_task_id.is_none()
+                    && service.check_before_task()?
+                    && workspace.clean()?,
+            }
+        };
+        preflight(service, &task.definition().definition)?;
         let base = workspace.head()?;
-        if let Some(saved) = service.reset_worktree(task.id)? {
-            require(
-                workspace.clean()? || workspace.reset_fingerprint()? == saved,
-                "Worktree changed after Reset to pending; preserve or commit the new changes before Run so unrelated work is not included",
-            )?;
-        }
         require(
             workspace.clean()?
                 || service.pending_delivery_handoff(task.id)?
@@ -327,6 +374,7 @@ fn run_inner(
             },
             &token,
             &base,
+            opening != cycle::Opening::Repair,
         )?;
         // A live attempt blocks configuration changes before settings are read or Git mutates.
         let delivery_init: Result<()> = (|| {
@@ -371,31 +419,15 @@ fn run_inner(
             earlier_task_ms: service.earlier_task_active_ms(&run)?,
         };
 
-        // A task's own first attempt, or a retry after a red start, begins from a verified
-        // green state. Inserted prerequisite tasks exist to repair, so they start at once.
-        let fresh_start = task.origin_task_id.is_none()
-            && task.attempts.last().is_none_or(|a| {
-                a.state == "failed"
-                    && a.outcome
-                        .as_deref()
-                        .is_some_and(|o| o.starts_with(crate::application::stop::BASELINE_RED))
-            });
-        let verify_first = fresh_start && service.check_before_task()? && workspace.clean()?;
-        // Only an attempt that directly follows a failure is a repair; a judge-replanned
-        // attempt ends as interrupted, so the next one starts fresh on the new plan.
-        let repair = !fresh_start
-            && task.attempts.last().is_some_and(|a| {
-                a.state == "failed"
-                    || (matches!(a.state.as_str(), "paused" | "waiting")
-                        && a.steps.iter().any(|step| step.role == "remediation"))
-            });
         service.output(
             &run,
             "system",
-            if repair {
-                "Remediation started with configured remediation model"
-            } else {
-                "Execution started; results require checks, review and validation"
+            match opening {
+                cycle::Opening::Repair => "Repair started with the configured remediation model",
+                cycle::Opening::Retry => "Retry started from the kept work; checks run first",
+                cycle::Opening::Fresh { .. } => {
+                    "Execution started; results require checks, review and validation"
+                }
             },
         )?;
         let mut delivery_retries = 0_u32;
@@ -423,7 +455,7 @@ fn run_inner(
                     !checks.is_empty(),
                     "Configure at least one enabled project check",
                 )?;
-                cycle::run(service, &run, &mut context, &checks, repair, verify_first)
+                cycle::run(service, &run, &mut context, &checks, opening)
             });
             let result = match result {
                 Ok(Outcome::Failed("transport" | "environment" | "protocol", message))
@@ -528,14 +560,13 @@ fn run_inner(
             // time when it names one, else back off, then resume the same attempt.
             Outcome::RateLimit(reset_at) => {
                 service.rate_wait(&run, reset_at)?;
-                if options.queue && wait_for_backoff(service, &run, &context)? {
+                if wait_for_backoff(service, &run, &context)? {
                     continue;
                 }
+                // Paused during the wait: Resume tries again at once.
+                service.pause_wait(&run)?;
                 service.release_supervisor(&run)?;
-                return Ok(
-                    "Waiting for scheduled rate-limit backoff; resume the same attempt when eligible"
-                        .into(),
-                );
+                return Ok("Paused during a provider limit wait".into());
             }
             Outcome::Paused => {
                 service.finish_run(
@@ -604,6 +635,7 @@ fn run_inner(
                 if stop.load(Ordering::Relaxed) {
                     return Ok("Runner stopped; repair attempt not started".into());
                 }
+                repairing = true;
                 continue;
             }
             Outcome::Passed(_) | Outcome::Changes { .. } => unreachable!(),
@@ -613,39 +645,6 @@ fn run_inner(
 
 pub fn supervisor_alive(service: &Service) -> Result<bool> {
     Workspace::supervisor_alive(&service.project_root()?)
-}
-
-/// How long `stop` waits for a paused runner to finish worker shutdown and cleanup.
-pub const STOP_PATIENCE: Duration = Duration::from_secs(120);
-
-/// Pauses whatever the project's runner is doing and waits until the runner has exited.
-/// None when no runner was running; otherwise the task it paused, if it paused one.
-pub fn stop(service: &mut Service, patience: Duration) -> Result<Option<Option<i64>>> {
-    if !supervisor_alive(service)? {
-        return Ok(None);
-    }
-    // A runner between tasks or already finishing has nothing to pause; it exits by itself.
-    let paused = match service.current_task()? {
-        Some(task) => match service.request_pause(VersionedTask {
-            id: task.id,
-            version: task.version,
-        }) {
-            Ok(()) => Some(task.id),
-            Err(Error::Conflict(_)) => None,
-            Err(error) => return Err(error),
-        },
-        None => None,
-    };
-    let deadline = Instant::now() + patience;
-    while supervisor_alive(service)? {
-        if Instant::now() >= deadline {
-            return Err(Error::Conflict(
-                "The runner has not exited yet; check ktask current, then run stop again".into(),
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    Ok(Some(paused))
 }
 
 /// Called after a committed answer, approval or Human acknowledgment. The
@@ -677,10 +676,11 @@ fn continue_session_inner(
         return Ok(false);
     };
     if session.mode == "one" {
-        if intervention {
-            service.single_intervention_resolved()?;
+        if !intervention {
+            return Ok(false);
         }
-        return Ok(false);
+        service.single_intervention_resolved()?;
+        return resume_answered(service, paths);
     }
     if session.mode != "queue"
         || if intervention {
@@ -734,6 +734,22 @@ fn continue_session_inner(
         }
         return Err(error);
     }
+    Ok(true)
+}
+
+/// Run one: an answer is the owner's go-ahead for the same task, so its attempt continues
+/// at once. Run one still never moves on to another task.
+fn resume_answered(service: &mut Service, paths: &Paths) -> Result<bool> {
+    let Some(task) = service.current_task()? else {
+        return Ok(false);
+    };
+    if task.state() != crate::application::lifecycle::State::NeedsInput
+        || service.open_question(task.id)?.is_some()
+        || supervisor_alive(service)?
+    {
+        return Ok(false);
+    }
+    background(service, paths, false, false)?;
     Ok(true)
 }
 
@@ -959,7 +975,9 @@ fn ai_turn(
             .any(|f| f.severity == agent::Severity::Critical)
         || assessment.outcome == "failed";
     // Minor findings are recorded with the accepted result; only critical ones cost a round.
-    let needs_work = critical;
+    // A worker's self-assessment never does: the supervisor's checks and the independent
+    // judges are the gate, and the worker leaves the full check to the supervisor.
+    let needs_work = critical && !matches!(role, "execution" | "repair");
     for criterion in &assessment.criteria {
         service.criterion(
             run,
@@ -1301,6 +1319,10 @@ fn execute(
     mut stream: Option<&mut provider::Stream>,
 ) -> Result<Finish> {
     let ai = stream.is_some();
+    // Codex reports a resumed session's running totals, not the turn's own usage.
+    let session_totals = stream
+        .as_ref()
+        .is_some_and(|s| s.provider == provider::Provider::Codex);
     ctx.persist_active_time(service, run)?;
     if let Some(outcome) = ctx.deadline_outcome(run) {
         ctx.persist_active_time(service, run)?;
@@ -1381,6 +1403,11 @@ fn execute(
                                 }
                                 provider::Event::Usage(usage, cost) => {
                                     service.output_rows(run, &std::mem::take(&mut rows))?;
+                                    let usage = if session_totals {
+                                        service.step_share(step, usage)?
+                                    } else {
+                                        usage
+                                    };
                                     service.record_usage(step, &usage, cost)?
                                 }
                             }
@@ -1441,104 +1468,6 @@ fn execute(
     }
 }
 
-/// Abandon a paused/waiting attempt while holding the runner lease, so a live supervisor
-/// (for example one sleeping through a rate-limit wait) can never lose its attempt underneath it.
-pub fn abandon(
-    service: &mut Service,
-    target: crate::application::VersionedTask,
-    reason: &str,
-) -> Result<()> {
-    let _workspace = Workspace::acquire(&service.project_root()?)?;
-    service.abandon_run(target, reason)
-}
-
-/// Pause a live worker, wait for cleanup, then serialize reset against another runner.
-pub fn reset_to_pending(
-    service: &mut Service,
-    target: crate::application::VersionedTask,
-    reason: &str,
-) -> Result<()> {
-    let task = service
-        .current_task()?
-        .ok_or_else(|| Error::Conflict("No current task".into()))?;
-    require(
-        task.id == target.id && task.version == target.version,
-        "Task changed; refresh before Reset to pending",
-    )?;
-    let original_attempt = task.attempts.last().map(|attempt| attempt.id);
-    let mut pause_cursor = None;
-    if matches!(task.status.as_str(), "running" | "waiting") && supervisor_alive(service)? {
-        service.request_pause(target)?;
-        pause_cursor = original_attempt
-            .map(|attempt| service.pause_cursor(attempt))
-            .transpose()?;
-        let deadline = std::time::Instant::now() + Duration::from_secs(60);
-        while supervisor_alive(service)? {
-            require(
-                std::time::Instant::now() < deadline,
-                "Worker cleanup did not finish; task remains locked. Retry Reset to pending after cleanup",
-            )?;
-            std::thread::sleep(Duration::from_millis(100));
-        }
-    }
-    let workspace = Workspace::acquire(&service.project_root()?)?;
-    let version = checked_reset_version(service, target, original_attempt, pause_cursor)?;
-    service.reset_to_pending(
-        crate::application::VersionedTask {
-            id: target.id,
-            version,
-        },
-        reason,
-        &workspace.reset_fingerprint()?,
-    )
-}
-
-/// Recheck the original caller after worker cleanup. Only that worker's one
-/// recorded pause transition may advance the version reset is allowed to use.
-fn checked_reset_version(
-    service: &mut Service,
-    target: VersionedTask,
-    original_attempt: Option<i64>,
-    pause_cursor: Option<i64>,
-) -> Result<i64> {
-    let current = service
-        .current_task()?
-        .ok_or_else(|| Error::Conflict("No current task".into()))?;
-    require(
-        current.id == target.id && current.attempts.last().map(|a| a.id) == original_attempt,
-        "Current task or attempt changed before Reset to pending",
-    )?;
-    let version = if current.version == target.version {
-        target.version
-    } else {
-        let attempt =
-            original_attempt.ok_or_else(|| Error::Conflict("Reset attempt changed".into()))?;
-        let verified_pause = pause_cursor
-            .map(|cursor| service.verified_pause_after(attempt, cursor))
-            .transpose()?
-            .unwrap_or(false);
-        require(
-            verified_pause
-                && current.version == target.version + 1
-                && current.status == "paused"
-                && current.attempts.last().is_some_and(|a| a.state == "paused"),
-            "Task changed while stopping its worker; refresh before Reset to pending",
-        )?;
-        current.version
-    };
-    Ok(version)
-}
-
-/// Give up on the whole task; it moves to History as cancelled with its attempts intact.
-pub fn abandon_task(
-    service: &mut Service,
-    target: crate::application::VersionedTask,
-    reason: &str,
-) -> Result<()> {
-    let _workspace = Workspace::acquire(&service.project_root()?)?;
-    service.abandon_task(target, reason)
-}
-
 /// Launch the exact supervisor executable, never a PATH-selected ktask or a rebuild target.
 pub fn background(
     service: &mut Service,
@@ -1554,7 +1483,7 @@ pub fn background(
         "Configure an enabled check in Configuration > Checks (or CLI check-set)",
     )?;
     if let Some(task) = service.current_task()? {
-        preflight(service, &task.execution_revision().definition)?;
+        preflight(service, &task.definition().definition)?;
     }
     std::fs::create_dir_all(&paths.state)?;
     let log_path = paths
@@ -1620,59 +1549,4 @@ pub fn background(
             )
         })?
         .map_err(Error::Conflict)
-}
-
-#[cfg(test)]
-mod reset_version_tests {
-    use super::*;
-    use crate::storage::Database;
-    use rusqlite::params;
-
-    #[test]
-    fn answer_after_captured_reset_target_cannot_be_adopted() -> Result<()> {
-        let parent = tempfile::Builder::new()
-            .prefix("ktask-reset-race-")
-            .tempdir()?;
-        let scratch = crate::scratch::Scratch::new(parent.path())?;
-        let root = scratch.path().to_path_buf();
-        let state = root.join("state");
-        let db = Database::open_in(&state)?;
-        db.connection().execute(
-            "INSERT INTO projects(name,root_path,created_at_ms) VALUES ('race',?1,100)",
-            [root.as_os_str().as_encoded_bytes()],
-        )?;
-        let project = db.connection().last_insert_rowid();
-        db.connection().execute("INSERT INTO tasks(project_id,order_key,lifecycle,origin,created_at_ms,updated_at_ms) VALUES (?1,'1','ready','human',100,100)",[project])?;
-        let task = db.connection().last_insert_rowid();
-        db.connection().execute("INSERT INTO task_revisions(task_id,revision,lifecycle,kind,title,goal,created_by_kind,created_by,created_at_ms,decided_at_ms,decided_by_kind,decided_by) VALUES (?1,1,'ready','ai','Task','Goal','human','owner',100,100,'human','owner')",[task])?;
-        db.connection().execute("INSERT INTO attempts(project_id,task_id,revision,number,state,execution_token,started_at_ms,wait_reason,waiting_since_ms) VALUES (?1,?2,1,1,'waiting','old-worker',101,'question',102)",params![project,task])?;
-        let attempt = db.connection().last_insert_rowid();
-        db.connection().execute("INSERT INTO questions(attempt_id,prompt,state,created_at_ms) VALUES (?1,'What next?','open',102)",[attempt])?;
-        db.connection()
-            .execute("UPDATE tasks SET row_version=2 WHERE id=?1", [task])?;
-        drop(db);
-        let mut reset_service = Service::find(Database::open_in(&state)?, &root)?.expect("project");
-        let mut intervening_service =
-            Service::find(Database::open_in(&state)?, &root)?.expect("project");
-        let captured = reset_service.current_task()?.expect("current");
-        let target = VersionedTask {
-            id: task,
-            version: captured.version,
-        };
-        let gate = Arc::new(std::sync::Barrier::new(2));
-        let answer_gate = Arc::clone(&gate);
-        let answer = std::thread::spawn(move || {
-            answer_gate.wait();
-            intervening_service.answer(target, "Proceed")
-        });
-        gate.wait();
-        answer.join().expect("answer thread")?;
-        assert!(checked_reset_version(&mut reset_service, target, Some(attempt), None).is_err());
-        let latest = reset_service.current_task()?.expect("current");
-        assert_eq!(latest.version, target.version + 1);
-        assert_eq!(latest.status, "waiting");
-        drop(reset_service);
-        scratch.close()?;
-        Ok(())
-    }
 }

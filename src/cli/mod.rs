@@ -215,9 +215,6 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         );
     }
     let paths = instance.paths()?;
-    if let Command::Stop { all } = command {
-        return emit(stop(&paths, &root, *all)?, cli.json);
-    }
     let creates_project = matches!(
         command,
         Command::Add(_)
@@ -296,9 +293,6 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
                     queue,
                     notify: *notify,
                     continue_session: *continue_session,
-                    recover: false,
-                    confirm_worker_cleanup: false,
-                    recover_target: None,
                 },
             )?
         };
@@ -306,87 +300,6 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             output::Reply {
                 data: json!({"message":message}),
                 text: format!("{message}\n"),
-            },
-            cli.json,
-        );
-    }
-    if let Command::Recover {
-        confirm_worker_cleanup,
-    } = command
-    {
-        let message = crate::runner::run(
-            &mut service,
-            &paths,
-            &crate::runner::Options {
-                recover: true,
-                confirm_worker_cleanup: *confirm_worker_cleanup,
-                ..Default::default()
-            },
-        )?;
-        return emit(
-            output::Reply {
-                data: json!({"message":message}),
-                text: format!("{message}\n"),
-            },
-            cli.json,
-        );
-    }
-    if let Command::Remediate { id, apply } = command {
-        let current = service.current_task()?.ok_or_else(|| Failure {
-            status: 4,
-            code: "conflict",
-            message: "No failed current task".into(),
-        })?;
-        if current.id != *id || current.status != "failed" {
-            return Err(Failure {
-                status: 4,
-                code: "conflict",
-                message: "Remediate requires the failed current task".into(),
-            });
-        }
-        let task = service
-            .task(*id)?
-            .ok_or_else(|| Failure::missing("Task not found"))?;
-        let definition = task.definition().definition.clone();
-        let model = definition.models[3].as_ref().ok_or_else(|| Failure {
-            status: 4,
-            code: "conflict",
-            message: "Configure a remediation model first".into(),
-        })?;
-        service.validate_model("remediation", model)?;
-        let pin = service.begin_remediation_evidence(application::VersionedTask {
-            id: current.id,
-            version: current.version,
-        })?;
-        let evidence = service.remediation_evidence(*id, &paths.state)?;
-        let judgment = crate::runner::agent::propose_remediation(
-            crate::runner::process::stopped()?.as_ref(),
-            model,
-            &definition,
-            &evidence,
-            &paths,
-            &root,
-            pin,
-        )?;
-        let mut receipts = Vec::new();
-        if *apply {
-            let ready = service.preferences(&paths.config)?.planner_approval
-                == application::preferences::PlannerApproval::Automatic;
-            receipts = crate::runner::remediation::apply_judgment(
-                &mut service,
-                application::VersionedTask {
-                    id: current.id,
-                    version: current.version,
-                },
-                &judgment,
-                ready,
-            )?;
-        }
-        let data = json!({"judgment":judgment,"applied":apply,"receipts":receipts});
-        return emit(
-            output::Reply {
-                text: format!("{}\n", serde_json::to_string(&data).unwrap()),
-                data,
             },
             cli.json,
         );
@@ -405,15 +318,8 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             ))
             .into());
         }
-        let current_id = service.current_task()?.map(|t| t.id);
-        if !matches!(task.status.as_str(), "new" | "ready")
-            && !(task.status == "failed" && current_id == Some(task.id))
-        {
-            return Err(storage::Error::Conflict(
-                "Only pending work or failed current can be broken down".into(),
-            )
-            .into());
-        }
+        // Breaking a task down supersedes it, so only Pending work qualifies.
+        task.require(application::lifecycle::Action::Supersede)?;
         let model = service.project_defaults()?[0]
             .clone()
             .ok_or_else(|| storage::Error::Conflict("Configure a planning model first".into()))?;
@@ -505,10 +411,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
     let mut reply = execute::command(&mut service, command)?;
     if matches!(
         command,
-        Command::Answer { .. }
-            | Command::Approve { .. }
-            | Command::Ack { .. }
-            | Command::Resolve { .. }
+        Command::Answer { .. } | Command::Approve { .. } | Command::Done { .. }
     ) {
         // The edit is committed. Report any continuation failure alongside its
         // successful receipt, and retain the reason in the execution session.
@@ -521,59 +424,6 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         }
     }
     emit(reply, cli.json)
-}
-
-/// Stops this project's runner, or with `all` every project's, and says what each one did.
-fn stop(
-    paths: &crate::instance::Paths,
-    root: &std::path::Path,
-    all: bool,
-) -> Result<output::Reply> {
-    let Some(db) = Database::open_existing(paths)? else {
-        return Ok(output::Reply {
-            data: json!({"stopped":[]}),
-            text: "No runner is running\n".into(),
-        });
-    };
-    let roots = if all {
-        Service::project_roots(&db)?
-    } else {
-        vec![root.to_path_buf()]
-    };
-    drop(db);
-    let (mut stopped, mut text) = (Vec::new(), String::new());
-    for root in roots {
-        let db = Database::open_existing(paths)?
-            .ok_or_else(|| Failure::missing("Project database disappeared"))?;
-        let Some(mut service) = Service::find(db, &root)? else {
-            return Err(Failure::missing(
-                "This directory is not a registered project; use add first",
-            ));
-        };
-        let Some(paused) = crate::runner::stop(&mut service, crate::runner::STOP_PATIENCE)? else {
-            continue;
-        };
-        text.push_str(&match paused {
-            Some(id) => format!(
-                "{}: runner stopped; #{id} paused, run resumes it\n",
-                service.project_name
-            ),
-            None => format!("{}: runner stopped\n", service.project_name),
-        });
-        stopped.push(json!({"project":service.project_name,"paused_task":paused}));
-    }
-    if stopped.is_empty() {
-        text = if all {
-            "No runner is running\n"
-        } else {
-            "No runner is running for this project\n"
-        }
-        .into();
-    }
-    Ok(output::Reply {
-        data: json!({"stopped":stopped}),
-        text,
-    })
 }
 
 fn validate(cli: &Cli) -> Result<()> {
