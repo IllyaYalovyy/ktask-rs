@@ -192,6 +192,8 @@ pub struct Task {
     pub needs_question: bool,
     pub needs_rate_limit: bool,
     pub repairs: Option<usize>,
+    /// Epoch milliseconds when the task left the queue; None in demo mode and while open.
+    pub closed_at_ms: Option<i64>,
 }
 impl Task {
     pub fn pending(id: usize, title: &str) -> Self {
@@ -219,6 +221,7 @@ impl Task {
             needs_question: false,
             needs_rate_limit: false,
             repairs: None,
+            closed_at_ms: None,
         }
     }
     pub fn ready(&self) -> Option<&Revision> {

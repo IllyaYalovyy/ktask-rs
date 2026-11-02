@@ -14,7 +14,7 @@ pub struct Event {
     pub message: String,
 }
 
-const TASK_COLUMNS: &str = "id, row_version, lifecycle, status, order_key, resolution_reason, attempts_used, resolved_by_kind || ': ' || resolved_by, origin_task_id, origin_attempt_id, counted_from";
+const TASK_COLUMNS: &str = "id, row_version, lifecycle, status, order_key, resolution_reason, attempts_used, resolved_by_kind || ': ' || resolved_by, origin_task_id, origin_attempt_id, counted_from, closed_at_ms";
 pub struct WaitingResume {
     pub resume_at_ms: Option<i64>,
 }
@@ -41,6 +41,7 @@ fn task_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         revisions: Vec::new(),
         attempts: Vec::new(),
         counted_from: r.get(10)?,
+        closed_at_ms: r.get(11)?,
     })
 }
 fn complete_task(db: &Connection, mut task: Task) -> Result<Task> {
@@ -937,6 +938,7 @@ impl Service {
                         revisions: Vec::new(),
                         attempts: Vec::new(),
                         counted_from: r.get(11)?,
+                        closed_at_ms: r.get(7)?,
                     },
                     r.get::<_, Option<i64>>(7)?,
                 ))

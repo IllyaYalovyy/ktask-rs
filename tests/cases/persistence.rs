@@ -657,8 +657,28 @@ fn history_rows_show_attempts_total_time_and_usage_by_keyboard_and_mouse() -> Re
             .lines()
             .find(|line| line.contains(&format!("#{unknown_id}")))
             .unwrap();
+        // Newest finish first, and every row says when it finished ("Nov 1 14:05").
+        assert!(
+            screen.find(&format!("#{unknown_id}")) < screen.find(&format!("#{known_id}")),
+            "{screen}"
+        );
         let known = known.split('│').nth(1).unwrap();
         let unknown = unknown.split('│').nth(1).unwrap();
+        for row in [known, unknown] {
+            let words = row.split_whitespace().collect::<Vec<_>>();
+            let clock = words
+                .iter()
+                .position(|w| {
+                    w.len() >= 4
+                        && w.as_bytes()[w.len() - 3] == b':'
+                        && w.bytes().filter(u8::is_ascii_digit).count() == w.len() - 1
+                })
+                .unwrap_or_else(|| panic!("no finish time in {row}"));
+            assert!(
+                clock >= 2 && words[clock - 2].len() == 3 && words[clock - 1].parse::<u8>().is_ok(),
+                "{row}"
+            );
+        }
         assert!(
             known
                 .split_whitespace()

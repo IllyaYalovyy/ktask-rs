@@ -1191,10 +1191,17 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         Rect::new(toolbar.x + 15, toolbar.y + 1, toolbar.width - 15, 1),
         Action::Search,
     ));
-    let [list, detail] = if app.view == View::History && area.width < 90 {
-        Layout::horizontal([Constraint::Percentage(75), Constraint::Percentage(25)]).areas(area)
+    // Narrow History gives every column (finish time included) the full width; Enter opens details.
+    let compact_history = app.view == View::History && area.width < 90;
+    let [list, detail] = if compact_history {
+        [area, Rect::default()]
     } else {
-        Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area)
+        let list_share = if app.view == View::History { 65 } else { 60 };
+        Layout::horizontal([
+            Constraint::Percentage(list_share),
+            Constraint::Percentage(100 - list_share),
+        ])
+        .areas(area)
     };
     let position = visible
         .iter()
@@ -1207,6 +1214,7 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         position.map_or(0, |n| n + 1),
         visible.len(),
         match app.view {
+            View::History if app.service.is_some() => " · Finished Attempts Time Usage",
             View::History => " · Attempts Time Usage",
             View::Queue if list.width >= QUEUE_MODEL_MIN_WIDTH => " · Model",
             _ => "",
@@ -1240,8 +1248,14 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                     } else {
                         format!("${:.2}", task.cost() as f64 / 100.0)
                     };
+                    // Demo tasks carry no real timestamps; SQLite tasks always do.
+                    let finished = if app.service.is_some() {
+                        format!(" {:<12}", finished_label(task.closed_at_ms))
+                    } else {
+                        String::new()
+                    };
                     format!(
-                        " {:>3} {:>7} {:>width$}",
+                        "{finished} {:>3} {:>7} {:>width$}",
                         task.attempts.len(),
                         history_time(total_ms),
                         usage,
@@ -1299,11 +1313,15 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                 .collect::<String>()
         );
         format!(
-            "{}\n#{} · {} · {}\n\nGoal: {}\n\nCheck: {}\n\nAttempts: {} · {}{}\n\nModels:\n{}{}",
+            "{}\n#{} · {} · {}{}\n\nGoal: {}\n\nCheck: {}\n\nAttempts: {} · {}{}\n\nModels:\n{}{}",
             t.definition().title,
             t.id,
             t.status().label(),
             t.definition().kind.label(),
+            t.closed_at_ms.map_or(String::new(), |at| format!(
+                " · finished {}",
+                finished_label(Some(at))
+            )),
             t.definition().goal,
             t.definition().check,
             t.attempts.len(),
@@ -1333,6 +1351,9 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
             }
         )
     });
+    if compact_history {
+        return;
+    }
     frame.render_widget(
         Paragraph::new(text)
             .wrap(Wrap { trim: false })
@@ -1799,6 +1820,14 @@ fn role_models(settings: &crate::presentation::Settings) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Local completion time for History rows, e.g. "Oct 26 23:32"; "-" when unrecorded.
+fn finished_label(closed_at_ms: Option<i64>) -> String {
+    closed_at_ms.map_or_else(
+        || "-".into(),
+        |at| crate::clock::format_local(at, crate::application::now_ms()),
+    )
 }
 
 fn history_time(ms: u64) -> String {

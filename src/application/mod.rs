@@ -252,6 +252,8 @@ pub struct Task {
     pub attempts_used: i64,
     /// Attempts before this count belong to earlier runs; Run and Retry restart the limits.
     pub counted_from: i64,
+    /// When the task completed, failed-skipped, was cancelled or superseded; None while open.
+    pub closed_at_ms: Option<i64>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct LifecycleEvent {

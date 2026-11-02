@@ -1549,6 +1549,7 @@ fn project_task(task: &domain::Task) -> Result<model::Task, String> {
         needs_question: false,
         needs_rate_limit: false,
         repairs: None,
+        closed_at_ms: task.closed_at_ms,
     })
 }
 
