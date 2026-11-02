@@ -78,15 +78,16 @@ impl UsageTotals {
         }
     }
 
-    /// A short History row label; the detail pane retains the full cost explanation.
+    /// A short History row label, money rounded to cents; the detail pane retains the full cost explanation.
     pub fn history_label(&self) -> String {
         match (self.cost_microusd, self.uncosted_calls) {
             (Some(cost), missing) if missing > 0 => {
-                let dollars = format!("${:.6}", cost as f64 / 1_000_000.0);
-                let dollars = dollars.trim_end_matches('0').trim_end_matches('.');
-                format!("{dollars} +{missing} no$")
+                format!("{} +{missing} no$", cents_label(cost))
             }
-            _ => self.cost_label(),
+            _ => match self.cost_microusd {
+                Some(cost) => cents_label(cost),
+                None => self.cost_label(),
+            },
         }
     }
 
@@ -260,9 +261,32 @@ pub fn grouped(n: i64) -> String {
     text
 }
 
+/// Dollars rounded half-up to cents from micro-USD, e.g. `$0.12`.
+fn cents_label(microusd: i64) -> String {
+    let cents = (i128::from(microusd) + 5_000).div_euclid(10_000);
+    let sign = if cents < 0 { "-" } else { "" };
+    let cents = cents.abs();
+    format!("{sign}${}.{:02}", cents / 100, cents % 100)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_money_is_rounded_to_cents() {
+        for (micro, label) in [
+            (0, "$0.00"),
+            (4_999, "$0.00"),
+            (5_000, "$0.01"),
+            (123_456, "$0.12"),
+            (12_345_678, "$12.35"),
+        ] {
+            let mut usage = UsageTotals::default();
+            usage.add([None, None, None, None, Some(micro)]);
+            assert_eq!(usage.history_label(), label);
+        }
+    }
 
     #[test]
     fn merging_attempts_preserves_missing_fields_and_saturates_reported_totals() {

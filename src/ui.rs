@@ -1259,7 +1259,7 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                         task.attempts.len(),
                         history_time(total_ms),
                         usage,
-                        width = Line::raw(&usage).width().max(9)
+                        width = Line::raw(&usage).width().max(12)
                     )
                 } else if app.view == View::Queue && list.width >= QUEUE_MODEL_MIN_WIDTH {
                     format!(" {}", model_summary(&task.definition().settings))

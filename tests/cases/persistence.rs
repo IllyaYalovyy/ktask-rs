@@ -600,7 +600,7 @@ fn history_rows_show_attempts_total_time_and_usage_by_keyboard_and_mouse() -> Re
         [known_attempt],
     )?;
     assert_eq!(db.connection().execute(
-        "UPDATE model_calls SET cost_microusd=150 WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id=?1)",
+        "UPDATE model_calls SET cost_microusd=3000 WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id=?1)",
         [known_attempt],
     )?, 2);
     drop(db);
@@ -644,9 +644,7 @@ fn history_rows_show_attempts_total_time_and_usage_by_keyboard_and_mouse() -> Re
             t.send("3")?;
         }
         let screen = t.screen("history statistics", |s| {
-            s.contains("Attempts Time Usage")
-                && s.contains("$0.000300")
-                && s.contains("2k new tokens")
+            s.contains("Attempts Time Usage") && s.contains("$0.01") && s.contains("2k new tokens")
         })?;
         println!("HISTORY STATISTICS {cols} mouse={mouse}\n{screen}");
         let known = screen
@@ -683,7 +681,7 @@ fn history_rows_show_attempts_total_time_and_usage_by_keyboard_and_mouse() -> Re
             known
                 .split_whitespace()
                 .collect::<Vec<_>>()
-                .ends_with(&["1", "2s", "$0.000300"]),
+                .ends_with(&["1", "2s", "$0.01"]),
             "{known}"
         );
         assert!(
@@ -877,11 +875,11 @@ fn recorded_usage_is_visible_in_current_details_history_and_statistics() -> Resu
             .find(|cell| cell.contains(&format!("#{id}")))
             .expect("task row in History list");
         assert!(row.contains("Failed"), "{row}");
-        assert!(row.contains("$0.0001 +1 no$"), "{row}");
+        assert!(row.contains("$0.00 +1 no$"), "{row}");
         assert!(
             row.split_whitespace()
                 .collect::<Vec<_>>()
-                .ends_with(&["1", "0s", "$0.0001", "+1", "no$"]),
+                .ends_with(&["1", "0s", "$0.00", "+1", "no$"]),
             "{row}"
         );
         t.send("\r")?;
