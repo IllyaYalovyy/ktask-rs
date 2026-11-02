@@ -366,7 +366,13 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             cli.json,
         );
     }
-    if let Command::Retention { days, if_version } = command {
+    if let Command::Retention {
+        days,
+        max_bytes,
+        max_files,
+        if_version,
+    } = command
+    {
         let expected = service.retention_policy()?;
         if if_version.is_some_and(|version| version != expected.version) {
             return Err(storage::Error::Conflict(
@@ -374,11 +380,19 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             )
             .into());
         }
-        let saved = service.set_retention(expected, *days)?;
+        let saved = service.set_storage_policy(
+            expected,
+            *days,
+            max_bytes.unwrap_or(expected.max_bytes),
+            max_files.unwrap_or(expected.max_files),
+        )?;
         return emit(
             output::Reply {
                 data: json!({"retention":saved}),
-                text: format!("Retention: {} days (v{})\n", saved.days, saved.version),
+                text: format!(
+                    "Retention: {} days, {} bytes, {} files (v{})\n",
+                    saved.days, saved.max_bytes, saved.max_files, saved.version
+                ),
             },
             cli.json,
         );
@@ -391,7 +405,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             None
         };
         let mut text = format!(
-            "Storage: {} bytes retained; {} bytes eligible across {} attempt(s){}\n{}",
+            "Storage: {} logical bytes retained; {} bytes eligible across {} attempt(s){}\nAllocation: {} bytes in {} files/directories (SQLite {}, WAL {}, runner logs {}, evidence {}, directories {}); {} eligible file bytes, {} reusable SQLite bytes, {} protected bytes. Limits: {} bytes, {} files{}{}\n{}",
             preview.usage_bytes,
             preview.reclaimable_bytes,
             preview.candidates.len(),
@@ -400,6 +414,22 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             } else {
                 ""
             },
+            preview.allocated_bytes,
+            preview.allocated_files,
+            preview.database_bytes,
+            preview.wal_bytes,
+            preview.runner_log_bytes,
+            preview.evidence_bytes,
+            preview.directory_entries,
+            preview.eligible_file_bytes,
+            preview.reusable_database_bytes,
+            preview.protected_bytes,
+            preview.policy.max_bytes,
+            preview.policy.max_files,
+            if preview.effective_max_bytes != preview.policy.max_bytes || preview.effective_max_files != preview.policy.max_files {
+                format!("; shared effective {} bytes, {} files", preview.effective_max_bytes, preview.effective_max_files)
+            } else { String::new() },
+            if preview.launch_capacity_reached { " · WORK PAUSED AT CAPACITY RESERVE" } else { "" },
             preview
                 .candidates
                 .iter()

@@ -93,6 +93,10 @@ OUTPUT CONTRACT
   ktask show ID (or current) lists artifact IDs, media types, sizes, SHA-256 digests
   and source trees. ktask artifact ID opens retained UTF-8 text/JSON. Storage retention
   keeps Queue and unresolved-failure evidence; eligible History artifacts are pruned.
+  retention DAYS --max-bytes N --max-files N sets finite instance allocation limits.
+  The runner cleans eligible closed evidence at queue handoffs and pauses new work
+  when protected allocation leaves no capacity. storage previews physical SQLite,
+  WAL, artifact, directory and runner log allocation before manual --apply.
 
   Without --json, output is human text and may change. With --json, stdout carries one
   line:  {"schema_version":1,"ok":true,"data":...}

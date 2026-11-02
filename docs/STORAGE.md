@@ -159,8 +159,10 @@ erDiagram
     projects ||--o{ project_checks : "project_id"
     projects ||--o| project_delivery : "project_id"
     projects ||--o| project_retention : "project_id"
+    projects ||--o| project_storage_limits : "project_id"
     projects ||--o{ evidence_pins : "project_id"
     projects ||--o| evidence_sweep : "project_id"
+    projects ||--o| instance_runner_log_baselines : "project_id"
     projects ||--o| execution_sessions : "project_id"
     projects ||--o| pending_controls : "project_id"
     projects ||--o{ tasks : "project_id"
@@ -565,9 +567,11 @@ recovery also removes idle orphan files left by interrupted creation or retireme
 ### evidence_sweep
 
 Cursor for bounded cleanup of empty evidence directories belonging to eligible closed
-attempts. A missing row starts at attempt 0; reaching the end wraps to 0. Task closure,
+attempts. A missing row starts at attempt 0; a completed pass waits for an eligibility
+change or new attempt instead of repeatedly traversing protected history. Task closure,
 reservation release, cleanup admission, and retention-policy changes mark an active pass
-dirty so the next apply restarts at the oldest attempt. Each instance stores its own cursor
+dirty so the next apply restarts at the oldest attempt. A completed pass records the next
+closed-attempt age deadline and restarts when that deadline arrives. Each instance stores its own cursor
 in its own database.
 
 | Column | Type | Nullable | Definition |
@@ -578,10 +582,28 @@ in its own database.
 | `last_step_id` | INTEGER | no | Last examined step within the active attempt. |
 | `last_artifact_id` | INTEGER | no | Last examined artifact parent within the active attempt. |
 | `dirty` | INTEGER | no | Eligibility changed during a bounded pass; restart at attempt 0 on the next apply. |
+| `complete` | INTEGER | no | The current pass reached the end and need not restart without a change. |
+| `pressure` | INTEGER | no | Whether capacity pressure widened eligibility for this pass. |
+| `next_eligible_at_ms` | INTEGER | no | Earliest future closed-attempt age deadline; 0 if none. A completed sweep restarts when this time arrives. |
 
 - PK `(project_id)`.
 - FK `(project_id)` → `projects(id)`.
 - Triggers on task closure, reservation release, cleanup admission, and retention-policy changes mark the cursor dirty.
+
+### instance_runner_log_baselines
+
+Per-project runner-segment measurements used with the shared SQLite/root baseline.
+Housekeeping stats only its own two log segments; alternating projects cannot
+charge unchanged segments again. Rotation and shrinkage update the measured baseline.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `project_id` | INTEGER | no | Project whose runner segments were measured. |
+| `bytes` | INTEGER | no | Last measured physical allocation of that project's runner segments. |
+| `files` | INTEGER | no | Last measured number of that project's runner segments. |
+
+- PK `(project_id)`.
+- FK `(project_id)` → `projects(id)`.
 
 ### evidence_cleanup_admissions
 
@@ -614,6 +636,50 @@ workspace lease and explicit worker recovery still govern execution.
 
 - PK `(project_id)`.
 - FK `(project_id)` → `projects(id)`.
+
+### instance_allocation_scan
+
+Durable cursor for bounded automatic physical accounting. A checkpoint visits at most 64
+directory entries through no-follow descriptors; the entry cookies resume after restart.
+A changed admission generation invalidates the partial measurement. `complete` is 0 while
+traversing, 1 before guarded reconciliation, and 2 once installed.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `id` | INTEGER | no | Singleton key, always 1. |
+| `generation` | INTEGER | no | Admission generation captured before traversal. |
+| `revision` | INTEGER | no | Compare-and-swap revision for competing scanners. |
+| `frames_json` | TEXT | no | No-follow directory stack and Linux entry cookies. |
+| `bytes` | INTEGER | no | Physical bytes accumulated in this pass. |
+| `files` | INTEGER | no | Files and directories accumulated in this pass. |
+| `database_bytes` | INTEGER | no | SQLite allocation encountered so far. |
+| `wal_bytes` | INTEGER | no | WAL allocation encountered so far. |
+| `runner_log_bytes` | INTEGER | no | Runner log allocation encountered so far. |
+| `evidence_bytes` | INTEGER | no | Evidence allocation encountered so far. |
+| `evidence_entries` | INTEGER | no | Evidence files and directories encountered so far. |
+| `directory_entries` | INTEGER | no | Directories encountered so far. |
+| `entries_visited` | INTEGER | no | Bounded traversal work recorded across checkpoints. |
+| `complete` | INTEGER | no | 0 traversing, 1 pending guarded reconciliation, 2 reconciled. |
+
+- PK `(id)`.
+
+### instance_storage_admission
+
+Shared conservative watermark for output and artifact admission. The single row is initialized from physical instance allocation; each accepted write advances its generation. Housekeeping may lower the watermark only after measuring allocation without an intervening admission.
+SQLite vacuum or a substantial WAL checkpoint invalidates a completed measurement so reclaimed
+space can be used by a queued run. Per-project runner segments are measured against their own
+baselines, including across rotation and restart.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `id` | INTEGER | no | Singleton key, always 1. |
+| `projected_bytes` | INTEGER | no | Pessimistic allocated-byte projection including pending publications and SQLite/WAL growth. |
+| `projected_files` | INTEGER | no | Pessimistic allocated file and directory entry projection. |
+| `generation` | INTEGER | no | Monotonic admission generation for safe reconciliation. |
+| `known_bytes` | INTEGER | no | Last measured allocation of fixed SQLite, WAL, legacy runner-log, lock and root entries; per-project segments have separate baselines. |
+| `known_files` | INTEGER | no | Last measured file and directory count among those fixed entries. |
+
+- PK `(id)`.
 
 ### model_calls
 
@@ -785,6 +851,19 @@ Project-specific minimum age for terminal attempts on closed tasks. A missing ro
 | `project_id` | INTEGER | no | Owning project. |
 | `days` | INTEGER | no | Minimum completed attempt age in days; 0 allows immediate cleanup. |
 | `version` | INTEGER | no | Positive policy version. |
+
+- PK `(project_id)`.
+- FK `(project_id)` → `projects(id)`.
+
+### project_storage_limits
+
+Per-project byte and file limits for the shared instance allocation. The smallest configured values across registered projects govern their shared instance; a missing row uses the service defaults of 1 GiB and 100,000 entries. The retention policy version guards edits to both limits.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `project_id` | INTEGER | no | Owning project. |
+| `max_bytes` | INTEGER | no | Maximum allocated bytes, from 1 MiB through 1 TiB. |
+| `max_files` | INTEGER | no | Maximum allocated files and directories, from 16 through 10,000,000. |
 
 - PK `(project_id)`.
 - FK `(project_id)` → `projects(id)`.

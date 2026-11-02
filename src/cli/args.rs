@@ -138,6 +138,12 @@ pub enum Command {
     Retention {
         /// Age in days after which completed attempts become eligible for cleanup.
         days: i64,
+        /// Maximum physical bytes allocated by this instance (shared SQLite and files).
+        #[arg(long)]
+        max_bytes: Option<i64>,
+        /// Maximum files and directories allocated by this instance.
+        #[arg(long)]
+        max_files: Option<i64>,
         /// Reject if the retention policy changed since this version.
         #[arg(long)]
         if_version: Option<i64>,

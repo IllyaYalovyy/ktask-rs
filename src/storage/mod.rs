@@ -188,6 +188,16 @@ impl Database {
         // an error return closes it, which releases the lock.
         state_dir.lock()?;
         // Validate identity/version before changing the persistent journal mode.
+        let empty: bool = connection.query_row(
+            "SELECT count(*) = 0 FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*'",
+            [],
+            |r| r.get(0),
+        )?;
+        if empty {
+            // Incremental vacuum can return deleted output pages to the filesystem
+            // without a database replacement. Existing databases keep their mode.
+            connection.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
+        }
         migrations::apply(&mut connection, migrations::ALL)?;
         let mode: String =
             connection.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;

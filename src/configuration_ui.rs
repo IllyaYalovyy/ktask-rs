@@ -36,7 +36,7 @@ impl App {
                     .storage_preview()
                     .map_err(|e| e.to_string())?;
                 let mut body = format!(
-                    "Retained: {} bytes · eligible: {} bytes in {} attempt(s){}\nCleanup keeps task history and all live or unresolved work.\n",
+                    "Retained: {} logical bytes · eligible: {} bytes in {} attempt(s){}\nAllocated: {} bytes in {} files/directories · eligible files: {} · reusable SQLite: {} · protected: {} bytes{}\nSQLite: {} · WAL: {} · runner logs: {} · evidence: {} · directories: {}\nCleanup keeps task history and all live or unresolved work.\n",
                     preview.usage_bytes,
                     preview.reclaimable_bytes,
                     preview.candidates.len(),
@@ -44,8 +44,31 @@ impl App {
                         " · deferred while work is live"
                     } else {
                         ""
-                    }
+                    },
+                    preview.allocated_bytes,
+                    preview.allocated_files,
+                    preview.eligible_file_bytes,
+                    preview.reusable_database_bytes,
+                    preview.protected_bytes,
+                    if preview.launch_capacity_reached {
+                        " · WORK PAUSED AT CAPACITY RESERVE"
+                    } else {
+                        ""
+                    },
+                    preview.database_bytes,
+                    preview.wal_bytes,
+                    preview.runner_log_bytes,
+                    preview.evidence_bytes,
+                    preview.directory_entries,
                 );
+                if preview.effective_max_bytes != preview.policy.max_bytes
+                    || preview.effective_max_files != preview.policy.max_files
+                {
+                    body.push_str(&format!(
+                        "Shared effective limit: {} bytes, {} files.\n",
+                        preview.effective_max_bytes, preview.effective_max_files
+                    ));
+                }
                 for candidate in &preview.candidates {
                     body.push_str(&format!(
                         "Task #{} attempt #{}: {} output + {} artifact bytes ({} files; {} pending)\n",
@@ -67,6 +90,14 @@ impl App {
                             &preview.policy.days.to_string(),
                         ),
                         Field::choice("Action", &["Save policy", "Apply preview"], "Save policy"),
+                        Field::text(
+                            "Maximum allocated bytes",
+                            &preview.policy.max_bytes.to_string(),
+                        ),
+                        Field::text(
+                            "Maximum files and directories",
+                            &preview.policy.max_files.to_string(),
+                        ),
                     ],
                 )
             }
@@ -223,8 +254,19 @@ impl App {
                     .value(0)
                     .parse()
                     .map_err(|_| "Days must be a nonnegative integer")?;
+                let max_bytes: i64 = dialog
+                    .value(2)
+                    .parse()
+                    .map_err(|_| "Bytes must be an integer")?;
+                let max_files: i64 = dialog
+                    .value(3)
+                    .parse()
+                    .map_err(|_| "Files must be an integer")?;
                 if dialog.value(1) == "Apply preview" {
-                    if days != preview.policy.days {
+                    if days != preview.policy.days
+                        || max_bytes != preview.policy.max_bytes
+                        || max_files != preview.policy.max_files
+                    {
                         return Err(
                             "Save the changed policy, then reopen Storage to preview it".into()
                         );
@@ -258,7 +300,7 @@ impl App {
                 self.service
                     .as_mut()
                     .unwrap()
-                    .set_retention(preview.policy, days)
+                    .set_storage_policy(preview.policy, days, max_bytes, max_files)
                     .map_err(|e| e.to_string())?;
             }
             DialogKind::StorageConfirm(preview) => {

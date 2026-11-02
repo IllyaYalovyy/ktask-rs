@@ -1,5 +1,8 @@
 use crate::support::{self, Result, Terminal};
-use ktask_rs_mk3::storage::Database;
+use ktask_rs_mk3::{
+    application::{Definition, Kind, ModelConfig, Service, VersionedTask},
+    storage::Database,
+};
 use rusqlite::OptionalExtension;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -12,6 +15,438 @@ use std::{
     time::{Duration, Instant},
 };
 const BIN: &str = env!("CARGO_BIN_EXE_ktask-dev");
+
+#[test]
+fn storage_capacity_waits_before_launch_and_resumes_after_policy_change() -> Result {
+    let f = Fixture::new()?;
+    f.add("Keep work until capacity is available")?;
+    f.ok(&["retention", "30", "--max-bytes", "1048576"])?;
+    let log = f.scratch.path().join("state/ktask-dev/runner.log");
+    fs::write(&log, vec![b'x'; 2 * 1024 * 1024])?;
+    let stopped = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        stopped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stopped.stderr)
+    );
+    let message = String::from_utf8(stopped.stdout)?;
+    assert!(
+        message.contains("Storage capacity reserve reached"),
+        "{message}"
+    );
+    assert!(message.contains("runner logs"), "{message}");
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "ready");
+    assert!(task["attempts"].as_array().unwrap().is_empty());
+    let usage = f.ok(&["storage"])?;
+    assert!(usage["preview"]["over_capacity"].as_bool().unwrap());
+    assert!(usage["preview"]["runner_log_bytes"].as_i64().unwrap() >= 2 * 1024 * 1024);
+    f.ok(&["retention", "30", "--max-bytes", "1073741824"])?;
+    let resumed = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    Ok(())
+}
+
+#[test]
+fn queued_run_uses_space_recovered_by_multiple_sqlite_vacuum_batches() -> Result {
+    let f = Fixture::new()?;
+    f.add("Create closed history")?;
+    let first = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let attempt = f.ok(&["show", "1"])?["attempts"][0]["id"].as_i64().unwrap();
+    let db = f.db()?;
+    db.connection().execute("INSERT INTO attempt_output(attempt_id,sequence,stream,recorded_at_ms,content) VALUES (?1,100000,'system',1,?2)", rusqlite::params![attempt,"x".repeat(4 * 1024 * 1024)])?;
+    db.connection()
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+    db.connection().execute(
+        "DELETE FROM attempt_output WHERE attempt_id=?1 AND sequence=100000",
+        [attempt],
+    )?;
+    db.connection()
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+    let free: i64 = db
+        .connection()
+        .pragma_query_value(None, "freelist_count", |r| r.get(0))?;
+    assert!(
+        free > 512,
+        "fixture did not leave multiple vacuum batches: {free}"
+    );
+    let database = f.scratch.path().join("state/ktask-dev/ktask.sqlite3");
+    let allocated_before = fs::metadata(&database)?.blocks() * 512;
+    drop(db);
+    f.add("Run after SQLite releases capacity")?;
+    let max_bytes = (allocated_before * 3 / 2).max(1_048_576).to_string();
+    f.ok(&["retention", "30", "--max-bytes", &max_bytes])?;
+    assert!(
+        f.ok(&["storage"])?["preview"]["launch_capacity_reached"]
+            .as_bool()
+            .unwrap()
+    );
+    let result = f.process().args(["run", "--queue"]).output()?;
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        f.ok(&["show", "2"])?["status"],
+        "succeeded",
+        "{}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+    assert!(fs::metadata(&database)?.blocks() * 512 < allocated_before);
+    Ok(())
+}
+
+#[test]
+fn protected_only_capacity_reaches_waiting_without_restarting_cleanup() -> Result {
+    let f = Fixture::new()?;
+    f.add("Wait without deleting protected evidence")?;
+    f.ok(&["retention", "30", "--max-bytes", "1048576"])?;
+    let evidence = f.scratch.path().join("state/ktask-dev/evidence/held-proof");
+    fs::create_dir_all(evidence.parent().unwrap())?;
+    fs::write(&evidence, vec![b'p'; 2 * 1024 * 1024])?;
+    for restart in 0..2 {
+        let started = Instant::now();
+        let result = f.process().args(["run", "--queue"]).output()?;
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let output = String::from_utf8(result.stdout)?;
+        assert!(
+            output.contains("Storage capacity reserve reached"),
+            "{output}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "protected capacity spun after restart {restart}"
+        );
+        assert_eq!(f.ok(&["show", "1"])?["status"], "ready");
+        assert_eq!(fs::metadata(&evidence)?.len(), 2 * 1024 * 1024);
+        println!(
+            "protected capacity restart={restart} elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn protected_closed_attempt_directories_settle_after_bounded_sweep() -> Result {
+    let f = Fixture::new()?;
+    let mut service = Service::open(f.db()?, &f.root, None)?;
+    let definition = Definition {
+        title: "Protected closed evidence".into(),
+        goal: "Keep unknown proof files".into(),
+        kind: Kind::Ai,
+        criteria: vec!["Preserved".into()],
+        models: std::array::from_fn(|role| {
+            Some(ModelConfig {
+                provider: "codex".into(),
+                model: ["execution", "review", "validation", "remediation"][role].into(),
+                effort: None,
+            })
+        }),
+        attempt_limit: Some(1),
+        timeout_ms: None,
+        stage_timeout_ms: None,
+    };
+    let tasks = service.create(&vec![definition; 130], None, true)?;
+    let mut last_evidence = PathBuf::new();
+    for task in tasks {
+        let version = service.current_task()?.unwrap().version;
+        let run = service.begin_run(
+            VersionedTask { id: task, version },
+            &format!("closed-protected-{task}"),
+            "fixture-base",
+            false,
+        )?;
+        service.finish_run(&run, "succeeded", None, "Closed", None)?;
+        last_evidence = f.scratch.path().join(format!(
+            "state/ktask-dev/evidence/attempt-{}/held.bin",
+            run.attempt
+        ));
+        fs::create_dir_all(last_evidence.parent().unwrap())?;
+        fs::write(&last_evidence, vec![b'p'; 8192])?;
+    }
+    drop(service);
+    f.add("Wait after protected sweep")?;
+    f.ok(&["retention", "0", "--max-bytes", "1048576"])?;
+    for restart in 0..2 {
+        let started = Instant::now();
+        let result = f.process().args(["run", "--queue"]).output()?;
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("Storage capacity reserve reached")
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "protected sweep restarted indefinitely"
+        );
+        assert_eq!(f.ok(&["show", "131"])?["status"], "ready");
+        assert_eq!(fs::read(&last_evidence)?, vec![b'p'; 8192]);
+        println!(
+            "protected closed sweep restart={restart} elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn capacity_wait_and_resume_are_visible_in_real_terminal_by_keyboard_and_mouse() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.add("Wait for shared capacity")?;
+        f.ok(&["retention", "30", "--max-bytes", "1048576"])?;
+        fs::write(
+            f.scratch.path().join("state/ktask-dev/runner.log"),
+            vec![b'x'; 2 * 1024 * 1024],
+        )?;
+        let (cols, rows) = if mouse { (120, 42) } else { (105, 32) };
+        let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
+        terminal.screen("capacity task ready", |s| {
+            s.contains("Wait for shared capacity")
+        })?;
+        if mouse {
+            terminal.click("r Run queue")?;
+        } else {
+            terminal.send("r")?;
+        }
+        let waiting = terminal.screen("capacity wait visible", |s| {
+            s.contains("Storage capacity reserve reached")
+        })?;
+        println!("CAPACITY WAIT mouse={mouse} size={cols}x{rows}\n{waiting}");
+        assert_eq!(f.ok(&["show", "1"])?["status"], "ready");
+        f.ok(&["retention", "30", "--max-bytes", "1073741824"])?;
+        if mouse {
+            terminal.click("r Run queue")?;
+        } else {
+            terminal.send("r")?;
+        }
+        let resumed = terminal.screen("capacity run resumed", |s| {
+            s.contains("Session: Queue · complete · no queued work")
+                && s.contains("Queue complete.")
+        })?;
+        println!("CAPACITY RESUMED mouse={mouse} size={cols}x{rows}\n{resumed}");
+        terminal.send("q")?;
+        terminal.finish()?;
+        assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn bounded_reconciliation_remains_pausable_in_real_terminal() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.add("Pause while protected storage is counted")?;
+        f.ok(&["retention", "30", "--max-bytes", "1048576"])?;
+        let evidence = f.scratch.path().join("state/ktask-dev/evidence");
+        for index in 0..12_000 {
+            fs::create_dir_all(evidence.join(format!("held-{index}")))?;
+        }
+        let (cols, rows) = if mouse { (120, 42) } else { (105, 32) };
+        let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
+        terminal.screen("task ready before bounded accounting", |s| {
+            s.contains("Pause while protected storage is counted")
+        })?;
+        if mouse {
+            terminal.click("r Run queue")?;
+        } else {
+            terminal.send("r")?;
+        }
+        let running = terminal.screen("bounded accounting active", |s| {
+            s.contains("Session: Queue · running") && s.contains("p Pause")
+        })?;
+        println!("BOUNDED ACCOUNTING RUNNING mouse={mouse} size={cols}x{rows}\n{running}");
+        let started = Instant::now();
+        if mouse {
+            terminal.click("p Pause")?;
+        } else {
+            terminal.send("p")?;
+        }
+        let paused = terminal.screen("bounded accounting paused", |s| {
+            s.contains("Session: Queue · paused")
+        })?;
+        println!(
+            "BOUNDED ACCOUNTING PAUSED mouse={mouse} elapsed_ms={}\n{paused}",
+            started.elapsed().as_millis()
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(f.ok(&["show", "1"])?["status"], "ready");
+        assert!(evidence.join("held-11999").is_dir());
+        terminal.send("q")?;
+        terminal.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn queued_run_drains_more_than_four_cleanup_batches_before_starting_work() -> Result {
+    let f = Fixture::new()?;
+    let mut service = Service::open(f.db()?, &f.root, None)?;
+    let definition = Definition {
+        title: "Closed history".into(),
+        goal: "Retain before cleanup".into(),
+        kind: Kind::Ai,
+        criteria: vec!["Recorded".into()],
+        models: std::array::from_fn(|role| {
+            Some(ModelConfig {
+                provider: "codex".into(),
+                model: ["execution", "review", "validation", "remediation"][role].into(),
+                effort: None,
+            })
+        }),
+        attempt_limit: Some(1),
+        timeout_ms: None,
+        stage_timeout_ms: None,
+    };
+    let tasks = service.create(&vec![definition; 900], None, true)?;
+    for task in tasks {
+        let version = service.current_task()?.unwrap().version;
+        let run = service.begin_run(
+            VersionedTask { id: task, version },
+            &format!("closed-{task}"),
+            "fixture-base",
+            false,
+        )?;
+        service.output(&run, "system", &"x".repeat(32 * 1024))?;
+        service.finish_run(&run, "succeeded", None, "Closed", None)?;
+    }
+    let before = service.storage_preview()?;
+    assert!(before.allocated_bytes > 3 * 1024 * 1024);
+    let policy = service.retention_policy()?;
+    service.set_storage_policy(policy, 0, 3 * 1024 * 1024, 100_000)?;
+    drop(service);
+    f.add("Run after automatic cleanup")?;
+    let started = Instant::now();
+    let run = f.process().args(["run", "--queue"]).output()?;
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        f.ok(&["show", "901"])?["status"],
+        "succeeded",
+        "{}",
+        String::from_utf8_lossy(&run.stdout)
+    );
+    let after = f.ok(&["storage"])?;
+    assert!(after["preview"]["allocated_bytes"].as_i64().unwrap() < before.allocated_bytes);
+    let pruned: i64 = f.db()?.connection().query_row(
+        "SELECT count(*) FROM output_pruning p JOIN attempts a ON a.id=p.attempt_id WHERE a.task_id<=900", [], |r| r.get(0)
+    )?;
+    assert_eq!(
+        pruned, 900,
+        "automatic queue cleanup stopped before draining the backlog"
+    );
+    println!(
+        "unattended queue reclaimed {pruned} attempts in {} ms",
+        started.elapsed().as_millis()
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn live_output_capacity_pause_reaps_worker_and_resumes_same_attempt() -> Result {
+    let f = Fixture::new()?;
+    f.provider("noisy-review-once")?;
+    f.add("Pause during sustained output")?;
+    let before = f.ok(&["storage"])?;
+    let allocated = before["preview"]["allocated_bytes"].as_i64().unwrap();
+    let budget = (allocated + 2 * 1024 * 1024).max(1_048_576).to_string();
+    f.ok(&["retention", "30", "--max-bytes", &budget])?;
+    let paused = f.process().args(["run", "--one"]).output()?;
+    assert!(paused.status.success(), "{paused:?}");
+    assert!(
+        String::from_utf8_lossy(&paused.stdout).contains("Resource limit: shared storage"),
+        "{paused:?}"
+    );
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "paused", "{task}");
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+    let recorded: i64 = f.db()?.connection().query_row(
+        "SELECT count(*) FROM attempt_output WHERE attempt_id=1",
+        [],
+        |r| r.get(0),
+    )?;
+    assert!(recorded > 0, "accepted output was discarded");
+    f.guardian_finished()?;
+    f.no_scratch()?;
+    f.ok(&["retention", "30", "--max-bytes", "1073741824"])?;
+    let resumed = f.process().args(["run", "--one"]).output()?;
+    assert!(resumed.status.success(), "{resumed:?}");
+    let completed = f.ok(&["show", "1"])?;
+    assert_eq!(completed["status"], "succeeded", "{completed}");
+    assert_eq!(completed["attempts"].as_array().unwrap().len(), 1);
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn artifact_capacity_rejection_keeps_verification_incomplete_until_resume() -> Result {
+    let f = Fixture::new()?;
+    f.provider("artifact-capacity")?;
+    f.add("Archive proof within shared capacity")?;
+    let before = f.ok(&["storage"])?;
+    let allocated = before["preview"]["allocated_bytes"].as_i64().unwrap();
+    let budget = (allocated + 1024 * 1024).max(1_048_576).to_string();
+    f.ok(&["retention", "30", "--max-bytes", &budget])?;
+    let paused = f.process().args(["run", "--one"]).output()?;
+    assert!(paused.status.success(), "{paused:?}");
+    assert!(
+        String::from_utf8_lossy(&paused.stdout).contains("Resource limit: shared storage"),
+        "{paused:?}"
+    );
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "paused");
+    assert!(
+        task["attempts"][0]["artifacts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let passed: i64 = f.db()?.connection().query_row(
+        "SELECT count(*) FROM attempt_steps WHERE attempt_id=1 AND role='check' AND state='succeeded'", [], |r| r.get(0)
+    )?;
+    assert_eq!(passed, 0, "check passed without required proof");
+    f.guardian_finished()?;
+    f.no_scratch()?;
+    f.ok(&["retention", "30", "--max-bytes", "1073741824"])?;
+    let resumed = f.process().args(["run", "--one"]).output()?;
+    assert!(resumed.status.success(), "{resumed:?}");
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "succeeded", "{task}");
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+    assert!(
+        task["attempts"][0]["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["name"] == "proof.bin")
+    );
+    Ok(())
+}
 
 #[test]
 fn detached_logger_process_rotates_continuous_stderr_with_finite_storage() -> Result {
@@ -3552,6 +3987,8 @@ case '{mode}' in
   printf '{{"type":"turn.completed","usage":{{}}}}\n'; exit 0;;
  artifact-oversize)
   if [ "$model" = execution ]; then head -c 8388609 /dev/zero > "$KTASK_ARTIFACT_DIR/huge.bin"; fi;;
+ artifact-capacity)
+  if [ "$model" = execution ]; then head -c 524288 /dev/zero > "$KTASK_ARTIFACT_DIR/proof.bin"; printf 'verified\n' > result.txt; fi;;
  artifact-empty-flood)
   if [ "$model" = execution ]; then
    i=0; while [ "$i" -lt 400 ]; do : > "$KTASK_ARTIFACT_DIR/empty-$i"; i=$((i + 1)); done

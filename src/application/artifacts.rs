@@ -2,12 +2,18 @@
 //! provenance before bytes enter state storage; opening the project reconciles an
 //! interrupted copy before exposing it to readers or retention.
 use super::*;
+use nix::{
+    errno::Errno,
+    fcntl::{OFlag, RenameFlags, openat, renameat2},
+    sys::stat::{Mode, mkdirat},
+    unistd::{UnlinkatFlags, unlinkat},
+};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, OpenOptions, TryLockError},
     io::{Read, Write},
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 const FILE_LIMIT: u64 = 8 * 1024 * 1024;
@@ -64,7 +70,70 @@ fn require_budget(tx: &Transaction<'_>, attempt: i64, name: &str, size: u64) -> 
     )
 }
 
-fn final_path(root: &Path, relative: &str) -> Result<PathBuf> {
+struct ArtifactTarget {
+    parent: fs::File,
+    name: String,
+}
+
+struct Publication<'a> {
+    attempt: i64,
+    token: &'a str,
+    name: &'a str,
+    source: &'a Path,
+    relative: &'a str,
+    tree: &'a str,
+}
+
+impl ArtifactTarget {
+    fn pending(&self) -> String {
+        format!("{}.pending", self.name)
+    }
+
+    fn open(&self, name: &str) -> Result<Option<fs::File>> {
+        match openat(
+            &self.parent,
+            name,
+            OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(fd) => Ok(Some(fs::File::from(fd))),
+            Err(Errno::ENOENT) => Ok(None),
+            Err(error) => Err(retention::io(error)),
+        }
+    }
+
+    fn absent(&self) -> Result<bool> {
+        Ok(self.open(&self.name)?.is_none() && self.open(&self.pending())?.is_none())
+    }
+
+    fn remove(&self, name: &str) -> Result<()> {
+        match unlinkat(&self.parent, name, UnlinkatFlags::NoRemoveDir) {
+            Ok(()) | Err(Errno::ENOENT) => Ok(()),
+            Err(error) => Err(retention::io(error)),
+        }
+    }
+
+    fn publish_pending(&self) -> Result<()> {
+        renameat2(
+            &self.parent,
+            self.pending().as_str(),
+            &self.parent,
+            self.name.as_str(),
+            RenameFlags::RENAME_NOREPLACE,
+        )
+        .map_err(retention::io)?;
+        self.parent.sync_all()?;
+        Ok(())
+    }
+}
+
+/// Resolve each component from a pinned directory, rejecting substituted links.
+/// Recovery never creates a parent; a missing one means the copy never completed.
+fn artifact_target(
+    root: &fs::File,
+    relative: &str,
+    create_parent: bool,
+) -> Result<Option<ArtifactTarget>> {
     let parts: Vec<_> = Path::new(relative).components().collect();
     require(
         parts.len() == 3 || parts.len() == 4,
@@ -76,20 +145,33 @@ fn final_path(root: &Path, relative: &str) -> Result<PathBuf> {
             .all(|part| matches!(part, std::path::Component::Normal(_))),
         "Unsafe artifact destination",
     )?;
-    let parent = root.join(relative).parent().unwrap().to_path_buf();
-    fs::create_dir_all(&parent)?;
-    require(
-        parent.canonicalize()?.starts_with(root.canonicalize()?),
-        "Artifact destination escapes state storage",
-    )?;
-    Ok(root.join(relative))
-}
-
-fn staged_path(final_path: &Path) -> PathBuf {
-    final_path.with_file_name(format!(
-        "{}.pending",
-        final_path.file_name().unwrap().to_string_lossy()
-    ))
+    let mut parent = root.try_clone()?;
+    let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+    for part in &parts[..parts.len() - 1] {
+        let name = part.as_os_str();
+        let next = match openat(&parent, name, flags, Mode::empty()) {
+            Ok(fd) => fd,
+            Err(Errno::ENOENT) if create_parent => {
+                match mkdirat(&parent, name, Mode::from_bits_truncate(0o700)) {
+                    Ok(()) | Err(Errno::EEXIST) => {}
+                    Err(error) => return Err(retention::io(error)),
+                }
+                openat(&parent, name, flags, Mode::empty()).map_err(retention::io)?
+            }
+            Err(Errno::ENOENT) => return Ok(None),
+            Err(error) => return Err(retention::io(error)),
+        };
+        parent = fs::File::from(next);
+    }
+    Ok(Some(ArtifactTarget {
+        parent,
+        name: parts
+            .last()
+            .unwrap()
+            .as_os_str()
+            .to_string_lossy()
+            .into_owned(),
+    }))
 }
 
 fn publication_lock(root: &Path) -> Result<fs::File> {
@@ -102,23 +184,10 @@ fn publication_lock(root: &Path) -> Result<fs::File> {
         .open(root.join("artifact-publication.lock"))?)
 }
 
-fn remove_if_present(path: &Path) -> Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
-}
-
-fn verify(path: &Path, size: i64, checksum: &str) -> Result<bool> {
-    let input = match OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
-        .open(path)
-    {
-        Ok(input) => input,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(error.into()),
+fn verify(target: &ArtifactTarget, name: &str, size: i64, checksum: &str) -> Result<bool> {
+    let input = match target.open(name)? {
+        Some(input) => input,
+        None => return Ok(false),
     };
     let metadata = input.metadata()?;
     if !metadata.is_file() || metadata.len() != size as u64 {
@@ -152,6 +221,32 @@ impl Service {
         relative: &str,
         tree: &str,
     ) -> Result<()> {
+        self.publish_artifact_after_reservation(
+            Publication {
+                attempt,
+                token,
+                name,
+                source,
+                relative,
+                tree,
+            },
+            || {},
+        )
+    }
+
+    fn publish_artifact_after_reservation(
+        &self,
+        publication: Publication<'_>,
+        after_reservation: impl FnOnce(),
+    ) -> Result<()> {
+        let Publication {
+            attempt,
+            token,
+            name,
+            source,
+            relative,
+            tree,
+        } = publication;
         require(!name.trim().is_empty(), "Artifact name is required")?;
         require(
             matches!(tree.len(), 40 | 64),
@@ -184,56 +279,82 @@ impl Service {
         )?;
         let checksum = format!("{:x}", Sha256::digest(&bytes));
         let media = media_type(name, &bytes);
-        let root = self.db.state_file("")?;
-        let publication = publication_lock(&root)?;
+        let root = self.db.state_dir();
+        let publication = publication_lock(&self.db.state_file("")?)?;
         publication.lock()?;
-        let path = final_path(&root, relative)?;
-        let pending = staged_path(&path);
-        require(
-            !path.exists() && !pending.exists(),
-            "Artifact destination already exists",
-        )?;
+        let existing = artifact_target(root, relative, false)?;
+        if let Some(target) = existing.as_ref() {
+            require(target.absent()?, "Artifact destination already exists")?;
+        }
         let tx = Transaction::new_unchecked(self.db.connection(), TransactionBehavior::Immediate)?;
         require(tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND project_id=?2 AND execution_token=?3)", params![attempt,self.project_id,token], |r| r.get::<_, bool>(0))?, "Runner lost ownership of artifact attempt")?;
         require_budget(&tx, attempt, name, bytes.len() as u64)?;
+        super::retention::admit_capacity(&tx, 0, 0, bytes.len() as u64, 1)?;
         tx.execute("INSERT INTO artifact_reservations(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)", params![attempt,name,media,relative,bytes.len() as i64,checksum,tree,now_ms()])?;
         tx.commit()?;
         // A crash from here on leaves a reservation that recovery can inspect.
+        after_reservation();
+        let mut target = None;
+        let mut staged_created = false;
+        let mut published = false;
         let result = (|| -> Result<()> {
-            let mut output = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .custom_flags(nix::libc::O_NOFOLLOW)
-                .open(&pending)?;
+            let safe = artifact_target(root, relative, true)?.expect("parent was created");
+            require(safe.absent()?, "Artifact destination already exists")?;
+            let pending = safe.pending();
+            target = Some(safe);
+            let safe = target.as_ref().unwrap();
+            let mut output = fs::File::from(
+                openat(
+                    &safe.parent,
+                    pending.as_str(),
+                    OFlag::O_WRONLY
+                        | OFlag::O_CREAT
+                        | OFlag::O_EXCL
+                        | OFlag::O_NOFOLLOW
+                        | OFlag::O_CLOEXEC,
+                    Mode::from_bits_truncate(0o600),
+                )
+                .map_err(retention::io)?,
+            );
+            staged_created = true;
             output.write_all(&bytes)?;
             output.sync_all()?;
             output.set_permissions(fs::Permissions::from_mode(0o444))?;
-            fs::rename(&pending, &path)?;
-            FileSync::parent(&path)?;
+            safe.publish_pending()?;
+            published = true;
             self.finish_reservation(relative)?;
             Ok(())
         })();
         if result.is_err()
-            && !verify(&path, bytes.len() as i64, &checksum).unwrap_or(false)
-            && !verify(&pending, bytes.len() as i64, &checksum).unwrap_or(false)
-            && remove_if_present(&pending).is_ok()
-            && remove_if_present(&path).is_ok()
+            && let Some(safe) = target.as_ref()
+            && staged_created
+            && !published
+            && safe.remove(&safe.pending()).is_ok()
         {
-            let _ = self.db.connection().execute(
-                "DELETE FROM artifact_reservations WHERE relative_path=?1",
-                [relative],
-            );
+            let _ = self.drop_reservation(relative);
         }
         result
     }
 
-    fn finish_reservation(&self, relative: &str) -> Result<()> {
+    pub(super) fn finish_reservation(&self, relative: &str) -> Result<()> {
         let tx = Transaction::new_unchecked(self.db.connection(), TransactionBehavior::Immediate)?;
         tx.execute("INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms) SELECT attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms FROM artifact_reservations WHERE relative_path=?1 ON CONFLICT(relative_path) DO NOTHING", [relative])?;
         tx.execute(
             "DELETE FROM artifact_reservations WHERE relative_path=?1",
             [relative],
         )?;
+        retention::bump_admission_generation(&tx)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn drop_reservation(&self, relative: &str) -> Result<()> {
+        let tx = Transaction::new_unchecked(self.db.connection(), TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM artifact_reservations WHERE relative_path=?1",
+            [relative],
+        )?;
+        retention::bump_admission_generation(&tx)?;
         tx.commit()?;
         Ok(())
     }
@@ -245,10 +366,10 @@ impl Service {
         if !pending {
             return Ok(());
         }
-        let root = self.db.state_file("")?;
+        let root = self.db.state_dir();
         // A reader can open while either a guardian or the parent supervisor is
         // publishing a transcript. Never reconcile their live reservation.
-        let publication = publication_lock(&root)?;
+        let publication = publication_lock(&self.db.state_file("")?)?;
         match publication.try_lock() {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => return Ok(()),
@@ -273,29 +394,28 @@ impl Service {
             }
             for (id, relative, size, checksum) in rows {
                 cursor = id;
-                let path = final_path(&root, &relative)?;
-                let pending = staged_path(&path);
-                if verify(&path, size, &checksum)? {
-                    fs::set_permissions(&path, fs::Permissions::from_mode(0o444))?;
+                let Some(target) = artifact_target(root, &relative, false)? else {
+                    self.drop_reservation(&relative)?;
+                    continue;
+                };
+                if verify(&target, &target.name, size, &checksum)? {
+                    target
+                        .open(&target.name)?
+                        .unwrap()
+                        .set_permissions(fs::Permissions::from_mode(0o444))?;
                     self.finish_reservation(&relative)?;
-                } else if verify(&pending, size, &checksum)? {
-                    fs::set_permissions(&pending, fs::Permissions::from_mode(0o444))?;
-                    fs::rename(&pending, &path)?;
-                    FileSync::parent(&path)?;
+                } else if verify(&target, &target.pending(), size, &checksum)? {
+                    target
+                        .open(&target.pending())?
+                        .unwrap()
+                        .set_permissions(fs::Permissions::from_mode(0o444))?;
+                    target.publish_pending()?;
                     self.finish_reservation(&relative)?;
                 } else {
                     // The process stopped before a complete copy; no evidence was published.
-                    remove_if_present(&pending)?;
-                    remove_if_present(&path)?;
-                    let tx = Transaction::new_unchecked(
-                        self.db.connection(),
-                        TransactionBehavior::Immediate,
-                    )?;
-                    tx.execute(
-                        "DELETE FROM artifact_reservations WHERE relative_path=?1",
-                        [&relative],
-                    )?;
-                    tx.commit()?;
+                    target.remove(&target.pending())?;
+                    target.remove(&target.name)?;
+                    self.drop_reservation(&relative)?;
                 }
             }
         }
@@ -303,17 +423,168 @@ impl Service {
     }
 }
 
-struct FileSync;
-impl FileSync {
-    fn parent(path: &Path) -> Result<()> {
-        fs::File::open(path.parent().unwrap())?.sync_all()?;
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::{MetadataExt, symlink};
+
+    #[test]
+    fn substituted_recovery_parent_never_touches_external_evidence() -> Result<()> {
+        let scratch = tempfile::tempdir()?;
+        let project = scratch.path().join("project");
+        let other_state = scratch.path().join("other-instance");
+        fs::create_dir(&project)?;
+        let other = crate::storage::Database::open_in(&other_state)?;
+        let other_identity = other
+            .connection()
+            .query_row("PRAGMA application_id", [], |r| r.get::<_, i64>(0))?;
+        let state = scratch.path().join("state");
+        let mut service =
+            Service::open(crate::storage::Database::open_in(&state)?, &project, None)?;
+        let task = service.create(
+            &[Definition {
+                title: "Recover proof".into(),
+                goal: "Keep outside files unchanged".into(),
+                kind: Kind::Ai,
+                criteria: vec!["Proof".into()],
+                models: std::array::from_fn(|_| {
+                    Some(ModelConfig {
+                        provider: "claude".into(),
+                        model: "sonnet".into(),
+                        effort: None,
+                    })
+                }),
+                attempt_limit: Some(1),
+                timeout_ms: None,
+                stage_timeout_ms: None,
+            }],
+            None,
+            true,
+        )?[0];
+        let version = service.current_task()?.unwrap().version;
+        let run = service.begin_run(
+            VersionedTask { id: task, version },
+            "substituted-parent",
+            "fixture-base",
+            false,
+        )?;
+        let own_parent = state.join(format!("evidence/attempt-{}/step-1", run.attempt));
+        fs::create_dir_all(own_parent.parent().unwrap())?;
+        let external_project = project.join("external-proof");
+        fs::create_dir(&external_project)?;
+        let source = scratch.path().join("source");
+        fs::write(&source, b"proof")?;
+        let checksum = format!("{:x}", Sha256::digest(b"proof"));
+        let other_db = fs::metadata(other_state.join("ktask.sqlite3"))?;
+        for (index, parent, valid_final, valid_pending) in [
+            (0, &external_project, true, false),
+            (1, &other_state, false, true),
+            (2, &external_project, false, false),
+            (3, &other_state, false, false),
+        ] {
+            let name = format!("file-0-{index}");
+            let final_file = parent.join(&name);
+            let pending_file = parent.join(format!("{name}.pending"));
+            fs::write(
+                &final_file,
+                if valid_final {
+                    b"proof".as_slice()
+                } else {
+                    b"outside-final"
+                },
+            )?;
+            fs::write(
+                &pending_file,
+                if valid_pending {
+                    b"proof".as_slice()
+                } else {
+                    b"outside-pending"
+                },
+            )?;
+            fs::set_permissions(&final_file, fs::Permissions::from_mode(0o600))?;
+            fs::set_permissions(&pending_file, fs::Permissions::from_mode(0o640))?;
+            let final_before = fs::read(&final_file)?;
+            let pending_before = fs::read(&pending_file)?;
+            symlink(parent, &own_parent)?;
+            let relative = format!("evidence/attempt-{}/step-1/{name}", run.attempt);
+            service.db.connection().execute("INSERT INTO artifact_reservations(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms) VALUES (?1,'proof','text/plain',?2,5,?3,?4,1)", params![run.attempt,relative,checksum,"a".repeat(40)])?;
+            assert!(service.reconcile_artifact_reservations().is_err());
+            assert!(
+                service
+                    .publish_artifact(
+                        run.attempt,
+                        &run.token,
+                        "proof",
+                        &source,
+                        &relative,
+                        &"a".repeat(40)
+                    )
+                    .is_err()
+            );
+            assert_eq!(fs::read(&final_file)?, final_before);
+            assert_eq!(fs::read(&pending_file)?, pending_before);
+            assert_eq!(
+                fs::metadata(&final_file)?.permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(
+                fs::metadata(&pending_file)?.permissions().mode() & 0o777,
+                0o640
+            );
+            let pending: i64 = service.db.connection().query_row(
+                "SELECT count(*) FROM artifact_reservations WHERE relative_path=?1",
+                [&relative],
+                |r| r.get(0),
+            )?;
+            assert_eq!(pending, 1);
+            service.drop_reservation(&relative)?;
+            fs::remove_file(&own_parent)?;
+        }
+        let raced_parent = state.join(format!("evidence/attempt-{}/step-2", run.attempt));
+        let raced_relative = format!("evidence/attempt-{}/step-2/file-0-9", run.attempt);
+        let outside_final = external_project.join("file-0-9");
+        let outside_pending = external_project.join("file-0-9.pending");
+        fs::write(&outside_final, b"outside-final")?;
+        fs::write(&outside_pending, b"outside-pending")?;
+        assert!(
+            service
+                .publish_artifact_after_reservation(
+                    Publication {
+                        attempt: run.attempt,
+                        token: &run.token,
+                        name: "proof",
+                        source: &source,
+                        relative: &raced_relative,
+                        tree: &"a".repeat(40)
+                    },
+                    || symlink(&external_project, &raced_parent).unwrap(),
+                )
+                .is_err()
+        );
+        assert_eq!(fs::read(&outside_final)?, b"outside-final");
+        assert_eq!(fs::read(&outside_pending)?, b"outside-pending");
+        let pending: i64 = service.db.connection().query_row(
+            "SELECT count(*) FROM artifact_reservations WHERE relative_path=?1",
+            [&raced_relative],
+            |r| r.get(0),
+        )?;
+        assert_eq!(
+            pending, 1,
+            "failed validation must retain recovery ownership"
+        );
+        assert_eq!(
+            other
+                .connection()
+                .query_row("PRAGMA application_id", [], |r| r.get::<_, i64>(0))?,
+            other_identity
+        );
+        let other_after = fs::metadata(other_state.join("ktask.sqlite3"))?;
+        assert_eq!(
+            (other_db.dev(), other_db.ino()),
+            (other_after.dev(), other_after.ino())
+        );
+        Ok(())
+    }
 
     #[test]
     fn artifact_limits_report_file_and_attempt_overflow() -> Result<()> {

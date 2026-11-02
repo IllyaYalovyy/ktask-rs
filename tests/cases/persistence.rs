@@ -2863,8 +2863,128 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
     quit(&mut keyboard)?;
     assert!(self::service(root)?.task(unresolved_id)?.unwrap().attempts[0].output_pruned);
     assert_eq!(self::service(root)?.retention_policy()?.days, 5);
-    let policy = cli(&["retention", "7", "--if-version", "3"])?;
-    assert_eq!(policy["data"]["retention"]["days"], 7);
+    let policy = cli(&[
+        "retention",
+        "7",
+        "--max-bytes",
+        "2097152",
+        "--max-files",
+        "250",
+        "--if-version",
+        "3",
+    ])?;
+    assert_eq!(
+        (
+            &policy["data"]["retention"]["days"],
+            &policy["data"]["retention"]["max_bytes"],
+            &policy["data"]["retention"]["max_files"],
+        ),
+        (
+            &serde_json::json!(7),
+            &serde_json::json!(2097152),
+            &serde_json::json!(250),
+        )
+    );
+    Ok(())
+}
+
+#[test]
+fn storage_budget_fields_persist_and_validate_by_mouse_and_keyboard_in_real_pty() -> Result {
+    let sandbox = support::sandbox()?;
+    let root = sandbox.path();
+    let _service = service(root)?;
+    let mut mouse = Terminal::open_project(
+        env!("CARGO_BIN_EXE_ktask-dev"),
+        root,
+        &project(root),
+        120,
+        42,
+    )?;
+    mouse.screen("mouse current loaded", |s| s.contains("4 Config"))?;
+    mouse.click("4 Config")?;
+    mouse.screen("mouse config loaded", |s| s.contains("k Storage"))?;
+    mouse.click("k Storage")?;
+    let opened = mouse.screen("mouse storage budget fields", |s| {
+        s.contains("Maximum allocated bytes") && s.contains("Maximum files and directories")
+    })?;
+    println!("MOUSE STORAGE BUDGET FORM\n{opened}");
+    mouse.click("Maximum allocated bytes")?;
+    mouse.send("\x01bad")?;
+    mouse.click("Apply")?;
+    let invalid = mouse.screen("mouse invalid byte budget", |s| {
+        s.contains("Bytes must be an integer")
+    })?;
+    println!("MOUSE INVALID BYTE BUDGET\n{invalid}");
+    mouse.click("Maximum allocated bytes")?;
+    mouse.send("\x012097152")?;
+    mouse.click("Maximum files and directories")?;
+    mouse.send("\x01500")?;
+    mouse.click("Apply")?;
+    mouse.screen("mouse budget saved", |s| {
+        s.contains("Project configuration saved")
+    })?;
+    assert_eq!(
+        (
+            service(root)?.retention_policy()?.max_bytes,
+            service(root)?.retention_policy()?.max_files
+        ),
+        (2_097_152, 500)
+    );
+    mouse.click("k Storage")?;
+    let reopened = mouse.screen("mouse saved budgets reopened", |s| {
+        s.contains("2097152") && s.contains("500")
+    })?;
+    println!("MOUSE SAVED BUDGETS\n{reopened}");
+    mouse.click("Cancel")?;
+    quit(&mut mouse)?;
+
+    let mut keyboard = Terminal::open_project(
+        env!("CARGO_BIN_EXE_ktask-dev"),
+        root,
+        &project(root),
+        105,
+        32,
+    )?;
+    keyboard.screen("keyboard current loaded", |s| s.contains("4 Config"))?;
+    keyboard.send("4")?;
+    keyboard.screen("keyboard config loaded", |s| s.contains("k Storage"))?;
+    keyboard.send("k")?;
+    keyboard.screen("keyboard storage budget fields", |s| {
+        s.contains("Maximum allocated bytes") && s.contains("Maximum files and directories")
+    })?;
+    keyboard.send("\t\t\x013145728\t\x01600\x13")?;
+    let saved = keyboard.screen("keyboard budget saved", |s| {
+        s.contains("Project configuration saved")
+    })?;
+    println!("KEYBOARD SAVED BUDGETS\n{saved}");
+    assert_eq!(
+        (
+            service(root)?.retention_policy()?.max_bytes,
+            service(root)?.retention_policy()?.max_files
+        ),
+        (3_145_728, 600)
+    );
+    keyboard.send("k")?;
+    let reopened = keyboard.screen("keyboard saved budgets reopened", |s| {
+        s.contains("3145728") && s.contains("600")
+    })?;
+    println!("KEYBOARD REOPENED BUDGETS\n{reopened}");
+    keyboard.send("\t\t\t\x01bad\x13")?;
+    let invalid = keyboard.screen("keyboard invalid file budget", |s| {
+        s.contains("Files must be an integer")
+    })?;
+    println!("KEYBOARD INVALID FILE BUDGET\n{invalid}");
+    keyboard.send("\x1b")?;
+    fs::write(
+        root.join("state/ktask-dev/runner.log"),
+        vec![b'x'; 4 * 1024 * 1024],
+    )?;
+    keyboard.send("k")?;
+    let capacity = keyboard.screen("keyboard protected capacity status", |s| {
+        s.contains("WORK PAUSED AT CAPACITY") && s.contains("RESERVE")
+    })?;
+    println!("KEYBOARD CAPACITY STATUS\n{capacity}");
+    quit(&mut keyboard)?;
     Ok(())
 }
 
@@ -3025,6 +3145,48 @@ fn repeated_retention_removes_files_and_empty_directories_but_preserves_unresolv
         "historical failure"
     );
     assert_eq!(service.task(unresolved)?.unwrap().status, "failed");
+    Ok(())
+}
+
+#[test]
+fn storage_preview_handles_more_sibling_directories_than_open_descriptors() -> Result {
+    let sandbox = support::sandbox()?;
+    let root = sandbox.path();
+    let _service = service(root)?;
+    let evidence = root.join("state/ktask-dev/evidence");
+    for index in 0..300 {
+        fs::create_dir_all(evidence.join(format!("attempt-{index}/step-1")))?;
+    }
+    let mut command = std::process::Command::new("prlimit");
+    command
+        .env_clear()
+        .env("HOME", root)
+        .env("XDG_STATE_HOME", root.join("state"))
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_CACHE_HOME", root.join("cache"))
+        .env("XDG_RUNTIME_DIR", root.join("runtime"))
+        .env("TMPDIR", root)
+        .current_dir(project(root))
+        .args([
+            "--nofile=64:64",
+            "--",
+            env!("CARGO_BIN_EXE_ktask-dev"),
+            "--json",
+            "storage",
+        ]);
+    let output = command.output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert!(
+        response["data"]["preview"]["directory_entries"]
+            .as_i64()
+            .unwrap()
+            >= 600
+    );
     Ok(())
 }
 

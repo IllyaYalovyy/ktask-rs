@@ -515,6 +515,10 @@ impl Service {
             tx.commit()?;
             return Err(error);
         }
+        if let Err(error) = super::retention::admit_capacity(&tx, text.len() as u64, 1, 0, 0) {
+            tx.commit()?;
+            return Err(error);
+        }
         tx.execute("INSERT INTO attempt_output(attempt_id,sequence,stream,recorded_at_ms,content) SELECT ?1,coalesce(max(sequence),0)+1,?2,?3,?4 FROM attempt_output WHERE attempt_id=?1", params![run.attempt,stream,now_ms(),text])?;
         tx.commit()?;
         Ok(())
@@ -534,6 +538,16 @@ impl Service {
             run.attempt,
             rows.iter().map(|(_, text)| text.len() as u64).sum(),
             rows.len() as u64,
+        ) {
+            tx.commit()?;
+            return Err(error);
+        }
+        if let Err(error) = super::retention::admit_capacity(
+            &tx,
+            rows.iter().map(|(_, text)| text.len() as u64).sum(),
+            rows.len() as u64,
+            0,
+            0,
         ) {
             tx.commit()?;
             return Err(error);

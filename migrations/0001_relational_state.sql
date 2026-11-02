@@ -464,6 +464,53 @@ CREATE TABLE project_retention (
     version INTEGER NOT NULL CHECK (version > 0)
 ) STRICT;
 
+-- Limits apply to the whole instance allocation because SQLite and its WAL are
+-- shared by projects. Each project can choose when its closed evidence is shed.
+CREATE TABLE project_storage_limits (
+    project_id INTEGER PRIMARY KEY REFERENCES projects(id),
+    max_bytes INTEGER NOT NULL CHECK (max_bytes BETWEEN 1048576 AND 1099511627776),
+    max_files INTEGER NOT NULL CHECK (max_files BETWEEN 16 AND 10000000)
+) STRICT;
+
+-- A conservative instance-wide admission watermark. Writers advance it in the
+-- same transaction as output or artifact reservations; housekeeping reconciles
+-- it against physical allocation only if no writer changed its generation.
+CREATE TABLE instance_storage_admission (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    projected_bytes INTEGER NOT NULL CHECK (projected_bytes >= 0),
+    projected_files INTEGER NOT NULL CHECK (projected_files >= 0),
+    generation INTEGER NOT NULL CHECK (generation >= 0),
+    known_bytes INTEGER NOT NULL DEFAULT 0 CHECK (known_bytes >= 0),
+    known_files INTEGER NOT NULL DEFAULT 0 CHECK (known_files >= 0)
+) STRICT;
+
+-- Runner segments are probed by project, so their baselines must not be
+-- compared with another project's logs or the shared SQLite/root baseline.
+CREATE TABLE instance_runner_log_baselines (
+    project_id INTEGER PRIMARY KEY REFERENCES projects(id),
+    bytes INTEGER NOT NULL CHECK (bytes >= 0),
+    files INTEGER NOT NULL CHECK (files >= 0)
+) STRICT;
+
+-- Automatic accounting scans a bounded number of directory entries per turn.
+-- Its cursor is durable; a changed admission generation invalidates the scan.
+CREATE TABLE instance_allocation_scan (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    generation INTEGER NOT NULL CHECK (generation >= 0),
+    revision INTEGER NOT NULL CHECK (revision >= 0),
+    frames_json TEXT NOT NULL,
+    bytes INTEGER NOT NULL CHECK (bytes >= 0),
+    files INTEGER NOT NULL CHECK (files >= 0),
+    database_bytes INTEGER NOT NULL CHECK (database_bytes >= 0),
+    wal_bytes INTEGER NOT NULL CHECK (wal_bytes >= 0),
+    runner_log_bytes INTEGER NOT NULL CHECK (runner_log_bytes >= 0),
+    evidence_bytes INTEGER NOT NULL CHECK (evidence_bytes >= 0),
+    evidence_entries INTEGER NOT NULL CHECK (evidence_entries >= 0),
+    directory_entries INTEGER NOT NULL CHECK (directory_entries >= 0),
+    entries_visited INTEGER NOT NULL CHECK (entries_visited >= 0),
+    complete INTEGER NOT NULL CHECK (complete IN (0,1,2))
+) STRICT;
+
 -- A bounded pass over closed attempts can resume without revisiting the same
 -- preserved directories on every storage cleanup.
 CREATE TABLE evidence_sweep (
@@ -472,7 +519,10 @@ CREATE TABLE evidence_sweep (
     active_attempt_id INTEGER NOT NULL DEFAULT 0 CHECK (active_attempt_id >= 0),
     last_step_id INTEGER NOT NULL DEFAULT 0 CHECK (last_step_id >= 0),
     last_artifact_id INTEGER NOT NULL DEFAULT 0 CHECK (last_artifact_id >= 0),
-    dirty INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0,1))
+    dirty INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0,1)),
+    complete INTEGER NOT NULL DEFAULT 0 CHECK (complete IN (0,1)),
+    pressure INTEGER NOT NULL DEFAULT 0 CHECK (pressure IN (0,1)),
+    next_eligible_at_ms INTEGER NOT NULL DEFAULT 0 CHECK (next_eligible_at_ms >= 0)
 ) STRICT;
 
 -- Interactive read-only providers retain evidence without creating execution attempts.

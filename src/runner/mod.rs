@@ -198,6 +198,9 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
                 let current = service.current_task()?;
                 match current {
                     None => ("completed", message.clone()),
+                    Some(_) if message.starts_with("Storage capacity reserve reached:") => {
+                        ("waiting", message.clone())
+                    }
                     Some(task) if task.status == "paused" => ("paused", message.clone()),
                     Some(task) if session.mode == "one" && task.status != "waiting" => {
                         ("stopped", "Run one completed the current task".into())
@@ -344,9 +347,64 @@ fn run_inner(
         if std::mem::take(&mut owner_start) {
             service.end_limit_wait()?;
         }
+        let (mut storage, mut cleanup_progress) = service.automatic_housekeeping_progress(1)?;
         let Some(task) = service.current_task()? else {
             return Ok("Queue complete".into());
         };
+        // A single checkpoint is bounded, but a queued run must keep scheduling
+        // checkpoints while eligible history is actually being reclaimed. Pause
+        // and stop remain responsive between batches; a protected or exhausted
+        // instance settles to waiting instead of spinning.
+        let mut contentions = 0_u32;
+        while matches!(
+            cleanup_progress,
+            crate::application::retention::HousekeepingProgress::Reconciling
+                | crate::application::retention::HousekeepingProgress::Contended
+        ) || (storage.launch_capacity_reached
+            && cleanup_progress.continues()
+            && !storage.deferred_for_live_work)
+        {
+            if stop.load(Ordering::Relaxed) {
+                return Ok("Runner stopped; no next task started".into());
+            }
+            if service
+                .execution_session()?
+                .is_some_and(|s| s.state == "paused")
+            {
+                return Ok("Paused; no later task started".into());
+            }
+            if cleanup_progress == crate::application::retention::HousekeepingProgress::Contended {
+                // Other projects can publish output throughout a scan. A fixed
+                // retry count would abandon this queue even though those writers
+                // will eventually finish and leave a stable accounting window.
+                // Keep the wait interruptible and cap its polling rate.
+                contentions = contentions.saturating_add(1);
+                std::thread::sleep(Duration::from_millis(
+                    25_u64.saturating_mul(u64::from(contentions).min(10)),
+                ));
+            } else {
+                contentions = 0;
+                std::thread::yield_now();
+            }
+            (storage, cleanup_progress) = service.automatic_housekeeping_progress(1)?;
+        }
+        if storage.launch_capacity_reached {
+            return Ok(format!(
+                "Storage capacity reserve reached: {} of {} bytes and {} of {} files/directories projected; next eligible page has {} bytes in {} attempts; {} bytes are protected or outside this page (last reconciled SQLite {}, WAL {}, runner logs {}, evidence {}; reusable SQLite {}). Additional work is paused until capacity is raised or retained data is reclaimed",
+                storage.allocated_bytes,
+                storage.effective_max_bytes,
+                storage.allocated_files,
+                storage.effective_max_files,
+                storage.reclaimable_bytes,
+                storage.candidates.len(),
+                storage.protected_bytes,
+                storage.database_bytes,
+                storage.wal_bytes,
+                storage.runner_log_bytes,
+                storage.evidence_bytes,
+                storage.reusable_database_bytes,
+            ));
+        }
         if let Some(stopped) = admit(service, &task, notified)? {
             return Ok(stopped);
         }
@@ -1368,6 +1426,16 @@ fn execute(
         ctx.persist_active_time(service, run)?;
         return Ok(Finish::Stopped(outcome));
     }
+    let storage = service.storage_preview()?;
+    if storage.work_capacity_reached {
+        return Ok(Finish::Stopped(Outcome::DeliveryBlocked(format!(
+            "Resource limit: storage capacity reserve reached ({} / {} bytes, {} / {} files/directories); evidence and work retained",
+            storage.allocated_bytes,
+            storage.effective_max_bytes,
+            storage.allocated_files,
+            storage.effective_max_files,
+        ))));
+    }
     let mut spec = spec.clone();
     let artifact_relative = format!("evidence/attempt-{}/step-{}", run.attempt, step.id);
     spec.artifact_target = Some(process::ArtifactTarget {
@@ -1554,9 +1622,14 @@ pub fn background(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
+    let log_budget = service.runner_log_budget()?.min(crate::resource::limit(
+        "KTASK_RUNNER_LOG_BYTES",
+        8 * 1024 * 1024,
+    ));
     let mut logger = Command::new(&paths.executable)
         .arg("__logger")
         .arg(&log_path)
+        .env("KTASK_RUNNER_LOG_BYTES", log_budget.to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

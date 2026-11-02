@@ -329,6 +329,7 @@ impl Default for Actor {
 impl Service {
     /// Read commands select a registered root without registering another project.
     pub fn find(db: Database, root: &Path) -> Result<Option<Self>> {
+        retention::initialize_capacity_admission(&db)?;
         let root = root.canonicalize()?;
         let project: Option<(i64, String)> = db
             .connection()
@@ -358,6 +359,7 @@ impl Service {
     }
     /// The canonical working directory selects the project, never the instance data root.
     pub fn open(mut db: Database, root: &Path, name: Option<&str>) -> Result<Self> {
+        retention::initialize_capacity_admission(&db)?;
         let root = root.canonicalize()?;
         require(root.is_dir(), "Project root must be a directory")?;
         let bytes = root.as_os_str().as_encoded_bytes();
