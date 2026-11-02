@@ -363,6 +363,7 @@ fn controls(app: &App) -> Vec<(&'static str, Action)> {
             ("c Checks", Action::ProjectChecks),
             ("g Git delivery", Action::Delivery),
             ("k Storage", Action::Storage),
+            ("b Build cache", Action::BuildCache),
             ("e Preferences", Action::Configure),
             ("Esc Back", Action::Back),
         ],
@@ -1355,7 +1356,7 @@ fn draw_information(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect)
                 .and_then(|service| service.delivery_config().ok())
                 .unwrap_or_default();
             format!(
-                "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\nDelivery: {} via {}/{}\n\nDefaults apply to new tasks; existing revisions stay pinned.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
+                "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup; b for build caches.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\nDelivery: {} via {}/{}\n\nDefaults apply to new tasks; existing revisions stay pinned.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
                 app.project_name,
                 if app.mouse_enabled {
                     "Enabled"
@@ -1465,6 +1466,8 @@ fn dialog_hint(dialog: &crate::dialog::Dialog, has_position: bool) -> &str {
         "Wheel / PgUp / PgDn: scroll · Esc: close"
     } else if matches!(dialog.kind, DialogKind::StorageConfirm(_)) {
         "Enter / Ctrl-S: delete evidence · Esc: cancel"
+    } else if matches!(dialog.kind, DialogKind::BuildCacheConfirm(_)) {
+        "Enter / Ctrl-S: confirm · Esc: cancel"
     } else {
         "Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply"
     }
@@ -1570,6 +1573,8 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
             ("Delete evidence", Action::Submit),
             ("Cancel", Action::Cancel),
         ]
+    } else if matches!(dialog.kind, DialogKind::BuildCacheConfirm(_)) {
+        vec![("Confirm", Action::Submit), ("Cancel", Action::Cancel)]
     } else {
         vec![("Apply", Action::Submit), ("Cancel", Action::Cancel)]
     };

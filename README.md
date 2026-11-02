@@ -123,6 +123,9 @@ example `ktask delivery --mode pr --remote origin --base main --if-version 0`.
 Configuration → Storage previews retained output and check transcript bytes, sets the age
 of completed work eligible for cleanup, and applies cleanup after review. History marks
 pruned content; live work and unresolved failures retain their evidence.
+Configuration → Build cache (`b`) shows the same inventory, edits the cache bounds, previews and
+runs cleanup, and adopts the project's `target` after confirmation; see
+[docs/RESOURCE_LIMITS.md](docs/RESOURCE_LIMITS.md#build-caches-and-diagnostic-trees).
 Mouse, run-one/continue-queue, and planner approval preferences persist per project and instance.
 Break down uses the configured planning model and previews ordinary subtasks before applying them.
 
@@ -365,6 +368,12 @@ cargo run --locked -- approve 1 --if-version 1
 - Storage: `storage` previews logical output and artifact bytes; `storage --apply` removes
   eligible content. `retention DAYS [--if-version N]` sets the age policy (default 30 days;
   0 allows immediate cleanup of closed work). Both commands support `--json`.
+- Build caches: `cache` inventories owned caches, unowned ones (listed, never cleaned),
+  provider session storage (reported separately, never cleaned), exclusions and capacity
+  pressure. `cache adopt [PATH]` is the explicit opt-in that takes ownership of a Cargo
+  `target`; `cache clean [--apply]` previews or retires obsolete generations;
+  `cache limits [--max-bytes N --max-files N --keep-generations N --grace-secs N
+  --min-free-bytes N --if-version N]` shows or sets the finite bounds. All support `--json`.
 - Change: `add`, `edit ID`, `move ID --before ID`, `approve`, `reject --reason`, `stop`, `done`,
   `cancel`, `supersede --by`, `copy [--before ID]`. Each task's JSON lists its `state` and the
   `actions` it offers; a refused action exits 4 naming both.

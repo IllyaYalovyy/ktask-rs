@@ -408,6 +408,17 @@ fn run_inner(
         if let Some(stopped) = admit(service, &task, notified)? {
             return Ok(stopped);
         }
+        // Safe point: this supervisor holds the workspace lease and no worker is live, so
+        // obsolete build generations in caches this instance owns can retire now.
+        if let Some(done) = crate::build_cache::maintain(paths, &workspace.root) {
+            let freed: u64 = done.reports.iter().map(|r| r.freed_bytes).sum();
+            if freed > 0 || done.scratch_reclaimed > 0 {
+                eprintln!(
+                    "build cache: retired {freed} bytes of obsolete generations; {} abandoned scratch run(s) reclaimed",
+                    done.scratch_reclaimed
+                );
+            }
+        }
         let (task, revised) = adopt_revision(service, task)?;
         let opening = if std::mem::take(&mut repairing) || service.replan_pending(task.id)? {
             cycle::Opening::Repair

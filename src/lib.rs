@@ -3,6 +3,8 @@ pub const PRODUCT: &str = "ktask RS";
 mod actions;
 mod app;
 pub mod application;
+pub mod build_cache;
+mod cache_ui;
 mod cli;
 pub(crate) mod clock;
 mod configuration_ui;

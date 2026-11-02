@@ -674,7 +674,11 @@ impl Worker {
         let mut child = spawned?;
         let mut input = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");
-        let (tx, messages) = mpsc::sync_channel(32);
+        // The reader keeps draining the pipe while the supervisor waits on a busy shared
+        // database, which under many concurrent projects can block a commit for seconds. The
+        // bound (1,024 chunks, each at most one 4 KiB read plus framing) keeps memory finite; a supervisor that truly
+        // stops consuming still fills it and the guardian's two-second stall rule applies.
+        let (tx, messages) = mpsc::sync_channel(1024);
         let reader = thread::spawn(move || {
             for line in io::BufReader::new(stdout).lines() {
                 let message = line

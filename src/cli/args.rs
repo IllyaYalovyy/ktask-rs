@@ -47,6 +47,44 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
+#[derive(Subcommand)]
+pub enum CacheAction {
+    /// Retire obsolete generations in owned caches and reclaim abandoned scratch. Previews
+    /// unless --apply; an active build, open file or fresh output is always kept.
+    Clean {
+        /// Delete now instead of previewing.
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Explicit opt-in: take ownership of an existing Cargo target directory (default:
+    /// the project's target). Nothing unowned is ever cleaned without this.
+    Adopt {
+        /// A Cargo target directory; defaults to the project's own `target`.
+        path: Option<PathBuf>,
+    },
+    /// Show or set the finite cache bounds.
+    Limits {
+        /// Allocated bytes one owned cache may hold.
+        #[arg(long)]
+        max_bytes: Option<u64>,
+        /// Files and directories one owned cache may hold.
+        #[arg(long)]
+        max_files: Option<u64>,
+        /// Newest generations of each local build artifact kept warm.
+        #[arg(long)]
+        keep_generations: Option<u64>,
+        /// Output newer than this many seconds counts as active.
+        #[arg(long)]
+        grace_secs: Option<u64>,
+        /// Free-space floor that raises a capacity-pressure warning.
+        #[arg(long)]
+        min_free_bytes: Option<u64>,
+        /// Reject if the policy changed since this version.
+        #[arg(long)]
+        if_version: Option<u64>,
+    },
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 pub enum ActorKind {
     Human,
@@ -133,6 +171,14 @@ pub enum Command {
         /// Remove the previewed output now.
         #[arg(long)]
         apply: bool,
+    },
+    /// Inventory build caches and diagnostic trees; manage the ones this instance owns.
+    ///
+    /// Without a subcommand lists owned caches, unowned ones (inventoried only), provider
+    /// session storage (never cleaned) and capacity pressure. Needs no registered project.
+    Cache {
+        #[command(subcommand)]
+        action: Option<CacheAction>,
     },
     /// Set how many days completed attempts keep their output (0 means immediately).
     Retention {

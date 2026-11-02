@@ -97,6 +97,8 @@ OUTPUT CONTRACT
   The runner cleans eligible closed evidence at queue handoffs and pauses new work
   when protected allocation leaves no capacity. storage previews physical SQLite,
   WAL, artifact, directory and runner log allocation before manual --apply.
+  cache lists owned/unowned build caches and provider storage; cache adopt opts a Cargo
+  target in, cache clean [--apply] retires obsolete generations, cache limits sets bounds.
 
   Without --json, output is human text and may change. With --json, stdout carries one
   line:  {"schema_version":1,"ok":true,"data":...}

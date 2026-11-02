@@ -1537,11 +1537,15 @@ mod tests {
             }
             Ok(other)
         });
+        // Each scan step also grows the WAL, and a concurrent probe legitimately charges a
+        // growth of 64 KiB or more, which restarts the scan. The probing thread is finite, so
+        // the scan must settle once it ends; unchanged runner logs never add a charge.
         let mut settled = false;
-        for _ in 0..30 {
-            if bounded_allocation_scan(&service.db)? == ScanProgress::Settled {
-                settled = true;
-                break;
+        let mut after_probes = 0;
+        while !settled && after_probes < 30 {
+            settled = bounded_allocation_scan(&service.db)? == ScanProgress::Settled;
+            if concurrent.is_finished() {
+                after_probes += 1;
             }
         }
         let other = concurrent.join().expect("runner probe panicked")?;
@@ -1738,11 +1742,17 @@ mod tests {
         for _ in 0..8 {
             let _ = bounded_allocation_scan(&service.db)?;
             calls += 1;
-            let visited: i64 = service.db.connection().query_row(
-                "SELECT entries_visited FROM instance_allocation_scan WHERE id=1",
-                [],
-                |r| r.get(0),
-            )?;
+            // Concurrent output can contend the very first call before it records a scan.
+            let visited: i64 = service
+                .db
+                .connection()
+                .query_row(
+                    "SELECT entries_visited FROM instance_allocation_scan WHERE id=1",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .unwrap_or(0);
             assert!(visited.saturating_sub(previous_visited) <= CLEANUP_BATCH);
             previous_visited = visited;
         }
@@ -1756,11 +1766,17 @@ mod tests {
         loop {
             let progress = bounded_allocation_scan(&service.db)?;
             calls += 1;
-            let visited: i64 = service.db.connection().query_row(
-                "SELECT entries_visited FROM instance_allocation_scan WHERE id=1",
-                [],
-                |r| r.get(0),
-            )?;
+            // Concurrent output can contend the very first call before it records a scan.
+            let visited: i64 = service
+                .db
+                .connection()
+                .query_row(
+                    "SELECT entries_visited FROM instance_allocation_scan WHERE id=1",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .unwrap_or(0);
             assert!(visited.saturating_sub(previous_visited) <= CLEANUP_BATCH);
             previous_visited = visited;
             if progress == ScanProgress::Settled {

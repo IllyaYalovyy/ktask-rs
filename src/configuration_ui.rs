@@ -27,6 +27,9 @@ impl App {
         self.auto_advance = saved.continuation == Continuation::Queue;
     }
     pub(crate) fn open_project_config(&mut self, action: Action) -> Result<(), String> {
+        if action == Action::BuildCache {
+            return self.open_build_cache();
+        }
         let dialog = match action {
             Action::Storage => {
                 let preview = self
@@ -248,6 +251,12 @@ impl App {
         Ok(())
     }
     pub(crate) fn save_project_config(&mut self, dialog: &mut Dialog) -> Result<bool, String> {
+        if matches!(
+            dialog.kind,
+            DialogKind::BuildCache(_) | DialogKind::BuildCacheConfirm(_)
+        ) {
+            return self.save_build_cache(dialog);
+        }
         match &dialog.kind {
             DialogKind::Storage(preview) => {
                 let days: i64 = dialog

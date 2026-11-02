@@ -270,7 +270,10 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
                 ),
             })
         }
-        Command::Run { .. } | Command::Storage { .. } | Command::Retention { .. } => {
+        Command::Run { .. }
+        | Command::Storage { .. }
+        | Command::Cache { .. }
+        | Command::Retention { .. } => {
             unreachable!("runner dispatch")
         }
         Command::Init {

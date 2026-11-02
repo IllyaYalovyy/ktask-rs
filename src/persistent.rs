@@ -211,6 +211,7 @@ impl App {
                 | Action::ProjectChecks
                 | Action::Delivery
                 | Action::Storage
+                | Action::BuildCache
         ) {
             if let Err(error) = self.open_project_config(action) {
                 self.message(error);
@@ -836,6 +837,8 @@ impl App {
                 | DialogKind::Delivery(_)
                 | DialogKind::Storage(_)
                 | DialogKind::StorageConfirm(_)
+                | DialogKind::BuildCache(_)
+                | DialogKind::BuildCacheConfirm(_)
         ) {
             return self.save_project_config(dialog);
         }

@@ -1,3 +1,5 @@
+#[path = "cases/build_cache.rs"]
+mod build_cache;
 #[path = "cases/cleanup.rs"]
 mod cleanup;
 #[path = "cases/cli.rs"]

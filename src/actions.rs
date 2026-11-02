@@ -341,7 +341,11 @@ impl App {
                 }
             }
             Action::Configure => self.open_config(),
-            Action::ProjectModels | Action::ProjectChecks | Action::Delivery | Action::Storage => {}
+            Action::ProjectModels
+            | Action::ProjectChecks
+            | Action::Delivery
+            | Action::Storage
+            | Action::BuildCache => {}
             Action::Import => {
                 self.dialog = Some(Dialog::new(
                     DialogKind::Import,
@@ -1454,6 +1458,8 @@ impl App {
             | DialogKind::Delivery(_)
             | DialogKind::Storage(_)
             | DialogKind::StorageConfirm(_)
+            | DialogKind::BuildCache(_)
+            | DialogKind::BuildCacheConfirm(_)
             | DialogKind::StoredImport(_)
             | DialogKind::FileOverwrite { .. } => {
                 return Err("Disk operations require SQLite mode".into());

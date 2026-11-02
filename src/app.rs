@@ -98,6 +98,7 @@ pub enum Action {
     ProjectChecks,
     Delivery,
     Storage,
+    BuildCache,
     Scroll(i32),
     Position(i32),
     Fields(i32),
@@ -575,6 +576,9 @@ impl App {
             }
             View::Config if self.service.is_some() && code == KeyCode::Char('k') => {
                 Some(Action::Storage)
+            }
+            View::Config if self.service.is_some() && code == KeyCode::Char('b') => {
+                Some(Action::BuildCache)
             }
             View::Config if self.service.is_some() && code == KeyCode::Char('g') => {
                 Some(Action::Delivery)

@@ -45,6 +45,8 @@ pub enum DialogKind {
     Delivery(crate::application::configuration::DeliveryConfig),
     Storage(crate::application::retention::Preview),
     StorageConfirm(crate::application::retention::Preview),
+    BuildCache(crate::build_cache::Policy),
+    BuildCacheConfirm(BuildCachePlan),
     Config,
     ResetConfig,
     Help,
@@ -292,4 +294,11 @@ impl Dialog {
             }
         }
     }
+}
+
+/// What a confirmed Build cache dialog will do.
+#[derive(Clone, Debug)]
+pub enum BuildCachePlan {
+    Clean,
+    Adopt(std::path::PathBuf),
 }

@@ -30,6 +30,26 @@ impl Scratch {
         Ok(scratch)
     }
 
+    /// Deletes every run directory whose owner is gone and reports how many. Live owners
+    /// keep their kernel lease, so their files are never touched.
+    pub fn reclaim(root: &Path) -> io::Result<usize> {
+        match fs::metadata(root) {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error),
+        }
+        let sweep = open_lock(&root.join(".sweep.lock"))?;
+        sweep.lock()?;
+        let abandoned = reclaimed_entries(root).and_then(|mut found| {
+            found.extend(set_aside_abandoned(root)?);
+            Ok(found)
+        });
+        sweep.unlock()?;
+        let abandoned = abandoned?;
+        delete_all(&abandoned);
+        Ok(abandoned.len())
+    }
+
     fn claim(root: &Path) -> io::Result<(Self, Vec<PathBuf>)> {
         fs::create_dir_all(root)?;
         let sweep = open_lock(&root.join(".sweep.lock"))?;
