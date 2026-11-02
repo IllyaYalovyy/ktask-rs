@@ -1300,10 +1300,17 @@ fn judge_once(
         return Ok(Outcome::Failed("protocol", message.into()));
     }
     let (summary, outcome) = match judgment {
-        // The first line is the judge's reason, shown to the owner as the round's why.
+        // The reason's first line is the owner's one-line why for the round.
         agent::Judgment::Repair { plan, reason } => (
             format!("Repair: {reason}\nAuthorized repair plan:\n{plan}"),
-            Outcome::Passed(format!("{}\n{plan}", reason.replace('\n', " "))),
+            Outcome::Passed(format!(
+                "{}\n{plan}",
+                reason
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .unwrap_or_default()
+            )),
         ),
         agent::Judgment::Ask { question, reason } => {
             service.finish_step(&step, false, &format!("Owner decision needed: {reason}"))?;

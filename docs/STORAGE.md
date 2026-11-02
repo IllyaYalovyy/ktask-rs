@@ -61,8 +61,8 @@ write the supervisor's state root, and the endpoint accepts no other mutation.
 
 Model saves and execution preflight validate exact provider model IDs. Codex reads
 `$CODEX_HOME/models_cache.json` (default `$HOME/.codex/models_cache.json`), including
-`models[].slug` and `supported_reasoning_levels[].effort`. Claude's standard `sonnet`,
-`opus`, and `haiku` aliases are accepted. Other IDs and custom deployments require an
+`models[].slug` and `supported_reasoning_levels[].effort`. Claude's standard `sonnet`, `opus`,
+`haiku`, and `fable` aliases are accepted. Other IDs and custom deployments require an
 explicit entry in `model-catalog.json` beside the instance's `ktask.sqlite3`:
 
 ```json

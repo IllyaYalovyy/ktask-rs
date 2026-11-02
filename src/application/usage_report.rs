@@ -78,16 +78,16 @@ impl UsageTotals {
         }
     }
 
-    /// A short History row label, money rounded to cents; the detail pane retains the full cost explanation.
+    /// A short History row label: money rounded to cents, else new tokens ("2.0M tkn");
+    /// the detail pane retains the full explanation.
     pub fn history_label(&self) -> String {
         match (self.cost_microusd, self.uncosted_calls) {
             (Some(cost), missing) if missing > 0 => {
                 format!("{} +{missing} no$", cents_label(cost))
             }
-            _ => match self.cost_microusd {
-                Some(cost) => cents_label(cost),
-                None => self.cost_label(),
-            },
+            (Some(cost), _) => cents_label(cost),
+            (None, _) if self.calls == 0 => "-".into(),
+            (None, _) => format!("{} tkn", count(self.new_tokens())),
         }
     }
 
@@ -286,6 +286,16 @@ mod tests {
             usage.add([None, None, None, None, Some(micro)]);
             assert_eq!(usage.history_label(), label);
         }
+    }
+
+    #[test]
+    fn history_without_cost_shows_new_tokens_in_short_form() {
+        assert_eq!(UsageTotals::default().history_label(), "-");
+        let mut reported = UsageTotals::default();
+        reported.add([Some(1_900_000), Some(5_000_000), None, Some(100_000), None]);
+        assert_eq!(reported.history_label(), "2.0M tkn");
+        reported.add([None, None, None, None, None]);
+        assert_eq!(reported.history_label(), "? tkn");
     }
 
     #[test]

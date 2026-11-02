@@ -89,6 +89,15 @@ fn model_metadata_rejects_each_save_atomically_and_accepts_explicit_aliases() ->
         assert_eq!(service.snapshot()?.queue.len(), 1);
         definition.models[index] = None;
     }
+    for alias in ["sonnet", "opus", "haiku", "fable"] {
+        let standard = ModelConfig {
+            provider: "claude".into(),
+            model: alias.into(),
+            effort: Some("high".into()),
+        };
+        service.set_default("planning", &standard, true)?;
+        assert_eq!(service.project_defaults()?[0], Some(standard));
+    }
     let catalog = root.join("state/ktask-dev/model-catalog.json");
     std::fs::write(
         &catalog,
@@ -288,6 +297,17 @@ fn reject_invalid_model_defaults(t: &mut Terminal, root: &Path, mouse: bool) -> 
         }) && s.contains("codex/typo-model")
     })?;
     println!("INVALID MODEL SAVE mouse={mouse}\n{rejected}");
+    let unwrapped = |text: &str| {
+        text.chars()
+            .filter(|c| !c.is_whitespace() && *c != '│')
+            .collect::<String>()
+    };
+    let catalog = root.join("state/ktask-dev/model-catalog.json");
+    let ending = format!("declare the exact ID/alias in {}", catalog.display());
+    assert!(
+        unwrapped(&rejected).contains(&unwrapped(&ending)),
+        "the error must be shown in full, ending with {ending}"
+    );
     assert!(
         service(root)?
             .project_defaults()?

@@ -1231,45 +1231,84 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
             list,
         );
     } else {
-        let items: Vec<_> = visible
+        let tasks: Vec<_> = visible.iter().filter_map(|id| app.task(*id)).collect();
+        // Cells right of the title; History aligns numbers right and the finish time left.
+        let cells: Vec<Vec<String>> = tasks
             .iter()
-            .filter_map(|id| app.task(*id))
             .map(|task| {
-                let prefix = format!("#{:<3} {:<8} ", task.id, task.status().label());
-                let available = list.width.saturating_sub(4) as usize;
-                let statistics = if app.view == View::History {
+                if app.view == View::History {
                     let total_ms = task.attempts.iter().fold(0_u64, |total, attempt| {
                         total.saturating_add(attempt.elapsed_ms.saturating_add(attempt.waiting_ms))
                     });
                     let usage = if app.service.is_some() {
                         app.stored_usage(task.id).history_label()
                     } else if task.attempts.is_empty() {
-                        "none yet".into()
+                        "-".into()
                     } else {
                         format!("${:.2}", task.cost() as f64 / 100.0)
                     };
-                    // Demo tasks carry no real timestamps; SQLite tasks always do.
-                    let finished = if app.service.is_some() {
-                        format!(" {:<12}", finished_label(task.closed_at_ms))
-                    } else {
-                        String::new()
-                    };
-                    format!(
-                        "{finished} {:>3} {:>7} {:>width$}",
-                        task.attempts.len(),
+                    let mut row = vec![
+                        task.attempts.len().to_string(),
                         history_time(total_ms),
                         usage,
-                        width = Line::raw(&usage).width().max(12)
-                    )
+                    ];
+                    // Demo tasks carry no real timestamps; SQLite tasks always do.
+                    if app.service.is_some() {
+                        row.insert(0, finished_label(task.closed_at_ms));
+                    }
+                    row
                 } else if app.view == View::Queue && list.width >= QUEUE_MODEL_MIN_WIDTH {
-                    format!(" {}", model_summary(&task.definition().settings))
+                    vec![model_summary(&task.definition().settings)]
                 } else {
-                    String::new()
-                };
-                let title_width = available
-                    .saturating_sub(Line::raw(&prefix).width() + Line::raw(&statistics).width());
+                    Vec::new()
+                }
+            })
+            .collect();
+        let width = |text: &str| Line::raw(text).width();
+        let id_width = tasks.iter().map(|task| task.id.to_string().len()).max();
+        let status_width = tasks.iter().map(|task| task.status().label().len()).max();
+        // At least "#123 Pending ", widening only for longer IDs or statuses in view.
+        let (id_width, status_width) = (
+            id_width.unwrap_or(0).max(3),
+            status_width.unwrap_or(0).max(8),
+        );
+        let cell_widths: Vec<usize> = (0..cells.first().map_or(0, Vec::len))
+            .map(|index| {
+                cells
+                    .iter()
+                    .map(|row| width(&row[index]))
+                    .max()
+                    .unwrap_or(0)
+            })
+            .collect();
+        let left_aligned =
+            |index: usize| app.view != View::History || (app.service.is_some() && index == 0);
+        let items: Vec<_> = tasks
+            .iter()
+            .zip(&cells)
+            .map(|(task, row)| {
+                let prefix = format!(
+                    "#{:<id_width$} {:<status_width$} ",
+                    task.id,
+                    task.status().label()
+                );
+                let statistics: String = row
+                    .iter()
+                    .zip(&cell_widths)
+                    .enumerate()
+                    .map(|(index, (cell, &cell_width))| {
+                        let pad = " ".repeat(cell_width - width(cell));
+                        if left_aligned(index) {
+                            format!(" {cell}{pad}")
+                        } else {
+                            format!(" {pad}{cell}")
+                        }
+                    })
+                    .collect();
+                let available = list.width.saturating_sub(4) as usize;
+                let title_width = available.saturating_sub(width(&prefix) + width(&statistics));
                 let text = shortened(&task.definition().title, title_width);
-                let gap = " ".repeat(title_width.saturating_sub(Line::raw(&text).width()));
+                let gap = " ".repeat(title_width.saturating_sub(width(&text)));
                 ListItem::new(Line::from(vec![
                     Span::styled(prefix, Style::new().fg(status_color(task.status()))),
                     Span::raw(text),
@@ -1508,8 +1547,16 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     } else {
         dialog.body.clone()
     };
-    let lines = wrapped(&body_text, area.width.min(78).saturating_sub(2) as usize);
-    let height = (lines.len() + dialog.fields.len() * 2 + 6)
+    let width = area.width.min(78).saturating_sub(2) as usize;
+    let lines = wrapped(&body_text, width);
+    // Errors wrap in full: their end often names the file or value to fix.
+    let hint = wrapped(dialog_hint(&dialog, position.is_some()), width);
+    let hint_rows = if matches!(dialog.kind, DialogKind::Inspect { .. }) {
+        1
+    } else {
+        hint.len().max(2)
+    };
+    let height = (lines.len() + dialog.fields.len() * 2 + 4 + hint_rows)
         .max(12)
         .min(usize::from(area.height - 2)) as u16;
     let popup = Rect::new(
@@ -1524,10 +1571,11 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         popup,
     );
     let inner = Rect::new(popup.x + 1, popup.y + 1, popup.width - 2, popup.height - 2);
+    let hint_rows = (hint_rows as u16).min(inner.height.saturating_sub(5).max(1));
     dialog.field_capacity = dialog
         .fields
         .len()
-        .min((inner.height.saturating_sub(5) / 2) as usize)
+        .min((inner.height.saturating_sub(3 + hint_rows) / 2) as usize)
         .max(1);
     if matches!(dialog.kind, DialogKind::Models(_)) && app.service.is_some() {
         dialog.field_capacity = dialog.field_capacity.min(7);
@@ -1541,11 +1589,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     let [body, fields, error, actions] = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(dialog.fields.len().min(dialog.field_capacity) as u16 * 2),
-        Constraint::Length(if matches!(dialog.kind, DialogKind::Inspect { .. }) {
-            1
-        } else {
-            2
-        }),
+        Constraint::Length(hint_rows),
         Constraint::Length(
             if matches!(
                 dialog.kind,
@@ -1578,10 +1622,8 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     );
     app.selection.zone(body);
     draw_fields(frame, app, &dialog, fields);
-    let hint = dialog_hint(&dialog, position.is_some());
     frame.render_widget(
-        Paragraph::new(hint)
-            .wrap(Wrap { trim: false })
+        Paragraph::new(hint.into_iter().map(Line::raw).collect::<Vec<_>>())
             .style(Style::new().fg(if dialog.error.is_empty() { MUTED } else { WARN })),
         error,
     );

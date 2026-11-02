@@ -39,6 +39,25 @@ fn service(root: &Path) -> Result<Service> {
         None,
     )?)
 }
+/// Each word of a rendered row with the terminal column it starts at.
+fn words_at(row: &str) -> Vec<(usize, &str)> {
+    let mut words = Vec::new();
+    let mut start = None;
+    for (column, (at, ch)) in row.char_indices().enumerate() {
+        match (ch.is_whitespace(), start) {
+            (false, None) => start = Some((column, at)),
+            (true, Some((first, from))) => {
+                words.push((first, &row[from..at]));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some((first, from)) = start {
+        words.push((first, &row[from..]));
+    }
+    words
+}
 fn target(service: &mut Service, id: i64) -> Result<VersionedTask> {
     let snapshot = service.snapshot()?;
     let task = snapshot
@@ -627,6 +646,9 @@ fn history_rows_show_attempts_total_time_and_usage_by_keyboard_and_mouse() -> Re
     let mut writer = service(root)?;
     let current = target(&mut writer, unknown_id)?;
     writer.mark_done(current, "Recorded")?;
+    let cancelled_id = writer.create(&[definition("Never ran")], None, true)?[0];
+    let cancelled = target(&mut writer, cancelled_id)?;
+    writer.cancel(cancelled, "")?;
     drop(writer);
 
     for (cols, mouse) in [(70, false), (70, true), (100, false), (100, true)] {
@@ -644,7 +666,7 @@ fn history_rows_show_attempts_total_time_and_usage_by_keyboard_and_mouse() -> Re
             t.send("3")?;
         }
         let screen = t.screen("history statistics", |s| {
-            s.contains("Attempts Time Usage") && s.contains("$0.01") && s.contains("2k new tokens")
+            s.contains("Attempts Time Usage") && s.contains("$0.01") && s.contains("2k tkn")
         })?;
         println!("HISTORY STATISTICS {cols} mouse={mouse}\n{screen}");
         let known = screen
@@ -660,23 +682,51 @@ fn history_rows_show_attempts_total_time_and_usage_by_keyboard_and_mouse() -> Re
             screen.find(&format!("#{unknown_id}")) < screen.find(&format!("#{known_id}")),
             "{screen}"
         );
+        let cancelled = screen
+            .lines()
+            .find(|line| line.contains(&format!("#{cancelled_id}")))
+            .unwrap();
         let known = known.split('│').nth(1).unwrap();
         let unknown = unknown.split('│').nth(1).unwrap();
-        for row in [known, unknown] {
-            let words = row.split_whitespace().collect::<Vec<_>>();
+        let cancelled = cancelled.split('│').nth(1).unwrap();
+        // Every column starts (text) or ends (numbers) at the same place in every row.
+        let mut columns = Vec::new();
+        for row in [known, unknown, cancelled] {
+            let row = row.replace('›', " ");
+            let words = words_at(&row);
             let clock = words
                 .iter()
-                .position(|w| {
+                .position(|(_, w)| {
                     w.len() >= 4
                         && w.as_bytes()[w.len() - 3] == b':'
                         && w.bytes().filter(u8::is_ascii_digit).count() == w.len() - 1
                 })
                 .unwrap_or_else(|| panic!("no finish time in {row}"));
             assert!(
-                clock >= 2 && words[clock - 2].len() == 3 && words[clock - 1].parse::<u8>().is_ok(),
+                clock >= 2
+                    && words[clock - 2].1.len() == 3
+                    && words[clock - 1].1.parse::<u8>().is_ok(),
                 "{row}"
             );
+            let end = |(at, word): (usize, &str)| at + word.chars().count();
+            columns.push([
+                words[2].0,
+                words[clock - 2].0,
+                end(words[clock + 1]),
+                end(words[clock + 2]),
+            ]);
         }
+        assert!(
+            columns.windows(2).all(|pair| pair[0] == pair[1]),
+            "{columns:?}\n{screen}"
+        );
+        assert!(
+            cancelled
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .ends_with(&["0", "0s", "-"]),
+            "{cancelled}"
+        );
         assert!(
             known
                 .split_whitespace()
@@ -688,7 +738,7 @@ fn history_rows_show_attempts_total_time_and_usage_by_keyboard_and_mouse() -> Re
             unknown
                 .split_whitespace()
                 .collect::<Vec<_>>()
-                .ends_with(&["2", "6s", "2k", "new", "tokens"]),
+                .ends_with(&["2", "6s", "2k", "tkn"]),
             "{unknown}"
         );
         quit(&mut t)?;
@@ -758,7 +808,7 @@ fn codex_only_usage_reaches_current_history_stats_and_cli() -> Result {
             t.send("3")?;
         }
         let history = t.screen("Codex history usage", |s| {
-            s.contains("Attempts Time Usage") && s.contains("2k new tokens")
+            s.contains("Attempts Time Usage") && s.contains("2k tkn")
         })?;
         println!("CODEX HISTORY mouse={mouse}\n{history}");
         quit(&mut t)?;

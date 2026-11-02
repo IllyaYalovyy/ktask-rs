@@ -3943,7 +3943,7 @@ case "$prompt" in *"You are the failure judge"*)
  printf '%s' "$prompt" > "$HOME/prompt-judge"
  if [ '{mode}' = sequential-pr ]; then
   case "$prompt" in *"passed tests dropped from 5 at the previous checkpoint to 4"*)
-   printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"repair\",\"plan\":\"Restore five passing tests and zero ignored tests\",\"reason\":\"Validation rejected the recorded test-count regression\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
+   printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"repair\",\"plan\":\"Restore five passing tests and zero ignored tests\",\"reason\":\"\\nValidation rejected the recorded test-count regression\\nThe working tree has no diff from reviewed tree 0123abc\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
   esac
  fi
  if [ '{mode}' = judge-error-once ] && [ ! -f "$HOME/judge-error" ]; then
@@ -5563,6 +5563,19 @@ fn real_binary_records_check_counts_and_rejects_regression_at_validation() -> Re
         "{report}"
     );
     println!("CHECK COUNT REGRESSION REJECTED\n{report}");
+    assert!(
+        judge_prompt.contains("The reason's first line is shown to the owner as this round's Why"),
+        "{judge_prompt}"
+    );
+    let fix_round: String = db.connection().query_row(
+        "SELECT message FROM events WHERE task_id=2 AND message LIKE 'Workflow · Fix%' ORDER BY id LIMIT 1",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(
+        fix_round,
+        "Workflow · Fix · repair round 1/10\nWhy: Validation rejected the recorded test-count regression"
+    );
     for role in ["review", "validation"] {
         let prompt = fs::read_to_string(f.scratch.path().join(format!("first-{role}-prompt")))?;
         assert!(

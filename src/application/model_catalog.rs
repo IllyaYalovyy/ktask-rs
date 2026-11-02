@@ -94,7 +94,8 @@ impl Service {
                 return Ok((entry.provider.clone(), entry.model.clone()));
             }
         }
-        if model.provider == "claude" && ["sonnet", "opus", "haiku"].contains(&model.model.as_str())
+        if model.provider == "claude"
+            && ["sonnet", "opus", "haiku", "fable"].contains(&model.model.as_str())
         {
             validate_effort(role, model, None, &configured)?;
             return Ok((model.provider.clone(), model.model.clone()));

@@ -974,8 +974,10 @@ fn build_cache_flows_work_from_keyboard_and_mouse() -> Result {
         screen(&t, "Build cache limits saved")?;
         assert_eq!(build_cache::policy(&f.paths)?.keep_generations, 1);
         go(&mut t, "b", "b Build cache")?;
+        // Saving closed the form, so its fields are back only once it reopens; the footer
+        // keeps "limits saved" visible, or hidden behind a tall form, depending on paths.
         t.screen("reopened", |s| {
-            s.contains("Owned:") && !s.contains("limits saved")
+            s.contains("Owned:") && s.contains("Warm generations kept")
         })?;
         if mouse {
             t.click("Save limits")?;
