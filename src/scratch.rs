@@ -102,7 +102,7 @@ impl Drop for Scratch {
     }
 }
 
-fn open_lock(path: &Path) -> io::Result<File> {
+pub(crate) fn open_lock(path: &Path) -> io::Result<File> {
     OpenOptions::new()
         .read(true)
         .write(true)

@@ -7,7 +7,7 @@ use crate::{
     instance::Instance,
     storage::{self, Database},
 };
-use args::{CacheAction, Cli, Command};
+use args::{Cli, Command};
 use clap::{CommandFactory, FromArgMatches};
 use serde_json::json;
 use std::{
@@ -193,7 +193,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
     }
     if let Command::Cache { action } = command {
         let paths = instance.paths()?;
-        return emit(cache_reply(&paths, &root, action.as_ref())?, cli.json);
+        return emit(execute::cache(&paths, &root, action.as_ref())?, cli.json);
     }
     // Preview is file validation only: no project registration or database initialization.
     if let Command::Import {
@@ -571,155 +571,4 @@ fn validate(cli: &Cli) -> Result<()> {
         _ => {}
     }
     Ok(())
-}
-
-fn cache_reply(
-    paths: &crate::instance::Paths,
-    project: &std::path::Path,
-    action: Option<&CacheAction>,
-) -> Result<output::Reply> {
-    use crate::build_cache as cache;
-    let bytes = |n: u64| format!("{n} bytes");
-    match action {
-        None => {
-            let inv = cache::inventory(paths, project)?;
-            let mut text = format!(
-                "Managed (owned): {} in {} files · limit {} per cache, {} files · free {} of {}\n",
-                bytes(inv.managed_bytes),
-                inv.managed_files,
-                bytes(inv.policy.max_bytes),
-                inv.policy.max_files,
-                bytes(inv.free_bytes),
-                bytes(inv.total_bytes),
-            );
-            for (title, entries) in [
-                ("Owned", &inv.owned),
-                ("Not managed", &inv.unowned),
-                ("Provider storage (never cleaned)", &inv.provider),
-            ] {
-                text.push_str(&format!("{title}:\n"));
-                for e in entries {
-                    text.push_str(&format!(
-                        "  {} [{}/{}] {} in {} files — {}\n",
-                        e.path.display(),
-                        e.kind,
-                        e.ownership,
-                        bytes(e.bytes),
-                        e.files,
-                        output::safe(&e.note)
-                    ));
-                }
-            }
-            for line in &inv.pressure {
-                text.push_str(&format!("Pressure: {line}\n"));
-            }
-            for line in &inv.exclusions {
-                text.push_str(&format!("Excluded: {line}\n"));
-            }
-            Ok(output::Reply {
-                data: json!({"cache":inv}),
-                text,
-            })
-        }
-        Some(CacheAction::Clean { apply }) => {
-            let done = cache::clean(paths, *apply)?;
-            let mut text = format!(
-                "{} cleanup of {} owned cache(s); {} abandoned scratch run(s) reclaimed\n",
-                if *apply { "Applied" } else { "Preview" },
-                done.reports.len(),
-                done.scratch_reclaimed
-            );
-            for r in &done.reports {
-                text.push_str(&match &r.deferred {
-                    Some(why) => format!("  {}: deferred, {why}\n", r.root.display()),
-                    None => format!(
-                        "  {}: {} generation(s) {}, {} freed, {} protected; {} → {}{}\n",
-                        r.root.display(),
-                        r.removed_generations,
-                        if *apply {
-                            "removed"
-                        } else {
-                            "would be removed"
-                        },
-                        bytes(r.freed_bytes),
-                        r.protected_generations,
-                        bytes(r.before_bytes),
-                        bytes(r.after_bytes),
-                        if r.over_capacity {
-                            " · STILL OVER LIMIT (only warm or protected output remains)"
-                        } else {
-                            ""
-                        },
-                    ),
-                });
-                for note in &r.skipped {
-                    text.push_str(&format!("    {note}\n"));
-                }
-            }
-            Ok(output::Reply {
-                data: json!({"applied":apply,"scratch_reclaimed":done.scratch_reclaimed,"caches":done.reports}),
-                text,
-            })
-        }
-        Some(CacheAction::Adopt { path }) => {
-            let target = path.clone().unwrap_or_else(|| project.join("target"));
-            let claim = cache::adopt(paths, project, &target)?;
-            Ok(output::Reply {
-                data: json!({"root":claim.root,"already_owned":claim.already_owned}),
-                text: format!(
-                    "{} {}\n",
-                    if claim.already_owned {
-                        "Already owned:"
-                    } else {
-                        "Now owned:"
-                    },
-                    claim.root.display()
-                ),
-            })
-        }
-        Some(CacheAction::Limits {
-            max_bytes,
-            max_files,
-            keep_generations,
-            grace_secs,
-            min_free_bytes,
-            if_version,
-        }) => {
-            let current = cache::policy(paths)?;
-            let mut next = current;
-            let edits = [
-                max_bytes,
-                max_files,
-                keep_generations,
-                grace_secs,
-                min_free_bytes,
-            ];
-            if edits.iter().any(|e| e.is_some()) {
-                if if_version.is_some_and(|v| v != current.version) {
-                    return Err(storage::Error::Conflict(
-                        "Build cache policy changed; read it again".into(),
-                    )
-                    .into());
-                }
-                next.max_bytes = max_bytes.unwrap_or(next.max_bytes);
-                next.max_files = max_files.unwrap_or(next.max_files);
-                next.keep_generations = keep_generations.unwrap_or(next.keep_generations);
-                next.grace_secs = grace_secs.unwrap_or(next.grace_secs);
-                next.min_free_bytes = min_free_bytes.unwrap_or(next.min_free_bytes);
-                next = cache::set_policy(paths, current, next)?;
-            }
-            Ok(output::Reply {
-                data: json!({"limits":next}),
-                text: format!(
-                    "Build cache limits (v{}): {} bytes, {} files per cache; keep {} generations; {}s grace; {} byte free-space floor\n",
-                    next.version,
-                    next.max_bytes,
-                    next.max_files,
-                    next.keep_generations,
-                    next.grace_secs,
-                    next.min_free_bytes
-                ),
-            })
-        }
-    }
 }

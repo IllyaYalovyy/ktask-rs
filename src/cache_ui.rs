@@ -2,7 +2,7 @@
 //! same `build_cache` commands as the CLI.
 use crate::{
     app::Screen,
-    build_cache::{self, Policy},
+    build_cache::{self, Policy, size},
     dialog::{BuildCachePlan, Dialog, DialogKind, Field},
     persistent::StoredWorkspace,
 };
@@ -15,63 +15,16 @@ const MAX_FILES: &str = "Maximum files per cache";
 const GENERATIONS: &str = "Warm generations kept";
 const ACTION: &str = "Action";
 
-fn size(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
-}
-
 impl StoredWorkspace {
     pub(crate) fn open_build_cache(&self, screen: &Screen) -> Result<Dialog, String> {
         let paths = screen.instance.paths().map_err(|e| e.to_string())?;
         let root = self.service.project_root().map_err(|e| e.to_string())?;
         let inv = build_cache::inventory(&paths, &root).map_err(|e| e.to_string())?;
-        let mut body = format!(
-            "Managed: {} in {} files (limit {} / {} files per cache) · free {} of {}\n",
-            size(inv.managed_bytes),
-            inv.managed_files,
-            size(inv.policy.max_bytes),
-            inv.policy.max_files,
-            size(inv.free_bytes),
-            size(inv.total_bytes),
-        );
-        for (title, entries) in [
-            ("Owned", &inv.owned),
-            ("Not managed (opt in to clean)", &inv.unowned),
-            ("Provider storage (never cleaned)", &inv.provider),
-        ] {
-            if entries.is_empty() {
-                continue;
-            }
-            body.push_str(&format!("{title}:\n"));
-            for e in entries {
-                body.push_str(&format!(
-                    "  {} · {} · {} files · {}\n",
-                    e.path.display(),
-                    size(e.bytes),
-                    e.files,
-                    e.note
-                ));
-            }
-        }
-        for line in &inv.pressure {
-            body.push_str(&format!("Pressure: {line}\n"));
-        }
-        body.push_str(&format!("Never touched: {}\n", inv.exclusions.join("; ")));
         let policy = inv.policy;
         Ok(Dialog::new(
             DialogKind::BuildCache(policy),
             "Build cache",
-            &body,
+            &inv.render(),
             vec![
                 Field::text(MAX_BYTES, &policy.max_bytes.to_string()),
                 Field::text(MAX_FILES, &policy.max_files.to_string()),

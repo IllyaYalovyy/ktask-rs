@@ -7,9 +7,11 @@
 //! cleaned. Cleanup runs only where liveness is proved: no cargo build holds the profile
 //! lock, no process has the file open, mapped or running, and the output is not fresh.
 mod inventory;
+mod plan;
 mod prune;
+mod scan;
 
-pub use inventory::{Entry, Inventory, inventory};
+pub use inventory::{Entry, Inventory, Kind, Ownership, inventory, size};
 pub use prune::{Report, prune};
 
 use crate::{
@@ -18,7 +20,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{Read, Write},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
@@ -101,7 +103,7 @@ pub fn policy(paths: &Paths) -> Result<Policy> {
 pub fn set_policy(paths: &Paths, expected: Policy, mut next: Policy) -> Result<Policy> {
     next.validate()?;
     fs::create_dir_all(&paths.config)?;
-    let lock = lock_file(&paths.config.join(".build-cache.lock"))?;
+    let lock = crate::scratch::open_lock(&paths.config.join(".build-cache.lock"))?;
     lock.lock()?;
     let current = policy(paths)?;
     if current.version != expected.version {
@@ -115,15 +117,6 @@ pub fn set_policy(paths: &Paths, expected: Policy, mut next: Policy) -> Result<P
         &serde_json::to_vec_pretty(&next).expect("policy JSON"),
     )?;
     Ok(next)
-}
-
-fn lock_file(path: &Path) -> std::io::Result<File> {
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {

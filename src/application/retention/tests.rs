@@ -1819,6 +1819,15 @@ fn step_launch_reads_no_output_and_walks_no_tree() -> Result<()> {
     Ok(())
 }
 
+/// How long a thread (`/proc/<pid>/task/<tid>`) has been runnable but waiting for a CPU:
+/// the second field of its `schedstat`. Zero where the kernel keeps no scheduler statistics.
+fn scheduler_delay(thread: &Path) -> std::time::Duration {
+    std::fs::read_to_string(thread.join("schedstat"))
+        .ok()
+        .and_then(|stat| stat.split_whitespace().nth(1)?.parse().ok())
+        .map_or(std::time::Duration::ZERO, std::time::Duration::from_nanos)
+}
+
 #[test]
 fn cleanup_holds_the_write_lock_only_briefly() -> Result<()> {
     let (sandbox, mut service, task) = closed_service()?;
@@ -1840,36 +1849,87 @@ fn cleanup_holds_the_write_lock_only_briefly() -> Result<()> {
     }
     let policy = service.retention_policy()?;
     service.set_retention(policy, 0)?;
+    // SQLite fsyncs a new WAL header inside whichever transaction first writes after the
+    // WAL restarts, and each cleanup call ends with a checkpoint that lets it restart. That
+    // sync's latency is the filesystem's (above 90 ms on a loaded btrfs), not cleanup's, so
+    // the writer makes that first write between cleanup calls, and no automatic checkpoint
+    // restarts the WAL within a call. Every cleanup transaction and checkpoint still counts.
+    service
+        .db
+        .connection()
+        .execute_batch("PRAGMA wal_autocheckpoint=0; CREATE TABLE writer_turn(n INTEGER); INSERT INTO writer_turn VALUES (0);")?;
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let restart = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // This thread runs cleanup; the writer reads its scheduler statistics.
+    let cleanup_thread = PathBuf::from("/proc").join(std::fs::read_link("/proc/thread-self")?);
     let writer = {
         let stop = stop.clone();
+        let restart = restart.clone();
         let state = state.clone();
-        std::thread::spawn(move || -> Result<(std::time::Duration, u32)> {
-            let db = crate::storage::Database::open_in(&state)?;
-            // Retry every millisecond for at most 5 s, so the measured wait is how long
-            // cleanup holds the lock rather than where SQLite's backoff happens to wake.
-            fn poll(retries: i32) -> bool {
-                std::thread::sleep(std::time::Duration::from_millis(1));
-                retries < 5000
-            }
-            db.connection().busy_handler(Some(poll))?;
-            let mut longest = std::time::Duration::ZERO;
-            let mut turns = 0;
-            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                let started = std::time::Instant::now();
-                db.connection().execute_batch("BEGIN IMMEDIATE")?;
-                longest = longest.max(started.elapsed());
-                db.connection().execute_batch("COMMIT")?;
-                turns += 1;
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
-            Ok((longest, turns))
-        })
+        std::thread::spawn(
+            move || -> Result<(std::time::Duration, std::time::Duration, u32)> {
+                let db = crate::storage::Database::open_in(&state)?;
+                // NORMAL still syncs the header of a restarted WAL; the commit needs no other sync.
+                db.connection()
+                    .execute_batch("PRAGMA wal_autocheckpoint=0; PRAGMA synchronous=NORMAL")?;
+                // Retry every millisecond for at most 5 s, so the measured wait is how long
+                // cleanup holds the lock rather than where SQLite's backoff happens to wake.
+                fn poll(retries: i32) -> bool {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    retries < 5000
+                }
+                db.connection().busy_handler(Some(poll))?;
+                // A loaded machine can also keep the lock holder or this writer runnable but off
+                // a CPU; that time is the machine's. Cleanup's work and I/O under the lock count.
+                let preempted = || {
+                    scheduler_delay(&cleanup_thread)
+                        + scheduler_delay(Path::new("/proc/thread-self"))
+                };
+                let mut longest = std::time::Duration::ZERO;
+                let mut longest_wall = std::time::Duration::ZERO;
+                let mut turns = 0;
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let started = std::time::Instant::now();
+                    let delayed = preempted();
+                    db.connection().execute_batch("BEGIN IMMEDIATE")?;
+                    let waited = started.elapsed();
+                    longest_wall = longest_wall.max(waited);
+                    longest =
+                        longest.max(waited.saturating_sub(preempted().saturating_sub(delayed)));
+                    // Requested only after a cleanup call returned, so this lock was taken after
+                    // its checkpoint: this write is the first since the WAL could restart.
+                    let first = restart.load(std::sync::atomic::Ordering::SeqCst);
+                    if first {
+                        db.connection()
+                            .execute_batch("UPDATE writer_turn SET n=n+1")?;
+                    }
+                    db.connection().execute_batch("COMMIT")?;
+                    if first {
+                        restart.store(false, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    turns += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                Ok((longest, longest_wall, turns))
+            },
+        )
+    };
+    let restart_wal = || {
+        restart.store(true, std::sync::atomic::Ordering::SeqCst);
+        let asked = std::time::Instant::now();
+        while restart.load(std::sync::atomic::Ordering::SeqCst) {
+            assert!(
+                !writer.is_finished() && asked.elapsed() < std::time::Duration::from_secs(5),
+                "the writer did not make the first write after the checkpoint"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     };
     let started = std::time::Instant::now();
     let mut batches = 0;
     let cleaned = (|| -> Result<()> {
         loop {
+            restart_wal();
             let preview = service.storage_preview()?;
             let receipt = service.cleanup_storage(&preview)?;
             batches += 1;
@@ -1881,7 +1941,7 @@ fn cleanup_holds_the_write_lock_only_briefly() -> Result<()> {
     })();
     let elapsed = started.elapsed();
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
-    let (longest, turns) = writer.join().expect("writer panicked")?;
+    let (longest, longest_wall, turns) = writer.join().expect("writer panicked")?;
     cleaned?;
     let (files, rows): (i64, i64) = service.db.connection().query_row(
         "SELECT (SELECT count(*) FROM artifacts WHERE pruned_at_ms IS NULL),(SELECT count(*) FROM attempt_output)",
@@ -1891,9 +1951,10 @@ fn cleanup_holds_the_write_lock_only_briefly() -> Result<()> {
     assert_eq!((files, rows), (0, 0));
     assert_eq!(evidence_counts(&state.join("evidence"))?, (0, 0));
     println!(
-        "CLEANUP WRITER WAIT files=160 output_rows=160 batches={batches} cleanup_ms={} writer_turns={turns} longest_wait_ms={:.1}",
+        "CLEANUP WRITER WAIT files=160 output_rows=160 batches={batches} cleanup_ms={} writer_turns={turns} longest_wait_ms={:.1} longest_wall_ms={:.1}",
         elapsed.as_millis(),
-        longest.as_secs_f64() * 1000.0
+        longest.as_secs_f64() * 1000.0,
+        longest_wall.as_secs_f64() * 1000.0
     );
     assert!(turns > 0);
     assert!(

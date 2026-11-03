@@ -1,19 +1,51 @@
 //! Read-only inventory: what exists, who owns it, and what the bound does not cover.
-use super::{Policy, prune::measure_root};
+use super::{Policy, scan};
 use crate::instance::Paths;
 use serde::Serialize;
 use std::{
+    collections::HashSet,
     fs,
     path::{Path, PathBuf},
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    Build,
+    Scratch,
+    Diagnostic,
+    Provider,
+    External,
+}
+
+impl Kind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Build => "build",
+            Self::Scratch => "scratch",
+            Self::Diagnostic => "diagnostic",
+            Self::Provider => "provider",
+            Self::External => "external",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Ownership {
+    /// Verified marker and registration: cleanup manages it.
+    Owned,
+    /// Inventoried only, until the owner opts in.
+    Unowned,
+    /// Never cleaned.
+    Excluded,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Entry {
     pub path: PathBuf,
-    /// build, scratch, diagnostic, provider or external.
-    pub kind: &'static str,
-    /// owned (verified), unowned (inventoried only) or excluded (never cleaned).
-    pub ownership: &'static str,
+    pub kind: Kind,
+    pub ownership: Ownership,
     pub bytes: u64,
     pub files: u64,
     pub note: String,
@@ -35,15 +67,59 @@ pub struct Inventory {
     pub exclusions: Vec<String>,
 }
 
-fn entry(path: &Path, kind: &'static str, ownership: &'static str, note: &str) -> Entry {
-    let (bytes, files) = measure_root(path);
-    Entry {
-        path: path.to_path_buf(),
-        kind,
-        ownership,
-        bytes,
-        files,
-        note: note.into(),
+/// Human-readable allocated size.
+pub fn size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+impl Inventory {
+    /// The one text form of an inventory, shown by the TUI and printed by the CLI.
+    pub fn render(&self) -> String {
+        let mut text = format!(
+            "Managed: {} in {} files (limit {} / {} files per cache) · free {} of {}\n",
+            size(self.managed_bytes),
+            self.managed_files,
+            size(self.policy.max_bytes),
+            self.policy.max_files,
+            size(self.free_bytes),
+            size(self.total_bytes),
+        );
+        for (title, entries) in [
+            ("Owned", &self.owned),
+            ("Not managed (opt in to clean)", &self.unowned),
+            ("Provider storage (never cleaned)", &self.provider),
+        ] {
+            if entries.is_empty() {
+                continue;
+            }
+            text.push_str(&format!("{title}:\n"));
+            for e in entries {
+                text.push_str(&format!(
+                    "  {} · {} · {} · {} files · {}\n",
+                    e.path.display(),
+                    e.kind.as_str(),
+                    size(e.bytes),
+                    e.files,
+                    e.note
+                ));
+            }
+        }
+        for line in &self.pressure {
+            text.push_str(&format!("Pressure: {line}\n"));
+        }
+        text.push_str(&format!("Never touched: {}\n", self.exclusions.join("; ")));
+        text
     }
 }
 
@@ -93,101 +169,125 @@ fn filesystem(path: &Path) -> (u64, u64) {
     })
 }
 
-pub fn inventory(paths: &Paths, project: &Path) -> crate::storage::Result<Inventory> {
-    let policy = super::policy(paths)?;
-    let mut owned = Vec::new();
-    let mut unowned = Vec::new();
-    let mut claimed = Vec::new();
+/// What [`discover`] found, before anything is measured.
+#[derive(Default)]
+struct Found {
+    owned: Vec<Entry>,
+    unowned: Vec<Entry>,
+    provider: Vec<Entry>,
+    exclusions: Vec<String>,
+    /// Canonical paths already listed, so no directory appears twice.
+    claimed: Vec<PathBuf>,
+}
+
+impl Found {
+    fn add(&mut self, path: &Path, kind: Kind, ownership: Ownership, note: &str) {
+        let entry = Entry {
+            path: path.to_path_buf(),
+            kind,
+            ownership,
+            bytes: 0,
+            files: 0,
+            note: note.into(),
+        };
+        match (kind, ownership) {
+            (Kind::Provider, _) => self.provider.push(entry),
+            (_, Ownership::Owned) => self.owned.push(entry),
+            _ => self.unowned.push(entry),
+        }
+        self.claimed
+            .push(fs::canonicalize(path).unwrap_or(path.to_path_buf()));
+    }
+    fn listed(&self, path: &Path) -> bool {
+        self.claimed
+            .contains(&fs::canonicalize(path).unwrap_or(path.to_path_buf()))
+    }
+}
+
+fn discover_builds(found: &mut Found, paths: &Paths, project: &Path) {
     for root in super::owned_roots(paths) {
-        owned.push(entry(
+        found.add(
             &root,
-            "build",
-            "owned",
+            Kind::Build,
+            Ownership::Owned,
             "verified marker and registration; obsolete generations retire automatically",
-        ));
-        claimed.push(root);
+        );
     }
     for root in super::registered_roots(paths) {
-        if !claimed.contains(&root) && exists(&root) {
-            unowned.push(entry(
+        if !found.listed(&root) && exists(&root) {
+            found.add(
                 &root,
-                "build",
-                "unowned",
+                Kind::Build,
+                Ownership::Unowned,
                 "registration no longer verifies (moved, copied or marker removed); adopt again to manage",
-            ));
-            claimed.push(root);
+            );
         }
     }
     let target = project.join("target");
-    if exists(&target) {
-        let canonical = fs::canonicalize(&target).unwrap_or(target.clone());
-        if !claimed.contains(&canonical) {
-            let note = if fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
-                "symbolic link; never followed. Name the real directory to adopt it"
-            } else if super::looks_like_cargo_target(&target) {
-                "project build cache created outside ktask; run `cache adopt` to manage it"
-            } else {
-                "project directory named target; not recognizably a build cache"
-            };
-            unowned.push(entry(&target, "build", "unowned", note));
-            claimed.push(canonical);
+    if exists(&target) && !found.listed(&target) {
+        let note = if fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
+            "symbolic link; never followed. Name the real directory to adopt it"
+        } else if super::looks_like_cargo_target(&target) {
+            "project build cache created outside ktask; run `cache adopt` to manage it"
+        } else {
+            "project directory named target; not recognizably a build cache"
+        };
+        found.add(&target, Kind::Build, Ownership::Unowned, note);
+    }
+}
+
+fn discover_instance_cache(found: &mut Found, paths: &Paths) {
+    let Ok(children) = fs::read_dir(&paths.cache) else {
+        return;
+    };
+    let mut children: Vec<_> = children.flatten().map(|c| c.path()).collect();
+    children.sort();
+    for path in children {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if name == super::REGISTRY || found.listed(&path) || !path.is_dir() {
+            continue;
+        }
+        if name == "scratch" || name == "workers" {
+            found.add(
+                &path,
+                Kind::Scratch,
+                Ownership::Owned,
+                "per-run directories under kernel leases; abandoned runs are reclaimed at startup and safe points",
+            );
+        } else if super::looks_like_cargo_target(&path) {
+            found.add(
+                &path,
+                Kind::Build,
+                Ownership::Unowned,
+                "build cache inside the instance cache directory with no ownership proof",
+            );
+        } else {
+            found.add(
+                &path,
+                Kind::External,
+                Ownership::Unowned,
+                "unrecognized; left alone",
+            );
         }
     }
-    if let Ok(children) = fs::read_dir(&paths.cache) {
-        let mut children: Vec<_> = children.flatten().map(|c| c.path()).collect();
-        children.sort();
-        for path in children {
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let canonical = fs::canonicalize(&path).unwrap_or(path.clone());
-            if name == super::REGISTRY || claimed.contains(&canonical) || !path.is_dir() {
-                continue;
-            }
-            if name == "scratch" || name == "workers" {
-                owned.push(entry(
-                    &path,
-                    "scratch",
-                    "owned",
-                    "per-run directories under kernel leases; abandoned runs are reclaimed at startup and safe points",
-                ));
-            } else if super::looks_like_cargo_target(&path) {
-                unowned.push(entry(
-                    &path,
-                    "build",
-                    "unowned",
-                    "build cache inside the instance cache directory with no ownership proof",
-                ));
-            } else {
-                unowned.push(entry(
-                    &path,
-                    "external",
-                    "unowned",
-                    "unrecognized; left alone",
-                ));
-            }
-        }
-    }
+}
+
+fn discover_elsewhere(found: &mut Found, paths: &Paths) {
     let temp = std::env::temp_dir();
     for name in ["ktask-diag", "ktask-test-scratch"] {
         let path = temp.join(name);
         if exists(&path) {
-            unowned.push(entry(
+            found.add(
                 &path,
-                "diagnostic",
-                "unowned",
+                Kind::Diagnostic,
+                Ownership::Unowned,
                 "diagnostic tree from earlier tooling; owner never proven",
-            ));
+            );
         }
     }
-    let mut exclusions = vec![
-        "Project sources, Git objects, stashes and worktrees".to_owned(),
-        format!("Installed supervisor {}", paths.executable.display()),
-        "Evidence, transcripts and the SQLite database (see `storage`)".to_owned(),
-        "Provider session, credential and cache storage (reported separately; never cleaned)"
-            .to_owned(),
-    ];
     if let Some(siblings) = paths.cache.parent().and_then(|p| fs::read_dir(p).ok()) {
         let mut names: Vec<PathBuf> = siblings
             .flatten()
@@ -201,37 +301,65 @@ pub fn inventory(paths: &Paths, project: &Path) -> crate::storage::Result<Invent
             .collect();
         names.sort();
         for path in names {
-            unowned.push(entry(
+            found.add(
                 &path,
-                "external",
-                "excluded",
+                Kind::External,
+                Ownership::Excluded,
                 "another instance's or legacy cache; not this instance's data",
-            ));
+            );
         }
     }
-    let provider: Vec<Entry> = provider_roots()
-        .into_iter()
-        .map(|(name, path)| {
-            entry(
-                &path,
-                "provider",
-                "excluded",
-                &format!("{name}: resumable sessions and credentials preserved; no supported scoped cleanup"),
-            )
-        })
-        .collect();
-    exclusions.push("Other applications' data".into());
-    let managed_bytes = owned.iter().map(|e| e.bytes).sum();
-    let managed_files = owned.iter().map(|e| e.files).sum();
-    let unowned_bytes = unowned
+    for (name, path) in provider_roots() {
+        found.add(
+            &path,
+            Kind::Provider,
+            Ownership::Excluded,
+            &format!(
+                "{name}: resumable sessions and credentials preserved; no supported scoped cleanup"
+            ),
+        );
+    }
+}
+
+/// Every directory the instance knows about, with its owner and what cleanup does with it.
+fn discover(paths: &Paths, project: &Path) -> Found {
+    let mut found = Found::default();
+    discover_builds(&mut found, paths, project);
+    discover_instance_cache(&mut found, paths);
+    discover_elsewhere(&mut found, paths);
+    found.exclusions = vec![
+        "Project sources, Git objects, stashes and worktrees".to_owned(),
+        format!("Installed supervisor {}", paths.executable.display()),
+        "Evidence, transcripts and the SQLite database (see `storage`)".to_owned(),
+        "Provider session, credential and cache storage (reported separately; never cleaned)"
+            .to_owned(),
+        "Other applications' data".to_owned(),
+    ];
+    found
+}
+
+/// Allocated bytes and entries of each entry's tree.
+fn measure(entries: &mut [Entry]) {
+    for entry in entries {
+        let totals = scan::measure(&entry.path, &HashSet::new()).total;
+        (entry.bytes, entry.files) = (totals.bytes, totals.files);
+    }
+}
+
+/// Totals and the pressure the bound does or cannot relieve.
+fn report(policy: Policy, found: Found, filesystem: (u64, u64)) -> Inventory {
+    let (free_bytes, total_bytes) = filesystem;
+    let managed_bytes = found.owned.iter().map(|e| e.bytes).sum();
+    let managed_files = found.owned.iter().map(|e| e.files).sum();
+    let unowned_bytes = found
+        .unowned
         .iter()
-        .filter(|e| e.ownership == "unowned")
+        .filter(|e| e.ownership == Ownership::Unowned)
         .map(|e| e.bytes)
         .sum();
-    let provider_bytes = provider.iter().map(|e| e.bytes).sum();
-    let (free_bytes, total_bytes) = filesystem(&paths.cache);
+    let provider_bytes = found.provider.iter().map(|e| e.bytes).sum();
     let mut pressure = Vec::new();
-    for entry in owned.iter().filter(|e| e.kind == "build") {
+    for entry in found.owned.iter().filter(|e| e.kind == Kind::Build) {
         if entry.bytes > policy.max_bytes || entry.files > policy.max_files {
             pressure.push(format!(
                 "{} exceeds its limit ({} of {} bytes, {} of {} files); cleanup retires obsolete generations",
@@ -255,11 +383,11 @@ pub fn inventory(paths: &Paths, project: &Path) -> crate::storage::Result<Invent
             "{provider_bytes} bytes of provider storage grow outside the bound"
         ));
     }
-    Ok(Inventory {
+    Inventory {
         policy,
-        owned,
-        unowned,
-        provider,
+        owned: found.owned,
+        unowned: found.unowned,
+        provider: found.provider,
         managed_bytes,
         managed_files,
         unowned_bytes,
@@ -267,6 +395,15 @@ pub fn inventory(paths: &Paths, project: &Path) -> crate::storage::Result<Invent
         free_bytes,
         total_bytes,
         pressure,
-        exclusions,
-    })
+        exclusions: found.exclusions,
+    }
+}
+
+pub fn inventory(paths: &Paths, project: &Path) -> crate::storage::Result<Inventory> {
+    let policy = super::policy(paths)?;
+    let mut found = discover(paths, project);
+    for entries in [&mut found.owned, &mut found.unowned, &mut found.provider] {
+        measure(entries);
+    }
+    Ok(report(policy, found, filesystem(&paths.cache)))
 }

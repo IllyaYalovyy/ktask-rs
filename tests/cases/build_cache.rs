@@ -46,7 +46,9 @@ fn fixture() -> Result<Fixture> {
 
 fn age(path: &Path, seconds: u64) -> Result {
     let when = SystemTime::now() - Duration::from_secs(seconds);
-    File::options().write(true).open(path)?.set_modified(when)?;
+    // Read-only: a writable descriptor that a concurrently forked child inherits would make
+    // executing this file fail with ETXTBSY.
+    File::open(path)?.set_modified(when)?;
     Ok(())
 }
 
@@ -63,40 +65,119 @@ fn cargo_skeleton(target: &Path) -> Result {
     Ok(())
 }
 
-/// One build generation as cargo lays it out: a test binary, a library and their metadata,
-/// incremental state, all keyed by a hash that changes with the package version.
+/// The compilation units the fixture writes for every version, as cargo check, cargo clippy,
+/// cargo build and cargo test leave them for one package: each has its own hash, its own
+/// fingerprint naming the unit, and its own incremental state.
+struct FixtureUnit {
+    /// Added to the version to give the unit's hash.
+    offset: u64,
+    /// Cargo's unit name in the fingerprint directory.
+    unit: &'static str,
+    /// rustc's crate name, which names the deps/ files and the incremental directory.
+    crate_name: &'static str,
+    /// Output files below deps/, `{h}` standing for the hash.
+    outputs: &'static [&'static str],
+    clippy: bool,
+}
+
+const TEST_BINARY: u64 = 0;
+const LIBRARY: u64 = 0x1000;
+
+const UNITS: [FixtureUnit; 4] = [
+    FixtureUnit {
+        offset: TEST_BINARY,
+        unit: "test-integration-test-tui",
+        crate_name: "tui",
+        outputs: &["tui-{h}"],
+        clippy: false,
+    },
+    FixtureUnit {
+        offset: LIBRARY,
+        unit: "lib-ktask",
+        crate_name: "ktask",
+        outputs: &["libktask-{h}.rlib", "libktask-{h}.rmeta"],
+        clippy: false,
+    },
+    FixtureUnit {
+        offset: 0x2000,
+        unit: "lib-ktask",
+        crate_name: "ktask",
+        outputs: &["libktask-{h}.rmeta"],
+        clippy: false,
+    },
+    FixtureUnit {
+        offset: 0x3000,
+        unit: "lib-ktask",
+        crate_name: "ktask",
+        outputs: &["libktask-{h}.rmeta"],
+        clippy: true,
+    },
+];
+
+fn unit_hash(version: u64, offset: u64) -> String {
+    format!("{:016x}", version + offset)
+}
+
+/// One version's generations as cargo lays them out, all aged `age_secs`.
 fn build(target: &Path, version: u64, age_secs: u64) -> Result {
     let debug = target.join("debug");
-    // Every compilation unit has its own hash.
-    let hash = format!("{version:016x}");
-    let lib = format!("{:016x}", version + 0x1000);
-    let incremental = format!("{version:013x}");
-    let files = [
-        format!("deps/tui-{hash}"),
-        format!("deps/tui-{hash}.d"),
-        format!("deps/libktask-{lib}.rlib"),
-        format!("deps/libktask-{lib}.rmeta"),
-        format!("deps/ktask-{lib}.d"),
-        format!(".fingerprint/ktask-rs-mk3-{lib}/lib-ktask.json"),
-        format!("build/ktask-rs-mk3-{lib}/output"),
-        format!("incremental/ktask-{incremental}/s-1-abc/dep-graph.bin"),
-    ];
-    for relative in &files {
-        let path = debug.join(relative);
-        fs::create_dir_all(path.parent().unwrap())?;
-        let body = if relative.ends_with(".d") {
-            format!("{}: tests/tui.rs src/lib.rs\n", path.display())
-        } else {
-            "x".repeat(8192)
-        };
-        fs::write(&path, body)?;
-        age(&path, age_secs)?;
+    for unit in &UNITS {
+        let hash = unit_hash(version, unit.offset);
+        let mut files: Vec<String> = unit
+            .outputs
+            .iter()
+            .map(|o| format!("deps/{}", o.replace("{h}", &hash)))
+            .collect();
+        files.push(format!("deps/{}-{hash}.d", unit.crate_name));
+        files.push(format!(
+            ".fingerprint/ktask-rs-mk3-{hash}/{}.json",
+            unit.unit
+        ));
+        files.push(format!(".fingerprint/ktask-rs-mk3-{hash}/{}", unit.unit));
+        files.push(format!(
+            "incremental/{}-{:013x}/s-1-abc/dep-graph.bin",
+            unit.crate_name,
+            version + unit.offset
+        ));
+        if unit.offset == LIBRARY {
+            files.push(format!("build/ktask-rs-mk3-{hash}/output"));
+        }
+        for relative in &files {
+            let path = debug.join(relative);
+            fs::create_dir_all(path.parent().unwrap())?;
+            let body = if relative.ends_with(".d") {
+                let clippy = if unit.clippy {
+                    "\n# env-dep:CLIPPY_ARGS=\n# env-dep:CLIPPY_CONF_DIR"
+                } else {
+                    ""
+                };
+                format!("{}: tests/tui.rs src/lib.rs{clippy}\n", path.display())
+            } else {
+                "x".repeat(8192)
+            };
+            fs::write(&path, body)?;
+            age(&path, age_secs)?;
+        }
     }
     Ok(())
 }
 
+/// Incremental directories one version leaves: one per unit.
+const INCREMENTAL_PER_VERSION: usize = UNITS.len();
+
+/// Every file below `dir`, relative to it.
+fn relative_files(dir: &Path) -> std::collections::BTreeSet<PathBuf> {
+    snapshot(dir)
+        .into_iter()
+        .map(|(path, _)| path.strip_prefix(dir).unwrap().to_path_buf())
+        .collect()
+}
+
 fn registry_dependency(target: &Path) -> Result {
     let deps = target.join("debug/deps");
+    let fingerprint = target.join("debug/.fingerprint/serde-00000000000000aa");
+    fs::create_dir_all(&fingerprint)?;
+    fs::write(fingerprint.join("lib-serde.json"), "{}")?;
     fs::write(
         deps.join("libserde-00000000000000aa.rlib"),
         "s".repeat(4096),
@@ -153,10 +234,12 @@ fn owned(f: &Fixture) -> Result {
 fn repeated_version_builds_stay_bounded_and_the_newest_generation_stays_warm() -> Result {
     let f = fixture()?;
     owned(&f)?;
-    quick(&f.paths, 2)?;
+    let keep = 2;
+    let versions = 40_u64;
+    quick(&f.paths, keep)?;
     registry_dependency(&f.target)?;
     let mut bound = 0;
-    for version in 1..=40_u64 {
+    for version in 1..=versions {
         build(&f.target, version, 40_000 - version * 100)?;
         if version % 4 == 0 {
             let done = build_cache::clean(&f.paths, true)?;
@@ -172,7 +255,17 @@ fn repeated_version_builds_stay_bounded_and_the_newest_generation_stays_warm() -
         files <= bound,
         "{files} files after the final clean exceeded {bound}"
     );
-    assert!(files < 100, "{files} files remain after 40 versions");
+    // What remains is exactly a target that only ever built the newest `keep` versions.
+    let reference = f.root.join("reference");
+    cargo_skeleton(&reference)?;
+    registry_dependency(&reference)?;
+    for version in versions + 1 - keep..=versions {
+        build(&reference, version, 0)?;
+    }
+    assert_eq!(
+        relative_files(&f.target.join("debug")),
+        relative_files(&reference.join("debug"))
+    );
     let deps = f.target.join("debug/deps");
     let test_binaries = fs::read_dir(&deps)?
         .flatten()
@@ -181,25 +274,21 @@ fn repeated_version_builds_stay_bounded_and_the_newest_generation_stays_warm() -
             n.starts_with("tui-") && !n.ends_with(".d")
         })
         .count();
-    assert_eq!(test_binaries, 2, "keeps exactly the newest two generations");
+    assert_eq!(
+        test_binaries as u64, keep,
+        "keeps exactly the newest generations"
+    );
     assert!(
-        deps.join(format!("tui-{:016x}", 40)).is_file(),
+        deps.join(format!("tui-{:016x}", versions)).is_file(),
         "newest stays warm"
     );
-    assert!(deps.join(format!("tui-{:016x}", 39)).is_file());
-    assert!(!deps.join(format!("tui-{:016x}", 1)).exists());
     assert!(
         deps.join("libserde-00000000000000aa.rlib").is_file(),
         "unchanged registry dependencies stay warm"
     );
-    assert!(count(&f.target.join("debug/incremental")) <= 6);
-    assert!(
-        !f.target
-            .join(format!(
-                "debug/.fingerprint/ktask-rs-mk3-{:016x}",
-                1 + 0x1000
-            ))
-            .exists()
+    assert_eq!(
+        count(&f.target.join("debug/incremental")),
+        keep as usize * INCREMENTAL_PER_VERSION
     );
     Ok(())
 }
@@ -322,12 +411,20 @@ fn capacity_limit_evicts_oldest_but_never_the_last_warm_generation() -> Result {
     owned(&f)?;
     let current = quick(&f.paths, 32)?;
     let deps = f.target.join("debug/deps");
-    // Five registry-crate generations of 20 MiB each (sparse, but counted by length).
-    for generation in 1..=5_u64 {
+    let generations = 5_u64;
+    let generation_bytes = 20 * build_cache::MIB;
+    let limit = 64 * build_cache::MIB;
+    // Registry-crate generations of 20 MiB each (sparse, but counted by length).
+    for generation in 1..=generations {
         let name = format!("libbig-{generation:016x}.rlib");
         let file = File::create(deps.join(&name))?;
-        file.set_len(20 * build_cache::MIB)?;
+        file.set_len(generation_bytes)?;
         drop(file);
+        let fingerprint = f
+            .target
+            .join(format!("debug/.fingerprint/big-{generation:016x}"));
+        fs::create_dir_all(&fingerprint)?;
+        fs::write(fingerprint.join("lib-big.json"), "{}")?;
         let dep_info = deps.join(format!("big-{generation:016x}.d"));
         fs::write(
             &dep_info,
@@ -343,13 +440,16 @@ fn capacity_limit_evicts_oldest_but_never_the_last_warm_generation() -> Result {
         &f.paths,
         current,
         Policy {
-            max_bytes: 64 * build_cache::MIB,
+            max_bytes: limit,
             ..current
         },
     )?;
     let preview = build_cache::clean(&f.paths, false)?;
-    assert!(
-        preview.reports[0].removed_generations >= 2,
+    // The oldest generations whose removal brings the cache under its limit.
+    let excess = preview.reports[0].before_bytes - limit;
+    assert_eq!(
+        preview.reports[0].removed_generations,
+        excess.div_ceil(generation_bytes),
         "preview plans eviction"
     );
     assert!(
@@ -379,7 +479,7 @@ fn capacity_limit_evicts_oldest_but_never_the_last_warm_generation() -> Result {
         &f.paths,
         limited,
         Policy {
-            max_bytes: 64 * build_cache::MIB,
+            max_bytes: limit,
             max_files: 1_000,
             ..limited
         },
@@ -387,7 +487,7 @@ fn capacity_limit_evicts_oldest_but_never_the_last_warm_generation() -> Result {
     File::options()
         .write(true)
         .open(deps.join(format!("libbig-{:016x}.rlib", 5)))?
-        .set_len(80 * build_cache::MIB)?;
+        .set_len(limit + generation_bytes)?;
     let done = build_cache::clean(&f.paths, true)?;
     assert!(done.reports[0].over_capacity);
     assert!(deps.join(format!("libbig-{:016x}.rlib", 5)).is_file());
@@ -421,18 +521,23 @@ fn unowned_caches_are_inventoried_and_never_cleaned() -> Result {
         .iter()
         .find(|e| e.path == f.target)
         .expect("target listed");
-    assert_eq!(entry.ownership, "unowned");
+    assert_eq!(entry.ownership, build_cache::Ownership::Unowned);
     assert!(entry.bytes > 0 && entry.files > 0);
     assert!(inventory.unowned_bytes > 0);
     assert!(inventory.pressure.iter().any(|p| p.contains("unowned")));
     // A forged marker without this instance's registration proves nothing.
     fs::write(f.target.join(".ktask-cache-owner"), r#"{"token":"forged"}"#)?;
     assert!(!build_cache::is_owned(&f.paths, &f.target));
+    let forged = snapshot(&f.target);
     let error = build_cache::prune(&f.paths, &f.target, &build_cache::policy(&f.paths)?, true)
         .unwrap_err()
         .to_string();
     assert!(error.contains("not owned"), "{error}");
-    assert_eq!(tree_files(&f.target), before + 1);
+    assert_eq!(
+        snapshot(&f.target),
+        forged,
+        "a refused prune changes nothing"
+    );
     Ok(())
 }
 
@@ -514,6 +619,76 @@ fn clone_paths(p: &Paths) -> Paths {
     }
 }
 
+const HOLD_GENERATION: &str = "KTASK_TEST_HOLD_GENERATION";
+
+// Runs only when the liveness test launches a copy of this test executable from deps/.
+#[test]
+fn running_generation_process() -> Result {
+    if std::env::var_os(HOLD_GENERATION).is_none() {
+        return Ok(());
+    }
+    println!("GENERATION_RUNNING");
+    std::io::Write::flush(&mut std::io::stdout())?;
+    let _ = std::io::Read::read(&mut std::io::stdin(), &mut [0]);
+    Ok(())
+}
+
+/// A copy of this test binary running from a cache generation until it is finished.
+struct RunningGeneration {
+    child: std::process::Child,
+    stdout: std::io::BufReader<std::process::ChildStdout>,
+}
+
+impl RunningGeneration {
+    fn start(executable: &Path, home: &Path) -> Result<Self> {
+        use std::io::BufRead;
+        let mut child = Command::new(executable)
+            .args([
+                "--exact",
+                "build_cache::running_generation_process",
+                "--nocapture",
+            ])
+            .env_clear()
+            .env("HOME", home)
+            .env("TMPDIR", home)
+            .env(HOLD_GENERATION, "1")
+            .current_dir(home)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()?;
+        let stdout = child.stdout.take().ok_or("child stdout")?;
+        let mut running = Self {
+            child,
+            stdout: std::io::BufReader::new(stdout),
+        };
+        let mut line = String::new();
+        while running.stdout.read_line(&mut line)? > 0 && line.trim_end() != "GENERATION_RUNNING" {
+            line.clear();
+        }
+        assert_eq!(
+            line.trim_end(),
+            "GENERATION_RUNNING",
+            "the copied test binary did not start"
+        );
+        Ok(running)
+    }
+
+    fn finish(mut self) -> Result {
+        drop(self.child.stdin.take());
+        std::io::copy(&mut self.stdout, &mut std::io::sink())?;
+        let status = self.child.wait()?;
+        assert!(status.success(), "{status}");
+        Ok(())
+    }
+}
+
+impl Drop for RunningGeneration {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 #[test]
 fn live_builds_open_files_running_programs_and_fresh_output_are_kept() -> Result {
     let f = fixture()?;
@@ -541,14 +716,17 @@ fn live_builds_open_files_running_programs_and_fresh_output_are_kept() -> Result
     assert_eq!(tree_files(&f.target), before);
     lock.unlock()?;
     // A file another process (here: this test) has open is not removed.
-    let open = File::open(deps.join(format!("libktask-{:016x}.rlib", 2 + 0x1000)))?;
-    // A running executable is not removed either.
+    let open_library = deps.join(format!("libktask-{:016x}.rlib", 2 + LIBRARY));
+    let open = File::open(&open_library)?;
+    // A running executable is not removed either: a copy of this test binary, so its
+    // inode is its own, waits in deps/ until its stdin closes.
     let running = deps.join(format!("tui-{:016x}", 3));
-    support::copy_executable("/bin/sleep", &running)?;
+    support::copy_executable(std::env::current_exe()?, &running)?;
     age(&running, 50_000 - 3)?;
-    let mut child = Command::new(&running).arg("60").spawn()?;
+    let child = RunningGeneration::start(&running, &f.root)?;
     let done = build_cache::clean(&f.paths, true)?;
-    assert!(done.reports[0].protected_generations >= 2);
+    let in_use = [open_library, running.clone()];
+    assert_eq!(done.reports[0].protected_generations, in_use.len() as u64);
     assert!(
         deps.join(format!("libktask-{:016x}.rlib", 2 + 0x1000))
             .is_file()
@@ -560,8 +738,7 @@ fn live_builds_open_files_running_programs_and_fresh_output_are_kept() -> Result
             .exists()
     );
     assert!(deps.join(format!("tui-{:016x}", 5)).is_file());
-    child.kill()?;
-    child.wait()?;
+    child.finish()?;
     drop(open);
     build_cache::clean(&f.paths, true)?;
     assert!(
@@ -616,13 +793,21 @@ fn final_outputs_are_never_removed_even_when_their_generation_is_old() -> Result
 fn concurrent_and_interrupted_cleanups_converge_without_losing_warm_files() -> Result {
     let f = fixture()?;
     owned(&f)?;
-    quick(&f.paths, 2)?;
-    for version in 1..=12_u64 {
+    let keep = 2;
+    let versions = 12;
+    quick(&f.paths, keep)?;
+    for version in 1..=versions {
         build(&f.target, version, 60_000 - version)?;
     }
     // A cleanup killed mid-generation leaves a partial one behind.
     let deps = f.target.join("debug/deps");
-    // Cleanup removes dependency-info last, so a survivor keeps its identity or is a remnant.
+    // Cleanup removes the fingerprint first: Cargo rebuilds a unit without one, so the
+    // outputs it leaves are a remnant.
+    fs::remove_dir_all(f.target.join(format!(
+        "debug/.fingerprint/ktask-rs-mk3-{}",
+        unit_hash(5, TEST_BINARY)
+    )))?;
+    // Partial generations without outputs are remnants too.
     fs::remove_file(deps.join(format!("tui-{:016x}", 3)))?;
     fs::remove_file(deps.join(format!("libktask-{:016x}.rlib", 4 + 0x1000)))?;
     fs::remove_file(deps.join(format!("libktask-{:016x}.rmeta", 4 + 0x1000)))?;
@@ -642,16 +827,18 @@ fn concurrent_and_interrupted_cleanups_converge_without_losing_warm_files() -> R
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter(|n| {
-            [12_u64, 11, 12 + 0x1000, 11 + 0x1000]
-                .iter()
-                .all(|kept| !n.contains(&format!("{kept:016x}")))
+            (versions + 1 - keep..=versions).all(|kept| {
+                UNITS
+                    .iter()
+                    .all(|unit| !n.contains(&unit_hash(kept, unit.offset)))
+            })
         })
         .collect();
     assert!(
         leftovers.is_empty(),
         "stale generations remain: {leftovers:?}"
     );
-    assert!(deps.join(format!("tui-{:016x}", 12)).is_file());
+    assert!(deps.join(format!("tui-{:016x}", versions)).is_file());
     Ok(())
 }
 
@@ -768,23 +955,37 @@ fn crates_named_with_a_lib_prefix_keep_their_dependency_info_and_fingerprint() -
     Ok(())
 }
 
-/// Cargo's real layout, not a fixture's: after versions pile up and cleanup runs, the
-/// current version still builds and checks with nothing recompiled.
+/// Fingerprint directories of every unit in a Cargo profile.
+fn fingerprint_dirs(profile: &Path) -> usize {
+    count(&profile.join(".fingerprint"))
+}
+
+/// Cargo's real layout, not a fixture's: after versions pile up under every command a
+/// worker runs (build, check, clippy, tests) and cleanup keeps one generation, the next pass
+/// of the same commands compiles and checks nothing.
 #[test]
 fn real_cargo_stays_warm_after_cleanup_of_lib_prefixed_crates() -> Result {
     let f = fixture()?;
     let workspace = f.root.join("ws");
     let target = f.root.join("cargo-target");
-    for dir in ["libdemo/src", "app/src"] {
+    for dir in ["libdemo/src", "libdemo/tests", "app/src"] {
         fs::create_dir_all(workspace.join(dir))?;
     }
     fs::write(
+        workspace.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"libdemo\", \"app\"]\nresolver = \"2\"\n",
+    )?;
+    fs::write(
         workspace.join("libdemo/src/lib.rs"),
-        "pub fn f() -> u32 { 1 }\n",
+        "pub fn f() -> u32 { 1 }\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn one() { assert_eq!(super::f(), 1); }\n}\n",
+    )?;
+    fs::write(
+        workspace.join("libdemo/tests/api.rs"),
+        "#[test]\nfn api() { assert_eq!(libdemo::f(), 1); }\n",
     )?;
     fs::write(
         workspace.join("app/src/main.rs"),
-        "fn main() { println!(\"{}\", libdemo::f()); }\n",
+        "fn main() { println!(\"{}\", libdemo::f()); }\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn runs() { assert_eq!(libdemo::f(), 1); }\n}\n",
     )?;
     let manifest = |version: u64| -> Result {
         fs::write(
@@ -806,7 +1007,7 @@ fn real_cargo_stays_warm_after_cleanup_of_lib_prefixed_crates() -> Result {
             .args(args)
             .arg("--offline")
             .arg("--manifest-path")
-            .arg(workspace.join("app/Cargo.toml"))
+            .arg(workspace.join("Cargo.toml"))
             .env("CARGO_TARGET_DIR", &target)
             .env("CARGO_HOME", f.root.join("cargo-home"))
             .env("CARGO_INCREMENTAL", "1")
@@ -814,23 +1015,49 @@ fn real_cargo_stays_warm_after_cleanup_of_lib_prefixed_crates() -> Result {
             .output()?;
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
         assert!(output.status.success(), "cargo {args:?}: {stderr}");
-        Ok(stderr)
+        Ok(format!("--- cargo {}\n{stderr}", args.join(" ")))
     };
-    for version in 1..=4_u64 {
+    // Every command a worker and the supervisor checks run, each a distinct set of units.
+    let pass = || -> Result<String> {
+        [
+            &["build", "--workspace"][..],
+            &["check", "--workspace"],
+            &["check", "--workspace", "--all-targets"],
+            &["clippy", "--workspace", "--all-targets"],
+            &["test", "--workspace", "--no-run"],
+        ]
+        .iter()
+        .map(|args| cargo(args))
+        .collect()
+    };
+    let versions = 3;
+    let keep = 1;
+    let mut units_per_version = 0;
+    for version in 1..=versions {
         manifest(version)?;
-        cargo(&["build"])?;
-        cargo(&["check"])?;
+        pass()?;
+        if version == 1 {
+            units_per_version = fingerprint_dirs(&target.join("debug"));
+        }
     }
+    assert_eq!(
+        fingerprint_dirs(&target.join("debug")),
+        units_per_version * versions as usize,
+        "every version adds its own units"
+    );
     build_cache::adopt(&f.paths, &workspace, &target)?;
-    quick(&f.paths, 1)?;
-    let before = tree_files(&target);
+    quick(&f.paths, keep)?;
     let done = build_cache::clean(&f.paths, true)?;
     let report = &done.reports[0];
     assert!(
         report.deferred.is_none() && report.freed_bytes > 0,
         "{report:?}"
     );
-    assert!(tree_files(&target) < before);
+    assert_eq!(
+        fingerprint_dirs(&target.join("debug")),
+        units_per_version * keep as usize,
+        "exactly the newest generation of every unit remains"
+    );
     let deps = target.join("debug/deps");
     let libraries = fs::read_dir(&deps)?
         .flatten()
@@ -840,22 +1067,15 @@ fn real_cargo_stays_warm_after_cleanup_of_lib_prefixed_crates() -> Result {
         })
         .count();
     assert_eq!(libraries, 1, "only the current library generation remains");
-    let build = cargo(&["build"])?;
-    let check = cargo(&["check"])?;
-    let transcript =
-        format!("--- cargo build after cleanup\n{build}\n--- cargo check after cleanup\n{check}");
+    let transcript = pass()?;
     if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
         let _ = fs::write(
             Path::new(&dir).join("real-cargo-warm-after-clean.txt"),
-            &transcript,
+            format!("{report:#?}\n{transcript}"),
         );
     }
     assert!(
-        !build.contains("Compiling") && build.contains("Finished"),
-        "{transcript}"
-    );
-    assert!(
-        !check.contains("Compiling") && !check.contains("Checking"),
+        !transcript.contains("Compiling") && !transcript.contains("Checking"),
         "{transcript}"
     );
     let second = build_cache::clean(&f.paths, true)?;
@@ -955,8 +1175,9 @@ fn cli(f: &Fixture, args: &[&str]) -> Result<serde_json::Value> {
 fn cli_inventories_adopts_cleans_and_separates_provider_storage() -> Result {
     let f = fixture()?;
     cargo_skeleton(&f.target)?;
-    for version in 1..=6_u64 {
-        build(&f.target, version, 50_000)?;
+    let versions = 6;
+    for version in 1..=versions {
+        build(&f.target, version, 50_000 - version)?;
     }
     let codex = f.root.join(".codex/sessions");
     fs::create_dir_all(&codex)?;
@@ -983,12 +1204,13 @@ fn cli_inventories_adopts_cleans_and_separates_provider_storage() -> Result {
     let clean = cli(&f, &["clean", "--apply"])?;
     assert_eq!(clean["caches"].as_array().unwrap().len(), 0);
     assert_eq!(tree_files(&f.target), before);
+    let keep = 1;
     let limits = cli(
         &f,
         &[
             "limits",
             "--keep-generations",
-            "1",
+            &keep.to_string(),
             "--grace-secs",
             "0",
             "--if-version",
@@ -998,18 +1220,26 @@ fn cli_inventories_adopts_cleans_and_separates_provider_storage() -> Result {
     assert_eq!(limits["limits"]["version"], 1);
     let adopted = cli(&f, &["adopt"])?;
     assert_eq!(adopted["already_owned"], false);
+    let managed = snapshot(&f.target.join("debug"));
     let preview = cli(&f, &["clean"])?;
     assert_eq!(preview["applied"], false);
-    assert_eq!(tree_files(&f.target), before + 2, "preview deletes nothing");
+    assert_eq!(
+        snapshot(&f.target.join("debug")),
+        managed,
+        "preview deletes nothing"
+    );
     let applied = cli(&f, &["clean", "--apply"])?;
     let report = &applied["caches"][0];
     assert!(report["freed_bytes"].as_u64().unwrap() > 0);
     assert!(report["after_bytes"].as_u64().unwrap() < report["before_bytes"].as_u64().unwrap());
-    assert_eq!(count(&f.target.join("debug/incremental")), 3);
+    assert_eq!(
+        count(&f.target.join("debug/incremental")),
+        keep * INCREMENTAL_PER_VERSION
+    );
     assert!(
         f.target
             .join("debug/deps")
-            .join(format!("tui-{:016x}", 6))
+            .join(format!("tui-{:016x}", versions))
             .is_file()
     );
     // Provider sessions and credentials were never touched.
@@ -1050,7 +1280,7 @@ fn build_cache_flows_work_from_keyboard_and_mouse() -> Result {
         let target = f.root.join("target");
         cargo_skeleton(&target)?;
         for version in 1..=6_u64 {
-            build(&target, version, 50_000)?;
+            build(&target, version, 50_000 - version)?;
         }
         let mut t = Terminal::open_real(DEV, &f.root, 100, 32)?;
         screen(&t, "No current task")?;
