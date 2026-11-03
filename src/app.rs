@@ -368,7 +368,6 @@ impl App {
     }
     pub fn visible(&self) -> Vec<usize> {
         let catalog = self.catalog();
-        let query = catalog.query.to_lowercase();
         self.source()
             .iter()
             .filter(|task| {
@@ -376,14 +375,12 @@ impl App {
                     || (catalog.filter == 1 && task.definition().kind == Kind::Ai)
                     || (catalog.filter == 2 && task.definition().kind == Kind::Human)
                     || (catalog.filter == 3 && task.definition().kind == Kind::Docs))
-                    && format!(
-                        "#{} {} {}",
+                    && crate::application::search::matches(
                         task.id,
-                        task.definition().title,
-                        task.status().label()
+                        task.status(),
+                        &task.definition().title,
+                        &catalog.query,
                     )
-                    .to_lowercase()
-                    .contains(&query)
             })
             .map(|task| task.id)
             .collect()

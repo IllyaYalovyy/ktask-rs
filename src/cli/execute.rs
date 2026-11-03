@@ -428,9 +428,12 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
             rows.retain(|t| {
                 filter.is_none_or(|k| t.definition().definition.kind == kind(k))
                     && search.as_ref().is_none_or(|s| {
-                        format!("#{} {} {}", t.id, t.status, t.definition().definition.title)
-                            .to_lowercase()
-                            .contains(&s.to_lowercase())
+                        crate::application::search::matches(
+                            t.id,
+                            t.state(),
+                            &t.definition().definition.title,
+                            s,
+                        )
                     })
             });
             Ok(Reply::list(&rows))

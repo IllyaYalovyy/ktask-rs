@@ -5899,3 +5899,76 @@ fn running_session_pending_queue_selection_shows_every_enabled_control_at_both_s
     }
     Ok(())
 }
+
+#[test]
+fn cli_and_tui_search_match_the_state_label_a_row_prints() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let mut writer = service(root)?;
+    let ids = writer.create(
+        &[
+            definition("Alpha shipped"),
+            definition("Bravo dropped"),
+            definition("Charlie waiting"),
+        ],
+        None,
+        true,
+    )?;
+    let (finished, dropped, waiting) = (ids[0], ids[1], ids[2]);
+    let target_done = target(&mut writer, finished)?;
+    writer.mark_done(target_done, "Accepted")?;
+    let target_cancelled = target(&mut writer, dropped)?;
+    writer.cancel(target_cancelled, "")?;
+    drop(writer);
+
+    let found = |scope: &str, query: &str| -> Result<Vec<i64>> {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_ktask-dev"))
+            .env_clear()
+            .env("HOME", root)
+            .env("XDG_STATE_HOME", root.join("state"))
+            .env("XDG_CONFIG_HOME", root.join("config"))
+            .env("XDG_CACHE_HOME", root.join("cache"))
+            .env("XDG_RUNTIME_DIR", root.join("runtime"))
+            .env("TMPDIR", root)
+            .current_dir(project(root))
+            .args(["--json", "list", "--scope", scope, "--search", query])
+            .output()?;
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let list: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        Ok(list["data"]["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|task| task["id"].as_i64().unwrap())
+            .collect())
+    };
+    assert_eq!(found("history", "done")?, [finished]);
+    assert_eq!(found("history", "DONE")?, [finished]);
+    assert_eq!(found("history", "cancelled")?, [dropped]);
+    assert_eq!(found("all", "pending")?, [waiting]);
+    assert!(found("all", "succeeded")?.is_empty());
+    assert!(found("all", "deleted")?.is_empty());
+
+    let mut t = terminal(root)?;
+    t.screen("startup", |s| s.contains("3 History"))?;
+    t.send("3")?;
+    t.screen("History", on_history)?;
+    for (query, shown, hidden) in [
+        ("done", "Alpha shipped", "Bravo dropped"),
+        ("cancelled", "Bravo dropped", "Alpha shipped"),
+    ] {
+        t.send("/")?;
+        t.send(query)?;
+        let screen = t.screen(query, |s| {
+            s.contains(&format!("Search: {query}▏")) && !s.contains(hidden)
+        })?;
+        println!("TUI SEARCH {query}\n{screen}");
+        assert!(screen.contains(shown), "{screen}");
+        t.send("\x1b")?;
+        t.screen("search cleared", |s| {
+            s.contains("Alpha shipped") && s.contains("Bravo dropped")
+        })?;
+    }
+    quit(&mut t)?;
+    Ok(())
+}

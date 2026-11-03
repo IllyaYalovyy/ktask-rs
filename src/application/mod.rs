@@ -15,6 +15,7 @@ pub mod preferences;
 pub mod progress;
 mod queries;
 pub mod retention;
+pub mod search;
 pub mod session;
 pub mod stop;
 pub mod usage_report;
