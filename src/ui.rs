@@ -74,13 +74,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
     let compact_current = app.view == View::Current && area.height <= 24;
+    let mut controls = controls(app);
+    controls.insert(0, ("Copy", Action::Copy));
+    controls.extend([("? Help", Action::Help), ("q Quit", Action::Quit)]);
+    let action_rows = button_rows(&controls, area.width, 3);
     let [header, tabs, status, toolbar, body, actions, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(2),
         Constraint::Length(2),
         Constraint::Min(0),
-        Constraint::Length(3),
+        Constraint::Length(action_rows),
         Constraint::Length(if compact_current { 1 } else { 2 }),
     ])
     .areas(area);
@@ -171,9 +175,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         View::Queue | View::History => draw_catalog(frame, app, toolbar, body),
         View::Config | View::About => draw_information(frame, app, toolbar, body),
     }
-    let mut controls = controls(app);
-    controls.insert(0, ("Copy", Action::Copy));
-    controls.extend([("? Help", Action::Help), ("q Quit", Action::Quit)]);
     buttons(frame, app, actions, &controls, false);
     frame.render_widget(
         Paragraph::new(if compact_current {
@@ -441,19 +442,43 @@ fn panel(title: impl Into<Line<'static>>) -> Block<'static> {
         .border_style(Style::new().fg(MUTED))
 }
 
-fn buttons(frame: &mut Frame, app: &mut App, area: Rect, controls: &[(&str, Action)], modal: bool) {
-    let mut x = area.x;
-    let mut y = area.y;
-    for &(label, action) in controls {
-        let width = Line::raw(label).width() as u16 + 2;
-        if x + width > area.right() {
-            x = area.x;
+/// Flows buttons left to right, wrapping at the area's right edge. Returns each button's
+/// rectangle relative to the area's top-left corner and the rows used.
+fn button_layout(controls: &[(&str, Action)], width: u16) -> (Vec<Rect>, u16) {
+    let (mut x, mut y) = (0, 0);
+    let mut rects = Vec::with_capacity(controls.len());
+    for &(label, _) in controls {
+        let button = Line::raw(label).width() as u16 + 2;
+        if x > 0 && x + button > width {
+            x = 0;
             y += 1;
         }
-        if y >= area.bottom() {
-            break;
+        rects.push(Rect::new(x, y, button, 1));
+        x += button + 1;
+    }
+    (rects, y + 1)
+}
+
+/// Rows the controls need at this width, never fewer than `minimum`.
+fn button_rows(controls: &[(&str, Action)], width: u16, minimum: u16) -> u16 {
+    button_layout(controls, width).1.max(minimum)
+}
+
+fn buttons(frame: &mut Frame, app: &mut App, area: Rect, controls: &[(&str, Action)], modal: bool) {
+    let (rects, rows) = button_layout(controls, area.width);
+    // A control that does not fit is unreachable by mouse: size the area to its controls.
+    debug_assert!(
+        rows <= area.height,
+        "{} button rows do not fit {} rows: {:?}",
+        rows,
+        area.height,
+        controls.iter().map(|(label, _)| *label).collect::<Vec<_>>()
+    );
+    for (&(label, action), rel) in controls.iter().zip(rects) {
+        let rect = Rect::new(area.x + rel.x, area.y + rel.y, rel.width, 1);
+        if rect.bottom() > area.bottom() {
+            continue;
         }
-        let rect = Rect::new(x, y, width, 1);
         let enabled = modal || app.enabled(action);
         frame.render_widget(
             Paragraph::new(format!("[{label}]")).style(
@@ -464,7 +489,6 @@ fn buttons(frame: &mut Frame, app: &mut App, area: Rect, controls: &[(&str, Acti
             rect,
         );
         app.hits.push((rect, action));
-        x += width + 1;
     }
 }
 
@@ -1954,7 +1978,43 @@ pub fn wrapped(text: &str, width: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::OutputCache;
+    use super::{Action, OutputCache, button_layout};
+
+    #[test]
+    fn buttons_wrap_into_the_rows_they_need_and_never_overlap() {
+        let controls = [
+            ("aaaa", Action::Run),
+            ("bbbb", Action::Add),
+            ("cccc", Action::Quit),
+        ];
+        // Each button is its label plus two brackets; one column separates them.
+        let (rects, rows) = button_layout(&controls, 19);
+        assert_eq!((rows, rects[2].x, rects[2].y), (2, 0, 1));
+        let (rects, rows) = button_layout(&controls, 20);
+        assert_eq!((rows, rects[2].x, rects[2].y), (1, 14, 0));
+        // A button wider than the area still takes a row instead of looping or vanishing.
+        assert_eq!(button_layout(&controls, 3).1, 3);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "button rows do not fit")]
+    fn dropping_a_control_for_lack_of_rows_is_a_debug_failure() {
+        use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+        let mut app = crate::app::App::empty(crate::instance::Instance::Development);
+        let mut terminal = Terminal::new(TestBackend::new(20, 3)).unwrap();
+        terminal
+            .draw(|frame| {
+                super::buttons(
+                    frame,
+                    &mut app,
+                    Rect::new(0, 0, 10, 1),
+                    &[("aaaa", Action::Run), ("bbbb", Action::Add)],
+                    true,
+                );
+            })
+            .unwrap();
+    }
 
     #[test]
     fn appended_output_reflows_partial_words_and_invalidates_on_resize_or_replacement() {

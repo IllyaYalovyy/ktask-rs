@@ -1110,3 +1110,32 @@ fn all_dialog_types_fit_at_minimum_and_mouse_search_cancel() -> Result {
     )?;
     quit(&mut t)
 }
+
+/// Every enabled control must be on screen, so a mouse user can reach it at any size.
+const PENDING_QUEUE_CONTROLS: [&str; 6] = [
+    "Copy",
+    "S Stats",
+    "Esc Clear",
+    "/ Search",
+    "? Help",
+    "q Quit",
+];
+
+#[test]
+fn pending_queue_selection_shows_every_enabled_control_at_both_sizes_and_quit_clicks() -> Result {
+    for (cols, rows) in [(100, 30), (70, 22)] {
+        let mut t = Terminal::open(cols, rows)?;
+        ready(&t)?;
+        key(&mut t, "2", "Queue · 120 shown")?;
+        let screen = key(&mut t, "j", "› #2 ")?;
+        println!("PENDING QUEUE {cols}x{rows}\n{screen}");
+        assert!(screen.contains("Pending"), "{screen}");
+        assert!(screen.lines().count() <= usize::from(rows), "{screen}");
+        for label in PENDING_QUEUE_CONTROLS {
+            assert!(screen.contains(&format!("[{label}]")), "{label}\n{screen}");
+        }
+        t.click("q Quit")?;
+        t.finish()?;
+    }
+    Ok(())
+}

@@ -5868,3 +5868,34 @@ fn refused_keys_on_failed_current_name_the_offered_actions() -> Result {
     assert_eq!(storage_contents(root)?, before);
     Ok(())
 }
+
+#[test]
+fn running_session_pending_queue_selection_shows_every_enabled_control_at_both_sizes() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (mut writer, _run) = running_fixture(root, "Running first")?;
+    writer.create(&[runnable("Pending second")], None, true)?;
+    for (cols, rows) in [(100, 30), (70, 22)] {
+        let mut t = terminal_at(root, cols, rows)?;
+        t.screen("running current", |s| s.contains("Current #1 · Running"))?;
+        key(&mut t, "2", "Queue · ")?;
+        let screen = key(&mut t, "j", "› #2 ")?;
+        println!("RUNNING PENDING QUEUE {cols}x{rows}\n{screen}");
+        assert!(screen.contains("Pending"), "{screen}");
+        assert!(screen.lines().count() <= usize::from(rows), "{screen}");
+        for label in [
+            "Copy",
+            "p Pause",
+            "Esc Clear",
+            "S Stats",
+            "/ Search",
+            "? Help",
+            "q Quit",
+        ] {
+            assert!(screen.contains(&format!("[{label}]")), "{label}\n{screen}");
+        }
+        t.click("q Quit")?;
+        t.finish()?;
+    }
+    Ok(())
+}
