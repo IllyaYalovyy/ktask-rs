@@ -60,7 +60,7 @@ impl Database {
         })?;
         require(!tx.query_row("SELECT EXISTS(SELECT 1 FROM execution_sessions WHERE project_id=?1 AND state='paused')", [project], |r| r.get::<_,bool>(0))?, "Queue was paused before this attempt started")?;
         require(
-            kind == "ai",
+            kind != "human",
             "Human tasks require acknowledgment, not AI execution",
         )?;
         let configured: i64 = tx.query_row(

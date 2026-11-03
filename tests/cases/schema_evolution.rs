@@ -127,6 +127,20 @@ fn previous_v1_opens_in_real_binary_with_history_and_tui_screen() -> Result {
         )?,
         1
     );
+    // The in-place edit reaches existing databases: docs is allowed, the old row is untouched.
+    assert!(
+        db.query_row(
+            "SELECT sql FROM sqlite_schema WHERE name = 'task_revisions'",
+            [],
+            |row| row.get::<_, String>(0)
+        )?
+        .contains("kind IN ('ai', 'human', 'docs')")
+    );
+    assert_eq!(
+        db.query_row("SELECT kind FROM task_revisions", [], |row| row
+            .get::<_, String>(0))?,
+        "ai"
+    );
     drop(db);
 
     let mut terminal = Terminal::open_real(BINARY, root, 80, 25)?;

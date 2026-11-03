@@ -4645,6 +4645,97 @@ fn review_rounds_repair_only_critical_findings_in_real_tui() -> Result {
 }
 
 #[test]
+fn docs_task_skips_checks_but_is_reviewed_fixed_validated_and_committed() -> Result {
+    let f = Fixture::new()?;
+    let log = f.scratch.path().join("check-log");
+    // Every check run is logged; a docs task must leave the log absent.
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        &format!("echo ran >> '{}'; test -f result.txt", log.display()),
+    ])?;
+    // Starting checks stay enabled: a docs task must not run the green-baseline check either.
+    f.ok(&["init", "--check-before-task", "on"])?;
+    f.fail_first_review()?;
+    f.ok(&[
+        "add",
+        "--kind",
+        "docs",
+        "--title",
+        "Write the plan",
+        "--goal",
+        "Create result.txt containing verified",
+        "--criterion",
+        "result.txt contains verified",
+    ])?;
+    assert_eq!(f.ok(&["show", "1"])?["kind"], "docs");
+    f.ok(&["run"])?;
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["lifecycle"], "succeeded", "{task}");
+    assert!(!log.exists(), "a docs task never runs project checks");
+    let db = f.db()?;
+    let steps = |role: &str| -> Result<i64> {
+        Ok(db.connection().query_row(
+            "SELECT count(*) FROM attempt_steps WHERE attempt_id=1 AND role=?1",
+            [role],
+            |r| r.get(0),
+        )?)
+    };
+    assert_eq!(steps("check")?, 0);
+    assert_eq!(
+        steps("review")?,
+        2,
+        "the critical finding caused a second review"
+    );
+    assert_eq!(steps("validation")?, 1);
+    assert_eq!(
+        steps("remediation")?,
+        1,
+        "the read-only judge planned the fix round"
+    );
+    let round: i64 = db.connection().query_row(
+        "SELECT repair_round FROM attempt_progress WHERE attempt_id=1",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(round, 1);
+    assert_eq!(f.git(&["status", "--porcelain"])?, "");
+    assert_eq!(f.git(&["show", "HEAD:result.txt"])?, "verified\n");
+    let execution = fs::read_to_string(f.scratch.path().join("prompt-execution"))?;
+    assert!(
+        execution.contains("Do not run tests or builds"),
+        "{execution}"
+    );
+    assert!(!execution.contains("Run only focused builds, lints and tests"));
+    let repair = fs::read_to_string(f.scratch.path().join("prompt-repair-worker"))?;
+    assert!(repair.contains("Do not run tests or builds"));
+    for role in ["review", "validation"] {
+        let prompt = fs::read_to_string(f.scratch.path().join(format!("prompt-{role}")))?;
+        assert!(prompt.contains("This is a docs task"), "{role}: {prompt}");
+        assert!(!prompt.contains("Clean Code"), "{role}");
+        assert!(!prompt.contains("Supervisor check evidence"), "{role}");
+    }
+    let judge = fs::read_to_string(f.scratch.path().join("prompt-judge"))?;
+    assert!(judge.contains("This is a docs task") && !judge.contains("Clean Code"));
+
+    // An AI task in the same project still records its checks.
+    f.add("Code task")?;
+    f.ok(&["run"])?;
+    assert_eq!(f.ok(&["show", "2"])?["lifecycle"], "succeeded");
+    assert!(log.exists(), "an AI task runs the project checks");
+    assert!(
+        db.connection().query_row(
+            "SELECT count(*) FROM attempt_steps WHERE attempt_id=2 AND role='check'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )? > 0
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
 fn pause_at_tenth_review_resumes_the_phase_without_an_eleventh_repair() -> Result {
     for mouse in [false, true] {
         let f = Fixture::new()?;

@@ -950,7 +950,7 @@ Versioned definition, limits, and approval decision. Select the newest ready rev
 | `task_id` | INTEGER | no | Owning task. |
 | `revision` | INTEGER | no | Exact task revision number. |
 | `lifecycle` | TEXT | no | draft, ready, rejected, retired. |
-| `kind` | TEXT | no | ai or human. |
+| `kind` | TEXT | no | ai, human or docs (AI-run work without project checks). |
 | `title` | TEXT | no | Nonblank task title. |
 | `goal` | TEXT | no | Nonblank task goal. |
 | `change_reason` | TEXT | yes | Why this revision was created. |

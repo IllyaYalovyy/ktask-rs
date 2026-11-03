@@ -374,7 +374,8 @@ impl App {
             .filter(|task| {
                 (catalog.filter == 0
                     || (catalog.filter == 1 && task.definition().kind == Kind::Ai)
-                    || (catalog.filter == 2 && task.definition().kind == Kind::Human))
+                    || (catalog.filter == 2 && task.definition().kind == Kind::Human)
+                    || (catalog.filter == 3 && task.definition().kind == Kind::Docs))
                     && format!(
                         "#{} {} {}",
                         task.id,
@@ -1045,7 +1046,7 @@ impl App {
         self.reconcile();
         if (self.auto_advance || repaired.is_some())
             && self.current().is_some_and(|t| {
-                t.definition().kind == Kind::Ai
+                t.definition().kind.runs_ai()
                     && (t.status() == Status::Pending
                         || (repaired.is_some() && t.status() == Status::Failed))
             })

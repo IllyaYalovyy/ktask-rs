@@ -503,8 +503,13 @@ fn queue_search_filter_navigation_history_and_selection_are_independent() -> Res
     t.screen("only human task", |s| {
         s.contains("› #2 ") && s.contains("1 shown")
     })?;
+    click(&mut t, "f Filter", "Filter: Docs")?;
+    t.screen("no docs task in the demo queue", |s| {
+        s.contains("No matching tasks.")
+    })?;
+    // With no docs task the selection fell back to the first row; All keeps it.
     click(&mut t, "f Filter", "Filter: All")?;
-    key(&mut t, "g", "› #1 ")?;
+    t.screen("first row selected", |s| s.contains("› #1 "))?;
     t.wheel(true, 4, 8)?;
     t.screen("mouse wheel moves queue", |s| s.contains("› #4 "))?;
     t.wheel(false, 4, 8)?;
@@ -613,14 +618,22 @@ fn mouse_crud_cancel_copy_and_modal_focus() -> Result {
     click(&mut t, "x Cancel", "Cancel #241 Mouse changed")?;
     key(&mut t, "Duplicate", "Duplicate")?;
     click(&mut t, "Apply", "#241 cancelled · Cancelled: Duplicate")?;
-    click(&mut t, "3 History", "› #241 Cancelled Mouse changed")?;
+    click(
+        &mut t,
+        "3 History",
+        "› #241 Cancelled [Human] Mouse changed",
+    )?;
     click(
         &mut t,
         "C Copy to queue",
         "Copy to queue #241 Mouse changed",
     )?;
     t.click("Cancel")?;
-    closed(&t, "Copy to queue #241", "› #241 Cancelled Mouse changed")?;
+    closed(
+        &t,
+        "Copy to queue #241",
+        "› #241 Cancelled [Human] Mouse changed",
+    )?;
     click(
         &mut t,
         "C Copy to queue",
@@ -629,7 +642,11 @@ fn mouse_crud_cancel_copy_and_modal_focus() -> Result {
     key(&mut t, "2", "2▏")?;
     click(&mut t, "Apply", "#241 copied to the queue as #242")?;
     click(&mut t, "2 Queue", "Queue · 121 shown")?;
-    click(&mut t, "#242 Pending", "› #242 Pending  Mouse changed")?;
+    click(
+        &mut t,
+        "#242 Pending",
+        "› #242 Pending  [Human] Mouse changed",
+    )?;
     click(&mut t, "i Insert", "Insert task")?;
     t.click("Cancel")?;
     closed(&t, "Insert task", "Queue · 121 shown")?;

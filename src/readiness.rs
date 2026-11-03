@@ -1,7 +1,7 @@
 //! Read-only launch inspection for the Current Task screen.
 use crate::{
     app::App,
-    application::{Kind, ROLES, Service},
+    application::{ROLES, Service},
     presentation::TaskAction,
     runner::provider::Provider,
 };
@@ -184,16 +184,20 @@ pub(crate) fn inspect(app: &App) -> Readiness {
     );
     report.check(
         "Project checks",
-        service
-            .checks()
-            .map_err(|e| e.to_string())
-            .and_then(|checks| {
-                if checks.is_empty() {
-                    Err("No enabled check".into())
-                } else {
-                    Ok(())
-                }
-            }),
+        if !definition.definition.kind.runs_checks() {
+            Ok(())
+        } else {
+            service
+                .checks()
+                .map_err(|e| e.to_string())
+                .and_then(|checks| {
+                    if checks.is_empty() {
+                        Err("No enabled check".into())
+                    } else {
+                        Ok(())
+                    }
+                })
+        },
         "c Checks",
     );
     report.check(
@@ -207,7 +211,7 @@ pub(crate) fn inspect(app: &App) -> Readiness {
     );
     report.check(
         "Task",
-        if definition.definition.kind == Kind::Ai {
+        if definition.definition.kind.runs_ai() {
             Ok(())
         } else {
             Err("Human work has no AI run".into())

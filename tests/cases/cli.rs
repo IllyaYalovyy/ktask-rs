@@ -706,6 +706,83 @@ fn cli_models_drafts_approval_rejection_and_actor_attribution() -> Result {
 }
 
 #[test]
+fn docs_kind_is_added_edited_listed_shown_and_round_trips_through_tsv() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let new = |kind: &str, title: &str| -> Result<i64> {
+        let reply = json(
+            root,
+            &[
+                "add",
+                "--kind",
+                kind,
+                "--title",
+                title,
+                "--goal",
+                "Goal",
+                "--criterion",
+                "Check",
+            ],
+            0,
+        )?;
+        Ok(reply["data"]["tasks"][0]["id"].as_i64().unwrap())
+    };
+    let docs = new("docs", "Write the plan")?;
+    let ai = new("ai", "Code it")?;
+    assert_eq!(
+        json(root, &["show", &docs.to_string()], 0)?["data"]["kind"],
+        "docs"
+    );
+    assert_eq!(
+        json(root, &["show", &docs.to_string()], 0)?["data"]["definition"]["kind"],
+        "docs"
+    );
+    let listed = json(root, &["list", "--kind", "docs"], 0)?;
+    assert_eq!(listed["data"]["count"], 1);
+    assert_eq!(listed["data"]["tasks"][0]["kind"], "docs");
+    let text = run(root, &["show", &docs.to_string()])?;
+    assert!(text.status.success());
+    assert!(String::from_utf8_lossy(&text.stdout).contains("docs"));
+    let text = run(root, &["list"])?;
+    assert!(String::from_utf8_lossy(&text.stdout).contains("docs"));
+    // An AI task becomes docs by edit, and an invalid kind keeps the usage exit code.
+    json(root, &["edit", &ai.to_string(), "--kind", "docs"], 0)?;
+    assert_eq!(
+        json(root, &["list", "--kind", "docs"], 0)?["data"]["count"],
+        2
+    );
+    json(
+        root,
+        &[
+            "add",
+            "--kind",
+            "pages",
+            "--title",
+            "T",
+            "--goal",
+            "G",
+            "--criterion",
+            "C",
+        ],
+        2,
+    )?;
+    // Export and import keep the kind.
+    json(root, &["export", "tasks.tsv"], 0)?;
+    let exported = std::fs::read_to_string(root.join("tasks.tsv"))?;
+    assert!(exported.starts_with("ktask-tasks-v2\n"));
+    assert_eq!(
+        exported.lines().filter(|l| l.starts_with("docs\t")).count(),
+        2
+    );
+    json(root, &["import", "tasks.tsv"], 0)?;
+    assert_eq!(
+        json(root, &["list", "--kind", "docs"], 0)?["data"]["count"],
+        4
+    );
+    Ok(())
+}
+
+#[test]
 fn cli_export_import_preview_overwrite_and_atomic_insertion() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();

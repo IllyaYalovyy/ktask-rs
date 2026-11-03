@@ -271,6 +271,13 @@ fn admit(
     Ok(None)
 }
 
+/// Docs work never runs project checks, so only a queue headed by other work needs them.
+fn checks_required(service: &mut Service) -> Result<bool> {
+    Ok(service
+        .current_task()?
+        .is_none_or(|task| task.definition().definition.kind.runs_checks()))
+}
+
 /// Whether the task's last attempt failed because the checks were red before it started.
 fn red_start(task: &crate::application::Task) -> bool {
     task.attempts.last().is_some_and(|a| {
@@ -323,9 +330,8 @@ fn run_inner(
     }
     *owns_session = true;
     let stop = process::stopped()?;
-    let checks = service.checks()?;
     require(
-        !checks.is_empty(),
+        !checks_required(service)? || !service.checks()?.is_empty(),
         "Configure at least one real check: check-set build --command 'make check'",
     )?;
     let mut notified = false;
@@ -429,6 +435,7 @@ fn run_inner(
             // state. Inserted prerequisite tasks exist to repair, so they start at once.
             cycle::Opening::Fresh {
                 verify: task.origin_task_id.is_none()
+                    && task.definition().definition.kind.runs_checks()
                     && service.check_before_task()?
                     && workspace.clean()?,
             }
@@ -514,7 +521,13 @@ fn run_inner(
                     cycle::Opening::Repair => {
                         "Repair started with the configured remediation model"
                     }
+                    cycle::Opening::Retry if !run.definition.kind.runs_checks() => {
+                        "Retry started from the kept work; review and validation follow"
+                    }
                     cycle::Opening::Retry => "Retry started from the kept work; checks run first",
+                    cycle::Opening::Fresh { .. } if !run.definition.kind.runs_checks() => {
+                        "Docs execution started; no project checks, results require review and validation"
+                    }
                     cycle::Opening::Fresh { .. } => {
                         "Execution started; results require checks, review and validation"
                     }
@@ -542,7 +555,7 @@ fn run_inner(
                 }
                 let result = service.checks().and_then(|checks| {
                     require(
-                        !checks.is_empty(),
+                        !checks.is_empty() || !run.definition.kind.runs_checks(),
                         "Configure at least one enabled project check",
                     )?;
                     cycle::run(service, &run, &mut context, &checks, opening)
@@ -801,7 +814,7 @@ fn continue_session_inner(
         }
         return Ok(false);
     };
-    if task.definition().definition.kind != crate::application::Kind::Ai
+    if !task.definition().definition.kind.runs_ai()
         || task.definition().lifecycle != "ready"
         || !matches!(
             task.status.as_str(),
@@ -1039,7 +1052,7 @@ fn ai_turn(
             return Ok(Outcome::Failed("protocol", e.to_string()));
         }
     };
-    if role == "validation" {
+    if role == "validation" && run.definition.kind.runs_checks() {
         for reason in service.check_regressions(run)? {
             assessment.findings.push(agent::Finding {
                 severity: agent::Severity::Critical,
@@ -1386,7 +1399,7 @@ fn apply_judgment(
                 .map(|t| crate::application::Definition {
                     title: t.title.clone(),
                     goal: t.goal.clone(),
-                    kind: crate::application::Kind::Ai,
+                    kind: run.definition.kind,
                     criteria: t.criteria.clone(),
                     models: defaults.clone(),
                     attempt_limit: Some(3),
@@ -1617,7 +1630,7 @@ pub fn background(
     workspace::git_identity(&workspace.root)?;
     drop(workspace);
     require(
-        !service.checks()?.is_empty(),
+        !checks_required(service)? || !service.checks()?.is_empty(),
         "Configure an enabled check in Configuration > Checks (or CLI check-set)",
     )?;
     if let Some(task) = service.current_task()? {

@@ -22,10 +22,11 @@ impl Reply {
                     .iter()
                     .map(|t| {
                         format!(
-                            "{}\tv{}\t{}\t{}\n",
+                            "{}\tv{}\t{}\t{}\t{}\n",
                             t.id,
                             t.version,
                             t.state().label(),
+                            t.definition().definition.kind.as_str(),
                             safe(&t.definition().definition.title)
                         )
                     })

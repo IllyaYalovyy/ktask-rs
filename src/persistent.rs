@@ -986,10 +986,10 @@ impl App {
                 if definition.criteria.join("\n") != dialog.value(2) {
                     definition.criteria = dialog.value(2).lines().map(str::to_owned).collect();
                 }
-                definition.kind = if dialog.value(3) == "Human" {
-                    domain::Kind::Human
-                } else {
-                    domain::Kind::Ai
+                definition.kind = match Kind::from_label(dialog.value(3)) {
+                    Some(Kind::Human) => domain::Kind::Human,
+                    Some(Kind::Docs) => domain::Kind::Docs,
+                    _ => domain::Kind::Ai,
                 };
                 let ready = if id.is_some() {
                     dialog.value(if *insert { 5 } else { 4 }) == "Ready"
@@ -1306,10 +1306,10 @@ fn project_revision(revision: &domain::Revision) -> Result<model::Revision, Stri
         title: d.title.clone(),
         goal: d.goal.clone(),
         check: d.criteria.join("\n"),
-        kind: if d.kind == domain::Kind::Ai {
-            Kind::Ai
-        } else {
-            Kind::Human
+        kind: match d.kind {
+            domain::Kind::Ai => Kind::Ai,
+            domain::Kind::Human => Kind::Human,
+            domain::Kind::Docs => Kind::Docs,
         },
         settings: model::Settings {
             models: std::array::from_fn(|i| model::Model {

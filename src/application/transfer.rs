@@ -60,11 +60,7 @@ pub fn decode(text: &str) -> Result<Vec<Definition>> {
     for line in lines {
         let f = line.split('\t').map(unescape).collect::<Result<Vec<_>>>()?;
         require(f.len() >= 18 + stage, "Incomplete task definition")?;
-        let kind = match f[0].as_str() {
-            "ai" => Kind::Ai,
-            "human" => Kind::Human,
-            _ => return Err(Error::Conflict("Unknown task kind".into())),
-        };
+        let kind = Kind::parse(&f[0]).ok_or_else(|| Error::Conflict("Unknown task kind".into()))?;
         let mut models = std::array::from_fn(|_| None);
         for (i, model) in models.iter_mut().enumerate() {
             let offset = 5 + stage + i * 3;

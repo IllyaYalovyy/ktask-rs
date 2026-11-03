@@ -1025,11 +1025,7 @@ pub(super) fn revisions(db: &Connection, task: i64) -> Result<Vec<Revision>> {
                 definition: Definition {
                     title: r.get(2)?,
                     goal: r.get(3)?,
-                    kind: if r.get::<_, String>(4)? == "ai" {
-                        Kind::Ai
-                    } else {
-                        Kind::Human
-                    },
+                    kind: Kind::parse(&r.get::<_, String>(4)?).unwrap_or(Kind::Human),
                     attempt_limit: r.get(5)?,
                     timeout_ms: r.get(6)?,
                     stage_timeout_ms: r.get(8)?,

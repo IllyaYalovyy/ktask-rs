@@ -59,7 +59,7 @@ impl Service {
              WHERE project_id=?1 AND mode='queue' AND state IN ('running','waiting')
                AND reason!='Intervention resolved; continuing queue'
                AND EXISTS (SELECT 1 FROM current_tasks current
-                   WHERE current.project_id=?1 AND current.kind='ai'
+                   WHERE current.project_id=?1 AND current.kind IN ('ai','docs')
                      AND current.revision_lifecycle='ready'
                      AND current.status IN ('ready','failed','waiting','paused')
                      AND NOT EXISTS (SELECT 1 FROM questions question

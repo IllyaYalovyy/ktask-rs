@@ -16,6 +16,16 @@
 - Done, Cancelled and Superseded are final. Copy to queue brings any of them back as a new pending task; the original stays in History unchanged.
 - All user flows support mouse and keyboard. Mouse is enabled by default and can be disabled in Configuration.
 
+## Task kinds
+
+| Kind | Who does it | Project checks | Review and validation judge |
+|---|---|---|---|
+| AI (default) | AI agents | Yes: green baseline before the task, a check step after every implementation or fix | The diff against the Clean Code bar, with the check evidence |
+| Human | The owner; confirmed with Mark done | Never | None; no AI run |
+| Docs | AI agents | Never: no baseline check, no check step, and the worker is told not to run tests or builds | The written result against the goal and criteria: accuracy, completeness, consistency with the code and existing docs, clarity; a checked-in change must leave links, references and tables of contents consistent |
+
+A Docs task has the AI lifecycle with the checks removed: implement → review → fix → validate within one attempt, up to ten repair rounds with the read-only failure judge, then commit and delivery. Run, Resume, Retry, Stop and every other action follow the same state machine as an AI task; Run from Pending starts at implementation and Retry continues at review. The kind is chosen in the task form (CLI `--kind ai|human|docs`), filtered in Queue and History (f), shown in rows, details, `list` and `show`, and kept by import/export.
+
 ## Task states
 
 | State | Actions |
@@ -28,8 +38,8 @@
 | Failed | Retry, Edit, Stop, Mark done |
 | Done, Cancelled, Superseded | Copy to queue |
 
-- Stop returns any live task to Pending: the worker stops, the attempt ends, and uncommitted changes are saved as a git stash named `ktask: task #N attempt #M`. Run from Pending is a full restart: checks first, round 0, full limits.
-- Retry keeps the code, continues from the checks, and restarts the limits. Resume continues the same attempt; after an Edit it continues in a new attempt with the new revision.
+- Stop returns any live task to Pending: the worker stops, the attempt ends, and uncommitted changes are saved as a git stash named `ktask: task #N attempt #M`. Run from Pending is a full restart: checks first (Docs: none), round 0, full limits.
+- Retry keeps the code, continues from the checks (Docs: from review), and restarts the limits. Resume continues the same attempt; after an Edit it continues in a new attempt with the new revision.
 - Mark done is the owner's verdict from any unfinished state; a live attempt stops and stashes first. Only Pending can be cancelled or superseded; Supersede names at least one replacing task.
 - Remediation is automatic: the supervisor's judge repairs, revises, inserts prerequisites or breaks the task down. When it cannot, the task is Failed.
 - The TUI and the CLI offer exactly these actions; a refused action names the state and what it offers.
@@ -54,6 +64,8 @@
 - Configure a task → choose execution, review, validation, and remediation model/effort → save a new revision; previous attempts retain their original settings.
 - Switch to another task → preserve useful changes, stop/reap processes, and clean owned temporary state before execution; a failed handoff blocks the start. Retrying the same task may keep its workspace and reuse its compatible chat session.
 - Complete current → move it to History and show the next pending task as current; when none remain, show queue complete.
+- Add a Docs task for documents, plans or other non-code files (task form Kind: Docs, or `ktask add --kind docs`) → it runs like an AI task, reviewed and validated against its goal and criteria, with no project checks.
+- Filter Queue or History by kind (f cycles All, AI, Human, Docs) → rows of other kinds are tagged `[Human]` or `[Docs]`; the filter keeps execution order.
 - Search or filter Queue → select a matching task → read its details; no matches offers clearing the search/filter.
 - Add a task → save → see it appended and selected; cancel leaves Queue unchanged.
 - Edit a pending, paused, needs-input or failed task → save updated details or cancel unchanged; a running task and History are read-only.

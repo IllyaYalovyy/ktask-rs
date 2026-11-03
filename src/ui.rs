@@ -1175,7 +1175,7 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
             ),
             Line::raw(format!(
                 " Filter: {}  |  Search: {}",
-                ["All", "AI", "Human"][catalog.filter],
+                ["All", "AI", "Human", "Docs"][catalog.filter],
                 if catalog.query.is_empty() {
                     "/ to search"
                 } else {
@@ -1307,7 +1307,12 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                     .collect();
                 let available = list.width.saturating_sub(4) as usize;
                 let title_width = available.saturating_sub(width(&prefix) + width(&statistics));
-                let text = shortened(&task.definition().title, title_width);
+                // AI is the default kind; every other kind is tagged so the row shows it.
+                let tagged = match task.definition().kind {
+                    crate::presentation::Kind::Ai => task.definition().title.clone(),
+                    kind => format!("[{}] {}", kind.label(), task.definition().title),
+                };
+                let text = shortened(&tagged, title_width);
                 let gap = " ".repeat(title_width.saturating_sub(width(&text)));
                 ListItem::new(Line::from(vec![
                     Span::styled(prefix, Style::new().fg(status_color(task.status()))),

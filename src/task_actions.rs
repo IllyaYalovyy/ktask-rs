@@ -117,7 +117,7 @@ impl App {
         if self.auto_advance
             && self
                 .current()
-                .is_some_and(|t| t.id == id && t.definition().kind == crate::presentation::Kind::Ai)
+                .is_some_and(|t| t.id == id && t.definition().kind.runs_ai())
         {
             self.start_current();
         }

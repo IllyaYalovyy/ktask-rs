@@ -91,6 +91,14 @@ pub(super) fn run(
             }
             "judge" if progress.round == 0 => judge(service, run, ctx)?,
             "judge" => judge_attempt(service, run, ctx, run.attempt)?,
+            "check" if !run.definition.kind.runs_checks() => {
+                let tree = ctx
+                    .workspace
+                    .fingerprint(&ctx.paths.cache.join("workers"))?;
+                let scope = review_scope(service, run, ctx, &tree)?;
+                progress.verified_tree = tree;
+                Outcome::Passed(scope)
+            }
             "check" => {
                 let workers = ctx.paths.cache.join("workers");
                 let before = ctx.workspace.fingerprint(&workers)?;
@@ -101,14 +109,9 @@ pub(super) fn run(
                             let paths = ctx.workspace.tree_difference(&before, &after)?;
                             Outcome::Changes { report: format!("Worktree changed during supervisor checks; their results do not verify a stable source state. Expected tree {before}; observed tree {after}; differing paths: {paths}. Make verification read-only with respect to project source."), critical: true }
                         } else {
-                            let original_base = service.attempt_base(run.task)?.ok_or_else(|| {
-                                Error::Conflict("Attempt has no recorded baseline".into())
-                            })?;
-                            let delivery = service.attempt_delivery(run).ok();
-                            let base = delivery.as_ref().and_then(|d| (d.stage != "work").then_some(d.fetched_base.as_deref()).flatten()).unwrap_or(&original_base);
-                            let scope = ctx.workspace.review_scope(base, &after)?;
+                            let scope = review_scope(service, run, ctx, &after)?;
                             progress.verified_tree = after;
-                            Outcome::Passed(format!("{evidence}{}", scope.describe()))
+                            Outcome::Passed(format!("{evidence}{scope}"))
                         }
                     }
                     other => other,
@@ -128,8 +131,13 @@ pub(super) fn run(
             )?,
             "complete" => {
                 let minor = progress.evidence.matches("\nMinor: ").count();
+                let gates = if run.definition.kind.runs_checks() {
+                    "Checks, independent review"
+                } else {
+                    "Independent review"
+                };
                 return Ok(Outcome::Passed(format!(
-                    "Checks, independent review and validation passed after {} repair rounds{}",
+                    "{gates} and validation passed after {} repair rounds{}",
                     progress.round,
                     match minor {
                         0 => String::new(),
@@ -251,6 +259,23 @@ pub(super) fn run(
         }
         service.save_progress(run, &progress)?;
     }
+}
+
+/// What the reviewers examine: the attempt's change from its baseline to the verified tree.
+fn review_scope(service: &Service, run: &Run, ctx: &Context<'_>, tree: &str) -> Result<String> {
+    let original_base = service
+        .attempt_base(run.task)?
+        .ok_or_else(|| Error::Conflict("Attempt has no recorded baseline".into()))?;
+    let delivery = service.attempt_delivery(run).ok();
+    let base = delivery
+        .as_ref()
+        .and_then(|d| {
+            (d.stage != "work")
+                .then_some(d.fetched_base.as_deref())
+                .flatten()
+        })
+        .unwrap_or(&original_base);
+    Ok(ctx.workspace.review_scope(base, tree)?.describe())
 }
 
 pub(super) fn request_fixes(

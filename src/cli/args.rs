@@ -96,6 +96,8 @@ pub enum Kind {
     Ai,
     /// Done by the owner and confirmed with ack.
     Human,
+    /// Documents and plans: AI-run and reviewed, but no project checks.
+    Docs,
 }
 #[derive(Clone, Copy, ValueEnum)]
 pub enum Scope {

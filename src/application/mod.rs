@@ -36,13 +36,32 @@ pub const ROLES: [&str; 4] = ["execution", "review", "validation", "remediation"
 pub enum Kind {
     Ai,
     Human,
+    /// Documents and plans: runs like an AI task, but no project checks.
+    Docs,
 }
 impl Kind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Ai => "ai",
             Self::Human => "human",
+            Self::Docs => "docs",
         }
+    }
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "ai" => Some(Self::Ai),
+            "human" => Some(Self::Human),
+            "docs" => Some(Self::Docs),
+            _ => None,
+        }
+    }
+    /// Whether the supervisor runs this kind with AI workers, judges and validators.
+    pub fn runs_ai(self) -> bool {
+        self != Self::Human
+    }
+    /// Whether the project's checks gate this kind.
+    pub fn runs_checks(self) -> bool {
+        self == Self::Ai
     }
 }
 

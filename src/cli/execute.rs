@@ -75,6 +75,7 @@ fn kind(kind: Kind) -> app::Kind {
     match kind {
         Kind::Ai => app::Kind::Ai,
         Kind::Human => app::Kind::Human,
+        Kind::Docs => app::Kind::Docs,
     }
 }
 fn task(service: &mut Service, id: i64) -> Result<Task> {

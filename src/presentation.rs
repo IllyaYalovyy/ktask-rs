@@ -23,13 +23,28 @@ pub fn badge(status: Status) -> &'static str {
 pub enum Kind {
     Ai,
     Human,
+    Docs,
 }
 impl Kind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Ai => "AI",
             Self::Human => "Human",
+            Self::Docs => "Docs",
         }
+    }
+    pub const LABELS: [&'static str; 3] = ["AI", "Human", "Docs"];
+    /// The kind a form choice or imported row names; unknown labels are rejected by callers.
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "AI" => Some(Self::Ai),
+            "Human" => Some(Self::Human),
+            "Docs" => Some(Self::Docs),
+            _ => None,
+        }
+    }
+    pub fn runs_ai(self) -> bool {
+        self != Self::Human
     }
 }
 

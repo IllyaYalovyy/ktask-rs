@@ -228,6 +228,22 @@ its own queue, checks and model defaults in the same instance database, and has 
 supervisor: several projects run at the same time, each with its own TUI or CLI, and pausing
 one leaves the others running.
 
+## Task kinds
+
+A task is one of three kinds. **AI** (default) is code work: the project checks run on the clean
+starting commit, after every implementation or fix, and gate review and validation. **Human**
+work is done by the owner and confirmed with Mark done. **Docs** is for documents, plans and
+other non-code files: it runs like an AI task (implement, independent review, fix rounds with
+the read-only judge, validation, commit and delivery) but never runs project checks. There is
+no green-baseline check, no check step, and the worker is told not to run tests or builds.
+Review and validation judge the written result against the goal and criteria (accuracy,
+completeness, consistency with the code and existing docs, clarity) instead of the Clean Code
+bar; a checked-in change must still leave links, references and tables of contents consistent.
+Choose the kind in the task form (Kind: AI, Human, Docs) or with `--kind ai|human|docs` on
+`add` and `edit`. `list` and `show` print it, `list --kind docs` and the Queue/History filter
+(**f**) select it, other kinds are tagged in rows (`[Docs]`, `[Human]`), and TSV export/import
+keeps it. A queue of only Docs tasks does not need a configured project check.
+
 ## Run real work
 
 Use an ordinary Git baseline commit and a clean checkout for a new task. No hidden worktrees,
@@ -374,6 +390,8 @@ cargo run --locked -- approve 1 --if-version 1
   `target`; `cache clean [--apply]` previews or retires obsolete generations;
   `cache limits [--max-bytes N --max-files N --keep-generations N --grace-secs N
   --min-free-bytes N --if-version N]` shows or sets the finite bounds. All support `--json`.
+- Kinds: `add`/`edit --kind ai|human|docs`; `list --kind docs` filters; text `list` prints
+  `ID, version, state, kind, title`, and JSON carries `"kind"`.
 - Change: `add`, `edit ID`, `move ID --before ID`, `approve`, `reject --reason`, `stop`, `done`,
   `cancel`, `supersede --by`, `copy [--before ID]`. Each task's JSON lists its `state` and the
   `actions` it offers; a refused action exits 4 naming both.

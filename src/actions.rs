@@ -26,7 +26,7 @@ impl App {
                 matches!(self.view, View::Current | View::Queue)
                     && !(self.service.is_some() && self.supervisor_alive)
                     && current.is_some_and(|t| {
-                        t.definition().kind == Kind::Ai
+                        t.definition().kind.runs_ai()
                             && t.status()
                                 .forward()
                                 .is_some_and(|step| step != TaskAction::Approve)
@@ -253,7 +253,7 @@ impl App {
                 self.reconcile();
             }
             Action::Filter => {
-                self.catalog_mut().filter = (self.catalog().filter + 1) % 3;
+                self.catalog_mut().filter = (self.catalog().filter + 1) % 4;
                 self.reconcile();
             }
             Action::Follow => self.follow = true,
@@ -437,7 +437,7 @@ impl App {
             ),
             Field::choice(
                 "Kind",
-                &["AI", "Human"],
+                &Kind::LABELS,
                 task.map_or("AI", |t| t.definition().kind.label()),
             ),
         ];
@@ -1477,11 +1477,7 @@ impl App {
         if (0..3).any(|n| dialog.value(n).is_empty()) {
             return Err("Title, goal, and acceptance check are required".into());
         }
-        let kind = if dialog.value(3) == "Human" {
-            Kind::Human
-        } else {
-            Kind::Ai
-        };
+        let kind = Kind::from_label(dialog.value(3)).unwrap_or(Kind::Ai);
         let id = if let Some(id) = id {
             let task = self
                 .queue
@@ -1580,7 +1576,7 @@ fn parse_tasks(data: &str) -> Result<Vec<Task>, String> {
         let parts: Vec<_> = line.split('\t').map(str::trim).collect();
         if !matches!(parts.len(), 4 | 14 | 15)
             || parts.iter().take(4).any(|s| s.is_empty())
-            || !matches!(parts[0], "AI" | "Human")
+            || Kind::from_label(parts[0]).is_none()
         {
             return Err(format!(
                 "Invalid row {}: expected kind, title, goal, check (TSV)",
@@ -1590,11 +1586,7 @@ fn parse_tasks(data: &str) -> Result<Vec<Task>, String> {
         let mut task = Task::pending(0, parts[1]);
         task.revisions[0].goal = parts[2].into();
         task.revisions[0].check = parts[3].into();
-        task.revisions[0].kind = if parts[0] == "Human" {
-            Kind::Human
-        } else {
-            Kind::Ai
-        };
+        task.revisions[0].kind = Kind::from_label(parts[0]).expect("kind validated above");
         if parts.len() >= 14 {
             import_settings(&parts, &mut task)?;
         }

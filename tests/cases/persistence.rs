@@ -4426,6 +4426,82 @@ fn real_tui_saves_across_kill_restart_and_never_simulates_real_tasks() -> Result
 }
 
 #[test]
+fn docs_kind_is_chosen_filtered_and_shown_by_keyboard_and_mouse() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    service(root)?.create(&[definition("Plain AI task")], None, true)?;
+    let mut t = terminal_at(root, 100, 30)?;
+    t.screen("queue ready", |s| s.contains("Plain AI task"))?;
+
+    // Keyboard: Space on the Kind field cycles AI, Human, Docs.
+    key(&mut t, "a", "Add task")?;
+    key(&mut t, "Key docs\tGoal\tCriterion\t", "Criterion")?;
+    key(&mut t, "  ", "< Docs >")?;
+    let saved = submit(
+        &mut t,
+        "\tcodex/worker\thigh\x13",
+        "╭ Add task",
+        "[Docs] Key docs",
+    )?;
+    println!("KEYBOARD DOCS TASK SAVED\n{saved}");
+    assert!(row_shows(&saved, "[Docs] Key docs", "Pending"));
+
+    // Mouse: each click on Kind advances the choice.
+    t.click("a Add")?;
+    t.screen("mouse form", |s| s.contains("Execution provider/model"))?;
+    t.click("Title")?;
+    type_field(&mut t, "Mouse docs")?;
+    t.click("Goal")?;
+    type_field(&mut t, "Goal")?;
+    t.click("Acceptance check")?;
+    type_field(&mut t, "Criterion")?;
+    t.click("Kind")?;
+    t.screen("human", |s| s.contains("< Human >"))?;
+    t.click("Kind")?;
+    t.screen("docs", |s| s.contains("< Docs >"))?;
+    t.click("Execution provider/model")?;
+    type_field(&mut t, "codex/mouse")?;
+    t.click("Apply")?;
+    let saved = t.screen("mouse docs saved", |s| {
+        !s.contains("╭ Add task") && s.contains("[Docs] Mouse docs")
+    })?;
+    println!("MOUSE DOCS TASK SAVED\n{saved}");
+
+    // The detail pane names the kind of the selected task.
+    assert!(saved.contains("Docs"), "{saved}");
+
+    // Keyboard filter: All, AI, Human, Docs.
+    for label in ["AI", "Human", "Docs"] {
+        key(&mut t, "f", &format!("Filter: {label}"))?;
+    }
+    let docs = t.screen("docs filter", |s| {
+        s.contains("Filter: Docs") && !s.contains("Plain AI task")
+    })?;
+    println!("KEYBOARD DOCS FILTER\n{docs}");
+    assert!(docs.contains("[Docs] Key docs") && docs.contains("[Docs] Mouse docs"));
+    key(&mut t, "f", "Filter: All")?;
+    t.screen("all again", |s| s.contains("Plain AI task"))?;
+
+    // Mouse filter reaches the same state.
+    for label in ["AI", "Human", "Docs"] {
+        t.click("f Filter")?;
+        t.screen(label, |s| s.contains(&format!("Filter: {label}")))?;
+    }
+    let docs = t.screen("docs filter by mouse", |s| !s.contains("Plain AI task"))?;
+    println!("MOUSE DOCS FILTER\n{docs}");
+    quit(&mut t)?;
+
+    let snapshot = service(root)?.snapshot()?;
+    let kinds: Vec<_> = snapshot
+        .queue
+        .iter()
+        .map(|t| t.definition().definition.kind)
+        .collect();
+    assert_eq!(kinds, [Kind::Ai, Kind::Docs, Kind::Docs]);
+    Ok(())
+}
+
+#[test]
 fn queue_add_sets_execution_model_by_keyboard_and_mouse() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();

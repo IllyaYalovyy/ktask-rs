@@ -134,7 +134,7 @@ CREATE TABLE task_revisions (
     task_id INTEGER NOT NULL REFERENCES tasks(id),
     revision INTEGER NOT NULL CHECK (revision > 0),
     lifecycle TEXT NOT NULL CHECK (lifecycle IN ('draft', 'ready', 'rejected', 'retired')),
-    kind TEXT NOT NULL CHECK (kind IN ('ai', 'human')),
+    kind TEXT NOT NULL CHECK (kind IN ('ai', 'human', 'docs')),
     title TEXT NOT NULL CHECK (length(trim(title)) > 0),
     goal TEXT NOT NULL CHECK (length(trim(goal)) > 0),
     change_reason TEXT,
