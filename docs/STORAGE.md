@@ -50,7 +50,7 @@ TUI's refresh or `run`) settles it to paused with its work kept.
 
 Planner/remediator work uses ordinary tasks, not proposal tables. Approval is a human or AI
 decision on the revision. Mark done, Cancel and Supersede close the task without rewriting its
-attempts; Copy to queue creates a new task linked by `derived_from`. Escalation creates a new revision with new role settings.
+attempts; Copy to queue creates a new task linked by `derived_from`. Changing role models creates a new revision with the new role settings.
 An active execution worker may use the supervisor's absolute executable and its attempt token
 to file a follow-up draft immediately after current. The CLI sends the request through a
 guardian-owned endpoint in the worker's TMPDIR; only the guardian opens SQLite and applies this
@@ -59,24 +59,12 @@ write the supervisor's state root, and the endpoint accepts no other mutation.
 
 ## Waiting and limits
 
-Model saves and execution preflight validate exact provider model IDs. Codex reads
-`$CODEX_HOME/models_cache.json` (default `$HOME/.codex/models_cache.json`), including
-`models[].slug` and `supported_reasoning_levels[].effort`. Claude's standard `sonnet`, `opus`,
-`haiku`, and `fable` aliases are accepted. Other IDs and custom deployments require an
-explicit entry in `model-catalog.json` beside the instance's `ktask.sqlite3`:
-
-```json
-[{"provider":"codex","model":"custom-deployment","aliases":["custom-alias"],"efforts":["low","high"]}]
-```
-
-Providers remain `codex`, `claude`, or `opencode`; OpenCode model IDs retain the
-vendor prefix. Optional `aliases` name the same model, and optional `efforts` specify
-its exact supported values (an empty list allows no effort). Omit `efforts` to use
-the provider's standard values. Catalog metadata takes precedence over native
-metadata. Missing or malformed metadata blocks the save/start with the role, model,
-and source/action; names never imply supported models or capabilities. Resume checks
-the attempt's pinned revision even if newer settings exist. Read-only inspection
-and export remain available when provider metadata disappears.
+Model saves and execution preflight check structure only: the provider is `codex`, `claude`
+or `opencode`, provider and model are nonempty, and an explicit effort uses a spelling the
+provider accepts. ktask keeps no model catalog and reads no provider model cache; the model
+string goes to the provider CLI unchanged and the provider rejects names it does not know when
+it runs (OpenCode model IDs retain the vendor prefix). Resume checks
+the attempt's pinned revision even if newer settings exist.
 
 Project delivery lives in `project_delivery` with a guarded row version, mode (`local`,
 `direct`, or `pr`), remote, base branch, owned PR branch and last published tip. The default
@@ -109,7 +97,7 @@ Each revision has attempt_limit, attempt_timeout_ms (the task limit) and stage_t
 (the stage limit), each positive or NULL = unlimited. Both time limits are off by default; when
 switched on they are 6 hours and 30 minutes. New, imported and planned tasks default to no time
 limits; inserted repairs inherit the failed task's limits.
-attempt_limit applies across ALL revisions of the task; escalation does not reset usage.
+attempt_limit applies across ALL revisions of the task; a new revision does not reset usage.
 attempts_used counts succeeded attempts and failures in check/review/validation/agent/unknown.
 Rate-limit, transport, configuration, environment, protocol, timeout, interruption, and cancellation do not
 consume the coding-attempt budget. Number is an audit sequence, not budget usage.
@@ -1125,10 +1113,10 @@ VALUES (:project_id, :task_id, :now_ms, 'revision.approved', 'info', :message);
 COMMIT;
 ```
 
-### Model settings, escalation, and attempt history
+### Model settings and attempt history
 
-Never edit a revision already used by an attempt. Escalation copies the definition, criteria,
-and role settings into revision N+1, changes the execution model/effort there, records its
+Never edit a revision already used by an attempt. A model change copies the definition, criteria,
+and role settings into revision N+1, changes the role settings there, records its
 approval, and starts another attempt. The displayed failure remains until execution resumes
 or an explicit terminal resolution is chosen; tasks.lifecycle does not duplicate that failure. Do not overwrite attempt N or its configuration.
 

@@ -57,7 +57,7 @@ pub fn unresolvable(task: &Task) -> Option<Stop> {
         (
             "Ten repair rounds left critical findings; what to accept or change is your decision."
                 .to_owned(),
-            "Read the findings, then c Models for a stronger model and r Retry, or D Mark done",
+            "Read the findings, then change the task or c Models and r Retry, or D Mark done",
         )
     } else if attempt.failure_category.as_deref() == Some("configuration") {
         (

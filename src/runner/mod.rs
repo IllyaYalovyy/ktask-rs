@@ -57,7 +57,7 @@ enum Outcome {
     Question(String),
     /// Provider rate or usage limit, with its own reset time when it names one.
     RateLimit(Option<i64>),
-    /// The failure judge changed the plan (task revised, work inserted, model escalated);
+    /// The failure judge changed the plan (task revised or work inserted);
     /// this attempt ends without spending budget, the plan is applied, and the loop goes on.
     Replanned(agent::Judgment),
 }
@@ -607,7 +607,7 @@ fn run_inner(
                     }
                     Ok(delivery::DeliveryOutcome::Paused) => break Ok(Outcome::Paused),
                     Ok(delivery::DeliveryOutcome::Exhausted(reason)) => {
-                        break Ok(cycle::escalation(&reason));
+                        break Ok(cycle::unresolved(&reason));
                     }
                     Err(error) => {
                         if let Some(outcome) =
@@ -1166,8 +1166,7 @@ fn provider_turn(
     Ok(Some(outcome))
 }
 /// The failure judge: a read-only turn of the remediation model that decides whether the
-/// next worker repairs, the task is rewritten, prerequisite work is inserted, the model is
-/// escalated, or the owner must decide. Applied immediately; nothing runs twice.
+/// next worker repairs, the task is rewritten, prerequisite work is inserted, or the owner must decide. Applied immediately; nothing runs twice.
 fn judge(service: &mut Service, run: &Run, ctx: &mut Context<'_>) -> Result<Outcome> {
     let failed = service
         .task(run.task)?
@@ -1247,7 +1246,7 @@ fn judge_once(
     let mut prompt = agent::judge_prompt(run, &evidence);
     let mut schema = agent::judge_schema();
     if normal_cycle {
-        prompt.push_str("\nThis is a normal review/fix round within the same active task, not a failed task. Revalidate the current findings; preserve the goal and useful work. Plan fixes only for critical findings and drop minor ones. Cost to result matters most, then time: prefer repair while the worker is converging, but escalate to a stronger execution model or effort when the evidence shows it is not (for example a critical finding it already failed to fix, or a defect beyond its reach). You may revise the task or insert prerequisites only if needed, retaining the full goal and acceptance bar. The repair counter follows the original task across automatic revisions, escalations and prerequisite handoffs. Do not ask the owner during these rounds.");
+        prompt.push_str("\nThis is a normal review/fix round within the same active task, not a failed task. Revalidate the current findings; preserve the goal and useful work. Plan fixes only for critical findings and drop minor ones. Cost to result matters most, then time: prefer repair while the worker is converging. You may revise the task or insert prerequisites only if needed, retaining the full goal and acceptance bar. The repair counter follows the original task across automatic revisions and prerequisite handoffs. Do not ask the owner during these rounds.");
         schema["properties"]["judgment"]["anyOf"]
             .as_array_mut()
             .expect("judge alternatives")
@@ -1295,7 +1294,7 @@ fn judge_once(
         }
     };
     if normal_cycle && matches!(judgment, agent::Judgment::Ask { .. }) {
-        let message = "Fix planner must repair, revise, insert or escalate during the normal ten-round cycle; owner questions wait for the final critical decision";
+        let message = "Fix planner must repair, revise or insert during the normal ten-round cycle; owner questions wait for the final critical decision";
         service.finish_step(&step, false, message)?;
         return Ok(Outcome::Failed("protocol", message.into()));
     }
@@ -1331,10 +1330,6 @@ fn describe(judgment: &agent::Judgment) -> String {
         agent::Judgment::Insert { tasks, reason } => format!(
             "{} prerequisite task(s) inserted by the failure judge: {reason}",
             tasks.len()
-        ),
-        agent::Judgment::Escalate { model, reason } => format!(
-            "Execution escalated to {}/{} by the failure judge: {reason}",
-            model.provider, model.model
         ),
         agent::Judgment::Ask { reason, .. } => format!("Owner decision needed: {reason}"),
     }
@@ -1402,10 +1397,7 @@ fn apply_judgment(
             if service.attempt_delivery(run)?.stage == "work" {
                 remediation::preserve(service, workspace, target)?;
             }
-            service.apply_remediation(target, None, &repairs, &reason, ready)?;
-        }
-        agent::Judgment::Escalate { model, reason } => {
-            service.apply_remediation(target, Some(model), &[], &reason, true)?;
+            service.apply_remediation(target, &repairs, &reason, ready)?;
         }
         agent::Judgment::Repair { .. } | agent::Judgment::Ask { .. } => {}
     }

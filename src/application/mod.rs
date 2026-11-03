@@ -3,7 +3,7 @@ mod artifacts;
 mod commands;
 mod evidence;
 pub mod evidence_pin;
-mod model_catalog;
+mod model_validation;
 mod output_text;
 pub use evidence::{EvidenceCursor, EvidenceMatch, EvidenceSearch};
 pub mod configuration;
@@ -54,8 +54,7 @@ pub struct ModelConfig {
 }
 
 impl ModelConfig {
-    /// Fallback effort spellings when exact model metadata does not declare them.
-    /// Authoritative model metadata may define additional provider variants.
+    /// Effort spellings each provider accepts.
     pub fn accepted_efforts(provider: &str) -> Option<&'static [&'static str]> {
         match provider {
             "codex" => Some(&["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]),
@@ -65,7 +64,7 @@ impl ModelConfig {
         }
     }
 
-    /// Context-free shape validation; Service resolves model identity and efforts.
+    /// Context-free shape validation; Service also checks effort spellings.
     pub fn validate_for_role(&self, role: &str) -> Result<()> {
         require(
             !self.provider.trim().is_empty() && !self.model.trim().is_empty(),

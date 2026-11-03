@@ -221,14 +221,14 @@ pub(super) fn run(
                         }
                         .into();
                     } else if progress.phase == "decide" {
-                        return Ok(escalation(&report));
+                        return Ok(unresolved(&report));
                     } else if matches!(progress.phase.as_str(), "review" | "validate") {
                         progress
                             .evidence
                             .push_str(&format!("\nLatest critical findings:\n{report}"));
                         progress.phase = "decide".into();
                     } else {
-                        return Ok(escalation(&report));
+                        return Ok(unresolved(&report));
                     }
                 } else {
                     request_fixes(service, run, &mut progress, &report)?;
@@ -307,7 +307,7 @@ fn fix_checks(service: &Service, run: &Run, progress: &mut Progress, report: &st
     )
 }
 
-pub(super) fn escalation(report: &str) -> Outcome {
+pub(super) fn unresolved(report: &str) -> Outcome {
     let readable = serde_json::from_str::<serde_json::Value>(report)
         .ok()
         .map(|value| {
@@ -340,7 +340,7 @@ pub(super) fn escalation(report: &str) -> Outcome {
     Outcome::Failed(
         "review",
         format!(
-            "Critical findings remain after {REPAIR_ROUNDS} repair rounds. Work and evidence are preserved; no additional repair worker will start automatically. Inspect findings and apply explicit model escalation or remediation before retrying.\n{readable}"
+            "Critical findings remain after {REPAIR_ROUNDS} repair rounds. Work and evidence are preserved; no additional repair worker will start automatically. Inspect the findings, change the task or its models if needed, then retry.\n{readable}"
         ),
     )
 }

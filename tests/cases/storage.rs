@@ -67,10 +67,6 @@ fn stop_cancels_failed_attempt_question_and_terminal_lifecycle_wins() -> Result 
         [attempt],
     )?;
     // Copy to queue validates the copied revision's models like any new task.
-    std::fs::write(
-        root.join("state/model-catalog.json"),
-        r#"[{"provider":"codex","model":"test-model"}]"#,
-    )?;
     let mut service = Service::find(db, &root)?.expect("registered project");
     service.stop_task(VersionedTask { id, version: 2 }, "edit settings")?;
     assert!(service.open_question(id)?.is_none());
@@ -493,7 +489,7 @@ fn rejected_and_retired_revisions_do_not_replace_ready_and_drafts_are_separate()
     }
     store.connection().execute(
         "INSERT INTO task_revisions(task_id, revision, lifecycle, kind, title, goal, created_by_kind, created_by, created_at_ms)
-        VALUES (?1, 4, 'draft', 'ai', 'Pending escalation', 'Pending goal', 'ai', 'remediator', 120)",
+        VALUES (?1, 4, 'draft', 'ai', 'Pending remediation', 'Pending goal', 'ai', 'remediator', 120)",
         [id],
     )?;
     assert_eq!(
@@ -686,7 +682,7 @@ fn infrastructure_failures_do_not_exhaust_task_attempt_budget() -> Result {
 }
 
 #[test]
-fn task_override_and_revision_escalation_do_not_rewrite_attempt_failure() -> Result {
+fn task_override_and_new_revision_do_not_rewrite_attempt_failure() -> Result {
     let scratch = support::sandbox()?;
     let store = Database::open_in(scratch.path())?;
     let db = store.connection();
@@ -694,7 +690,7 @@ fn task_override_and_revision_escalation_do_not_rewrite_attempt_failure() -> Res
     let id = task(db, p, "5")?;
     db.execute("INSERT INTO attempts(project_id, task_id, revision, number, state, execution_token, started_at_ms, finished_at_ms, outcome, failure_category) VALUES (?1, ?2, 1, 1, 'failed', 'failed-attempt', 100, 110, 'Tests failed', 'check')", params![p, id])?;
     db.execute("INSERT INTO task_revisions SELECT task_id, 2, 'ready', kind, title, goal, 'Increase execution effort', 'ai', 'remediator', NULL, NULL, NULL, 120, 120, 'ai', 'remediator' FROM task_revisions WHERE task_id = ?1", [id])?;
-    db.execute("INSERT INTO revision_models SELECT task_id, 2, role, provider, 'stronger-model', 'high' FROM revision_models WHERE task_id = ?1 AND revision = 1", [id])?;
+    db.execute("INSERT INTO revision_models SELECT task_id, 2, role, provider, 'other-model', 'high' FROM revision_models WHERE task_id = ?1 AND revision = 1", [id])?;
     assert_eq!(scalar(db, "SELECT revision FROM current_tasks")?, 2);
     assert_eq!(scalar(db, "SELECT revision FROM attempts")?, 1);
     assert!(

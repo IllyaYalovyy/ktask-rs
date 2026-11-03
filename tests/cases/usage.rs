@@ -28,14 +28,6 @@ fn resumed_codex_session_steps_store_their_own_share_and_a_new_session_starts_ov
         "UPDATE revision_models SET provider='codex', model=role, effort=NULL WHERE task_id=?1",
         [id],
     )?;
-    let catalog: Vec<_> = ["execution", "review", "validation", "remediation"]
-        .iter()
-        .map(|model| serde_json::json!({"provider": "codex", "model": model}))
-        .collect();
-    std::fs::write(
-        root.join("state/model-catalog.json"),
-        serde_json::to_vec(&catalog)?,
-    )?;
     let mut service = Service::find(db, &root)?.expect("registered project");
     let run = service.begin_run(VersionedTask { id, version: 1 }, "usage", "base", true)?;
     let model = ModelConfig {

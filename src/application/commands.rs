@@ -212,7 +212,6 @@ impl Service {
     pub fn apply_remediation(
         &mut self,
         target: VersionedTask,
-        model: Option<ModelConfig>,
         repairs: &[Definition],
         reason: &str,
         ready: bool,
@@ -221,23 +220,14 @@ impl Service {
             !reason.trim().is_empty(),
             "A remediation reason is required",
         )?;
-        require(
-            model.is_some() ^ !repairs.is_empty(),
-            "Choose one remediation strategy",
-        )?;
+        require(!repairs.is_empty(), "Choose a remediation strategy")?;
         let existing = self
             .task(target.id)?
             .ok_or_else(|| Error::Conflict("Task disappeared".into()))?
             .definition()
             .definition
             .clone();
-        if let Some(model) = &model {
-            let mut revised = existing.clone();
-            revised.models[0] = Some(model.clone());
-            self.validate_definition_models(&revised)?;
-        } else {
-            self.validate_definition_models(&existing)?;
-        }
+        self.validate_definition_models(&existing)?;
         for definition in repairs {
             self.validate_definition_models(definition)?;
         }
@@ -268,30 +258,30 @@ impl Service {
             name: "remediator".into(),
         };
         let mut ids = Vec::new();
-        if let Some(model) = model {
-            let mut definition = existing.clone();
-            let used: i64 = tx.query_row(
-                "SELECT attempts_used FROM task_details WHERE id=?1",
-                [target.id],
-                |row| row.get(0),
-            )?;
-            if definition.attempt_limit.is_some_and(|limit| limit <= used) {
-                definition.attempt_limit = Some(used.saturating_add(1));
-            }
-            require(
-                definition.models[0].as_ref() != Some(&model),
-                "Escalation must change the execution model or effort",
-            )?;
-            definition.models[0] = Some(model);
+        for definition in repairs {
+            definition.validate()?;
+        }
+        let used: i64 = tx.query_row(
+            "SELECT attempts_used FROM task_details WHERE id=?1",
+            [target.id],
+            |row| row.get(0),
+        )?;
+        if existing.attempt_limit.is_some_and(|limit| limit <= used) {
+            let mut revised = existing.clone();
+            revised.attempt_limit = Some(used.saturating_add(1));
             let number: i64 = tx.query_row(
                 "SELECT max(revision)+1 FROM task_revisions WHERE task_id=?1",
                 [target.id],
-                |r| r.get(0),
+                |row| row.get(0),
             )?;
-            insert_revision(&tx, target.id, number, &definition, true, now, &remediator)?;
+            insert_revision(&tx, target.id, number, &revised, true, now, &remediator)?;
             tx.execute(
                 "UPDATE task_revisions SET change_reason=?3 WHERE task_id=?1 AND revision=?2",
-                params![target.id, number, reason],
+                params![
+                    target.id,
+                    number,
+                    "One bounded retry after prerequisite work"
+                ],
             )?;
             bump(&tx, target, now)?;
             event(
@@ -299,66 +289,30 @@ impl Service {
                 self.project_id,
                 target.id,
                 now,
-                "remediation.escalated",
+                "remediation.retry_reserved",
+                "One bounded retry reserved in a new revision; earlier attempts and failures retained",
+            )?;
+        }
+        let keys = ordering::keys_before(&tx, self.project_id, Some(target.id), repairs.len())?;
+        for (definition, key) in repairs.iter().zip(keys) {
+            tx.execute("INSERT INTO tasks(project_id,order_key,lifecycle,origin,recovery_root_id,created_at_ms,updated_at_ms) VALUES (?1,?2,?3,'remediator',(SELECT coalesce(recovery_root_id,id) FROM tasks WHERE id=?5),?4,?4)", params![self.project_id,key,if ready {"ready"} else {"new"},now,target.id])?;
+            let id = tx.last_insert_rowid();
+            insert_revision(&tx, id, 1, definition, ready, now, &remediator)?;
+            tx.execute(
+                "UPDATE task_revisions SET change_reason=?2 WHERE task_id=?1 AND revision=1",
+                params![id, reason],
+            )?;
+            event(
+                &tx,
+                self.project_id,
+                id,
+                now,
+                "task.remediation_inserted",
                 reason,
             )?;
-            ids.push(target.id);
-        } else {
-            for definition in repairs {
-                definition.validate()?;
-            }
-            let used: i64 = tx.query_row(
-                "SELECT attempts_used FROM task_details WHERE id=?1",
-                [target.id],
-                |row| row.get(0),
-            )?;
-            if existing.attempt_limit.is_some_and(|limit| limit <= used) {
-                let mut revised = existing.clone();
-                revised.attempt_limit = Some(used.saturating_add(1));
-                let number: i64 = tx.query_row(
-                    "SELECT max(revision)+1 FROM task_revisions WHERE task_id=?1",
-                    [target.id],
-                    |row| row.get(0),
-                )?;
-                insert_revision(&tx, target.id, number, &revised, true, now, &remediator)?;
-                tx.execute(
-                    "UPDATE task_revisions SET change_reason=?3 WHERE task_id=?1 AND revision=?2",
-                    params![
-                        target.id,
-                        number,
-                        "One bounded retry after prerequisite work"
-                    ],
-                )?;
-                bump(&tx, target, now)?;
-                event(
-                    &tx,
-                    self.project_id,
-                    target.id,
-                    now,
-                    "remediation.retry_reserved",
-                    "One bounded retry reserved in a new revision; earlier attempts and failures retained",
-                )?;
-            }
-            let keys = ordering::keys_before(&tx, self.project_id, Some(target.id), repairs.len())?;
-            for (definition, key) in repairs.iter().zip(keys) {
-                tx.execute("INSERT INTO tasks(project_id,order_key,lifecycle,origin,recovery_root_id,created_at_ms,updated_at_ms) VALUES (?1,?2,?3,'remediator',(SELECT coalesce(recovery_root_id,id) FROM tasks WHERE id=?5),?4,?4)", params![self.project_id,key,if ready {"ready"} else {"new"},now,target.id])?;
-                let id = tx.last_insert_rowid();
-                insert_revision(&tx, id, 1, definition, ready, now, &remediator)?;
-                tx.execute(
-                    "UPDATE task_revisions SET change_reason=?2 WHERE task_id=?1 AND revision=1",
-                    params![id, reason],
-                )?;
-                event(
-                    &tx,
-                    self.project_id,
-                    id,
-                    now,
-                    "task.remediation_inserted",
-                    reason,
-                )?;
-                ids.push(id);
-            }
+            ids.push(id);
         }
+
         if let Some(first) = ids.first() {
             tx.execute("UPDATE attempt_delivery SET handoff_target=?2 WHERE handoff_target=?1 AND handoff_claimed_by IS NULL AND attempt_id IN (SELECT id FROM attempts WHERE project_id=?3 AND state IN ('failed','interrupted'))",params![target.id,first,self.project_id])?;
         }

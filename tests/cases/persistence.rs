@@ -32,7 +32,6 @@ fn project(root: &Path) -> PathBuf {
     project
 }
 fn service(root: &Path) -> Result<Service> {
-    support::model_catalog(root)?;
     Ok(Service::open(
         Database::open_in(&root.join("state/ktask-dev"))?,
         &project(root),
@@ -75,7 +74,6 @@ fn terminal(root: &Path) -> Result<Terminal> {
     terminal_at(root, 70, 22)
 }
 fn terminal_at(root: &Path, cols: u16, rows: u16) -> Result<Terminal> {
-    support::model_catalog(root)?;
     Terminal::open_project(
         env!("CARGO_BIN_EXE_ktask-dev"),
         root,
@@ -4185,7 +4183,7 @@ fn commands_are_atomic_versioned_relational_and_preserve_usable_revisions() -> R
     let mut b = service(scratch.path())?;
     let id = a.create(&[definition("Approved")], None, true)?[0];
     let old = target(&mut a, id)?;
-    let mut draft = definition("Draft escalation");
+    let mut draft = definition("Draft revision");
     draft.models[0] = Some(ModelConfig {
         provider: "codex".into(),
         model: "test-model".into(),
@@ -4380,7 +4378,7 @@ fn real_tui_saves_across_kill_restart_and_never_simulates_real_tasks() -> Result
     key(&mut t, "c", "Execution provider/model")?;
     submit(
         &mut t,
-        "codex/worker-v2\tcustom\r",
+        "codex/worker-v2\thigh\r",
         "╭ Task models and limits",
         "Saved to SQLite",
     )?;
@@ -4402,7 +4400,7 @@ fn real_tui_saves_across_kill_restart_and_never_simulates_real_tasks() -> Result
     t.screen("stored model", |s| {
         s.contains("Execution provider/model") && s.contains("codex/worker-v2")
     })?;
-    t.screen("custom effort persists", |s| s.contains("custom"))?;
+    t.screen("effort persists", |s| s.contains("high"))?;
     submit(
         &mut t,
         "\x1b",
@@ -4431,7 +4429,6 @@ fn real_tui_saves_across_kill_restart_and_never_simulates_real_tasks() -> Result
 fn queue_add_sets_execution_model_by_keyboard_and_mouse() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();
-    support::model_catalog(root)?;
     let mut t = Terminal::open_project(
         env!("CARGO_BIN_EXE_ktask-dev"),
         root,

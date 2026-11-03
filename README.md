@@ -4,7 +4,7 @@ A TUI-first workspace for supervising AI coding tasks.
 
 Define the outcome, constraints, and observable success criteria. A capable execution model
 handles investigation, design, implementation, and verification within the task. Configure
-stronger models for independent review and remediation. Planning stays brief; separate specs
+models for independent review and remediation. Planning stays brief; separate specs
 and task breakdown are optional. Missing implementation details are for the executor to resolve,
 with human questions reserved for consequential product decisions.
 
@@ -87,7 +87,7 @@ model.
 A failed attempt is judged before the next one starts. The failure judge reads the evidence in
 a read-only turn of the remediation model and returns one decision: a repair plan, which the
 execution model applies in its resumed implementation session, a rewritten task when the definition itself is wrong, prerequisite tasks inserted before
-it, an escalated execution model, or a product question for the owner. Anything but a repair ends
+it, or a product question for the owner. Anything but a repair ends
 that attempt as interrupted, spending no budget, and the queue continues on the new plan.
 Forms support paste, cursor editing, `Ctrl-A` to clear, `Ctrl-S` to apply, and `Esc` to cancel.
 Insertion/move dialogs offer Earlier/Later buttons (`Alt-Up/Down`) and show neighboring IDs.
@@ -199,8 +199,8 @@ ktask model-default review --provider codex --model gpt-6-astra --effort high --
 # likewise validation and remediation
 ```
 
-Review, validation and remediation (the failure judge that plans each repair) must use a model
-different from (and stronger than) execution; the execution model applies the repair plans in its
+Review, validation and remediation (the failure judge that plans each repair) may use any provider and model,
+including the execution model's; the execution model applies the repair plans in its
 own session, so a fix does not start cold. Workers run focused tests; the supervisor's full check
 run is the gate that reviewers read. Then, in each project (a Git repository root with at least one commit):
 
@@ -280,7 +280,7 @@ current or marking Human work done also continues the queue. A saved interventio
 and compatible session. Closing the TUI does not stop the supervisor (the background runner):
 press `p` on any screen, or run `ktask pause`; it returns once the runner has exited. Start it again with `r` or `ktask run`. A failing check
 returns to the worker directly; critical review and validation findings go to a read-only judge
-that plans the fix or escalates the execution model. Each fix round shows a one-line **Why:** in
+that plans the fix. Each fix round shows a one-line **Why:** in
 Status and Activity, and regenerates proof; the ten-round limit applies, then the failure judge
 decides. A terminal failed attempt opens a separately recorded repair attempt.
 Two optional time limits, both off by default (Models, or `--task-limit` / `--stage-limit` with

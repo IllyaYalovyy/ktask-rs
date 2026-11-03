@@ -2929,17 +2929,17 @@ fn stop_accepts_needs_input_failed_and_paused_current_without_losing_history() -
 }
 
 #[test]
-fn native_model_metadata_is_exact_and_missing_metadata_is_actionable() -> Result {
+fn cli_saves_any_model_name_and_checks_only_structure() -> Result {
     let f = Fixture::new()?;
-    let catalog = f.scratch.path().join("state/ktask-dev/model-catalog.json");
-    fs::write(&catalog, "[]")?;
+    // No provider model cache or catalog is consulted: even a populated Codex cache that does
+    // not list the model changes nothing.
     let native = f.scratch.path().join("custom-codex-home");
     fs::create_dir(&native)?;
     fs::write(
         native.join("models_cache.json"),
-        r#"{"models":[{"slug":"native-custom-model","supported_reasoning_levels":[{"effort":"low"}]}]}"#,
+        r#"{"models":[{"slug":"listed-model","supported_reasoning_levels":[{"effort":"low"}]}]}"#,
     )?;
-    let set = |model: &str, effort: &str| -> Result<std::process::Output> {
+    let set = |provider: &str, model: &str, effort: &str| -> Result<std::process::Output> {
         Ok(f.process()
             .env("CODEX_HOME", &native)
             .args([
@@ -2947,7 +2947,7 @@ fn native_model_metadata_is_exact_and_missing_metadata_is_actionable() -> Result
                 "model-default",
                 "planning",
                 "--provider",
-                "codex",
+                provider,
                 "--model",
                 model,
                 "--effort",
@@ -2955,68 +2955,51 @@ fn native_model_metadata_is_exact_and_missing_metadata_is_actionable() -> Result
             ])
             .output()?)
     };
-    let accepted = set("native-custom-model", "low")?;
-    assert!(
-        accepted.status.success(),
-        "{}",
-        String::from_utf8_lossy(&accepted.stderr)
-    );
-    for (model, effort, needle) in [
-        ("native-custom-model", "high", "accepted values"),
-        ("native-custom-model-typo", "low", "not listed"),
+    for (provider, model, effort) in [
+        ("codex", "unlisted-model", "high"),
+        ("codex", "listed-model", "xhigh"),
+        ("claude", "fable", "high"),
+        ("claude", "anything-the-cli-accepts", "max"),
+        ("opencode", "vendor/new-model", "low"),
     ] {
-        let rejected = set(model, effort)?;
-        assert_eq!(rejected.status.code(), Some(4));
+        let accepted = set(provider, model, effort)?;
+        assert!(
+            accepted.status.success(),
+            "{provider}/{model}: {}",
+            String::from_utf8_lossy(&accepted.stderr)
+        );
+        let stored: (String, String) = f.db()?.connection().query_row(
+            "SELECT provider, model FROM project_models WHERE role='planning'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(stored, (provider.to_owned(), model.to_owned()));
+    }
+    for (provider, model, effort, needle) in [
+        ("codex", "unlisted-model", "hight", "accepted values"),
+        ("opencode", "vendor/new-model", "ultra", "accepted values"),
+        ("gemini", "pro", "high", "unsupported provider"),
+    ] {
+        let rejected = set(provider, model, effort)?;
+        assert_eq!(rejected.status.code(), Some(4), "{provider}/{model}");
         let message = String::from_utf8_lossy(&rejected.stderr);
         assert!(
-            message.contains("planning")
-                && message.contains(model)
-                && message.contains(needle)
-                && message.contains("models_cache.json"),
+            message.contains("planning") && message.contains(needle),
+            "{message}"
+        );
+        assert!(
+            !message.contains("models_cache.json") && !message.contains("model-catalog.json"),
             "{message}"
         );
     }
-    fs::remove_file(native.join("models_cache.json"))?;
-    let rejected = set("native-custom-model", "low")?;
-    let message = String::from_utf8_lossy(&rejected.stderr);
-    assert_eq!(rejected.status.code(), Some(4));
-    assert!(
-        message.contains("planning")
-            && message.contains("codex/native-custom-model")
-            && message.contains("no supported metadata entry")
-            && message.contains("model-catalog.json"),
-        "{message}"
-    );
-    fs::write(
-        native.join("models_cache.json"),
-        "invalid provider metadata",
-    )?;
-    let rejected = set("native-custom-model", "low")?;
-    let message = String::from_utf8_lossy(&rejected.stderr);
-    assert!(
-        message.contains("planning")
-            && message.contains("codex/native-custom-model")
-            && message.contains("invalid metadata"),
-        "{message}"
-    );
     Ok(())
 }
 
 #[test]
-fn explicitly_selected_model_alias_can_review_execution() -> Result {
+fn an_arbitrary_model_name_reaches_the_provider_command_line_unchanged() -> Result {
     let f = Fixture::new()?;
-    let path = f.scratch.path().join("state/ktask-dev/model-catalog.json");
-    let mut catalog: Value = serde_json::from_slice(&fs::read(&path)?)?;
-    let entry = catalog
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|entry| entry["provider"] == "codex" && entry["model"] == "execution")
-        .unwrap();
-    entry["aliases"] = serde_json::json!(["execution-alias"]);
-    fs::write(&path, serde_json::to_vec(&catalog)?)?;
     f.provider_roles_from_prompt()?;
-    f.add("Honor explicit alias")?;
+    f.add("Honor any model name")?;
     f.ok(&["edit", "1", "--model", "review=codex/execution-alias"])?;
     f.ok(&["run", "--one"])?;
     let task = f.ok(&["show", "1"])?;
@@ -3055,7 +3038,7 @@ fn invalid_models_preflight_every_role_before_start_or_resume() -> Result {
                         .execute("UPDATE attempts SET state='paused' WHERE id=?1", [attempt])?;
                     db.connection().execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) SELECT project_id,task_id,id,started_at_ms,'supervisor.released','info','Fixture handoff' FROM attempts WHERE id=?1", [attempt])?;
                 }
-                db.connection().execute("UPDATE revision_models SET model='typo-model' WHERE task_id=1 AND revision=1 AND role=?1", [role])?;
+                db.connection().execute("UPDATE revision_models SET model='typo-model', effort='hight' WHERE task_id=1 AND revision=1 AND role=?1", [role])?;
                 drop(db);
                 let rejected = f.process().args(["--json", "run", "--one"]).output()?;
                 assert_eq!(rejected.status.code(), Some(4));
@@ -3063,7 +3046,8 @@ fn invalid_models_preflight_every_role_before_start_or_resume() -> Result {
                 assert!(
                     message.contains(role)
                         && message.contains("codex/typo-model")
-                        && message.contains("model-catalog.json"),
+                        && message.contains("hight")
+                        && message.contains("accepted values"),
                     "{message}"
                 );
                 let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
@@ -3738,7 +3722,6 @@ struct Fixture {
 impl Fixture {
     fn new() -> Result<Self> {
         let scratch = support::sandbox()?;
-        support::model_catalog(scratch.path())?;
         let root = scratch.path().join("project");
         fs::create_dir(&root)?;
         fs::create_dir(scratch.path().join("bin"))?;
@@ -5304,6 +5287,61 @@ fn accepted_history_shows_independent_verdict_models() -> Result {
             && screen.contains("Accepted: validation passed")
     })?;
     println!("ACCEPTED HISTORY\n{summary}");
+    terminal.send("q")?;
+    terminal.kill()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn history_still_shows_attempts_that_recorded_a_model_escalation() -> Result {
+    let f = Fixture::new()?;
+    f.add("Earlier escalation")?;
+    f.ok(&["run", "--one"])?;
+    // Attempts recorded by earlier versions may hold an escalation step and event.
+    let reason =
+        "Execution escalated to codex/old-strong by the failure judge: model was the limit";
+    f.db()?.connection().execute_batch(&format!(
+        "INSERT INTO ai_sessions(project_id,task_id,role,provider,provider_scope,state,created_at_ms,last_used_at_ms)
+         VALUES (1,1,'remediation','codex','historical','closed',1,1);
+         INSERT INTO attempt_steps(attempt_id,project_id,task_id,revision,ordinal,role,state,session_id,provider,model,invocation,started_at_ms,finished_at_ms,report)
+         SELECT attempt_id,project_id,task_id,revision,(SELECT max(ordinal)+1 FROM attempt_steps),'remediation','succeeded',last_insert_rowid(),'codex','remediation','start',started_at_ms,started_at_ms,'{reason}'
+         FROM attempt_steps WHERE ordinal=1;
+         INSERT INTO events(project_id,task_id,occurred_at_ms,kind,level,message)
+         SELECT project_id,id,1,'remediation.escalated','info','{reason}' FROM tasks WHERE id=1;"
+    ))?;
+    let task = f.ok(&["show", "1"])?;
+    let steps = task["attempts"][0]["steps"].as_array().unwrap();
+    assert!(
+        steps
+            .iter()
+            .any(|step| step["role"] == "remediation" && step["report"] == reason),
+        "{steps:?}"
+    );
+    let events = f.ok(&["events", "--limit", "1000"])?;
+    assert!(
+        events["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["kind"] == "remediation.escalated" && event["message"] == reason),
+        "{events}"
+    );
+    let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 50)?;
+    terminal.send("3")?;
+    terminal.screen("task in History", |screen| {
+        screen.contains("History") && screen.contains("Earlier escalation")
+    })?;
+    terminal.send("\r")?;
+    terminal.screen("attempt details", |screen| {
+        screen.contains("Task details / attempts")
+    })?;
+    terminal.send("s")?;
+    let summary = terminal.screen("historical escalation step in History", |screen| {
+        screen.contains("Step 5 · remediation · succeeded · codex/remediation")
+            && screen.contains("Accepted: validation passed")
+    })?;
+    println!("HISTORICAL ESCALATION\n{summary}");
     terminal.send("q")?;
     terminal.kill()?;
     f.no_scratch()?;
@@ -9376,7 +9414,7 @@ fn retry_reservation_preserves_revision_history_and_rejects_stale_edit() -> Resu
     };
     let mut repair = original.definition().definition.clone();
     repair.title = "Prerequisite".into();
-    service.apply_remediation(target, None, &[repair], "Repair first", true)?;
+    service.apply_remediation(target, &[repair], "Repair first", true)?;
     let revised = service.task(target.id)?.unwrap();
     assert!(revised.version > target.version);
     assert_eq!(revised.revisions[1].definition.attempt_limit, Some(1));

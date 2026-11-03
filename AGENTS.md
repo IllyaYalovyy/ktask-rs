@@ -1,7 +1,7 @@
 # Working agreement
 
 - High-level tasks are the default. A capable execution model owns investigation, design,
-  implementation and verification within the task; stronger models review and remediate.
+  implementation and verification within the task; independent models review and remediate.
   Keep planning brief. Separate specifications and breakdown are optional, never prerequisites
   merely because implementation details are unspecified. Preserve the full goal and acceptance bar.
 
@@ -14,7 +14,7 @@
   A failing check goes straight back to the worker with its failing tests and errors; no judge.
   Review and validation block only on critical findings (correctness, behavior, performance,
   maintainability); minor findings are recorded and never cost a round. Critical findings go to
-  a read-only judge, which may repair, revise, insert or escalate the execution model. Every
+  a read-only judge, which may repair, revise, insert or ask the owner. Every
   fix round shows a one-line why. Persist phase and the ten-repair-round limit across
   pause/resume. After ten rounds the failure judge decides. Preserve historical failed records.
 
@@ -57,9 +57,9 @@
   waits resume the same attempt; infrastructure failures do not consume the coding budget.
 - Judges never run anything: review holds the Clean Code bar on the diff, validation checks the
   evidence is complete. A review or validation fix opens with a read-only judge; during normal
-  rounds apply its repair, revise, insert or escalate decision before a worker, and carry the
+  rounds apply its repair, revise or insert decision before a worker, and carry the
   original task’s ten-round count across replans. Owner questions wait until critical findings
-  remain after ten rounds. Automatic recovery from actual failures retains all five judge
+  remain after ten rounds. Automatic recovery from actual failures retains all four judge
   decisions. Permission, sandbox and tooling limits are never questions for the owner.
 - Normalize input_tokens to uncached input for every provider; cache read/write are disjoint.
 - Before switching tasks, preserve useful work, stop/reap workers, and clean owned scratch.

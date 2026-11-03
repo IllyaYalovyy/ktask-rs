@@ -98,12 +98,6 @@ fn process(binary: &str, root: &Path) -> Command {
     command
 }
 fn run(root: &Path, args: &[&str]) -> std::io::Result<Output> {
-    if args
-        .iter()
-        .any(|arg| matches!(*arg, "--model" | "--title" | "model-default" | "import"))
-    {
-        support::model_catalog(root)?;
-    }
     process(DEV, root).args(args).output()
 }
 fn json_result(output: Output, exit: i32) -> Result<Value> {
@@ -127,13 +121,6 @@ fn json_result(output: Output, exit: i32) -> Result<Value> {
     Ok(value)
 }
 fn json(root: &Path, args: &[&str], exit: i32) -> Result<Value> {
-    if exit != 2
-        && args
-            .iter()
-            .any(|arg| matches!(*arg, "add" | "edit" | "model-default" | "import"))
-    {
-        support::model_catalog(root)?;
-    }
     let output = process(DEV, root)
         .arg("--json")
         .args(args)
@@ -580,7 +567,7 @@ fn cli_models_drafts_approval_rejection_and_actor_attribution() -> Result {
             "edit",
             "1",
             "--title",
-            "Escalation",
+            "Retitled",
             "--approval",
             "draft",
             "--model",
@@ -1324,7 +1311,6 @@ fn cli_stop_and_done_stash_latest_attempt_behind_unstarted_prerequisite() -> Res
 fn self_host_script_configures_a_private_checkout_with_the_given_executable() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();
-    support::model_catalog(root)?;
     let project = root.join("project");
     std::fs::create_dir(&project)?;
     std::fs::create_dir(project.join("src"))?;
@@ -1433,7 +1419,6 @@ fn self_host_script_configures_a_private_checkout_with_the_given_executable() ->
 fn init_sets_up_new_projects_from_saved_defaults_and_their_own_files() -> Result {
     let sandbox = support::sandbox()?;
     let root = sandbox.path();
-    support::model_catalog(root)?;
     std::fs::create_dir(root.join("bin"))?;
     support::write_executable(&root.join("bin/codex"), "#!/bin/sh\nexit 0\n")?;
     let repository = |name: &str, files: &[(&str, &str)]| -> Result<String> {
