@@ -98,7 +98,7 @@ impl ArtifactTarget {
         ) {
             Ok(fd) => Ok(Some(fs::File::from(fd))),
             Err(Errno::ENOENT) => Ok(None),
-            Err(error) => Err(retention::io(error)),
+            Err(error) => Err(io(error)),
         }
     }
 
@@ -109,7 +109,7 @@ impl ArtifactTarget {
     fn remove(&self, name: &str) -> Result<()> {
         match unlinkat(&self.parent, name, UnlinkatFlags::NoRemoveDir) {
             Ok(()) | Err(Errno::ENOENT) => Ok(()),
-            Err(error) => Err(retention::io(error)),
+            Err(error) => Err(io(error)),
         }
     }
 
@@ -121,7 +121,7 @@ impl ArtifactTarget {
             self.name.as_str(),
             RenameFlags::RENAME_NOREPLACE,
         )
-        .map_err(retention::io)?;
+        .map_err(io)?;
         self.parent.sync_all()?;
         Ok(())
     }
@@ -134,43 +134,28 @@ fn artifact_target(
     relative: &str,
     create_parent: bool,
 ) -> Result<Option<ArtifactTarget>> {
-    let parts: Vec<_> = Path::new(relative).components().collect();
-    require(
-        parts.len() == 3 || parts.len() == 4,
-        "Unsafe artifact destination",
-    )?;
-    require(
-        parts
-            .iter()
-            .all(|part| matches!(part, std::path::Component::Normal(_))),
-        "Unsafe artifact destination",
-    )?;
+    let path = super::evidence_path::EvidencePath::parse(relative)
+        .ok_or_else(|| Error::Conflict("Unsafe artifact destination".into()))?;
     let mut parent = root.try_clone()?;
     let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
-    for part in &parts[..parts.len() - 1] {
-        let name = part.as_os_str();
+    for name in path.parents() {
         let next = match openat(&parent, name, flags, Mode::empty()) {
             Ok(fd) => fd,
             Err(Errno::ENOENT) if create_parent => {
                 match mkdirat(&parent, name, Mode::from_bits_truncate(0o700)) {
                     Ok(()) | Err(Errno::EEXIST) => {}
-                    Err(error) => return Err(retention::io(error)),
+                    Err(error) => return Err(io(error)),
                 }
-                openat(&parent, name, flags, Mode::empty()).map_err(retention::io)?
+                openat(&parent, name, flags, Mode::empty()).map_err(io)?
             }
             Err(Errno::ENOENT) => return Ok(None),
-            Err(error) => return Err(retention::io(error)),
+            Err(error) => return Err(io(error)),
         };
         parent = fs::File::from(next);
     }
     Ok(Some(ArtifactTarget {
         parent,
-        name: parts
-            .last()
-            .unwrap()
-            .as_os_str()
-            .to_string_lossy()
-            .into_owned(),
+        name: path.name.to_owned(),
     }))
 }
 
@@ -321,7 +306,7 @@ impl Service {
                         | OFlag::O_CLOEXEC,
                     Mode::from_bits_truncate(0o600),
                 )
-                .map_err(retention::io)?,
+                .map_err(io)?,
             );
             staged_created = true;
             output.write_all(&bytes)?;

@@ -401,15 +401,15 @@ CREATE TABLE attempt_output (
     PRIMARY KEY (attempt_id, sequence)
 ) STRICT;
 
--- Initialized from existing output once per attempt on first admission after upgrade.
+-- Every attempt has a row: new attempts start at zero; attempts recorded before the
+-- counters existed are backfilled from their retained rows when storage opens.
 CREATE TABLE attempt_output_usage (
     attempt_id INTEGER PRIMARY KEY REFERENCES attempts(id),
     bytes INTEGER NOT NULL CHECK (bytes >= 0),
     rows INTEGER NOT NULL CHECK (rows >= 0)
 ) STRICT;
 
--- Once initialized, counters follow every output mutation in the same transaction.
--- Old attempts initialize from their retained rows on first output admission.
+-- Counters follow every output mutation in the same transaction.
 CREATE TRIGGER attempt_output_usage_insert AFTER INSERT ON attempt_output
 BEGIN
     UPDATE attempt_output_usage SET
@@ -493,7 +493,10 @@ CREATE TABLE instance_runner_log_baselines (
 ) STRICT;
 
 -- Automatic accounting scans a bounded number of directory entries per turn.
--- Its cursor is durable; a changed admission generation invalidates the scan.
+-- Its cursor is durable. A walk in progress is never restarted: when it settles,
+-- the claims admitted since its base (the projection at its start, less the claims
+-- of reservations then pending) are added to the measurement, and a changed
+-- admission generation schedules the next walk.
 CREATE TABLE instance_allocation_scan (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     generation INTEGER NOT NULL CHECK (generation >= 0),
@@ -508,7 +511,9 @@ CREATE TABLE instance_allocation_scan (
     evidence_entries INTEGER NOT NULL CHECK (evidence_entries >= 0),
     directory_entries INTEGER NOT NULL CHECK (directory_entries >= 0),
     entries_visited INTEGER NOT NULL CHECK (entries_visited >= 0),
-    complete INTEGER NOT NULL CHECK (complete IN (0,1,2))
+    complete INTEGER NOT NULL CHECK (complete IN (0,1,2)),
+    base_bytes INTEGER NOT NULL DEFAULT 0,
+    base_files INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 
 -- A bounded pass over closed attempts can resume without revisiting the same

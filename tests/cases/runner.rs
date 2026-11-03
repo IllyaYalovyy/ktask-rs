@@ -420,8 +420,10 @@ fn bounded_reconciliation_remains_pausable_in_real_terminal() -> Result {
         let f = Fixture::new()?;
         f.add("Pause while protected storage is counted")?;
         f.ok(&["retention", "30", "--max-bytes", "1048576"])?;
+        // Reconciliation must outlast the TUI's 10 s wait for the supervisor's startup
+        // handshake, which comes only once an attempt begins.
         let evidence = f.scratch.path().join("state/ktask-dev/evidence");
-        for index in 0..12_000 {
+        for index in 0..80_000 {
             fs::create_dir_all(evidence.join(format!("held-{index}")))?;
         }
         let (cols, rows) = if mouse { (120, 42) } else { (105, 32) };
@@ -453,11 +455,98 @@ fn bounded_reconciliation_remains_pausable_in_real_terminal() -> Result {
         );
         assert!(started.elapsed() < Duration::from_secs(5));
         assert_eq!(f.ok(&["show", "1"])?["status"], "ready");
-        assert!(evidence.join("held-11999").is_dir());
+        assert!(evidence.join("held-79999").is_dir());
         terminal.send("q")?;
         terminal.finish()?;
         f.no_scratch()?;
     }
+    Ok(())
+}
+
+/// A project whose worker commits output every 50 ms keeps changing the shared admission
+/// generation. The other project's run waits for a settled allocation scan before it
+/// launches; that scan must absorb the concurrent output instead of restarting.
+#[test]
+fn run_starts_while_another_project_streams_output_over_a_large_evidence_tree() -> Result {
+    let f = Fixture::new()?;
+    let chatty_root = f.second_project("chatty")?;
+    let mut chatty = Service::open(f.db()?, &chatty_root, None)?;
+    let task = chatty.create(
+        &[Definition {
+            title: "Chatty worker".into(),
+            goal: "Stream output".into(),
+            kind: Kind::Ai,
+            criteria: vec!["Streams".into()],
+            models: std::array::from_fn(|role| {
+                Some(ModelConfig {
+                    provider: "codex".into(),
+                    model: ["execution", "review", "validation", "remediation"][role].into(),
+                    effort: None,
+                })
+            }),
+            attempt_limit: Some(1),
+            timeout_ms: None,
+            stage_timeout_ms: None,
+        }],
+        None,
+        true,
+    )?[0];
+    let version = chatty.current_task()?.unwrap().version;
+    let run = chatty.begin_run(
+        VersionedTask { id: task, version },
+        "chatty-worker",
+        "fixture-base",
+        false,
+    )?;
+    let evidence = f.scratch.path().join("state/ktask-dev/evidence");
+    for index in 0..20_000 {
+        fs::create_dir_all(evidence.join(format!("held-{index}")))?;
+    }
+    f.add("Start beside a chatty project")?;
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let emitter = {
+        let stop = stop.clone();
+        thread::spawn(move || -> ktask_rs_mk3::storage::Result<(u32, Duration)> {
+            let started = Instant::now();
+            let mut rows = 0;
+            while !stop.load(std::sync::atomic::Ordering::Relaxed)
+                && started.elapsed() < Duration::from_secs(60)
+            {
+                chatty.output(&run, "stdout", "chatty output row")?;
+                rows += 1;
+                thread::sleep(Duration::from_millis(50));
+            }
+            Ok((rows, started.elapsed()))
+        })
+    };
+    let started = Instant::now();
+    let result = f.process().args(["run", "--one"]).output();
+    let elapsed = started.elapsed();
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let (rows, emitting) = emitter.join().expect("output thread panicked")?;
+    let result = result?;
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    // Task IDs are instance-wide: the neighbour's task is #1.
+    assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
+    println!(
+        "CHATTY NEIGHBOUR entries=20000 output_rows={rows} emitting_ms={} run_one_ms={}",
+        emitting.as_millis(),
+        elapsed.as_millis()
+    );
+    assert!(
+        emitting >= elapsed && rows as u128 >= elapsed.as_millis() / 100,
+        "the neighbour stopped emitting before the run finished"
+    );
+    // Restarting the scan at every row would wait for the neighbour's full minute.
+    assert!(
+        elapsed < Duration::from_secs(45),
+        "run --one waited {elapsed:?} beside a chatty project"
+    );
+    f.no_scratch()?;
     Ok(())
 }
 

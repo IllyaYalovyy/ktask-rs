@@ -352,8 +352,9 @@ Ordered output chunks, not one row per character. Writer assigns a positive mono
 
 ### attempt_output_usage
 
-Persisted output bytes and row counts for admission. Existing attempts initialize this row
-from their retained output on first admission after upgrade. SQLite triggers then maintain
+Persisted output bytes and row counts for admission and the storage preview. Every attempt
+has a row: new attempts start at zero, and attempts recorded before the counters existed are
+backfilled from their retained output once when storage opens. SQLite triggers then maintain
 the counts in the same transaction as every output insert, delete or content change,
 including retention cleanup and empty output rows.
 
@@ -629,13 +630,15 @@ workspace lease and explicit worker recovery still govern execution.
 
 Durable cursor for bounded automatic physical accounting. A checkpoint visits at most 64
 directory entries through no-follow descriptors; the entry cookies resume after restart.
-A changed admission generation invalidates the partial measurement. `complete` is 0 while
-traversing, 1 before guarded reconciliation, and 2 once installed.
+A traversal in progress is never restarted: when it completes, the claims admitted since
+its base are added to the measurement, and a changed admission generation schedules the next
+traversal. `complete` is 0 while traversing, 1 before guarded reconciliation, and 2 once
+installed.
 
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
 | `id` | INTEGER | no | Singleton key, always 1. |
-| `generation` | INTEGER | no | Admission generation captured before traversal. |
+| `generation` | INTEGER | no | Admission generation captured before traversal; once installed, the generation it describes. |
 | `revision` | INTEGER | no | Compare-and-swap revision for competing scanners. |
 | `frames_json` | TEXT | no | No-follow directory stack and Linux entry cookies. |
 | `bytes` | INTEGER | no | Physical bytes accumulated in this pass. |
@@ -648,12 +651,14 @@ traversing, 1 before guarded reconciliation, and 2 once installed.
 | `directory_entries` | INTEGER | no | Directories encountered so far. |
 | `entries_visited` | INTEGER | no | Bounded traversal work recorded across checkpoints. |
 | `complete` | INTEGER | no | 0 traversing, 1 pending guarded reconciliation, 2 reconciled. |
+| `base_bytes` | INTEGER | no | Projected bytes when traversal began, less the claims of reservations then pending; projected growth beyond it is added on installation. |
+| `base_files` | INTEGER | no | Projected files when traversal began, less those pending reservations' entries. |
 
 - PK `(id)`.
 
 ### instance_storage_admission
 
-Shared conservative watermark for output and artifact admission. The single row is initialized from physical instance allocation; each accepted write advances its generation. Housekeeping may lower the watermark only after measuring allocation without an intervening admission.
+Shared conservative watermark for output and artifact admission. The single row is initialized from physical instance allocation; each accepted write advances its generation. Housekeeping lowers the watermark only to a completed measurement plus every claim admitted while it ran.
 SQLite vacuum or a substantial WAL checkpoint invalidates a completed measurement so reclaimed
 space can be used by a queued run. Per-project runner segments are measured against their own
 baselines, including across rotation and restart.

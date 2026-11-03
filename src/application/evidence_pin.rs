@@ -17,10 +17,6 @@ use std::{
 /// A guardian's reservation marker: a pin whose guard still holds it was never claimed.
 const GUARDIAN_RESERVED: &[u8] = b"pending guardian\n";
 
-fn io(error: Errno) -> Error {
-    Error::Io(std::io::Error::from_raw_os_error(error as i32))
-}
-
 fn identity(file: &File) -> Result<String> {
     let metadata = file.metadata()?;
     Ok(format!("{}:{}", metadata.dev(), metadata.ino()))
@@ -163,25 +159,11 @@ fn remove(directory: &File, id: &str) -> Result<()> {
     Ok(())
 }
 
-#[derive(Default)]
-pub(super) struct Recovery {
-    directory: Option<File>,
-    retired: Vec<(String, File, File)>,
-}
-impl Recovery {
-    // Call only after the encompassing write transaction has committed.
-    pub(super) fn finish(self) -> Result<()> {
-        if let Some(directory) = &self.directory {
-            for (id, _owner, _guardian) in &self.retired {
-                remove(directory, id)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Called inside the same write transaction used to preview/recheck retention.
-pub(super) fn recover(db: &rusqlite::Connection, root: &File) -> Result<Recovery> {
+/// Retire idle pins and remove orphaned guard files. The checks run on guard locks, not
+/// on the database, so no write transaction is open meanwhile; one short transaction
+/// deletes the retired rows, and their files go only after it commits. A crash leaves
+/// recoverable orphans, never a row whose missing lock is mistaken for idleness.
+pub(super) fn recover(db: &rusqlite::Connection, root: &File) -> Result<()> {
     let pins = db
         .prepare(
             "SELECT id,directory_identity,owner_identity,guardian_identity FROM evidence_pins",
@@ -200,7 +182,7 @@ pub(super) fn recover(db: &rusqlite::Connection, root: &File) -> Result<Recovery
         Err(Error::Io(error))
             if error.kind() == std::io::ErrorKind::NotFound && pins.is_empty() =>
         {
-            return Ok(Recovery::default());
+            return Ok(());
         }
         Err(error) => return Err(error),
     };
@@ -209,7 +191,7 @@ pub(super) fn recover(db: &rusqlite::Connection, root: &File) -> Result<Recovery
             pins.is_empty(),
             "Evidence directory ownership is missing; cleanup stopped",
         )?;
-        return Ok(Recovery::default());
+        return Ok(());
     }
     for (_, expected, _, _) in &pins {
         require(
@@ -217,7 +199,8 @@ pub(super) fn recover(db: &rusqlite::Connection, root: &File) -> Result<Recovery
             "Evidence guard directory changed; cleanup stopped",
         )?;
     }
-    // Orphans existed before this transaction and belong to our original directory.
+    // Guard files without a row read above are orphans of our original directory, unless
+    // their owner holds a lock: a pin being recorded right now is never idle.
     let live_ids: std::collections::BTreeSet<_> = pins.iter().map(|pin| pin.0.as_str()).collect();
     let mut orphans = std::collections::BTreeSet::new();
     for entry in fs::read_dir(descriptor_path(&directory))? {
@@ -251,6 +234,7 @@ pub(super) fn recover(db: &rusqlite::Connection, root: &File) -> Result<Recovery
             remove(&directory, &id)?;
         }
     }
+    // Held locks keep each retired pin idle until its files are removed.
     let mut retired = Vec::new();
     for (id, directory_identity, owner_identity, guardian_identity) in pins {
         require(
@@ -260,12 +244,19 @@ pub(super) fn recover(db: &rusqlite::Connection, root: &File) -> Result<Recovery
         let owner = verify(&directory, &id, "owner", &owner_identity)?;
         let guardian = verify(&directory, &id, "guardian", &guardian_identity)?;
         if idle(&owner)? && idle(&guardian)? && unclaimed(&guardian)? {
-            db.execute("DELETE FROM evidence_pins WHERE id=?1", [&id])?;
             retired.push((id, owner, guardian));
         }
     }
-    Ok(Recovery {
-        directory: Some(directory),
-        retired,
-    })
+    if retired.is_empty() {
+        return Ok(());
+    }
+    let tx = rusqlite::Transaction::new_unchecked(db, rusqlite::TransactionBehavior::Immediate)?;
+    for (id, _, _) in &retired {
+        tx.execute("DELETE FROM evidence_pins WHERE id=?1", [id])?;
+    }
+    tx.commit()?;
+    for (id, _owner, _guardian) in &retired {
+        remove(&directory, id)?;
+    }
+    Ok(())
 }

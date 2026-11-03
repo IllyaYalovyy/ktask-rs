@@ -80,6 +80,10 @@ impl Database {
             params![project, command.task_id, revision, command.execution_token, command.now_ms,base])?;
         let id = tx.last_insert_rowid();
         tx.execute(
+            "INSERT INTO attempt_output_usage(attempt_id,bytes,rows) VALUES (?1,0,0)",
+            [id],
+        )?;
+        tx.execute(
             "UPDATE tasks SET reset_pending=0,reset_worktree=NULL WHERE id=?1",
             [command.task_id],
         )?;

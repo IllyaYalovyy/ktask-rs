@@ -54,6 +54,7 @@ macro_rules! stored_names {
 mod artifacts;
 mod commands;
 mod evidence;
+mod evidence_path;
 pub mod evidence_pin;
 mod model_validation;
 mod output_text;
@@ -377,6 +378,8 @@ pub struct Service {
     actor: Actor,
     /// Why the one-time incremental-vacuum conversion failed in this process; it is not retried.
     vacuum_failure: Option<String>,
+    /// Unsafe evidence paths housekeeping has already reported in this process.
+    reported_evidence: std::collections::BTreeSet<String>,
     pub project_id: i64,
     pub project_name: String,
 }
@@ -410,6 +413,7 @@ impl Service {
     /// Read commands select a registered root without registering another project.
     pub fn find(db: Database, root: &Path) -> Result<Option<Self>> {
         retention::initialize_capacity_admission(&db)?;
+        execution::backfill_output_usage(db.connection())?;
         let root = root.canonicalize()?;
         let project: Option<(i64, String)> = db
             .connection()
@@ -427,6 +431,7 @@ impl Service {
             live_output: Default::default(),
             actor: Actor::default(),
             vacuum_failure: None,
+            reported_evidence: Default::default(),
         });
         if let Some(service) = &service {
             service.reconcile_artifact_reservations()?;
@@ -441,6 +446,7 @@ impl Service {
     /// The canonical working directory selects the project, never the instance data root.
     pub fn open(mut db: Database, root: &Path, name: Option<&str>) -> Result<Self> {
         retention::initialize_capacity_admission(&db)?;
+        execution::backfill_output_usage(db.connection())?;
         let root = root.canonicalize()?;
         require(root.is_dir(), "Project root must be a directory")?;
         let bytes = root.as_os_str().as_encoded_bytes();
@@ -494,6 +500,7 @@ impl Service {
             live_output: Default::default(),
             actor: Actor::default(),
             vacuum_failure: None,
+            reported_evidence: Default::default(),
             project_id,
             project_name,
         };
@@ -536,6 +543,10 @@ pub(crate) fn require(condition: bool, message: &str) -> Result<()> {
     } else {
         Err(Error::Conflict(message.into()))
     }
+}
+/// A failed `nix` call as the I/O error it is.
+pub(super) fn io(error: nix::errno::Errno) -> Error {
+    Error::Io(std::io::Error::from_raw_os_error(error as i32))
 }
 pub(crate) fn now_ms() -> i64 {
     SystemTime::now()

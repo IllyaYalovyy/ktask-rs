@@ -5,31 +5,36 @@ use super::{delivery::Stage, *};
 use crate::storage::{execution::StartAttempt, usage::TokenUsage};
 use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
 
+/// Usage counters for attempts recorded before they existed, from their retained rows. New
+/// attempts start with a zero row and triggers keep every row current, so after the one
+/// backfill at open no command sums output content again.
+const BACKFILL_OUTPUT_USAGE: &str = "INSERT INTO attempt_output_usage(attempt_id,bytes,rows) SELECT a.id,(SELECT coalesce(sum(length(CAST(o.content AS BLOB))),0) FROM attempt_output o WHERE o.attempt_id=a.id),(SELECT count(*) FROM attempt_output o WHERE o.attempt_id=a.id) FROM attempts a WHERE NOT EXISTS (SELECT 1 FROM attempt_output_usage u WHERE u.attempt_id=a.id) AND (?1 IS NULL OR a.id=?1)";
+
+/// Backfill every attempt's counters once, in one write transaction, when storage opens.
+pub(super) fn backfill_output_usage(db: &rusqlite::Connection) -> Result<()> {
+    if !db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM attempts a WHERE NOT EXISTS (SELECT 1 FROM attempt_output_usage u WHERE u.attempt_id=a.id))",
+        [],
+        |r| r.get::<_, bool>(0),
+    )? {
+        return Ok(());
+    }
+    let tx = Transaction::new_unchecked(db, TransactionBehavior::Immediate)?;
+    tx.execute(BACKFILL_OUTPUT_USAGE, [rusqlite::types::Null])?;
+    tx.commit()?;
+    Ok(())
+}
+
 fn reserve_output(tx: &Transaction<'_>, attempt: i64, bytes: u64, rows: u64) -> Result<()> {
     let byte_limit = crate::resource::limit("KTASK_OUTPUT_BYTES", 64 * 1024 * 1024);
     let row_limit = crate::resource::limit("KTASK_OUTPUT_ROWS", 100_000);
-    let usage: Option<(i64, i64)> = tx
-        .query_row(
-            "SELECT bytes,rows FROM attempt_output_usage WHERE attempt_id=?1",
-            [attempt],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?;
-    let (used_bytes, used_rows) = if let Some(usage) = usage {
-        usage
-    } else {
-        // Old V1 databases have output but no counters. This scan runs once per
-        // attempt, inside the admission transaction, and survives restarts.
-        let usage: (i64, i64) = tx.query_row(
-            "SELECT coalesce(sum(length(cast(content as blob))),0),count(*) FROM attempt_output WHERE attempt_id=?1",
-            [attempt], |r| Ok((r.get(0)?, r.get(1)?))
-        )?;
-        tx.execute(
-            "INSERT INTO attempt_output_usage(attempt_id,bytes,rows) VALUES (?1,?2,?3)",
-            params![attempt, usage.0, usage.1],
-        )?;
-        usage
-    };
+    // An attempt another binary recorded after this one opened has no counters yet.
+    tx.execute(BACKFILL_OUTPUT_USAGE, [attempt])?;
+    let (used_bytes, used_rows): (i64, i64) = tx.query_row(
+        "SELECT bytes,rows FROM attempt_output_usage WHERE attempt_id=?1",
+        [attempt],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
     if (used_bytes as u64).saturating_add(bytes) > byte_limit
         || (used_rows as u64).saturating_add(rows) > row_limit
     {

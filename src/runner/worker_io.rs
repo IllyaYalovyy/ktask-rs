@@ -96,8 +96,8 @@ fn launch_refused(service: &Service, run: &Run, ctx: &Context<'_>) -> Result<Opt
         ctx.persist_active_time(service, run)?;
         return Ok(Some(outcome));
     }
-    let storage = service.storage_preview()?;
-    Ok(storage.work_capacity_reached.then(|| {
+    let storage = service.work_capacity()?;
+    Ok(storage.reached.then(|| {
         Outcome::DeliveryBlocked(format!(
             "Resource limit: storage capacity reserve reached ({} / {} bytes, {} / {} files/directories); evidence and work retained",
             storage.allocated_bytes,
