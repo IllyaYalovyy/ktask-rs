@@ -57,11 +57,17 @@ impl UsageTotals {
         ]);
     }
 
+    /// Uncached input plus output over the calls that reported them; None when no call did.
     pub fn new_tokens(&self) -> Option<i64> {
-        if self.unreported_calls > 0 {
-            return None;
+        match (self.input, self.output) {
+            (None, None) => None,
+            (input, output) => Some(input.unwrap_or(0).saturating_add(output.unwrap_or(0))),
         }
-        Some(self.input?.saturating_add(self.output?))
+    }
+
+    /// Calls that reported no tokens, named beside a token count so a gap is never read as a total.
+    fn unreported_tokens(&self) -> Option<i64> {
+        (self.unreported_calls > 0 && self.new_tokens().is_some()).then_some(self.unreported_calls)
     }
 
     /// Reported dollars, or new tokens when no provider reported a cost.
@@ -74,7 +80,12 @@ impl UsageTotals {
                 self.uncosted_calls
             ),
             None if self.calls == 0 => "none yet".into(),
-            None => format!("{} new tokens", count(self.new_tokens())),
+            None => format!(
+                "{} new tokens{}",
+                count(self.new_tokens()),
+                self.unreported_tokens()
+                    .map_or(String::new(), |n| format!(" + {n} call(s) unreported"))
+            ),
         }
     }
 
@@ -87,7 +98,12 @@ impl UsageTotals {
             }
             (Some(cost), _) => cents_label(cost),
             (None, _) if self.calls == 0 => "-".into(),
-            (None, _) => format!("{} tkn", count(self.new_tokens())),
+            (None, _) => format!(
+                "{} tkn{}",
+                count(self.new_tokens()),
+                self.unreported_tokens()
+                    .map_or(String::new(), |n| format!(" +{n} ?"))
+            ),
         }
     }
 
@@ -295,7 +311,15 @@ mod tests {
         reported.add([Some(1_900_000), Some(5_000_000), None, Some(100_000), None]);
         assert_eq!(reported.history_label(), "2.0M tkn");
         reported.add([None, None, None, None, None]);
-        assert_eq!(reported.history_label(), "? tkn");
+        assert_eq!(reported.history_label(), "2.0M tkn +1 ?");
+        assert_eq!(
+            reported.cost_label(),
+            "2.0M new tokens + 1 call(s) unreported"
+        );
+        let mut unreported = UsageTotals::default();
+        unreported.add([None, None, None, None, None]);
+        assert_eq!(unreported.history_label(), "? tkn");
+        assert_eq!(unreported.cost_label(), "? new tokens");
     }
 
     #[test]
@@ -319,7 +343,7 @@ mod tests {
         assert_eq!(task.cost_microusd, Some(100));
         assert_eq!(task.unreported_calls, 2);
         assert_eq!(task.uncosted_calls, 2);
-        assert_eq!(task.new_tokens(), None);
+        assert_eq!(task.new_tokens(), Some(i64::MAX));
 
         let mut only_missing = UsageTotals::default();
         only_missing.merge(&missing);

@@ -100,7 +100,8 @@ fn dataset(t: &mut Terminal, spaces: &str, choice: &str) -> Result {
 fn model_form_all_fields_mouse_keyboard_validation_and_attempt_snapshot() -> Result {
     let mut t = open()?;
     println!("MODELS\n{}", click(&mut t, "c Models", "Execution model")?);
-    key(&mut t, "\x01worker-v2\t   ", "< none >")?;
+    // Space cycles medium → high → xhigh → max → none.
+    key(&mut t, "\x01worker-v2\t    ", "< none >")?;
     // Tab reaches all fields even when they don't fit; page buttons support mouse-only access.
     key(&mut t, "\t\t\t\t\t\t\t", "Attempt limit")?;
     key(&mut t, "\x010\r", "Limits must be positive")?;

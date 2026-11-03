@@ -16,7 +16,7 @@ impl App {
             fields.push(Field::text(&format!("{role} model"), &model.name));
             fields.push(Field::choice(
                 &format!("{role} effort"),
-                &["none", "low", "medium", "high", "max"],
+                &["none", "low", "medium", "high", "xhigh", "max"],
                 model.effort.as_deref().unwrap_or("none"),
             ));
         }

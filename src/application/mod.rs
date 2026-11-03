@@ -59,7 +59,7 @@ impl ModelConfig {
     pub fn accepted_efforts(provider: &str) -> Option<&'static [&'static str]> {
         match provider {
             "codex" => Some(&["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]),
-            "claude" => Some(&["low", "medium", "high", "max"]),
+            "claude" => Some(&["low", "medium", "high", "xhigh", "max"]),
             "opencode" => Some(&["low", "medium", "high", "max"]),
             _ => None,
         }

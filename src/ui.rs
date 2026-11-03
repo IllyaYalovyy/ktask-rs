@@ -1550,13 +1550,22 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     let width = area.width.min(78).saturating_sub(2) as usize;
     let lines = wrapped(&body_text, width);
     // Errors wrap in full: their end often names the file or value to fix.
-    let hint = wrapped(dialog_hint(&dialog, position.is_some()), width);
-    let hint_rows = if matches!(dialog.kind, DialogKind::Inspect { .. }) {
+    let hint = wrapped(dialog_hint(&dialog, position.is_some()).trim_end(), width);
+    let hint_rows = if matches!(dialog.kind, DialogKind::Inspect { .. }) && dialog.error.is_empty()
+    {
         1
     } else {
         hint.len().max(2)
     };
-    let height = (lines.len() + dialog.fields.len() * 2 + 4 + hint_rows)
+    let action_rows = if matches!(
+        dialog.kind,
+        DialogKind::Inspect { .. } | DialogKind::Readiness
+    ) {
+        3
+    } else {
+        2
+    };
+    let height = (lines.len() + dialog.fields.len() * 2 + 2 + hint_rows + action_rows)
         .max(12)
         .min(usize::from(area.height - 2)) as u16;
     let popup = Rect::new(
@@ -1571,11 +1580,13 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         popup,
     );
     let inner = Rect::new(popup.x + 1, popup.y + 1, popup.width - 2, popup.height - 2);
-    let hint_rows = (hint_rows as u16).min(inner.height.saturating_sub(5).max(1));
+    // A long error takes at most half the dialog, so the fields it names stay in view.
+    let hint_rows = (hint_rows as u16).min((inner.height / 2).max(1));
+    let action_rows = action_rows as u16;
     dialog.field_capacity = dialog
         .fields
         .len()
-        .min((inner.height.saturating_sub(3 + hint_rows) / 2) as usize)
+        .min((inner.height.saturating_sub(1 + action_rows + hint_rows) / 2) as usize)
         .max(1);
     if matches!(dialog.kind, DialogKind::Models(_)) && app.service.is_some() {
         dialog.field_capacity = dialog.field_capacity.min(7);
@@ -1590,16 +1601,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         Constraint::Min(1),
         Constraint::Length(dialog.fields.len().min(dialog.field_capacity) as u16 * 2),
         Constraint::Length(hint_rows),
-        Constraint::Length(
-            if matches!(
-                dialog.kind,
-                DialogKind::Inspect { .. } | DialogKind::Readiness
-            ) {
-                3
-            } else {
-                2
-            },
-        ),
+        Constraint::Length(action_rows),
     ])
     .areas(inner);
     position_dialog(

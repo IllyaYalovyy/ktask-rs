@@ -638,6 +638,11 @@ fn history_rows_show_attempts_total_time_and_usage_by_keyboard_and_mouse() -> Re
         "UPDATE model_calls SET input_tokens=1000,cache_read_tokens=500,cache_write_tokens=0,output_tokens=50 WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id=?1)",
         [unknown_attempt],
     )?;
+    // One call died before usage arrived: the row shows what was reported plus the gap.
+    db.connection().execute(
+        "UPDATE model_calls SET input_tokens=NULL,output_tokens=NULL WHERE rowid=(SELECT min(rowid) FROM model_calls WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id=?1))",
+        [unknown_attempt],
+    )?;
     db.connection().execute(
         "INSERT INTO attempts(project_id,task_id,revision,number,state,execution_token,started_at_ms,finished_at_ms,active_ms,outcome,failure_category) SELECT project_id,task_id,revision,2,'failed',?2,100,3700,3600,'Failed','check' FROM attempts WHERE id=?1",
         rusqlite::params![unknown_attempt, format!("history-extra-attempt-{unknown_id}")],
@@ -666,7 +671,7 @@ fn history_rows_show_attempts_total_time_and_usage_by_keyboard_and_mouse() -> Re
             t.send("3")?;
         }
         let screen = t.screen("history statistics", |s| {
-            s.contains("Attempts Time Usage") && s.contains("$0.01") && s.contains("2k tkn")
+            s.contains("Attempts Time Usage") && s.contains("$0.01") && s.contains("1k tkn +1 ?")
         })?;
         println!("HISTORY STATISTICS {cols} mouse={mouse}\n{screen}");
         let known = screen
@@ -738,7 +743,7 @@ fn history_rows_show_attempts_total_time_and_usage_by_keyboard_and_mouse() -> Re
             unknown
                 .split_whitespace()
                 .collect::<Vec<_>>()
-                .ends_with(&["2", "6s", "2k", "tkn"]),
+                .ends_with(&["2", "6s", "1k", "tkn", "+1", "?"]),
             "{unknown}"
         );
         quit(&mut t)?;
