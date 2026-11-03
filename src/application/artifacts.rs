@@ -289,7 +289,14 @@ impl Service {
         let tx = Transaction::new_unchecked(self.db.connection(), TransactionBehavior::Immediate)?;
         require(tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND project_id=?2 AND execution_token=?3)", params![attempt,self.project_id,token], |r| r.get::<_, bool>(0))?, "Runner lost ownership of artifact attempt")?;
         require_budget(&tx, attempt, name, bytes.len() as u64)?;
-        super::retention::admit_capacity(&tx, 0, 0, bytes.len() as u64, 1)?;
+        super::retention::admit_capacity(
+            &tx,
+            super::retention::measure_known_bytes(&self.db)?,
+            0,
+            0,
+            bytes.len() as u64,
+            1,
+        )?;
         tx.execute("INSERT INTO artifact_reservations(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)", params![attempt,name,media,relative,bytes.len() as i64,checksum,tree,now_ms()])?;
         tx.commit()?;
         // A crash from here on leaves a reservation that recovery can inspect.

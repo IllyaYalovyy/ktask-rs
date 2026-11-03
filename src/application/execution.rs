@@ -525,7 +525,14 @@ impl Service {
             tx.commit()?;
             return Err(error);
         }
-        if let Err(error) = super::retention::admit_capacity(&tx, text.len() as u64, 1, 0, 0) {
+        if let Err(error) = super::retention::admit_capacity(
+            &tx,
+            super::retention::measure_known_bytes(&self.db)?,
+            text.len() as u64,
+            1,
+            0,
+            0,
+        ) {
             tx.commit()?;
             return Err(error);
         }
@@ -539,6 +546,7 @@ impl Service {
         if rows.is_empty() {
             return Ok(());
         }
+        let measured = super::retention::measure_known_bytes(&self.db)?;
         let tx = self
             .db
             .connection_mut()
@@ -554,6 +562,7 @@ impl Service {
         }
         if let Err(error) = super::retention::admit_capacity(
             &tx,
+            measured,
             rows.iter().map(|(_, text)| text.len() as u64).sum(),
             rows.len() as u64,
             0,

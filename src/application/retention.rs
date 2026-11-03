@@ -160,29 +160,63 @@ pub(super) fn initialize_capacity_admission(db: &Database) -> Result<()> {
     Ok(())
 }
 
-/// Output rows and artifact reservations claim a conservative allowance in
+const SQLITE_PAGE: u64 = 4096;
+/// Usable leaf bytes before a cell spills to overflow pages.
+const SQLITE_LEAF: u64 = SQLITE_PAGE - 35;
+/// Row header, rowid and the (attempt, sequence) primary-key index entry.
+const OUTPUT_ROW_OVERHEAD: u64 = 40;
+/// Evidence, attempt and step directories plus the artifact's database rows.
+const ARTIFACT_FILE_OVERHEAD: u64 = 4 * SQLITE_PAGE;
+
+/// Physical database bytes for `rows` output rows holding `bytes` of text.
+/// Rows pack whole into pages, so a row over half a page wastes the rest of
+/// its page; larger rows spill into whole overflow pages.
+fn output_claim(bytes: u64, rows: u64) -> u64 {
+    if rows == 0 {
+        return bytes;
+    }
+    let cell = (bytes / rows).saturating_add(OUTPUT_ROW_OVERHEAD);
+    let per_row = if cell > SQLITE_LEAF {
+        cell.div_ceil(SQLITE_PAGE - 4).saturating_mul(SQLITE_PAGE)
+    } else {
+        SQLITE_PAGE / (SQLITE_LEAF / cell).max(1)
+    };
+    per_row.saturating_mul(rows).max(bytes)
+}
+
+/// Physical bytes of artifact content (whole blocks) and its directories.
+fn artifact_claim(bytes: u64, files: u64) -> u64 {
+    bytes
+        .div_ceil(SQLITE_PAGE)
+        .saturating_mul(SQLITE_PAGE)
+        .saturating_add(files.saturating_mul(ARTIFACT_FILE_OVERHEAD))
+}
+
+/// Output rows and artifact reservations claim an estimate of their physical size in
 /// their SQLite write transaction, serialized across projects in one instance.
 pub(super) fn admit_capacity(
     tx: &Connection,
+    measured: i64,
     output_bytes: u64,
     output_rows: u64,
     artifact_bytes: u64,
     artifact_files: u64,
 ) -> Result<()> {
     let (max_bytes, max_files) = effective_limits(tx)?;
-    let (projected_bytes, projected_files): (i64, i64) = tx.query_row(
-        "SELECT projected_bytes,projected_files FROM instance_storage_admission WHERE id=1",
+    let (projected, projected_files, frontier): (i64, i64, i64) = tx.query_row(
+        "SELECT projected_bytes,projected_files,known_bytes FROM instance_storage_admission WHERE id=1",
         [],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
-    // SQLite may allocate both database and WAL pages for a row. A published
-    // artifact may also create evidence, attempt and step directories. The
-    // unused quarter remains for interruption, status and recovery records.
-    let claim_bytes = output_bytes
-        .saturating_mul(4)
-        .saturating_add(output_rows.saturating_mul(32768))
-        .saturating_add(artifact_bytes.saturating_mul(4))
-        .saturating_add(artifact_files.saturating_mul(16384))
+    // The claim approximates the physical bytes the write will occupy. The
+    // known-allocation frontier is the measured size plus claims not yet
+    // visible on disk; only physical growth beyond it (WAL frames, page
+    // overhead) is charged again, so a claim is never counted twice.
+    let output = output_claim(output_bytes, output_rows).min(i64::MAX as u64) as i64;
+    let excess = measured.saturating_sub(frontier).max(0);
+    let projected_bytes = projected.saturating_add(excess);
+    let claim_bytes = (output as u64)
+        .saturating_add(artifact_claim(artifact_bytes, artifact_files))
         .min(i64::MAX as u64) as i64;
     let claim_files = artifact_files.saturating_mul(4).min(i64::MAX as u64) as i64;
     let byte_reserve = (max_bytes / 4).min(256 * 1024 * 1024);
@@ -201,10 +235,19 @@ pub(super) fn admit_capacity(
         )));
     }
     tx.execute(
-        "UPDATE instance_storage_admission SET projected_bytes=projected_bytes+?1,projected_files=projected_files+?2,generation=generation+1 WHERE id=1",
-        params![claim_bytes, claim_files],
+        "UPDATE instance_storage_admission SET projected_bytes=?1,projected_files=projected_files+?2,known_bytes=?3,generation=generation+1 WHERE id=1",
+        params![
+            projected_bytes.saturating_add(claim_bytes),
+            claim_files,
+            measured.max(frontier).saturating_add(output)
+        ],
     )?;
     Ok(())
+}
+
+/// Cheap physical measure for [`admit_capacity`]: a few `fstat` calls.
+pub(super) fn measure_known_bytes(db: &Database) -> Result<i64> {
+    Ok(known_allocation(db.state_dir())?.bytes)
 }
 
 fn admission_generation(db: &Database) -> Result<i64> {
@@ -243,10 +286,10 @@ fn reconcile_capacity_admission(
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    let projected_bytes = observed
-        .bytes
-        .saturating_add(pending_bytes.saturating_mul(4))
-        .saturating_add(pending_files.saturating_mul(16384));
+    let projected_bytes = observed.bytes.saturating_add(
+        artifact_claim(pending_bytes.max(0) as u64, pending_files.max(0) as u64)
+            .min(i64::MAX as u64) as i64,
+    );
     let projected_files = observed
         .files
         .saturating_add(pending_files.saturating_mul(4));
@@ -1864,7 +1907,7 @@ mod tests {
         let measured = allocation(service.db.state_dir())?;
         let tx =
             Transaction::new_unchecked(service.db.connection(), TransactionBehavior::Immediate)?;
-        admit_capacity(&tx, 8192, 1, 0, 0)?;
+        admit_capacity(&tx, 0, 8192, 1, 0, 0)?;
         tx.commit()?;
         let claimed = projected_allocation(&service.db)?;
         assert!(!reconcile_capacity_admission(
@@ -1895,7 +1938,7 @@ mod tests {
         let relative = format!("evidence/attempt-{attempt}/step-1/file-1-0");
         let tx =
             Transaction::new_unchecked(service.db.connection(), TransactionBehavior::Immediate)?;
-        admit_capacity(&tx, 0, 0, 8192, 1)?;
+        admit_capacity(&tx, 0, 0, 0, 8192, 1)?;
         tx.execute("INSERT INTO artifact_reservations(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms) VALUES (?1,'proof','text/plain',?2,8192,?3,?4,1)", params![attempt,relative,"a".repeat(64),"b".repeat(40)])?;
         tx.commit()?;
         let generation = admission_generation(&service.db)?;
@@ -2359,6 +2402,37 @@ mod tests {
             |r| r.get(0),
         )?;
         assert!(first_rows > 0 && second_rows > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn long_output_attempt_is_admitted_against_physical_growth() -> Result<()> {
+        let (sandbox, mut service, task) = closed_service()?;
+        let ballast = std::fs::File::create(sandbox.path().join("state/ballast"))?;
+        nix::fcntl::posix_fallocate(&ballast, 0, 300 * 1024 * 1024).map_err(io)?;
+        let policy = service.retention_policy()?;
+        service.set_storage_policy(policy, 30, 1 << 30, 100_000)?;
+        let version = service.current_task()?.unwrap().version;
+        let run = service.begin_run(
+            VersionedTask { id: task, version },
+            "long-output",
+            "fixture-base",
+            false,
+        )?;
+        let before = allocation(service.db.state_dir())?.bytes;
+        service.db.connection().execute(
+            "UPDATE instance_storage_admission SET projected_bytes=?1,generation=generation+1",
+            [before],
+        )?;
+        let row = "x".repeat(2048);
+        for _ in 0..120 {
+            let batch = vec![("stdout".to_owned(), row.clone()); 100];
+            service.output_rows(&run, &batch)?;
+        }
+        let physical = allocation(service.db.state_dir())?.bytes - before;
+        let projected = projected_allocation(&service.db)?.bytes - before;
+        assert!(physical >= 24_000_000, "{physical}");
+        assert!(projected <= 2 * physical, "{projected} vs {physical}");
         Ok(())
     }
 
