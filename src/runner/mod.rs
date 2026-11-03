@@ -363,6 +363,13 @@ fn run_inner(
         if std::mem::take(&mut owner_start) {
             service.end_limit_wait()?;
         }
+        // Safe point: no worker of this runner is live. The conversion also requires that no
+        // other attempt, pin or reservation exists in the instance.
+        if let Some(freed) = service.enable_incremental_vacuum()? {
+            eprintln!(
+                "storage: enabled incremental vacuum; the SQLite file shrank by {freed} bytes"
+            );
+        }
         let (mut storage, mut cleanup_progress) = service.automatic_housekeeping_progress(1)?;
         let Some(task) = service.current_task()? else {
             return Ok("Queue complete".into());
@@ -406,7 +413,7 @@ fn run_inner(
         }
         if storage.launch_capacity_reached {
             return Ok(format!(
-                "Storage capacity reserve reached: {} of {} bytes and {} of {} files/directories projected; next eligible page has {} bytes in {} attempts; {} bytes are protected or outside this page (last reconciled SQLite {}, WAL {}, runner logs {}, evidence {}; reusable SQLite {}). Additional work is paused until capacity is raised or retained data is reclaimed",
+                "Storage capacity reserve reached: {} of {} bytes and {} of {} files/directories projected; next eligible page has {} bytes in {} attempts; {} bytes are protected or outside this page, of which evidence of {} bytes is younger than the {}-day minimum age, {} bytes is referenced by reused checks and {} bytes belongs to open work (last reconciled SQLite {}, WAL {}, runner logs {}, evidence {}; reusable SQLite {}){}. Additional work is paused until capacity is raised, the minimum age passes or retained data is reclaimed; evidence younger than the minimum is never deleted",
                 storage.allocated_bytes,
                 storage.effective_max_bytes,
                 storage.allocated_files,
@@ -414,11 +421,20 @@ fn run_inner(
                 storage.reclaimable_bytes,
                 storage.candidates.len(),
                 storage.protected_bytes,
+                storage.protected_by_age_bytes,
+                storage.policy.days,
+                storage.protected_by_reference_bytes,
+                storage.protected_open_bytes,
                 storage.database_bytes,
                 storage.wal_bytes,
                 storage.runner_log_bytes,
                 storage.evidence_bytes,
                 storage.reusable_database_bytes,
+                storage
+                    .vacuum_note
+                    .as_ref()
+                    .map(|n| format!("; {n}"))
+                    .unwrap_or_default(),
             ));
         }
         if let Some(stopped) = admit(service, &task, notified)? {

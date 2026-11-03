@@ -318,6 +318,8 @@ pub struct Service {
     observed_data_version: i64,
     live_output: queries::LiveOutput,
     actor: Actor,
+    /// Why the one-time incremental-vacuum conversion failed in this process; it is not retried.
+    vacuum_failure: Option<String>,
     pub project_id: i64,
     pub project_name: String,
 }
@@ -367,6 +369,7 @@ impl Service {
             observed_data_version: 0,
             live_output: Default::default(),
             actor: Actor::default(),
+            vacuum_failure: None,
         });
         if let Some(service) = &service {
             service.reconcile_artifact_reservations()?;
@@ -433,6 +436,7 @@ impl Service {
             observed_data_version: 0,
             live_output: Default::default(),
             actor: Actor::default(),
+            vacuum_failure: None,
             project_id,
             project_name,
         };

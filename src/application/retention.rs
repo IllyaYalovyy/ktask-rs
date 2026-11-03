@@ -15,7 +15,9 @@ use std::os::{
 };
 
 const CLEANUP_BATCH: i64 = 64;
-const DEFAULT_MAX_BYTES: i64 = 1024 * 1024 * 1024;
+/// A self-hosting instance's SQLite file alone can exceed 1 GiB, so the default budget is
+/// several GiB. A project may still configure any value.
+const DEFAULT_MAX_BYTES: i64 = 8 * 1024 * 1024 * 1024;
 const DEFAULT_MAX_FILES: i64 = 100_000;
 const REFERENCED: &str = "NOT EXISTS (SELECT 1 FROM attempt_steps source JOIN attempt_steps reused ON reused.reused_from_step_id=source.id WHERE source.attempt_id=a.id)";
 
@@ -55,6 +57,14 @@ pub struct Preview {
     pub eligible_file_bytes: i64,
     pub reusable_database_bytes: i64,
     pub protected_bytes: i64,
+    /// Closed evidence younger than the retention minimum; never cleaned.
+    pub protected_by_age_bytes: i64,
+    /// Closed evidence that a reused check still refers to.
+    pub protected_by_reference_bytes: i64,
+    /// Evidence of open, running or unresolved tasks.
+    pub protected_open_bytes: i64,
+    /// Present while the database has not yet been converted to incremental vacuum.
+    pub vacuum_note: Option<String>,
     pub over_capacity: bool,
     pub work_capacity_reached: bool,
     pub launch_capacity_reached: bool,
@@ -74,7 +84,7 @@ pub struct CleanupReceipt {
 fn policy(db: &Connection, project: i64) -> Result<Policy> {
     Ok(db
         .query_row(
-            "SELECT r.days,coalesce(l.max_bytes,1073741824),coalesce(l.max_files,100000),r.version FROM project_retention r LEFT JOIN project_storage_limits l ON l.project_id=r.project_id WHERE r.project_id=?1",
+            "SELECT r.days,coalesce(l.max_bytes,8589934592),coalesce(l.max_files,100000),r.version FROM project_retention r LEFT JOIN project_storage_limits l ON l.project_id=r.project_id WHERE r.project_id=?1",
             [project],
             |r| {
                 Ok(Policy {
@@ -96,7 +106,7 @@ fn policy(db: &Connection, project: i64) -> Result<Policy> {
 
 fn effective_limits(db: &Connection) -> Result<(i64, i64)> {
     Ok(db.query_row(
-        "SELECT min(coalesce(l.max_bytes,1073741824)),min(coalesce(l.max_files,100000)) FROM projects p LEFT JOIN project_storage_limits l ON l.project_id=p.id",
+        "SELECT min(coalesce(l.max_bytes,8589934592)),min(coalesce(l.max_files,100000)) FROM projects p LEFT JOIN project_storage_limits l ON l.project_id=p.id",
         [], |r| Ok((r.get(0)?, r.get(1)?)),
     )?)
 }
@@ -742,11 +752,106 @@ fn reclaim_database(db: &Connection, root: &File) -> Result<()> {
         // The next bounded scan must replace the old projection, even if its
         // previous cursor was already complete. A single housekeeping WAL page
         // is deliberately ignored to avoid restarting an idle scan forever.
-        let known = known_allocation(root)?;
-        let tx = rusqlite::Transaction::new_unchecked(db, TransactionBehavior::Immediate)?;
-        tx.execute("UPDATE instance_storage_admission SET known_bytes=?1,known_files=?2,generation=generation+1 WHERE id=1", params![known.bytes,known.files])?;
-        tx.commit()?;
+        invalidate_known_allocation(db, root)?;
     }
+    Ok(())
+}
+
+/// Logical evidence bytes the minimum age, reuse references and open work keep, so the owner
+/// can see why a budget cannot be met by cleanup.
+fn protection_breakdown(db: &Connection, project: i64, cutoff: i64) -> Result<(i64, i64, i64)> {
+    Ok(db.query_row(
+        &format!("SELECT
+            coalesce(sum(CASE WHEN t.closed_at_ms IS NOT NULL AND {REFERENCED} AND a.finished_at_ms>?2 THEN b ELSE 0 END),0),
+            coalesce(sum(CASE WHEN t.closed_at_ms IS NOT NULL AND NOT {REFERENCED} THEN b ELSE 0 END),0),
+            coalesce(sum(CASE WHEN t.closed_at_ms IS NULL THEN b ELSE 0 END),0)
+            FROM (SELECT a.*,
+                coalesce((SELECT bytes FROM attempt_output_usage WHERE attempt_id=a.id),
+                         (SELECT sum(length(CAST(content AS BLOB))) FROM attempt_output WHERE attempt_id=a.id),0)
+                + coalesce((SELECT sum(size_bytes) FROM artifacts WHERE attempt_id=a.id AND pruned_at_ms IS NULL),0) AS b
+                FROM attempts a WHERE a.project_id=?1) a JOIN tasks t ON t.id=a.task_id"),
+        params![project, cutoff],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?)
+}
+
+/// Existing databases created before incremental vacuum never shrink their file. The
+/// conversion is one VACUUM, which needs room for a full copy plus its WAL and no live writer.
+enum Vacuum {
+    Incremental,
+    Ready,
+    Blocked(String),
+}
+
+/// `PRAGMA auto_vacuum` value of incremental mode.
+const AUTO_VACUUM_INCREMENTAL: i64 = 2;
+/// The copy and its WAL need about this many times the database size on the state filesystem.
+const VACUUM_FREE_SPACE_FACTOR: i64 = 3;
+
+/// SQLite builds the VACUUM copy in its temporary directory, chosen like its own default.
+fn sqlite_temp_directory() -> Option<std::path::PathBuf> {
+    ["SQLITE_TMPDIR", "TMPDIR"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(std::path::PathBuf::from)
+        .chain(["/var/tmp", "/usr/tmp", "/tmp"].map(std::path::PathBuf::from))
+        .find(|path| path.is_dir())
+}
+
+fn free_bytes(stat: &nix::sys::statvfs::Statvfs) -> i64 {
+    let blocks = stat.blocks_available();
+    let size = stat.fragment_size();
+    i64::try_from(blocks.saturating_mul(size)).unwrap_or(i64::MAX)
+}
+
+fn vacuum_state(db: &Connection, root: &File) -> Result<Vacuum> {
+    let mode: i64 = db.pragma_query_value(None, "auto_vacuum", |r| r.get(0))?;
+    if mode == AUTO_VACUUM_INCREMENTAL {
+        return Ok(Vacuum::Incremental);
+    }
+    let busy: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE state='running' UNION ALL SELECT 1 FROM model_calls WHERE step_id IS NULL AND state='running' UNION ALL SELECT 1 FROM evidence_pins UNION ALL SELECT 1 FROM artifact_reservations)", [], |r| r.get(0))?;
+    if busy {
+        return Ok(Vacuum::Blocked("work is live in this instance".into()));
+    }
+    let database = sqlite_file_bytes(root, "ktask.sqlite3")?;
+    let size = database.saturating_add(sqlite_file_bytes(root, "ktask.sqlite3-wal")?);
+    let free = free_bytes(&nix::sys::statvfs::fstatvfs(root).map_err(io)?);
+    let need = size.saturating_mul(VACUUM_FREE_SPACE_FACTOR);
+    if free < need {
+        return Ok(Vacuum::Blocked(format!(
+            "{free} bytes free, about {need} needed for the copy and its WAL"
+        )));
+    }
+    if let Some(temp) = sqlite_temp_directory()
+        && let Ok(stat) = nix::sys::statvfs::statvfs(&temp)
+        && free_bytes(&stat) < database
+    {
+        return Ok(Vacuum::Blocked(format!(
+            "SQLite's temporary directory {} has {} bytes free, about {database} needed for the copy",
+            temp.display(),
+            free_bytes(&stat)
+        )));
+    }
+    Ok(Vacuum::Ready)
+}
+
+fn vacuum_note(db: &Connection, root: &File) -> Result<Option<String>> {
+    Ok(match vacuum_state(db, root)? {
+        Vacuum::Incremental => None,
+        Vacuum::Ready => Some(
+            "SQLite file cannot shrink (auto_vacuum off); a one-time VACUUM enables incremental vacuum at the next runner safe point".into(),
+        ),
+        Vacuum::Blocked(why) => Some(format!(
+            "SQLite file cannot shrink (auto_vacuum off); the one-time VACUUM is deferred: {why}"
+        )),
+    })
+}
+
+fn invalidate_known_allocation(db: &Connection, root: &File) -> Result<()> {
+    let known = known_allocation(root)?;
+    let tx = rusqlite::Transaction::new_unchecked(db, TransactionBehavior::Immediate)?;
+    tx.execute("UPDATE instance_storage_admission SET known_bytes=?1,known_files=?2,generation=generation+1 WHERE id=1", params![known.bytes,known.files])?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -795,12 +900,8 @@ fn preview(
     let live = protected(db, project)?;
     let mut candidates = Vec::new();
     if !live {
-        let pressure = launch_capacity_reached(allocation, effective);
-        let cutoff = if pressure {
-            now
-        } else {
-            now.saturating_sub(policy.days.saturating_mul(86_400_000))
-        };
+        // The minimum age is a hard floor: capacity pressure never widens eligibility.
+        let cutoff = now.saturating_sub(policy.days.saturating_mul(86_400_000));
         let mut stmt = db.prepare(&format!("SELECT a.task_id,a.id,
             coalesce((SELECT bytes FROM attempt_output_usage WHERE attempt_id=a.id),
                      (SELECT sum(length(CAST(content AS BLOB))) FROM attempt_output WHERE attempt_id=a.id),0),
@@ -854,6 +955,18 @@ fn preview(
         .saturating_mul(page_bytes)
         .min(allocation.database);
     let deferred_for_live_work = live || (candidates.is_empty() && resumable(db, project)?);
+    let launch_capacity_reached = launch_capacity_reached(allocation, effective);
+    let (protected_by_age_bytes, protected_by_reference_bytes, protected_open_bytes) =
+        if mode.accounting || launch_capacity_reached {
+            protection_breakdown(
+                db,
+                project,
+                now.saturating_sub(policy.days.saturating_mul(86_400_000)),
+            )?
+        } else {
+            (0, 0, 0)
+        };
+    let vacuum_note = vacuum_note(db, root)?;
     Ok((
         Preview {
             policy,
@@ -873,10 +986,14 @@ fn preview(
                 .bytes
                 .saturating_sub(eligible_file_bytes)
                 .saturating_sub(reusable_database_bytes),
+            protected_by_age_bytes,
+            protected_by_reference_bytes,
+            protected_open_bytes,
+            vacuum_note,
             over_capacity: allocation.bytes >= effective_max_bytes
                 || allocation.files >= effective_max_files,
             work_capacity_reached: work_capacity_reached(allocation, effective),
-            launch_capacity_reached: launch_capacity_reached(allocation, effective),
+            launch_capacity_reached,
             effective_max_bytes,
             effective_max_files,
             candidates,
@@ -1016,11 +1133,7 @@ fn sweep_empty_evidence(
     let retention = policy(db, project)?;
     let now = now_ms();
     let retention_ms = retention.days.saturating_mul(86_400_000);
-    let cutoff = if pressure {
-        now
-    } else {
-        now.saturating_sub(retention_ms)
-    };
+    let cutoff = now.saturating_sub(retention_ms);
     let mut cursor = db.query_row("SELECT last_attempt_id,active_attempt_id,last_step_id,last_artifact_id,dirty,complete,pressure,next_eligible_at_ms FROM evidence_sweep WHERE project_id=?1", [project], |r| Ok(SweepCursor {last_attempt:r.get(0)?,active_attempt:r.get(1)?,last_step:r.get(2)?,last_artifact:r.get(3)?,dirty:r.get(4)?,complete:r.get(5)?,pressure:r.get(6)?,next_eligible_at_ms:r.get(7)?})).optional()?.unwrap_or_default();
     if cursor.dirty || cursor.pressure != pressure {
         cursor = SweepCursor::default();
@@ -1116,7 +1229,7 @@ fn sweep_empty_evidence(
         cursor.last_artifact = 0;
         *budget -= 1;
     }
-    if cursor.complete && !pressure {
+    if cursor.complete {
         cursor.next_eligible_at_ms = db.query_row(&format!("SELECT min(a.finished_at_ms+?2) FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE a.project_id=?1 AND t.closed_at_ms IS NOT NULL AND {REFERENCED} AND a.finished_at_ms>?3 AND NOT EXISTS(SELECT 1 FROM artifact_reservations r WHERE r.attempt_id=a.id)"), params![project,retention_ms,cutoff], |r| r.get::<_,Option<i64>>(0))?.unwrap_or(0);
     }
     db.execute("INSERT INTO evidence_sweep(project_id,last_attempt_id,active_attempt_id,last_step_id,last_artifact_id,dirty,complete,pressure,next_eligible_at_ms) VALUES (?1,?2,?3,?4,?5,0,?6,?7,?8) ON CONFLICT(project_id) DO UPDATE SET last_attempt_id=excluded.last_attempt_id,active_attempt_id=excluded.active_attempt_id,last_step_id=excluded.last_step_id,last_artifact_id=excluded.last_artifact_id,dirty=0,complete=excluded.complete,pressure=excluded.pressure,next_eligible_at_ms=excluded.next_eligible_at_ms", params![project,cursor.last_attempt,cursor.active_attempt,cursor.last_step,cursor.last_artifact,cursor.complete,cursor.pressure,cursor.next_eligible_at_ms])?;
@@ -1128,7 +1241,7 @@ impl Service {
     /// project budget, leaving the remaining allocation for evidence and recovery.
     pub(crate) fn runner_log_budget(&self) -> Result<u64> {
         let (bytes, projects): (i64, i64) = self.db.connection().query_row(
-            "SELECT min(coalesce(l.max_bytes,1073741824)),count(*) FROM projects p LEFT JOIN project_storage_limits l ON l.project_id=p.id",
+            "SELECT min(coalesce(l.max_bytes,8589934592)),count(*) FROM projects p LEFT JOIN project_storage_limits l ON l.project_id=p.id",
             [], |r| Ok((r.get(0)?, r.get(1)?))
         )?;
         Ok((bytes / projects.max(1) / 8).clamp(4096, 8 * 1024 * 1024) as u64)
@@ -1194,6 +1307,39 @@ impl Service {
             self.preview_with_allocation(CLEANUP_BATCH, false, &after)?,
             progress,
         ))
+    }
+
+    /// One-time conversion of a database created without incremental vacuum. Runs only at a
+    /// runner safe point with no live work in the instance and enough free space; otherwise it
+    /// is deferred and the Storage preview says why. An optional conversion never blocks work:
+    /// a failed VACUUM is logged, shown in the preview and not retried by this process.
+    /// Returns the bytes the file shrank by.
+    pub(crate) fn enable_incremental_vacuum(&mut self) -> Result<Option<i64>> {
+        if self.vacuum_failure.is_some() {
+            return Ok(None);
+        }
+        let root = self.db.state_dir().try_clone()?;
+        let db = self.db.connection();
+        if !matches!(vacuum_state(db, &root)?, Vacuum::Ready) {
+            return Ok(None);
+        }
+        let before = sqlite_file_bytes(&root, "ktask.sqlite3")?;
+        let vacuum = db
+            .pragma_update(None, "auto_vacuum", "INCREMENTAL")
+            .and_then(|()| db.execute_batch("VACUUM"));
+        if let Err(error) = vacuum {
+            if !sqlite_busy(&error) {
+                eprintln!("storage: incremental-vacuum conversion deferred: {error}");
+                self.vacuum_failure = Some(error.to_string());
+            }
+            return Ok(None);
+        }
+        reclaim_database(db, &root)?;
+        invalidate_known_allocation(db, &root)?;
+        Ok(Some(before.saturating_sub(sqlite_file_bytes(
+            &root,
+            "ktask.sqlite3",
+        )?)))
     }
 
     pub fn retention_policy(&self) -> Result<Policy> {
@@ -1276,7 +1422,16 @@ impl Service {
             },
         )?;
         read.commit()?;
-        Ok(preview)
+        Ok(self.with_vacuum_failure(preview))
+    }
+
+    fn with_vacuum_failure(&self, mut preview: Preview) -> Preview {
+        if let (Some(why), Some(note)) = (&self.vacuum_failure, &mut preview.vacuum_note) {
+            *note = format!(
+                "SQLite file cannot shrink (auto_vacuum off); the one-time VACUUM failed and is deferred for this process: {why}"
+            );
+        }
+        preview
     }
 
     pub fn storage_preview(&self) -> Result<Preview> {
@@ -1331,11 +1486,7 @@ impl Service {
         if !current.candidates.is_empty() {
             bump_admission_generation(&intent)?;
         }
-        let cutoff = if current.launch_capacity_reached {
-            now_ms()
-        } else {
-            now_ms().saturating_sub(current.policy.days.saturating_mul(86_400_000))
-        };
+        let cutoff = now_ms().saturating_sub(current.policy.days.saturating_mul(86_400_000));
         let selected = intent.prepare(&format!("SELECT f.id,f.attempt_id,f.relative_path,f.size_bytes FROM artifacts f JOIN attempts a ON a.id=f.attempt_id JOIN tasks t ON t.id=a.task_id WHERE a.project_id=?1 AND t.closed_at_ms IS NOT NULL AND {REFERENCED} AND f.pruned_at_ms IS NULL AND (a.finished_at_ms<=?2 OR f.pruning_requested_at_ms IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM artifact_reservations r WHERE r.attempt_id=a.id) ORDER BY f.id LIMIT ?3"))?.query_map(params![self.project_id,cutoff,CLEANUP_BATCH], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,i64>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         for (id, _, _, _) in &selected {
             intent.execute("UPDATE artifacts SET pruning_requested_at_ms=max(created_at_ms,?2) WHERE id=?1 AND pruned_at_ms IS NULL AND pruning_requested_at_ms IS NULL", params![id,now_ms()])?;
@@ -1637,6 +1788,72 @@ mod tests {
             projected_allocation(&service.db)?.bytes
         );
         assert!(physical.bytes < initial.bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn database_without_incremental_vacuum_converts_once_at_a_safe_point() -> Result<()> {
+        let (_sandbox, mut service, _) = closed_service()?;
+        let db = service.db.connection();
+        db.execute_batch("PRAGMA auto_vacuum=NONE; VACUUM;")?;
+        let mode = |db: &Connection| -> rusqlite::Result<i64> {
+            db.pragma_query_value(None, "auto_vacuum", |r| r.get(0))
+        };
+        assert_eq!(mode(db)?, 0);
+        let note = service
+            .storage_preview()?
+            .vacuum_note
+            .expect("limitation is reported");
+        assert!(note.contains("auto_vacuum off"), "{note}");
+        // Live work in the instance defers the conversion.
+        service.db.connection().execute(
+            "INSERT INTO evidence_pins(id,project_id,directory_identity,owner_identity,guardian_identity) VALUES ('00000000000000000000000000000001',?1,'d','o','g')",
+            [service.project_id],
+        )?;
+        assert_eq!(service.enable_incremental_vacuum()?, None);
+        assert_eq!(mode(service.db.connection())?, 0);
+        service
+            .db
+            .connection()
+            .execute("DELETE FROM evidence_pins", [])?;
+        assert!(service.enable_incremental_vacuum()?.is_some());
+        assert_eq!(mode(service.db.connection())?, 2);
+        assert!(service.storage_preview()?.vacuum_note.is_none());
+        assert_eq!(service.enable_incremental_vacuum()?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn failed_vacuum_conversion_is_deferred_reported_and_never_an_error() -> Result<()> {
+        let (sandbox, mut service, _) = closed_service()?;
+        service
+            .db
+            .connection()
+            .execute_batch("PRAGMA auto_vacuum=NONE; VACUUM;")?;
+        // VACUUM cannot run inside a transaction: a deterministic non-busy failure.
+        service.db.connection().execute_batch("BEGIN")?;
+        assert_eq!(service.enable_incremental_vacuum()?, None);
+        service.db.connection().execute_batch("ROLLBACK")?;
+        let note = service.storage_preview()?.vacuum_note.expect("reported");
+        assert!(
+            note.contains("failed and is deferred") && note.contains("transaction"),
+            "{note}"
+        );
+        // This process does not retry, even once the obstacle is gone.
+        assert_eq!(service.enable_incremental_vacuum()?, None);
+        let mode: i64 = service
+            .db
+            .connection()
+            .pragma_query_value(None, "auto_vacuum", |r| r.get(0))?;
+        assert_eq!(mode, 0);
+        drop(service);
+        let mut next = Service::open(
+            crate::storage::Database::open_in(&sandbox.path().join("state"))?,
+            &sandbox.path().join("project"),
+            None,
+        )?;
+        assert!(next.enable_incremental_vacuum()?.is_some());
+        assert!(next.storage_preview()?.vacuum_note.is_none());
         Ok(())
     }
 

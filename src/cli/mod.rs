@@ -409,7 +409,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             None
         };
         let mut text = format!(
-            "Storage: {} logical bytes retained; {} bytes eligible across {} attempt(s){}\nAllocation: {} bytes in {} files/directories (SQLite {}, WAL {}, runner logs {}, evidence {}, directories {}); {} eligible file bytes, {} reusable SQLite bytes, {} protected bytes. Limits: {} bytes, {} files{}{}\n{}",
+            "Storage: {} logical bytes retained; {} bytes eligible across {} attempt(s){}\nAllocation: {} bytes in {} files/directories (SQLite {}, WAL {}, runner logs {}, evidence {}, directories {}); {} eligible file bytes, {} reusable SQLite bytes, {} protected bytes ({} younger than the {}-day minimum age, {} referenced by reused checks, {} open work). Limits: {} bytes, {} files{}{}{}\n{}",
             preview.usage_bytes,
             preview.reclaimable_bytes,
             preview.candidates.len(),
@@ -428,12 +428,17 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             preview.eligible_file_bytes,
             preview.reusable_database_bytes,
             preview.protected_bytes,
+            preview.protected_by_age_bytes,
+            preview.policy.days,
+            preview.protected_by_reference_bytes,
+            preview.protected_open_bytes,
             preview.policy.max_bytes,
             preview.policy.max_files,
             if preview.effective_max_bytes != preview.policy.max_bytes || preview.effective_max_files != preview.policy.max_files {
                 format!("; shared effective {} bytes, {} files", preview.effective_max_bytes, preview.effective_max_files)
             } else { String::new() },
             if preview.launch_capacity_reached { " · WORK PAUSED AT CAPACITY RESERVE" } else { "" },
+            preview.vacuum_note.as_ref().map(|n| format!("\nNote: {n}")).unwrap_or_default(),
             preview
                 .candidates
                 .iter()

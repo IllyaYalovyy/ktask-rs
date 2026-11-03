@@ -107,6 +107,168 @@ fn queued_run_uses_space_recovered_by_multiple_sqlite_vacuum_batches() -> Result
     Ok(())
 }
 
+/// A one-day-old closed attempt under the default 30-day minimum, with the instance just
+/// over its launch reserve: nothing may be deleted and the runner must say why it stops.
+fn young_evidence_fixture() -> Result<(Fixture, PathBuf, PathBuf)> {
+    let f = Fixture::new()?;
+    f.add("Produce young evidence")?;
+    let first = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let attempt = f.ok(&["show", "1"])?["attempts"][0]["id"].as_i64().unwrap();
+    let state = f.scratch.path().join("state/ktask-dev");
+    let directory = state.join(format!("evidence/attempt-{attempt}"));
+    fs::create_dir_all(&directory)?;
+    let proof = directory.join("proof.txt");
+    fs::write(&proof, vec![b'e'; 1024 * 1024])?;
+    let day_ms = 86_400_000_i64;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64;
+    let db = f.db()?;
+    db.connection().execute(
+        "INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms) VALUES (?1,'proof','text/plain',?2,?3,1)",
+        rusqlite::params![attempt, format!("evidence/attempt-{attempt}/proof.txt"), 1024 * 1024],
+    )?;
+    db.connection().execute(
+        "UPDATE attempts SET started_at_ms=?2-60000,finished_at_ms=?2 WHERE id=?1",
+        rusqlite::params![attempt, now_ms - day_ms],
+    )?;
+    let closed: bool = db.connection().query_row(
+        "SELECT t.closed_at_ms IS NOT NULL FROM tasks t JOIN attempts a ON a.task_id=t.id WHERE a.id=?1",
+        [attempt],
+        |r| r.get(0),
+    )?;
+    assert!(closed, "the fixture attempt must be closed history");
+    drop(db);
+    let allocated = f.ok(&["storage"])?["preview"]["allocated_bytes"]
+        .as_i64()
+        .unwrap();
+    f.ok(&[
+        "retention",
+        "30",
+        "--max-bytes",
+        &(allocated + 65_536).to_string(),
+    ])?;
+    f.add("Must wait for the minimum age")?;
+    Ok((f, state, proof))
+}
+
+#[test]
+fn capacity_pressure_never_deletes_evidence_younger_than_the_minimum_age() -> Result {
+    let (f, _state, proof) = young_evidence_fixture()?;
+    let count = || -> Result<i64> {
+        Ok(f.db()?.connection().query_row(
+            "SELECT count(*) FROM artifacts WHERE pruned_at_ms IS NULL",
+            [],
+            |r| r.get(0),
+        )?)
+    };
+    let artifacts = count()?;
+    let preview = f.ok(&["storage"])?["preview"].clone();
+    assert!(
+        preview["launch_capacity_reached"].as_bool().unwrap(),
+        "{preview}"
+    );
+    assert!(
+        preview["candidates"].as_array().unwrap().is_empty(),
+        "{preview}"
+    );
+    assert!(
+        preview["protected_by_age_bytes"].as_i64().unwrap() >= 1024 * 1024,
+        "{preview}"
+    );
+    assert_eq!(preview["protected_by_reference_bytes"], 0);
+    for _ in 0..2 {
+        let applied = f.ok(&["storage", "--apply"])?;
+        assert_eq!(applied["cleanup"]["attempts"], 0, "{applied}");
+        assert_eq!(fs::metadata(&proof)?.len(), 1024 * 1024);
+    }
+    let result = f.process().args(["run", "--queue"]).output()?;
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let output = String::from_utf8(result.stdout)?;
+    assert!(
+        output.contains("Storage capacity reserve reached"),
+        "{output}"
+    );
+    assert!(
+        output.contains("younger than the 30-day minimum age"),
+        "{output}"
+    );
+    assert_eq!(f.ok(&["show", "2"])?["status"], "ready");
+    assert_eq!(fs::metadata(&proof)?.len(), 1024 * 1024);
+    assert_eq!(count()?, artifacts);
+    Ok(())
+}
+
+#[test]
+fn storage_view_shows_age_protection_by_keyboard_and_mouse() -> Result {
+    for mouse in [false, true] {
+        let (f, _state, proof) = young_evidence_fixture()?;
+        let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 130, 42)?;
+        terminal.screen("config tab", |s| s.contains("4 Config"))?;
+        if mouse {
+            terminal.click("4 Config")?;
+            terminal.screen("config", |s| s.contains("k Storage"))?;
+            terminal.click("k Storage")?;
+        } else {
+            terminal.send("4")?;
+            terminal.screen("config", |s| s.contains("k Storage"))?;
+            terminal.send("k")?;
+        }
+        let dialog = terminal.screen("age protection visible", |s| {
+            s.contains("Protected evidence") && s.contains("WORK PAUSED AT CAPACITY")
+        })?;
+        println!("STORAGE AGE PROTECTION mouse={mouse}\n{dialog}");
+        assert!(dialog.contains("minimum age"), "{dialog}");
+        assert!(dialog.contains("eligible: 0 bytes"), "{dialog}");
+        if mouse {
+            terminal.click("Cancel")?;
+        } else {
+            terminal.send("\x1b")?;
+        }
+        terminal.screen("dialog closed", |s| !s.contains("Protected evidence"))?;
+        terminal.send("\x03")?;
+        terminal.finish()?;
+        assert_eq!(fs::metadata(&proof)?.len(), 1024 * 1024);
+    }
+    Ok(())
+}
+
+#[test]
+fn runner_converts_a_legacy_database_to_incremental_vacuum_without_blocking_work() -> Result {
+    let f = Fixture::new()?;
+    f.add("Run on a database without incremental vacuum")?;
+    let mode = |f: &Fixture| -> Result<i64> {
+        Ok(f.db()?
+            .connection()
+            .pragma_query_value(None, "auto_vacuum", |r| r.get(0))?)
+    };
+    f.db()?
+        .connection()
+        .execute_batch("PRAGMA auto_vacuum=NONE; VACUUM;")?;
+    assert_eq!(mode(&f)?, 0);
+    let note = f.ok(&["storage"])?["preview"]["vacuum_note"].clone();
+    assert!(note.as_str().unwrap().contains("auto_vacuum off"), "{note}");
+    let result = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    assert_eq!(mode(&f)?, 2);
+    assert!(f.ok(&["storage"])?["preview"]["vacuum_note"].is_null());
+    Ok(())
+}
+
 #[test]
 fn protected_only_capacity_reaches_waiting_without_restarting_cleanup() -> Result {
     let f = Fixture::new()?;

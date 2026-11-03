@@ -571,7 +571,7 @@ in its own database.
 | `last_artifact_id` | INTEGER | no | Last examined artifact parent within the active attempt. |
 | `dirty` | INTEGER | no | Eligibility changed during a bounded pass; restart at attempt 0 on the next apply. |
 | `complete` | INTEGER | no | The current pass reached the end and need not restart without a change. |
-| `pressure` | INTEGER | no | Whether capacity pressure widened eligibility for this pass. |
+| `pressure` | INTEGER | no | Whether the launch reserve was reached when the pass ran. Pressure never widens eligibility; it only restarts the cursor. |
 | `next_eligible_at_ms` | INTEGER | no | Earliest future closed-attempt age deadline; 0 if none. A completed sweep restarts when this time arrives. |
 
 - PK `(project_id)`.
@@ -837,7 +837,7 @@ Project-specific minimum age for terminal attempts on closed tasks. A missing ro
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
 | `project_id` | INTEGER | no | Owning project. |
-| `days` | INTEGER | no | Minimum completed attempt age in days; 0 allows immediate cleanup. |
+| `days` | INTEGER | no | Minimum completed attempt age in days; 0 allows immediate cleanup. A hard floor: capacity pressure, automatic housekeeping and manual cleanup never delete younger evidence. |
 | `version` | INTEGER | no | Positive policy version. |
 
 - PK `(project_id)`.
@@ -845,7 +845,7 @@ Project-specific minimum age for terminal attempts on closed tasks. A missing ro
 
 ### project_storage_limits
 
-Per-project byte and file limits for the shared instance allocation. The smallest configured values across registered projects govern their shared instance; a missing row uses the service defaults of 1 GiB and 100,000 entries. The retention policy version guards edits to both limits.
+Per-project byte and file limits for the shared instance allocation. The smallest configured values across registered projects govern their shared instance; a missing row uses the service defaults of 8 GiB and 100,000 entries. The default is several GiB because a self-hosting instance's SQLite file alone can exceed 1 GiB. The retention policy version guards edits to both limits.
 
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
@@ -1267,8 +1267,11 @@ directory and stored output rows, leaving task history, reports, verdicts, usage
 pruning markers. Partial output removal is labeled with its removed byte count in History and
 CLI until the completed marker is written. It commits artifact pruning intent before unlinking; interrupted or partly
 failed cleanup remains visible and can reconcile files already removed on the next apply.
+The minimum age is a hard floor. When closed evidence younger than the minimum, evidence referenced by reused checks or evidence of open work keeps the instance over its budget, cleanup deletes nothing more; the preview and the runner report the bytes protected by age, by references and by open work, and the runner stops launching new work until capacity is raised or the evidence ages out.
 Each apply limits file, output-row and directory work; its receipt reports the bytes and
 attempts processed in that call. Further applies resume the remaining work.
+New databases enable `auto_vacuum=INCREMENTAL`. A database created with auto_vacuum off cannot shrink after deletions. At the runner's safe point ktask converts it once with `PRAGMA auto_vacuum=INCREMENTAL; VACUUM`, but only when no attempt, provider call, evidence pin or artifact reservation is live anywhere in the instance and the state filesystem has about three times the database and WAL size free. Otherwise the Storage preview states that the SQLite file cannot shrink and why the conversion is deferred. The conversion is optional and never blocks work: SQLite also needs room for the copy in its temporary directory (`SQLITE_TMPDIR`, `TMPDIR`, `/var/tmp`, `/usr/tmp` or `/tmp`), and a lack of space there defers it with the directory named. A failed VACUUM is logged to the runner log, shown in the preview and not retried by that process; the queue proceeds to housekeeping and launch.
+
 Empty generated step and attempt directories are removed only for eligible attempts with no
 artifact reservation. The bounded `evidence_sweep` cursor revisits interrupted publications
 even when they left no artifact row; retained files keep their directories.

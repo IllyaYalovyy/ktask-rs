@@ -39,7 +39,7 @@ impl App {
                     .storage_preview()
                     .map_err(|e| e.to_string())?;
                 let mut body = format!(
-                    "Retained: {} logical bytes · eligible: {} bytes in {} attempt(s){}\nAllocated: {} bytes in {} files/directories · eligible files: {} · reusable SQLite: {} · protected: {} bytes{}\nSQLite: {} · WAL: {} · runner logs: {} · evidence: {} · directories: {}\nCleanup keeps task history and all live or unresolved work.\n",
+                    "Retained: {} logical bytes · eligible: {} bytes in {} attempt(s){}\nAllocated: {} bytes in {} files/directories · eligible files: {} · reusable SQLite: {} · protected: {} bytes{}\nSQLite: {} · WAL: {} · runner logs: {} · evidence: {} · directories: {}\nProtected evidence: {} bytes younger than the {}-day minimum age · {} bytes referenced by reused checks · {} bytes of open work\nCleanup keeps task history and all live or unresolved work.\n",
                     preview.usage_bytes,
                     preview.reclaimable_bytes,
                     preview.candidates.len(),
@@ -63,7 +63,14 @@ impl App {
                     preview.runner_log_bytes,
                     preview.evidence_bytes,
                     preview.directory_entries,
+                    preview.protected_by_age_bytes,
+                    preview.policy.days,
+                    preview.protected_by_reference_bytes,
+                    preview.protected_open_bytes,
                 );
+                if let Some(note) = &preview.vacuum_note {
+                    body.push_str(&format!("{note}.\n"));
+                }
                 if preview.effective_max_bytes != preview.policy.max_bytes
                     || preview.effective_max_files != preview.policy.max_files
                 {
