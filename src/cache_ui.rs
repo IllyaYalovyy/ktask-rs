@@ -136,6 +136,9 @@ impl App {
                                     },
                                 ),
                             });
+                            for note in &r.skipped {
+                                body.push_str(&format!("  {note}\n"));
+                            }
                         }
                         if preview.reports.is_empty() {
                             body.push_str(

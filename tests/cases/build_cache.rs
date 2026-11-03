@@ -204,6 +204,118 @@ fn repeated_version_builds_stay_bounded_and_the_newest_generation_stays_warm() -
     Ok(())
 }
 
+/// Every path below `dir` with its size, in a stable order.
+fn snapshot(dir: &Path) -> Vec<(PathBuf, u64)> {
+    let mut seen = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let meta = fs::symlink_metadata(entry.path()).unwrap();
+            seen.push((entry.path(), meta.len()));
+            if meta.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    seen.sort();
+    seen
+}
+
+/// Adopts a skeleton, replaces `link` (relative to the target) by a symbolic link to a
+/// directory outside it holding old generations, cleans with keep=1 and proves that nothing
+/// outside moved and the report names the link.
+fn symlinked_below_root_is_never_followed(link: &str, outside_part: &str) -> Result {
+    let f = fixture()?;
+    owned(&f)?;
+    quick(&f.paths, 1)?;
+    let outside = f.root.join("elsewhere");
+    for version in 1..=4_u64 {
+        build(&outside, version, 40_000 - version * 100)?;
+    }
+    let link_path = f.target.join(link);
+    fs::remove_dir_all(&link_path)?;
+    std::os::unix::fs::symlink(outside.join(outside_part), &link_path)?;
+    let before = snapshot(&outside);
+    assert!(!before.is_empty());
+    for apply in [false, true] {
+        let done = build_cache::clean(&f.paths, apply)?;
+        let report = &done.reports[0];
+        assert!(report.deferred.is_none());
+        let expected = format!(
+            "{}: symbolic link; not managed",
+            fs::canonicalize(&f.target)?.join(link).display()
+        );
+        assert!(
+            report.skipped.contains(&expected),
+            "{:?} lacks {expected}",
+            report.skipped
+        );
+        assert_eq!(report.removed_generations, 0);
+        assert_eq!(report.freed_bytes, 0);
+        assert_eq!(
+            snapshot(&outside),
+            before,
+            "outside changed (apply={apply})"
+        );
+    }
+    assert!(fs::symlink_metadata(&link_path)?.file_type().is_symlink());
+    Ok(())
+}
+
+#[test]
+fn a_symlinked_incremental_directory_is_a_boundary_cleanup_never_crosses() -> Result {
+    symlinked_below_root_is_never_followed("debug/incremental", "debug/incremental")
+}
+
+#[test]
+fn a_symlinked_deps_directory_is_a_boundary_cleanup_never_crosses() -> Result {
+    symlinked_below_root_is_never_followed("debug/deps", "debug/deps")
+}
+
+#[test]
+fn symlinked_fingerprint_build_and_profile_directories_are_boundaries() -> Result {
+    symlinked_below_root_is_never_followed("debug/.fingerprint", "debug/.fingerprint")?;
+    symlinked_below_root_is_never_followed("debug/build", "debug/build")?;
+    symlinked_below_root_is_never_followed("debug", "debug")
+}
+
+#[test]
+fn a_symlinked_entry_inside_a_managed_directory_is_skipped_and_its_target_kept() -> Result {
+    let f = fixture()?;
+    owned(&f)?;
+    quick(&f.paths, 1)?;
+    let outside = f.root.join("elsewhere");
+    fs::create_dir_all(outside.join("ktask-0000000000001/s-1-abc"))?;
+    fs::write(
+        outside.join("ktask-0000000000001/s-1-abc/dep-graph.bin"),
+        "x",
+    )?;
+    for version in 1..=3_u64 {
+        build(&f.target, version, 40_000 - version * 100)?;
+    }
+    let incremental = f.target.join("debug/incremental");
+    let link = incremental.join("ktask-0000000000000");
+    std::os::unix::fs::symlink(outside.join("ktask-0000000000001"), &link)?;
+    let before = snapshot(&outside);
+    let done = build_cache::clean(&f.paths, true)?;
+    let report = &done.reports[0];
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|n| n.ends_with("ktask-0000000000000: symbolic link; not managed")),
+        "{:?}",
+        report.skipped
+    );
+    assert!(fs::symlink_metadata(&link)?.file_type().is_symlink());
+    assert_eq!(snapshot(&outside), before);
+    assert!(
+        report.removed_generations > 0,
+        "real generations still retire"
+    );
+    Ok(())
+}
+
 #[test]
 fn capacity_limit_evicts_oldest_but_never_the_last_warm_generation() -> Result {
     let f = fixture()?;

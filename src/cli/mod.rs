@@ -652,6 +652,9 @@ fn cache_reply(
                         },
                     ),
                 });
+                for note in &r.skipped {
+                    text.push_str(&format!("    {note}\n"));
+                }
             }
             Ok(output::Reply {
                 data: json!({"applied":apply,"scratch_reclaimed":done.scratch_reclaimed,"caches":done.reports}),

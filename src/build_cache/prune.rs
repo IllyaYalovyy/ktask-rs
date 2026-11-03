@@ -34,6 +34,74 @@ pub struct Report {
     pub freed_files: u64,
     /// Still above a limit although only protected or newest generations remain.
     pub over_capacity: bool,
+    /// Paths below the root that were left alone (symbolic links are never followed).
+    pub skipped: Vec<String>,
+}
+
+const LINK_NOTE: &str = "symbolic link; not managed";
+
+fn is_link(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+}
+
+/// The entries of an owned directory that cleanup may touch. A symbolic link is a boundary,
+/// whether it is the directory itself or an entry inside: it is reported and never followed.
+fn managed_entries(dir: &Path, skipped: &mut Vec<PathBuf>) -> Vec<fs::DirEntry> {
+    match fs::symlink_metadata(dir) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            skipped.push(dir.to_path_buf());
+            return Vec::new();
+        }
+        Ok(meta) if meta.is_dir() => {}
+        _ => return Vec::new(),
+    }
+    let Ok(children) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    children
+        .flatten()
+        .filter(|child| {
+            let link = child.file_type().is_ok_and(|t| t.is_symlink());
+            if link {
+                skipped.push(child.path());
+            }
+            !link
+        })
+        .collect()
+}
+
+fn describe(mut skipped: Vec<PathBuf>) -> Vec<String> {
+    skipped.sort();
+    skipped.dedup();
+    skipped
+        .iter()
+        .map(|path| {
+            let why = if is_link(path) {
+                LINK_NOTE
+            } else {
+                "outside the owned root; not removed"
+            };
+            format!("{}: {why}", path.display())
+        })
+        .collect()
+}
+
+/// Final guard before a removal: the entry's parent resolves inside the owned root and the
+/// entry itself is not a link out of it. A vanished entry has nothing left to remove.
+fn removable(root: &Path, path: &Path) -> bool {
+    let Some((parent, name)) = path.parent().zip(path.file_name()) else {
+        return false;
+    };
+    match fs::symlink_metadata(path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return true,
+        Err(_) => return false,
+        Ok(meta) if meta.file_type().is_symlink() => return false,
+        Ok(_) => {}
+    }
+    fs::canonicalize(parent).is_ok_and(|parent| {
+        let resolved = parent.join(name);
+        resolved.starts_with(root) && resolved != root
+    })
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
@@ -126,26 +194,45 @@ fn build_locks(
     Ok(Ok(held))
 }
 
-fn profile_dirs(root: &Path) -> Vec<PathBuf> {
+fn profile_dirs(root: &Path, skipped: &mut Vec<PathBuf>) -> Vec<PathBuf> {
     let is_profile = |p: &Path| p.join("deps").is_dir() || p.join(".fingerprint").is_dir();
+    // Whether a link would have been taken for a profile (or a triple holding profiles).
+    let reaches_profile = |p: &Path| {
+        is_profile(p)
+            || fs::read_dir(p)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .any(|e| is_profile(&e.path()))
+    };
     let mut found = Vec::new();
     let Ok(children) = fs::read_dir(root) else {
         return found;
     };
     for child in children.flatten() {
         let path = child.path();
-        if !child.file_type().is_ok_and(|t| t.is_dir()) {
+        let Ok(kind) = child.file_type() else {
             continue;
-        }
-        if is_profile(&path) {
+        };
+        if kind.is_symlink() {
+            if reaches_profile(&path) {
+                skipped.push(path);
+            }
+        } else if kind.is_dir() && is_profile(&path) {
             found.push(path);
-        } else if let Ok(inner) = fs::read_dir(&path) {
-            found.extend(
-                inner
-                    .flatten()
-                    .map(|e| e.path())
-                    .filter(|p| p.is_dir() && is_profile(p)),
-            );
+        } else if kind.is_dir()
+            && let Ok(inner) = fs::read_dir(&path)
+        {
+            for entry in inner.flatten() {
+                let inner_path = entry.path();
+                if entry.file_type().is_ok_and(|t| t.is_symlink()) {
+                    if is_profile(&inner_path) {
+                        skipped.push(inner_path);
+                    }
+                } else if inner_path.is_dir() && is_profile(&inner_path) {
+                    found.push(inner_path);
+                }
+            }
         }
     }
     found.sort();
@@ -289,13 +376,17 @@ fn crate_key(base: &str, extension: &str) -> String {
     }
 }
 
-fn dependency_generations(profile: &Path, context: &Context<'_>) -> Vec<Generation> {
+fn dependency_generations(
+    profile: &Path,
+    context: &Context<'_>,
+    skipped: &mut Vec<PathBuf>,
+) -> Vec<Generation> {
     // Within one profile a hash identifies one compilation unit, so its files, its
     // dependency-info and its fingerprint always form one generation.
     let mut by_hash: HashMap<String, Vec<Artifact>> = HashMap::new();
     let mut names: HashMap<String, String> = HashMap::new();
-    if let Ok(files) = fs::read_dir(profile.join("deps")) {
-        for file in files.flatten() {
+    {
+        for file in managed_entries(&profile.join("deps"), skipped) {
             let name = file.file_name().to_string_lossy().into_owned();
             let (stem, extension) = name.split_once('.').unwrap_or((&name, ""));
             let Some((base, hash)) = hash_suffix(stem) else {
@@ -323,10 +414,7 @@ fn dependency_generations(profile: &Path, context: &Context<'_>) -> Vec<Generati
     // dependency-info-only remnant has a hash of its own, never a live generation's.
     let mut extras: HashMap<String, Vec<PathBuf>> = HashMap::new();
     for sub in [".fingerprint", "build"] {
-        let Ok(dirs) = fs::read_dir(profile.join(sub)) else {
-            continue;
-        };
-        for dir in dirs.flatten() {
+        for dir in managed_entries(&profile.join(sub), skipped) {
             let name = dir.file_name().to_string_lossy().into_owned();
             if let Some((_, hash)) = hash_suffix(&name) {
                 extras.entry(hash.to_owned()).or_default().push(dir.path());
@@ -405,12 +493,13 @@ fn dependency_generations(profile: &Path, context: &Context<'_>) -> Vec<Generati
         .collect()
 }
 
-fn incremental_generations(profile: &Path, context: &Context<'_>) -> Vec<Generation> {
+fn incremental_generations(
+    profile: &Path,
+    context: &Context<'_>,
+    skipped: &mut Vec<PathBuf>,
+) -> Vec<Generation> {
     let mut out = Vec::new();
-    let Ok(dirs) = fs::read_dir(profile.join("incremental")) else {
-        return out;
-    };
-    for dir in dirs.flatten() {
+    for dir in managed_entries(&profile.join("incremental"), skipped) {
         let name = dir.file_name().to_string_lossy().into_owned();
         let Some((crate_name, hash)) = name.rsplit_once('-') else {
             continue;
@@ -491,7 +580,7 @@ fn mark_obsolete(generations: &[Generation], keep: u64) -> HashSet<usize> {
 /// Removal order keeps an interrupted cleanup recognizable: the files that decide a
 /// generation's kind (library, then executable) go late and its dependency-info last, so a
 /// survivor either still sits in its own bucket or is a lone remnant; the next pass retires it.
-fn remove_generation(generation: &Generation) -> bool {
+fn remove_generation(root: &Path, generation: &Generation, skipped: &mut Vec<PathBuf>) -> bool {
     let rank = |path: &PathBuf| match path.extension().and_then(|e| e.to_str()) {
         Some("rlib" | "so" | "a") => 1,
         None | Some("exe") => 2,
@@ -502,6 +591,11 @@ fn remove_generation(generation: &Generation) -> bool {
     files.sort_by_key(|path| rank(path));
     let mut complete = true;
     for dir in &generation.extra_dirs {
+        if !removable(root, dir) {
+            skipped.push(dir.clone());
+            complete = false;
+            continue;
+        }
         match fs::remove_dir_all(dir) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
@@ -509,6 +603,11 @@ fn remove_generation(generation: &Generation) -> bool {
         }
     }
     for file in files {
+        if !removable(root, file) {
+            skipped.push(file.clone());
+            complete = false;
+            continue;
+        }
         match fs::remove_file(file) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
@@ -543,7 +642,8 @@ pub fn prune(paths: &Paths, root: &Path, policy: &Policy, apply: bool) -> Result
         }
         Err(TryLockError::Error(e)) => return Err(e.into()),
     }
-    let profiles = profile_dirs(&root);
+    let mut skipped = Vec::new();
+    let profiles = profile_dirs(&root, &mut skipped);
     let _builds = match build_locks(&root, &profiles)? {
         Ok(held) => held,
         Err(reason) => {
@@ -574,8 +674,8 @@ pub fn prune(paths: &Paths, root: &Path, policy: &Policy, apply: bool) -> Result
             now: SystemTime::now(),
             grace: Duration::from_secs(policy.grace_secs),
         };
-        generations.extend(dependency_generations(profile, &context));
-        generations.extend(incremental_generations(profile, &context));
+        generations.extend(dependency_generations(profile, &context, &mut skipped));
+        generations.extend(incremental_generations(profile, &context, &mut skipped));
     }
     report.protected_generations = generations.iter().filter(|g| g.protected).count() as u64;
     let mut doomed = mark_obsolete(&generations, policy.keep_generations);
@@ -621,12 +721,13 @@ pub fn prune(paths: &Paths, root: &Path, policy: &Policy, apply: bool) -> Result
         report.removed_generations = doomed.len() as u64;
         report.after_bytes = bytes;
         report.after_files = files;
+        report.skipped = describe(skipped);
         return Ok(report);
     }
     let mut order: Vec<usize> = doomed.into_iter().collect();
     order.sort_by_key(|i| generations[*i].newest);
     for index in order {
-        if remove_generation(&generations[index]) {
+        if remove_generation(&root, &generations[index], &mut skipped) {
             report.removed_generations += 1;
         }
     }
@@ -635,5 +736,6 @@ pub fn prune(paths: &Paths, root: &Path, policy: &Policy, apply: bool) -> Result
     report.freed_files = report.before_files.saturating_sub(report.after_files);
     report.over_capacity =
         report.after_bytes > policy.max_bytes || report.after_files > policy.max_files;
+    report.skipped = describe(skipped);
     Ok(report)
 }
