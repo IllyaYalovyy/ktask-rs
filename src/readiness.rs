@@ -1,8 +1,7 @@
 //! Read-only launch inspection for the Current Task screen.
 use crate::{
-    app::App,
     application::{ROLES, Service},
-    presentation::TaskAction,
+    presentation::{Status, TaskAction},
     runner::provider::Provider,
 };
 use std::{fs::File, path::Path, process::Command};
@@ -130,16 +129,19 @@ fn writable_network(report: &mut Readiness, service: &Service, provider: Option<
     );
 }
 
-pub(crate) fn inspect(app: &App) -> Readiness {
+/// What blocks running `current` (its displayed state and stored task), or the project
+/// when there is no current task.
+pub(crate) fn inspect(
+    service: &Service,
+    current: Option<(Status, &crate::application::Task)>,
+    supervisor_alive: bool,
+) -> Readiness {
     let mut report = Readiness {
         lines: Vec::new(),
         blockers: 0,
         refresh_failed: false,
     };
-    let Some(service) = &app.service else {
-        return report;
-    };
-    let Some(task) = app.current().and_then(|task| app.stored.get(&task.id)) else {
+    let Some((state, task)) = current else {
         if let Ok(root) = service.project_root() {
             commit_identity(&mut report, &root);
         }
@@ -175,13 +177,10 @@ pub(crate) fn inspect(app: &App) -> Readiness {
     };
     let definition = task.definition();
     let root = service.project_root();
-    let state = app.current().expect("current task").status();
     report.check(
         "Execution state",
         match state.forward() {
-            _ if app.supervisor_alive => {
-                Err("The runner is working on it · p Pause, s Stop".into())
-            }
+            _ if supervisor_alive => Err("The runner is working on it · p Pause, s Stop".into()),
             Some(TaskAction::Approve) => Err("Approve a revision before Run".into()),
             Some(_) => Ok(()),
             None => Err(state.refusal(TaskAction::Run)),

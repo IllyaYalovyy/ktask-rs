@@ -3,23 +3,26 @@ pub const PRODUCT: &str = "ktask RS";
 mod actions;
 mod app;
 pub mod application;
+mod backend;
 pub mod build_cache;
 mod cache_ui;
 mod cli;
 pub(crate) mod clock;
 mod configuration_ui;
+mod demo;
 mod dialog;
+mod forms;
 pub mod instance;
 mod mock;
 mod persistent;
 mod presentation;
+mod projection;
 mod readiness;
 pub(crate) mod resource;
 pub mod runner;
 pub mod scratch;
 mod selection;
 pub mod storage;
-mod task_actions;
 mod ui;
 
 use std::io;
@@ -89,7 +92,7 @@ pub(crate) fn launch_tui(
 ) -> io::Result<()> {
     let paths = instance.paths()?;
     let app = if demo {
-        app::App::new(instance)
+        app::App::demo(instance)
     } else {
         let db = storage::Database::open(&paths).map_err(io::Error::other)?;
         let service =

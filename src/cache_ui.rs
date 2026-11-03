@@ -1,14 +1,19 @@
 //! Configuration → Build cache: inventory, limits, cleanup and opt-in adoption through the
 //! same `build_cache` commands as the CLI.
 use crate::{
-    app::App,
+    app::Screen,
     build_cache::{self, Policy},
     dialog::{BuildCachePlan, Dialog, DialogKind, Field},
+    persistent::StoredWorkspace,
 };
 
 const SAVE: &str = "Save limits";
 const CLEAN: &str = "Clean obsolete";
 const ADOPT: &str = "Adopt project target";
+const MAX_BYTES: &str = "Maximum bytes per cache";
+const MAX_FILES: &str = "Maximum files per cache";
+const GENERATIONS: &str = "Warm generations kept";
+const ACTION: &str = "Action";
 
 fn size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -25,15 +30,10 @@ fn size(bytes: u64) -> String {
     }
 }
 
-impl App {
-    pub(crate) fn open_build_cache(&mut self) -> Result<(), String> {
-        let paths = self.instance.paths().map_err(|e| e.to_string())?;
-        let root = self
-            .service
-            .as_ref()
-            .unwrap()
-            .project_root()
-            .map_err(|e| e.to_string())?;
+impl StoredWorkspace {
+    pub(crate) fn open_build_cache(&self, screen: &Screen) -> Result<Dialog, String> {
+        let paths = screen.instance.paths().map_err(|e| e.to_string())?;
+        let root = self.service.project_root().map_err(|e| e.to_string())?;
         let inv = build_cache::inventory(&paths, &root).map_err(|e| e.to_string())?;
         let mut body = format!(
             "Managed: {} in {} files (limit {} / {} files per cache) · free {} of {}\n",
@@ -68,48 +68,43 @@ impl App {
         }
         body.push_str(&format!("Never touched: {}\n", inv.exclusions.join("; ")));
         let policy = inv.policy;
-        self.dialog = Some(Dialog::new(
+        Ok(Dialog::new(
             DialogKind::BuildCache(policy),
             "Build cache",
             &body,
             vec![
-                Field::text("Maximum bytes per cache", &policy.max_bytes.to_string()),
-                Field::text("Maximum files per cache", &policy.max_files.to_string()),
-                Field::text(
-                    "Warm generations kept",
-                    &policy.keep_generations.to_string(),
-                ),
-                Field::choice("Action", &[SAVE, CLEAN, ADOPT], SAVE),
+                Field::text(MAX_BYTES, &policy.max_bytes.to_string()),
+                Field::text(MAX_FILES, &policy.max_files.to_string()),
+                Field::text(GENERATIONS, &policy.keep_generations.to_string()),
+                Field::choice(ACTION, &[SAVE, CLEAN, ADOPT], SAVE),
             ],
-        ));
-        Ok(())
+        ))
     }
 
     /// Returns true when the dialog is finished.
-    pub(crate) fn save_build_cache(&mut self, dialog: &mut Dialog) -> Result<bool, String> {
-        let paths = self.instance.paths().map_err(|e| e.to_string())?;
-        let root = self
-            .service
-            .as_ref()
-            .unwrap()
-            .project_root()
-            .map_err(|e| e.to_string())?;
+    pub(crate) fn save_build_cache(
+        &self,
+        screen: &mut Screen,
+        dialog: &mut Dialog,
+    ) -> Result<bool, String> {
+        let paths = screen.instance.paths().map_err(|e| e.to_string())?;
+        let root = self.service.project_root().map_err(|e| e.to_string())?;
         match &dialog.kind {
             DialogKind::BuildCache(expected) => {
-                let number = |index: usize, what: &str| -> Result<u64, String> {
+                let number = |label: &str, what: &str| -> Result<u64, String> {
                     dialog
-                        .value(index)
+                        .get(label)
                         .trim()
                         .parse()
                         .map_err(|_| format!("{what} must be a positive integer"))
                 };
                 let next = Policy {
-                    max_bytes: number(0, "Bytes")?,
-                    max_files: number(1, "Files")?,
-                    keep_generations: number(2, "Generations")?,
+                    max_bytes: number(MAX_BYTES, "Bytes")?,
+                    max_files: number(MAX_FILES, "Files")?,
+                    keep_generations: number(GENERATIONS, "Generations")?,
                     ..*expected
                 };
-                match dialog.value(3) {
+                match dialog.get(ACTION) {
                     CLEAN | ADOPT if next != *expected => {
                         Err("Save the changed limits first, then reopen Build cache".into())
                     }
@@ -165,7 +160,7 @@ impl App {
                     _ => {
                         build_cache::set_policy(&paths, *expected, next)
                             .map_err(|e| e.to_string())?;
-                        self.message("Build cache limits saved");
+                        screen.message("Build cache limits saved");
                         Ok(true)
                     }
                 }
@@ -187,7 +182,7 @@ impl App {
                         format!("Build cache owned: {}", claim.root.display())
                     }
                 };
-                self.message(message);
+                screen.message(message);
                 Ok(true)
             }
             _ => Ok(true),

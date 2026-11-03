@@ -94,9 +94,9 @@ impl UsageTotals {
     pub fn history_label(&self) -> String {
         match (self.cost_microusd, self.uncosted_calls) {
             (Some(cost), missing) if missing > 0 => {
-                format!("{} +{missing} no$", cents_label(cost))
+                format!("{} +{missing} no$", dollars(cost))
             }
-            (Some(cost), _) => cents_label(cost),
+            (Some(cost), _) => dollars(cost),
             (None, _) if self.calls == 0 => "-".into(),
             (None, _) => format!(
                 "{} tkn{}",
@@ -105,6 +105,37 @@ impl UsageTotals {
                     .map_or(String::new(), |n| format!(" +{n} ?"))
             ),
         }
+    }
+
+    /// "Tokens 380k new · 14M cached · 36k out", naming cache writes only when there are some.
+    pub fn token_line(&self) -> String {
+        if self.input.is_none() && self.cache_read.is_none() && self.output.is_none() {
+            return "Tokens none reported yet".into();
+        }
+        let written = match self.cache_write {
+            Some(n) if n > 0 => format!(" · {} cache written", count(Some(n))),
+            _ => String::new(),
+        };
+        format!(
+            "Tokens {} new · {} cached{written} · {} out",
+            count(self.input),
+            count(self.cache_read),
+            count(self.output)
+        )
+    }
+
+    /// "in 380k, cache 14M, out 36k": fits the narrowest Status box; details keep the split.
+    pub fn short_token_line(&self) -> String {
+        let cache = match (self.cache_read, self.cache_write) {
+            (Some(read), Some(written)) => Some(read.saturating_add(written)),
+            (read, written) => read.or(written),
+        };
+        format!(
+            "in {}, cache {}, out {}",
+            count(self.input),
+            count(cache),
+            count(self.output)
+        )
     }
 
     pub fn label(&self) -> String {
@@ -277,8 +308,9 @@ pub fn grouped(n: i64) -> String {
     text
 }
 
-/// Dollars rounded half-up to cents from micro-USD, e.g. `$0.12`.
-fn cents_label(microusd: i64) -> String {
+/// Dollars rounded half-up to cents from micro-USD, e.g. `$0.12`: every money amount a
+/// screen shows in cents, simulated or reported.
+pub fn dollars(microusd: i64) -> String {
     let cents = (i128::from(microusd) + 5_000).div_euclid(10_000);
     let sign = if cents < 0 { "-" } else { "" };
     let cents = cents.abs();
@@ -302,6 +334,25 @@ mod tests {
             usage.add([None, None, None, None, Some(micro)]);
             assert_eq!(usage.history_label(), label);
         }
+    }
+
+    #[test]
+    fn token_lines_name_cache_writes_only_when_present_and_shorten_for_narrow_boxes() {
+        assert_eq!(
+            UsageTotals::default().token_line(),
+            "Tokens none reported yet"
+        );
+        let mut usage = UsageTotals::default();
+        usage.add([Some(380_000), Some(14_000_000), None, Some(36_000), None]);
+        assert_eq!(usage.token_line(), "Tokens 380k new · 14M cached · 36k out");
+        assert_eq!(usage.short_token_line(), "in 380k, cache 14M, out 36k");
+        usage.add([None, None, Some(2_000), None, None]);
+        assert_eq!(
+            usage.token_line(),
+            "Tokens 380k new · 14M cached · 2k cache written · 36k out"
+        );
+        assert_eq!(usage.short_token_line(), "in 380k, cache 14M, out 36k");
+        assert_eq!(dollars(80_000), "$0.08");
     }
 
     #[test]

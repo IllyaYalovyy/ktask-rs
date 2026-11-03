@@ -155,6 +155,8 @@ pub struct Dialog {
     pub max_scroll: usize,
     pub field_offset: usize,
     pub field_capacity: usize,
+    /// At most this many fields show at once, even when more would fit.
+    pub field_limit: Option<usize>,
 }
 
 impl Dialog {
@@ -171,10 +173,17 @@ impl Dialog {
             max_scroll: 0,
             field_offset: 0,
             field_capacity: 1,
+            field_limit: None,
         }
     }
-    pub fn value(&self, index: usize) -> &str {
-        self.fields[index].value.trim()
+    /// The trimmed value of the field labelled `label`; every form reads its own labels.
+    pub fn get(&self, label: &str) -> &str {
+        self.fields
+            .iter()
+            .find(|field| field.label == label)
+            .unwrap_or_else(|| panic!("{} has no field {label:?}", self.title))
+            .value
+            .trim()
     }
     pub fn key(&mut self, key: KeyEvent) {
         if matches!(
@@ -256,13 +265,19 @@ impl Dialog {
         )
     }
 
+    /// The index of the position field and the task it moves, if the form places a task.
     pub fn position_field(&self) -> Option<(usize, Option<usize>)> {
-        match self.kind {
-            DialogKind::Task { insert: true, .. } => Some((4, None)),
-            DialogKind::Move(id) => Some((0, Some(id))),
-            DialogKind::ImportPreview(_) | DialogKind::StoredImport(_) => Some((0, None)),
-            _ => None,
-        }
+        let index = self
+            .fields
+            .iter()
+            .position(|field| field.label == crate::forms::BEFORE)?;
+        Some((
+            index,
+            match self.kind {
+                DialogKind::Move(id) => Some(id),
+                _ => None,
+            },
+        ))
     }
 
     pub fn paste(&mut self, text: &str) {

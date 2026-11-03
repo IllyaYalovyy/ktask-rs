@@ -179,6 +179,11 @@ impl ModelConfig {
         Ok((provider.into(), model.into()))
     }
 
+    /// "provider/model", the inverse of [`Self::split_identifier`].
+    pub fn identifier(&self) -> String {
+        format!("{}/{}", self.provider, self.model)
+    }
+
     /// A dialog's identifier and effort fields; both blank means unconfigured.
     pub fn from_fields(
         identifier: &str,

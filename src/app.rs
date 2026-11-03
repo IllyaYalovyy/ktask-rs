@@ -1,7 +1,7 @@
 use crate::{
+    backend::Backend,
     dialog::Dialog,
     instance::Instance,
-    mock,
     presentation::{Kind, Status, Task},
 };
 use ratatui::{
@@ -9,10 +9,7 @@ use ratatui::{
     layout::Rect,
     widgets::ListState,
 };
-use std::{
-    collections::BTreeMap,
-    time::{Duration, Instant},
-};
+use std::{collections::BTreeMap, time::Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum View {
@@ -195,14 +192,11 @@ impl EvidenceAttemptState {
     }
 }
 
-pub struct App {
-    pub service: Option<crate::application::Service>,
-    pub supervisor_alive: bool,
-    pub(crate) proposal_job: Option<crate::persistent::ProposalJob>,
-    pub(crate) pending_control: Option<crate::persistent::PendingControl>,
-    /// Shown instead of "Saved to SQLite" once the saved form's change is committed.
-    pub(crate) saved_notice: Option<String>,
-    pub stored: BTreeMap<usize, crate::application::Task>,
+/// What the screens show and where: selection, scroll, dialogs and the task projection the
+/// workspace last produced. The workspace's own data lives in its backend.
+pub struct Screen {
+    /// Whether the background supervisor runs; None when no supervisor serves this workspace.
+    pub supervisor_alive: Option<bool>,
     pub project_name: String,
     pub instance: Instance,
     pub view: View,
@@ -215,22 +209,12 @@ pub struct App {
     pub search_before: Option<Catalog>,
     pub notice: String,
     pub events: Vec<String>,
-    /// Events about the current task only (SQLite); mirrors `events` in demo mode.
+    /// Events the Activity panel shows for the current task.
     pub task_events: Vec<String>,
-    pub files: BTreeMap<String, String>,
-    pub next_id: usize,
     pub mouse_enabled: bool,
-    pub review_required: bool,
-    pub cleanup_fail_once: bool,
-    pub clean_retry: bool,
     pub auto_advance: bool,
     pub(crate) execution_session: Option<crate::application::session::ExecutionSession>,
-    pub launch_issue: Option<String>,
     pub readiness: Option<crate::readiness::Readiness>,
-    /// The task whose live supervisor run `readiness` was inspected during, if any.
-    pub(crate) readiness_running: Option<usize>,
-    pub last_workspace: Option<usize>,
-    pub tick_ms: u64,
     pub hits: Vec<(Rect, Action)>,
     pub list_rect: Rect,
     pub log_rect: Rect,
@@ -253,74 +237,79 @@ pub struct App {
     pub last_tick: Instant,
 }
 
+/// The terminal application: view state and the workspace backend behind it.
+pub struct App {
+    pub backend: Box<dyn Backend>,
+    pub(crate) screen: Screen,
+}
+
+/// Screens read and change view state through `App`; workspace commands go to `backend`.
+impl std::ops::Deref for App {
+    type Target = Screen;
+    fn deref(&self) -> &Screen {
+        &self.screen
+    }
+}
+impl std::ops::DerefMut for App {
+    fn deref_mut(&mut self) -> &mut Screen {
+        &mut self.screen
+    }
+}
+
 impl App {
-    pub fn new(instance: Instance) -> Self {
-        Self::build(instance, true)
-    }
-    pub(crate) fn empty(instance: Instance) -> Self {
-        Self::build(instance, false)
-    }
-    fn build(instance: Instance, demo: bool) -> Self {
-        let (queue, history) = if demo {
-            mock::dataset("Large")
-        } else {
-            (Vec::new(), Vec::new())
-        };
+    /// The `--demo` workspace with the Large fixture.
+    pub fn demo(instance: Instance) -> Self {
+        let mut screen = Screen::new(instance, "demo workspace");
+        let backend = crate::demo::DemoWorkspace::load(&mut screen, "Large");
+        screen.notice = "Mock workspace · changes last only for this session".into();
         Self {
-            service: None,
-            supervisor_alive: false,
-            proposal_job: None,
-            pending_control: None,
-            saved_notice: None,
-            stored: BTreeMap::new(),
-            project_name: "demo workspace".into(),
+            backend: Box::new(backend),
+            screen,
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn empty(instance: Instance) -> Self {
+        let mut screen = Screen::new(instance, "demo workspace");
+        let backend = crate::demo::DemoWorkspace::load(&mut screen, "Empty");
+        Self {
+            backend: Box::new(backend),
+            screen,
+        }
+    }
+    pub fn persistent(
+        instance: Instance,
+        service: crate::application::Service,
+    ) -> Result<Self, String> {
+        let mut screen = Screen::new(instance, &service.project_name);
+        let backend = crate::persistent::StoredWorkspace::open(&mut screen, service)?;
+        Ok(Self {
+            backend: Box::new(backend),
+            screen,
+        })
+    }
+}
+
+impl Screen {
+    fn new(instance: Instance, project_name: &str) -> Self {
+        Self {
+            supervisor_alive: None,
+            project_name: project_name.into(),
             instance,
             view: View::Current,
             previous: View::Current,
-            queue,
-            history,
-            queue_catalog: Catalog {
-                selected: demo.then_some(1),
-                ..Default::default()
-            },
-            history_catalog: Catalog {
-                selected: demo.then_some(121),
-                ..Default::default()
-            },
+            queue: Vec::new(),
+            history: Vec::new(),
+            queue_catalog: Catalog::default(),
+            history_catalog: Catalog::default(),
             dialog: None,
             search_before: None,
-            notice: "Mock workspace · changes last only for this session".into(),
-            events: if demo {
-                vec![
-                    "Check failed · #1".into(),
-                    "Execution stopped".into(),
-                    "Stopped for a decision".into(),
-                ]
-            } else {
-                Vec::new()
-            },
-            task_events: if demo {
-                vec![
-                    "Check failed · #1".into(),
-                    "Execution stopped".into(),
-                    "Stopped for a decision".into(),
-                ]
-            } else {
-                Vec::new()
-            },
-            files: if demo { mock::files() } else { BTreeMap::new() },
-            next_id: 241,
+            notice: String::new(),
+            events: Vec::new(),
+            task_events: Vec::new(),
             mouse_enabled: true,
-            review_required: false,
-            cleanup_fail_once: false,
-            clean_retry: false,
             auto_advance: true,
             execution_session: None,
-            launch_issue: None,
             readiness: None,
-            readiness_running: None,
-            last_workspace: Some(1),
-            tick_ms: 400,
             hits: Vec::new(),
             list_rect: Rect::default(),
             log_rect: Rect::default(),
@@ -432,6 +421,81 @@ impl App {
         self.task_events.insert(0, text);
         self.task_events.truncate(30);
     }
+    pub fn reveal(&mut self, id: usize) {
+        self.switch(View::Queue);
+        self.queue_catalog.query.clear();
+        self.queue_catalog.filter = 0;
+        self.queue_catalog.selected = Some(id);
+    }
+    /// Where `text` (a task ID, or blank for the end) places a task in Queue.
+    pub fn insertion_position(
+        &self,
+        text: &str,
+        excluding: Option<usize>,
+    ) -> Result<usize, String> {
+        let tasks: Vec<_> = self
+            .queue
+            .iter()
+            .filter(|t| Some(t.id) != excluding)
+            .collect();
+        let position = if text.is_empty() {
+            tasks.len()
+        } else {
+            let id: usize = text
+                .trim_start_matches('#')
+                .parse()
+                .map_err(|_| "Enter a pending task ID, or leave blank for end of Queue")?;
+            tasks
+                .iter()
+                .position(|t| t.id == id)
+                .ok_or("That ID is not an insertion target in Queue")?
+        };
+        if position == 0 && tasks.first().is_some_and(|t| t.status() == Status::Running) {
+            return Err("Cannot insert before running current".into());
+        }
+        Ok(position)
+    }
+    pub fn position_preview(&self, text: &str, excluding: Option<usize>) -> String {
+        match self.insertion_position(text, excluding) {
+            Ok(pos) => {
+                let tasks: Vec<_> = self
+                    .queue
+                    .iter()
+                    .filter(|t| Some(t.id) != excluding)
+                    .collect();
+                let before = if pos == 0 {
+                    "start".into()
+                } else {
+                    format!("#{}", tasks[pos - 1].id)
+                };
+                let after = tasks
+                    .get(pos)
+                    .map_or("end".into(), |t| format!("#{}", t.id));
+                format!("Position: after {before} / before {after}")
+            }
+            Err(error) => error,
+        }
+    }
+    /// Stop applies to the current task from every screen, as Pause does.
+    pub(crate) fn stop_target(&self) -> Option<&Task> {
+        if self.view == View::Current {
+            self.current()
+        } else {
+            self.selected_task()
+                .filter(|t| t.status().allows(crate::presentation::TaskAction::Stop))
+        }
+    }
+    /// The task an Edit, Models or control form opens on, as `action` selects it.
+    pub(crate) fn target(&self, action: Action) -> Option<&Task> {
+        if action == Action::Stop {
+            self.stop_target()
+        } else {
+            self.selected_task()
+        }
+    }
+}
+
+impl App {
     pub fn key(&mut self, key: KeyEvent, fits: bool) {
         if matches!(key.code, KeyCode::Char('c' | 'C'))
             && key.modifiers.contains(KeyModifiers::CONTROL)
@@ -454,7 +518,8 @@ impl App {
         }
         if key.code == KeyCode::F(7) {
             self.mouse_enabled = !self.mouse_enabled;
-            self.message(if self.mouse_enabled {
+            let enabled = self.mouse_enabled;
+            self.message(if enabled {
                 "Mouse capture on · drag selects text"
             } else {
                 "Mouse capture off · use the terminal's native text selection"
@@ -566,23 +631,21 @@ impl App {
                     None
                 }
             },
-            View::Config if self.service.is_some() && code == KeyCode::Char('m') => {
-                Some(Action::ProjectModels)
-            }
-            View::Config if self.service.is_some() && code == KeyCode::Char('c') => {
-                Some(Action::ProjectChecks)
-            }
-            View::Config if self.service.is_some() && code == KeyCode::Char('k') => {
-                Some(Action::Storage)
-            }
-            View::Config if self.service.is_some() && code == KeyCode::Char('b') => {
-                Some(Action::BuildCache)
-            }
-            View::Config if self.service.is_some() && code == KeyCode::Char('g') => {
-                Some(Action::Delivery)
-            }
-            View::Config if matches!(code, KeyCode::Enter | KeyCode::Char('e')) => {
-                Some(Action::Configure)
+            View::Config => {
+                let action = match code {
+                    KeyCode::Char('m') => Action::ProjectModels,
+                    KeyCode::Char('c') => Action::ProjectChecks,
+                    KeyCode::Char('k') => Action::Storage,
+                    KeyCode::Char('b') => Action::BuildCache,
+                    KeyCode::Char('g') => Action::Delivery,
+                    KeyCode::Enter | KeyCode::Char('e') => return Some(Action::Configure),
+                    _ => return None,
+                };
+                self.backend
+                    .config_controls()
+                    .iter()
+                    .any(|(_, offered)| *offered == action)
+                    .then_some(action)
             }
             _ => None,
         }
@@ -655,7 +718,7 @@ impl App {
             edit(dialog);
         }
         if before && !shows_match(&self.dialog) {
-            self.prepare_persistent_dialog();
+            self.refresh_inspect_body();
         }
     }
     fn inspect_search_key(&mut self, key: KeyEvent) -> bool {
@@ -879,176 +942,7 @@ impl App {
             _ => {}
         }
     }
-    fn refresh_persistent(&mut self) -> bool {
-        match self
-            .service
-            .as_ref()
-            .expect("SQLite mode")
-            .externally_changed()
-        {
-            Ok(true) => {
-                if let Err(error) = self.reload() {
-                    self.message(error);
-                }
-            }
-            Ok(false) => {
-                if self.current().is_some_and(|t| {
-                    matches!(
-                        t.status(),
-                        Status::Running | Status::Paused | Status::NeedsInput
-                    )
-                }) {
-                    // Nothing stored changed, so only the supervisor can have started or
-                    // stopped; redraw anyway so timers and countdowns advance.
-                    let service = self.service.as_ref().expect("SQLite mode");
-                    let unchanged = crate::runner::supervisor_alive(service)
-                        .is_ok_and(|alive| alive == self.supervisor_alive);
-                    if !unchanged && let Err(error) = self.reload() {
-                        self.message(error);
-                    }
-                    return true;
-                }
-                return false;
-            }
-            Err(error) => self.message(error.to_string()),
-        }
-        true
-    }
     pub fn tick(&mut self) -> bool {
-        if self.poll_remediation() || self.poll_control() {
-            return true;
-        }
-        if self.service.is_some() {
-            if self.dialog.is_some() || self.last_tick.elapsed() < Duration::from_millis(500) {
-                return false;
-            }
-            let changed = self.refresh_persistent();
-            // A slow snapshot must not make every queued input trigger another
-            // snapshot. Leave an input-processing interval after refresh finishes.
-            self.last_tick = Instant::now();
-            return changed;
-        }
-        if self.last_tick.elapsed() < Duration::from_millis(self.tick_ms) {
-            return false;
-        }
-        self.last_tick = Instant::now();
-        if let Some(task) = self.queue.first_mut()
-            && task.waiting_for_limit()
-        {
-            let attempt = task.attempts.last_mut().expect("waiting attempt");
-            if attempt.resume_at.is_some_and(|at| Instant::now() >= at) {
-                attempt.resume_at = None;
-                attempt.outcome = "Running".into();
-                self.record("Rate-limit wait ended · same attempt/session · no budget charged");
-            }
-            return true;
-        }
-        let Some(task) = self
-            .queue
-            .first_mut()
-            .filter(|t| t.status() == Status::Running)
-        else {
-            return false;
-        };
-        let attempt = task.attempts.last_mut().expect("running task has attempt");
-        attempt.step += 1;
-        attempt.elapsed_ms += self.tick_ms;
-        attempt.cost_cents += 1;
-        if attempt.revision.settings.timeout_ms > 0
-            && attempt.elapsed_ms >= attempt.revision.settings.timeout_ms
-        {
-            attempt.state = Status::Failed;
-            attempt.outcome = "Failed: active time limit reached".into();
-            attempt.logs.push(attempt.outcome.clone());
-            self.record("Active time limit reached · r Retry restarts it; c Models raises it");
-            return true;
-        }
-        if task.needs_rate_limit && attempt.step == 2 {
-            attempt.resume_at = Some(Instant::now() + Duration::from_secs(3));
-            attempt.outcome = "Waiting: rate limit (3 seconds)".into();
-            attempt.logs.push(
-                "RATE LIMIT: wait 3 seconds; retain attempt/session and active-time budget".into(),
-            );
-            self.record("Provider rate limit · scheduled resume in 3 seconds (mock)");
-            return true;
-        }
-        if task.needs_question && task.answer.is_empty() && attempt.step == 2 {
-            attempt.state = Status::NeedsInput;
-            attempt.outcome = "Waiting for answer".into();
-            attempt.question = Some("Which export format should be used?".into());
-            attempt
-                .logs
-                .push("QUESTION: Which export format should be used?".into());
-            self.record("Current task needs your answer");
-            return true;
-        }
-        attempt.logs.push(
-            match attempt.step {
-                1 => "Executor: inspected the task",
-                2 => "Executor: implementing",
-                3 => "Checks: running",
-                4 => "Review: checking the result",
-                5 => "Validation: checking the goal",
-                _ => "Checks: finishing",
-            }
-            .into(),
-        );
-        if attempt.step >= 6 {
-            if task.id == 1 && !attempt.revision.repaired {
-                attempt.state = Status::Failed;
-                attempt.outcome = "Failed: boundary error".into();
-                attempt.logs.push("FAIL: final row omitted.".into());
-                self.record("Check failed · later tasks remain pending");
-            } else {
-                self.complete_current("Completed; checks and review passed");
-            }
-        }
-        true
-    }
-    pub fn complete_current(&mut self, result: &str) {
-        let mut task = self.queue.remove(0);
-        task.resolution = Some(Status::Done);
-        if task.attempts.is_empty() {
-            task.attempts.push(crate::presentation::Attempt::start(
-                task.definition().clone(),
-                task.id,
-            ));
-        }
-        if let Some(attempt) = task.attempts.last_mut() {
-            attempt.state = Status::Done;
-            attempt.outcome = result.into();
-            attempt.logs.push(result.into());
-        }
-        let repaired = task.repairs;
-        if let Some(target) = repaired.and_then(|id| self.queue.iter_mut().find(|t| t.id == id)) {
-            let mut revision = target.definition().clone();
-            revision.repaired = true;
-            revision.actor = "AI: remediator".into();
-            target.revise(revision);
-        }
-        self.record(format!(
-            "#{} completed · {}",
-            task.id,
-            if self.queue.is_empty() {
-                "queue complete"
-            } else {
-                "next task ready"
-            }
-        ));
-        self.history_catalog.selected = Some(task.id);
-        self.history.insert(0, task);
-        self.follow = true;
-        self.show_log = false;
-        self.log_offset = 0;
-        self.reconcile();
-        if (self.auto_advance || repaired.is_some())
-            && self.current().is_some_and(|t| {
-                t.definition().kind.runs_ai()
-                    && (t.status() == Status::Pending
-                        || (repaired.is_some() && t.status() == Status::Failed))
-            })
-        {
-            self.start_current();
-        }
+        self.backend.tick(&mut self.screen)
     }
 }

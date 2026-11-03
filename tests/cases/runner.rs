@@ -7519,7 +7519,7 @@ fn queue_shows_the_model_each_task_will_use_by_keyboard_and_mouse() -> Result {
         let sol = row("2").unwrap();
         assert!(sol.contains("codex/gpt-6-sol high"), "{sol}");
         // The details pane lists every role of the selected task.
-        assert!(queue.contains("Review codex/review / default"), "{queue}");
+        assert!(queue.contains("Review: codex/review / none"), "{queue}");
         t.send("q")?;
         t.finish()?;
     }

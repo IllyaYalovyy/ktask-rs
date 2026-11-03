@@ -168,15 +168,15 @@ The supervisor records sessions, normalized usage, checks and criterion evidence
 
 - [Vision](docs/VISION.md)
 - [User flows](docs/USECASES.md)
-- `src/app.rs`: interaction state
+- `src/app.rs`: view state and input; `src/backend.rs`: the workspace interface screens use
 - `src/application/`: typed shared commands, transactional SQL, snapshots, definition transfer
 - `src/cli/`: argument parsing, shared command calls, human/JSON output (no SQL)
 - `src/runner/`: supervisor, agent prompts, process guardian, Git checkpoints
 - `src/runner/provider/`: Codex, Claude Code and OpenCode launch arguments and event parsing
-- `src/persistent.rs`: TUI forms → commands → refreshed read projections
-- `src/ui.rs`: terminal layout
-- `src/presentation.rs`: terminal read projections, separate from application command inputs
-- `src/mock.rs`: deterministic fake tasks and events
+- `src/persistent.rs`: the SQLite workspace: TUI forms → commands → refreshed projections
+- `src/demo.rs`, `src/mock.rs`: the `--demo` workspace and its deterministic fake tasks
+- `src/ui/`: terminal layout: frame chrome, Current, Queue/History, dialogs, text fitting
+- `src/presentation.rs`: terminal read projections and formatters; `task_text` renders tasks
 - `tests/cases/workflows.rs`: real-binary mouse and keyboard interaction tests
 - `tests/cases/lifecycle.rs`: revised approval, models, resolutions, waits, and handoff flows
 - `tests/cases/persistence.rs`: durable terminal flows, restart, conflicts, disk transfer, isolation

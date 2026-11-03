@@ -1,43 +1,67 @@
 //! Forms translate terminal input into shared application commands.
 use crate::{
-    app::{Action, App},
+    app::{Action, Screen},
     application::{
         ModelConfig,
         configuration::{Defaults, DeliveryConfig, MODEL_ROLES, ProjectCheck},
         preferences::{Continuation, PlannerApproval, Preferences},
     },
     dialog::{Dialog, DialogKind, Field},
+    forms,
+    persistent::StoredWorkspace,
 };
 
-impl App {
-    pub(crate) fn load_preferences(&mut self) -> Result<Preferences, String> {
-        let paths = self.instance.paths().map_err(|e| e.to_string())?;
+const DAYS: &str = "Retain completed attempts (days)";
+const STORAGE_ACTION: &str = "Action";
+const MAX_BYTES: &str = "Maximum allocated bytes";
+const MAX_FILES: &str = "Maximum files and directories";
+const NEW_PROJECTS: &str = "New projects";
+const CHECK_TO_OPEN: &str = "Check to open";
+const NAME: &str = "Name";
+const COMMAND: &str = "Command";
+const DIRECTORY: &str = "Working directory (relative)";
+const TIMEOUT: &str = "Timeout (ms)";
+const STATE: &str = "State";
+const MODE: &str = "Mode";
+const REMOTE: &str = "Git remote";
+const BASE: &str = "Base branch";
+const RUN_MODE: &str = "Run mode";
+const NETWORK: &str = "Agent network";
+const CHECK_FIRST: &str = "Check before task";
+
+fn model_label(role: &str) -> String {
+    format!("{role} provider/model")
+}
+fn effort_label(role: &str) -> String {
+    format!("{role} effort (optional)")
+}
+
+impl StoredWorkspace {
+    pub(crate) fn load_preferences(&mut self, screen: &mut Screen) -> Result<Preferences, String> {
+        let paths = screen.instance.paths().map_err(|e| e.to_string())?;
         let saved = self
             .service
-            .as_ref()
-            .unwrap()
             .preferences(&paths.config)
             .map_err(|e| e.to_string())?;
-        self.use_preferences(&saved);
+        self.use_preferences(screen, &saved);
         Ok(saved)
     }
-    fn use_preferences(&mut self, saved: &Preferences) {
-        self.mouse_enabled = saved.mouse;
+    fn use_preferences(&mut self, screen: &mut Screen, saved: &Preferences) {
+        screen.mouse_enabled = saved.mouse;
         self.review_required = saved.planner_approval == PlannerApproval::ReviewRequired;
-        self.auto_advance = saved.continuation == Continuation::Queue;
+        screen.auto_advance = saved.continuation == Continuation::Queue;
     }
-    pub(crate) fn open_project_config(&mut self, action: Action) -> Result<(), String> {
+    pub(crate) fn open_project_config(
+        &mut self,
+        screen: &mut Screen,
+        action: Action,
+    ) -> Result<Dialog, String> {
         if action == Action::BuildCache {
-            return self.open_build_cache();
+            return self.open_build_cache(screen);
         }
-        let dialog = match action {
+        Ok(match action {
             Action::Storage => {
-                let preview = self
-                    .service
-                    .as_ref()
-                    .unwrap()
-                    .storage_preview()
-                    .map_err(|e| e.to_string())?;
+                let preview = self.service.storage_preview().map_err(|e| e.to_string())?;
                 let mut body = format!(
                     "Retained: {} logical bytes · eligible: {} bytes in {} attempt(s){}\nAllocated: {} bytes in {} files/directories · eligible files: {} · reusable SQLite: {} · protected: {} bytes{}\nSQLite: {} · WAL: {} · runner logs: {} · evidence: {} · directories: {}\nProtected evidence: {} bytes younger than the {}-day minimum age · {} bytes referenced by reused checks · {} bytes of open work\nCleanup keeps task history and all live or unresolved work.\n",
                     preview.usage_bytes,
@@ -95,43 +119,33 @@ impl App {
                     "Storage retention",
                     &body,
                     vec![
-                        Field::text(
-                            "Retain completed attempts (days)",
-                            &preview.policy.days.to_string(),
+                        Field::text(DAYS, &preview.policy.days.to_string()),
+                        Field::choice(
+                            STORAGE_ACTION,
+                            &["Save policy", "Apply preview"],
+                            "Save policy",
                         ),
-                        Field::choice("Action", &["Save policy", "Apply preview"], "Save policy"),
-                        Field::text(
-                            "Maximum allocated bytes",
-                            &preview.policy.max_bytes.to_string(),
-                        ),
-                        Field::text(
-                            "Maximum files and directories",
-                            &preview.policy.max_files.to_string(),
-                        ),
+                        Field::text(MAX_BYTES, &preview.policy.max_bytes.to_string()),
+                        Field::text(MAX_FILES, &preview.policy.max_files.to_string()),
                     ],
                 )
             }
             Action::ProjectModels => {
-                let values = self
-                    .service
-                    .as_ref()
-                    .unwrap()
-                    .project_defaults()
-                    .map_err(|e| e.to_string())?;
+                let values = self.service.project_defaults().map_err(|e| e.to_string())?;
                 let mut fields: Vec<Field> = MODEL_ROLES
                     .iter()
                     .zip(&values)
                     .flat_map(|(role, value)| {
                         [
                             Field::text(
-                                &format!("{role} provider/model"),
+                                &model_label(role),
                                 &value
                                     .as_ref()
-                                    .map(|m| format!("{}/{}", m.provider, m.model))
+                                    .map(ModelConfig::identifier)
                                     .unwrap_or_default(),
                             ),
                             Field::text(
-                                &format!("{role} effort (optional)"),
+                                &effort_label(role),
                                 value
                                     .as_ref()
                                     .and_then(|m| m.effort.as_deref())
@@ -141,7 +155,7 @@ impl App {
                     })
                     .collect();
                 fields.push(Field::choice(
-                    "New projects",
+                    NEW_PROJECTS,
                     &["Keep their defaults", "Start with these"],
                     "Keep their defaults",
                 ));
@@ -153,13 +167,8 @@ impl App {
                 )
             }
             Action::ProjectChecks => {
-                let checks = self
-                    .service
-                    .as_ref()
-                    .unwrap()
-                    .project_checks()
-                    .map_err(|e| e.to_string())?;
-                let mut field = Field::choice("Check to open", &["Add new check"], "Add new check");
+                let checks = self.service.project_checks().map_err(|e| e.to_string())?;
+                let mut field = Field::choice(CHECK_TO_OPEN, &["Add new check"], "Add new check");
                 field.choices.extend(checks.iter().map(check_label));
                 let body = format!(
                     "Select a check, then Apply to edit or enable/disable.\n{}",
@@ -181,19 +190,14 @@ impl App {
                 )
             }
             Action::Delivery => {
-                let delivery = self
-                    .service
-                    .as_ref()
-                    .unwrap()
-                    .delivery_config()
-                    .map_err(|e| e.to_string())?;
+                let delivery = self.service.delivery_config().map_err(|e| e.to_string())?;
                 Dialog::new(
                     DialogKind::Delivery(delivery.clone()),
                     "Git delivery",
                     "Local commits only. Direct pushes verified commits to the base branch. Pull request uses a project branch and updates one PR. Remote and base default to origin/main.",
                     vec![
                         Field::choice(
-                            "Mode",
+                            MODE,
                             &["Local", "Direct push", "Pull request"],
                             match delivery.mode.as_str() {
                                 "direct" => "Direct push",
@@ -201,47 +205,31 @@ impl App {
                                 _ => "Local",
                             },
                         ),
-                        Field::text("Git remote", &delivery.remote),
-                        Field::text("Base branch", &delivery.base_branch),
+                        Field::text(REMOTE, &delivery.remote),
+                        Field::text(BASE, &delivery.base_branch),
                     ],
                 )
             }
             _ => {
-                let saved = self.load_preferences()?;
-                let service = self.service.as_ref().ok_or("SQLite mode required")?;
+                let saved = self.load_preferences(screen)?;
+                let service = &self.service;
                 let network = service.agent_network().map_err(|e| e.to_string())?;
                 let verify_first = service.check_before_task().map_err(|e| e.to_string())?;
                 let fields = vec![
+                    forms::mouse(saved.mouse),
+                    forms::planner_approval(self.review_required),
                     Field::choice(
-                        "Mouse",
-                        &["Enabled", "Disabled"],
-                        if saved.mouse { "Enabled" } else { "Disabled" },
-                    ),
-                    Field::choice(
-                        "Planner approval",
-                        &["Automatic", "Review required"],
-                        if self.review_required {
-                            "Review required"
-                        } else {
-                            "Automatic"
-                        },
-                    ),
-                    Field::choice(
-                        "Run mode",
+                        RUN_MODE,
                         &["Run one", "Continue queue"],
-                        if self.auto_advance {
+                        if screen.auto_advance {
                             "Continue queue"
                         } else {
                             "Run one"
                         },
                     ),
+                    Field::choice(NETWORK, &["Off", "On"], if network { "On" } else { "Off" }),
                     Field::choice(
-                        "Agent network",
-                        &["Off", "On"],
-                        if network { "On" } else { "Off" },
-                    ),
-                    Field::choice(
-                        "Check before task",
+                        CHECK_FIRST,
                         &["On", "Off"],
                         if verify_first { "On" } else { "Off" },
                     ),
@@ -253,32 +241,34 @@ impl App {
                     fields,
                 )
             }
-        };
-        self.dialog = Some(dialog);
-        Ok(())
+        })
     }
-    pub(crate) fn save_project_config(&mut self, dialog: &mut Dialog) -> Result<bool, String> {
+    pub(crate) fn save_project_config(
+        &mut self,
+        screen: &mut Screen,
+        dialog: &mut Dialog,
+    ) -> Result<bool, String> {
         if matches!(
             dialog.kind,
             DialogKind::BuildCache(_) | DialogKind::BuildCacheConfirm(_)
         ) {
-            return self.save_build_cache(dialog);
+            return self.save_build_cache(screen, dialog);
         }
         match &dialog.kind {
             DialogKind::Storage(preview) => {
                 let days: i64 = dialog
-                    .value(0)
+                    .get(DAYS)
                     .parse()
                     .map_err(|_| "Days must be a nonnegative integer")?;
                 let max_bytes: i64 = dialog
-                    .value(2)
+                    .get(MAX_BYTES)
                     .parse()
                     .map_err(|_| "Bytes must be an integer")?;
                 let max_files: i64 = dialog
-                    .value(3)
+                    .get(MAX_FILES)
                     .parse()
                     .map_err(|_| "Files must be an integer")?;
-                if dialog.value(1) == "Apply preview" {
+                if dialog.get(STORAGE_ACTION) == "Apply preview" {
                     if days != preview.policy.days
                         || max_bytes != preview.policy.max_bytes
                         || max_files != preview.policy.max_files
@@ -314,19 +304,15 @@ impl App {
                     return Ok(false);
                 }
                 self.service
-                    .as_mut()
-                    .unwrap()
                     .set_storage_policy(preview.policy, days, max_bytes, max_files)
                     .map_err(|e| e.to_string())?;
             }
             DialogKind::StorageConfirm(preview) => {
                 let applied = self
                     .service
-                    .as_mut()
-                    .unwrap()
                     .cleanup_storage(preview)
                     .map_err(|e| e.to_string())?;
-                self.message(format!(
+                screen.message(format!(
                     "Cleaned {} attempt(s), {} bytes{}",
                     applied.attempts,
                     applied.bytes,
@@ -340,29 +326,33 @@ impl App {
             }
             DialogKind::ProjectModels(expected) => {
                 let mut values: Defaults = std::array::from_fn(|_| None);
-                for (i, value) in values.iter_mut().enumerate() {
-                    *value =
-                        ModelConfig::from_fields(dialog.value(i * 2), dialog.value(i * 2 + 1))?;
+                for (role, value) in MODEL_ROLES.iter().zip(values.iter_mut()) {
+                    *value = ModelConfig::from_fields(
+                        dialog.get(&model_label(role)),
+                        dialog.get(&effort_label(role)),
+                    )?;
                 }
-                let service = self.service.as_mut().unwrap();
+                let service = &mut self.service;
                 service
                     .save_defaults(expected, &values)
                     .map_err(|e| e.to_string())?;
-                if dialog.value(values.len() * 2) == "Start with these" {
+                if dialog.get(NEW_PROJECTS) == "Start with these" {
                     service
                         .save_new_project_defaults(&values)
                         .map_err(|e| e.to_string())?;
                 }
             }
             DialogKind::ProjectChecks(checks) => {
-                let selected = dialog.fields[0]
-                    .choices
+                let chosen = dialog.get(CHECK_TO_OPEN);
+                let selected = dialog
+                    .fields
                     .iter()
-                    .position(|c| c == dialog.value(0))
+                    .find(|field| field.label == CHECK_TO_OPEN)
+                    .and_then(|field| field.choices.iter().position(|c| c == chosen))
                     .ok_or("Select a check")?;
                 // A project's first check starts from the command its files suggest.
                 let detected = (selected == 0 && checks.is_empty())
-                    .then(|| self.service.as_ref()?.project_root().ok())
+                    .then(|| self.service.project_root().ok())
                     .flatten()
                     .and_then(|root| crate::runner::setup::detect_check(&root));
                 let value = if selected == 0 {
@@ -378,12 +368,12 @@ impl App {
                     checks[selected - 1].clone()
                 };
                 let fields = vec![
-                    Field::text("Name", &value.name),
-                    Field::text("Command", &value.command),
-                    Field::text("Working directory (relative)", &value.directory),
-                    Field::text("Timeout (ms)", &value.timeout_ms.to_string()),
+                    Field::text(NAME, &value.name),
+                    Field::text(COMMAND, &value.command),
+                    Field::text(DIRECTORY, &value.directory),
+                    Field::text(TIMEOUT, &value.timeout_ms.to_string()),
                     Field::choice(
-                        "State",
+                        STATE,
                         &["Enabled", "Disabled"],
                         if value.enabled { "Enabled" } else { "Disabled" },
                     ),
@@ -407,70 +397,66 @@ impl App {
             DialogKind::ProjectCheck { expected, id } => {
                 let value = ProjectCheck {
                     id: *id,
-                    name: dialog.value(0).into(),
-                    command: dialog.value(1).into(),
-                    directory: dialog.value(2).into(),
+                    name: dialog.get(NAME).into(),
+                    command: dialog.get(COMMAND).into(),
+                    directory: dialog.get(DIRECTORY).into(),
                     timeout_ms: dialog
-                        .value(3)
+                        .get(TIMEOUT)
                         .parse()
                         .map_err(|_| "Timeout must be a positive integer")?,
-                    enabled: dialog.value(4) == "Enabled",
+                    enabled: dialog.get(STATE) == "Enabled",
                 };
                 self.service
-                    .as_mut()
-                    .unwrap()
                     .save_check(expected, &value)
                     .map_err(|e| e.to_string())?;
             }
             DialogKind::Delivery(expected) => {
                 let value = DeliveryConfig {
                     version: expected.version,
-                    mode: match dialog.value(0) {
+                    mode: match dialog.get(MODE) {
                         "Direct push" => "direct",
                         "Pull request" => "pr",
                         _ => "local",
                     }
                     .into(),
-                    remote: dialog.value(1).into(),
-                    base_branch: dialog.value(2).into(),
+                    remote: dialog.get(REMOTE).into(),
+                    base_branch: dialog.get(BASE).into(),
                 };
                 self.service
-                    .as_mut()
-                    .unwrap()
                     .save_delivery_config(expected, &value)
                     .map_err(|e| e.to_string())?;
             }
             DialogKind::Preferences(expected) => {
                 let value = Preferences {
                     version: expected.version,
-                    mouse: dialog.value(0) == "Enabled",
-                    planner_approval: if dialog.value(1) == "Review required" {
+                    mouse: dialog.get(forms::MOUSE) == "Enabled",
+                    planner_approval: if dialog.get(forms::PLANNER_APPROVAL) == "Review required" {
                         PlannerApproval::ReviewRequired
                     } else {
                         PlannerApproval::Automatic
                     },
-                    continuation: if dialog.value(2) == "Continue queue" {
+                    continuation: if dialog.get(RUN_MODE) == "Continue queue" {
                         Continuation::Queue
                     } else {
                         Continuation::Single
                     },
                 };
-                let paths = self.instance.paths().map_err(|e| e.to_string())?;
-                let service = self.service.as_mut().unwrap();
+                let paths = screen.instance.paths().map_err(|e| e.to_string())?;
+                let service = &mut self.service;
                 let saved = service
                     .save_preferences(&paths.config, expected, &value)
                     .map_err(|e| e.to_string())?;
                 service
-                    .set_agent_network(dialog.value(3) == "On")
+                    .set_agent_network(dialog.get(NETWORK) == "On")
                     .map_err(|e| e.to_string())?;
                 service
-                    .set_check_before_task(dialog.value(4) == "On")
+                    .set_check_before_task(dialog.get(CHECK_FIRST) == "On")
                     .map_err(|e| e.to_string())?;
-                self.use_preferences(&saved);
+                self.use_preferences(screen, &saved);
             }
             _ => return Err("Not a project configuration form".into()),
         }
-        self.message("Project configuration saved");
+        screen.message("Project configuration saved");
         Ok(true)
     }
 }

@@ -174,10 +174,10 @@ fn init(
         service.set_check_before_task(matches!(switch, Switch::On))?;
     }
     let checks = service.checks()?;
-    let models: Vec<(&str, Option<String>)> = app::configuration::MODEL_ROLES
+    let models: Vec<(&str, Option<ModelConfig>)> = app::configuration::MODEL_ROLES
         .iter()
+        .copied()
         .zip(service.project_defaults()?)
-        .map(|(role, model)| (*role, model.map(|m| format!("{}/{}", m.provider, m.model))))
         .collect();
     let network = service.agent_network()?;
     let verify_first = service.check_before_task()?;
@@ -196,8 +196,8 @@ fn init(
     }
     for (role, model) in &models {
         text.push_str(&format!(
-            "{role}: {}\n",
-            model.as_deref().unwrap_or("not set")
+            "{}\n",
+            output::safe(&crate::presentation::role_setting(role, model.as_ref()))
         ));
     }
     text.push_str(&format!(
@@ -223,7 +223,7 @@ fn init(
             "project": service.project_name, "root": root, "checks": checks,
             "check_source": check_source, "agent_network": network,
             "check_before_task": verify_first,
-            "models": models.into_iter().map(|(role, model)| (role.to_owned(), json!(model)))
+            "models": models.into_iter().map(|(role, model)| (role.to_owned(), json!(model.as_ref().map(ModelConfig::identifier))))
                 .collect::<serde_json::Map<_, _>>(),
         }),
         text,
@@ -584,15 +584,8 @@ fn edit(service: &mut Service, input: &Target, pending: bool, changes: &Changes)
                 .zip(defaults.iter())
                 .map(|(role, model)| {
                     format!(
-                        "{role}: {}\n",
-                        model
-                            .as_ref()
-                            .map_or("unconfigured".to_owned(), |m| format!(
-                                "{}/{} effort {}",
-                                m.provider,
-                                m.model,
-                                m.effort.as_deref().unwrap_or("none")
-                            ))
+                        "{}\n",
+                        crate::presentation::role_setting(role, model.as_ref())
                     )
                 })
                 .collect(),
