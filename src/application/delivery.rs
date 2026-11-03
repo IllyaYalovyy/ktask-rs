@@ -39,6 +39,12 @@ impl Service {
     pub fn pending_delivery_handoff(&self, task: i64) -> Result<bool> {
         Ok(self.db.connection().query_row("SELECT EXISTS(SELECT 1 FROM attempt_delivery d JOIN attempts a ON a.id=d.attempt_id WHERE a.project_id=?1 AND d.handoff_target=?2 AND d.handoff_claimed_by IS NULL)",params![self.project_id,task],|r|r.get(0))?)
     }
+    /// A delivery handed to this task by another task's attempt: an inserted prerequisite
+    /// takes over the repaired task's uncommitted work. A task's own Stop hands the delivery
+    /// back to itself and is not inherited work.
+    pub fn inherits_delivery_handoff(&self, task: i64) -> Result<bool> {
+        Ok(self.db.connection().query_row("SELECT EXISTS(SELECT 1 FROM attempt_delivery d JOIN attempts a ON a.id=d.attempt_id WHERE a.project_id=?1 AND d.handoff_target=?2 AND a.task_id<>?2 AND d.handoff_claimed_by IS NULL)",params![self.project_id,task],|r|r.get(0))?)
+    }
     pub fn claim_delivery_handoff(
         &mut self,
         run: &Run,

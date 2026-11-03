@@ -279,6 +279,16 @@ fn checks_required(service: &mut Service) -> Result<bool> {
 }
 
 /// Whether the task's last attempt failed because the checks were red before it started.
+/// Whether the task can have uncommitted work of its own: it is paused, waiting for an
+/// answer or failed after its worker started. A Pending task that was never run or was
+/// Stopped (its changes stashed) and a red start have none, so edits found there belong to
+/// someone else. (An inserted prerequisite inherits the repaired task's work through a
+/// delivery handoff instead: `Service::inherits_delivery_handoff`.)
+pub fn holds_own_work(task: &crate::application::Task) -> bool {
+    matches!(task.status.as_str(), "paused" | "waiting" | "running")
+        || task.status == "failed" && !red_start(task)
+}
+
 fn red_start(task: &crate::application::Task) -> bool {
     task.attempts.last().is_some_and(|a| {
         a.outcome
@@ -442,17 +452,23 @@ fn run_inner(
         };
         preflight(service, &task.definition().definition)?;
         let base = workspace.head()?;
+        // A fresh Run of a Pending task owns no uncommitted work: Stop stashed it. Only a
+        // Retry, Resume or repair may carry the task's own edits into the attempt.
+        let own_work = !matches!(opening, cycle::Opening::Fresh { .. })
+            || holds_own_work(&task)
+            || service.inherits_delivery_handoff(task.id)?;
         require(
             workspace.clean()?
-                || service.pending_delivery_handoff(task.id)?
-                || workspace::retains_work_from(
-                    &workspace.root,
-                    service.attempt_base(task.id)?.as_deref(),
-                    &base,
-                )?
-                || service
-                    .current_delivery_stage(task.id)?
-                    .is_some_and(|s| s != "work"),
+                || own_work
+                    && (service.pending_delivery_handoff(task.id)?
+                        || workspace::retains_work_from(
+                            &workspace.root,
+                            service.attempt_base(task.id)?.as_deref(),
+                            &base,
+                        )?
+                        || service
+                            .current_delivery_stage(task.id)?
+                            .is_some_and(|s| s != "work")),
             "Workspace has uncommitted work from outside this task; commit or preserve it before switching tasks",
         )?;
         let token = format!("{}:{}:{}", service.project_id, std::process::id(), now_ms());

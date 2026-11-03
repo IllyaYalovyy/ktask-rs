@@ -2058,8 +2058,12 @@ fn stop_mouse_control_applies_without_starting_work() -> Result {
             .duration_since(std::time::UNIX_EPOCH)?
             .as_millis() as i64,
     })?;
-    db.connection()
-        .execute("UPDATE attempts SET state='paused' WHERE id=?1", [attempt])?;
+    // begin_run records the checkout HEAD as the attempt's base; so must the fixture.
+    let head = f.git(&["rev-parse", "HEAD"])?;
+    db.connection().execute(
+        "UPDATE attempts SET state='paused',base_commit=?2 WHERE id=?1",
+        rusqlite::params![attempt, head.trim()],
+    )?;
     db.connection().execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) SELECT project_id,task_id,id,started_at_ms,'supervisor.released','info','Fixture handoff' FROM attempts WHERE id=?1", [attempt])?;
     drop(db);
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
@@ -2171,6 +2175,120 @@ fn stop_running_task_in_real_pty_reaps_worker_stashes_changes_and_runs_fresh() -
         t.finish()?;
         f.no_scratch()?;
     }
+    Ok(())
+}
+
+/// The owner's unrelated edit after a Stop is not the task's work: a fresh Run must neither
+/// stash, feed, commit nor push it. Run in the real TUI (both input paths) and the CLI.
+#[test]
+fn run_after_stop_refuses_unrelated_edits_in_real_pty_and_cli() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("dirty-live")?;
+        f.add("Stopped then edited")?;
+        f.ok(&["edit", "1", "--attempt-limit", "1"])?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 40)?;
+        t.screen("ready current", |s| s.contains("Current #1 · Pending"))?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        f.dirty_worker()?;
+        t.screen("running", |s| s.contains("Current #1 · Running"))?;
+        stop_current(&mut t, mouse, "Stopped then edited", "Rethink")?;
+        f.supervisor_stopped()?;
+        f.guardian_finished()?;
+        let head = f.git(&["rev-parse", "HEAD"])?;
+        let stashes = f.git(&["stash", "list"])?;
+        fs::write(f.root.join("unrelated.txt"), "owner edit\n")?;
+        f.provider("normal")?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        let refused = t.screen("run refused", |s| {
+            s.contains("uncommitted work from outside this task")
+        })?;
+        println!("RUN AFTER STOP REFUSED mouse={mouse}\n{refused}");
+        let blocked = f.process().args(["--json", "run", "--one"]).output()?;
+        assert_eq!(blocked.status.code(), Some(4));
+        assert!(
+            String::from_utf8_lossy(&blocked.stderr)
+                .contains("uncommitted work from outside this task"),
+            "{}",
+            String::from_utf8_lossy(&blocked.stderr)
+        );
+        assert_eq!(
+            fs::read_to_string(f.root.join("unrelated.txt"))?,
+            "owner edit\n"
+        );
+        assert_eq!(f.git(&["rev-parse", "HEAD"])?, head, "nothing committed");
+        assert_eq!(f.git(&["stash", "list"])?, stashes, "nothing stashed");
+        let shown = f.ok(&["show", "1"])?;
+        assert_eq!(shown["state"], "pending");
+        assert_eq!(shown["attempts"].as_array().unwrap().len(), 1);
+        t.send("\x1b")?;
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+/// A stopped task that kept a delivery checkpoint hands it to its next attempt; an unrelated
+/// edit must not be amended into that checkpoint.
+#[test]
+fn run_after_stop_refuses_unrelated_edits_with_a_retained_delivery_checkpoint() -> Result {
+    use ktask_rs_mk3::storage::execution::StartAttempt;
+    let f = Fixture::new()?;
+    f.add("Checkpointed stop")?;
+    let mut db = f.db()?;
+    let attempt = db.start_attempt(StartAttempt {
+        task_id: 1,
+        expected_version: 1,
+        execution_token: "checkpointed",
+        now_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis() as i64,
+    })?;
+    let head = f.git(&["rev-parse", "HEAD"])?;
+    let head = head.trim();
+    db.connection().execute(
+        "UPDATE attempts SET state='paused',base_commit=?2 WHERE id=?1",
+        rusqlite::params![attempt, head],
+    )?;
+    db.connection().execute(
+        "INSERT INTO attempt_progress(attempt_id,repair_round,phase,context,evidence,verified_tree) VALUES (?1,0,'review','','','')",
+        [attempt],
+    )?;
+    db.connection().execute(
+        "INSERT INTO attempt_delivery(attempt_id,mode,remote,destination_url,base_branch,stage,checkpoint_head) VALUES (?1,'local','','','main','checkpointed',?2)",
+        rusqlite::params![attempt, head],
+    )?;
+    db.connection().execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) SELECT project_id,task_id,id,started_at_ms,'supervisor.released','info','Fixture handoff' FROM attempts WHERE id=?1", [attempt])?;
+    drop(db);
+    f.ok(&["stop", "1", "--reason", "Rethink"])?;
+    fs::write(f.root.join("unrelated.txt"), "owner edit\n")?;
+    let blocked = f.process().args(["--json", "run", "--one"]).output()?;
+    assert_eq!(blocked.status.code(), Some(4));
+    assert!(
+        String::from_utf8_lossy(&blocked.stderr)
+            .contains("uncommitted work from outside this task"),
+        "{}",
+        String::from_utf8_lossy(&blocked.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(f.root.join("unrelated.txt"))?,
+        "owner edit\n"
+    );
+    assert_eq!(f.git(&["rev-parse", "HEAD"])?.trim(), head, "no amend");
+    assert_eq!(f.git(&["stash", "list"])?, "");
+    assert_eq!(
+        f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
+        1
+    );
     Ok(())
 }
 
@@ -7997,14 +8115,14 @@ fn readiness_lists_independent_blockers_and_ignores_a_dead_workers_marker() -> R
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 38)?;
     t.send("u")?;
     let details = t.screen("all readiness blockers", |s| {
-        s.contains("Uncommitted work outside this task")
+        s.contains("Uncommitted work from outside this task")
     })?;
     assert!(details.contains("OK · Worker ownership"), "{details}");
     for cause in [
         "No enabled check",
         "validation model",
         "codex executable not found",
-        "Uncommitted work outside this task",
+        "Uncommitted work from outside this task",
     ] {
         assert!(details.contains(cause), "{cause} absent:\n{details}");
     }

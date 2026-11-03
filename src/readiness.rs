@@ -79,7 +79,7 @@ fn ownership(common: &Path, name: &str, description: &str) -> Result<(), String>
     }
 }
 
-fn baseline(service: &Service, root: &Path, task: i64) -> Result<(), String> {
+fn baseline(service: &Service, root: &Path, task: &crate::application::Task) -> Result<(), String> {
     let top = git(root, &["rev-parse", "--show-toplevel"])?;
     if root.canonicalize().map_err(|e| e.to_string())?
         != Path::new(&top).canonicalize().map_err(|e| e.to_string())?
@@ -92,13 +92,19 @@ fn baseline(service: &Service, root: &Path, task: i64) -> Result<(), String> {
         return Ok(());
     }
     let head = git(root, &["rev-parse", "HEAD"])?;
-    let base = service.attempt_base(task).map_err(|e| e.to_string())?;
-    if crate::runner::workspace::retains_work_from(root, base.as_deref(), &head)
-        .map_err(|e| e.to_string())?
+    let base = service.attempt_base(task.id).map_err(|e| e.to_string())?;
+    let own = crate::runner::holds_own_work(task)
+        || service.replan_pending(task.id).map_err(|e| e.to_string())?
+        || service
+            .inherits_delivery_handoff(task.id)
+            .map_err(|e| e.to_string())?;
+    if own
+        && crate::runner::workspace::retains_work_from(root, base.as_deref(), &head)
+            .map_err(|e| e.to_string())?
     {
         return Ok(());
     }
-    Err("Uncommitted work outside this task; preserve or commit it before switching".into())
+    Err("Uncommitted work from outside this task; preserve or commit it before switching".into())
 }
 
 fn writable_network(report: &mut Readiness, service: &Service, provider: Option<Provider>) {
@@ -283,7 +289,7 @@ pub(crate) fn inspect(app: &App) -> Readiness {
             );
             report.check(
                 "Workspace baseline",
-                baseline(service, &root, task.id),
+                baseline(service, &root, task),
                 "inspect Git worktree",
             );
         }

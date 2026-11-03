@@ -216,11 +216,16 @@ fn capacity_limit_evicts_oldest_but_never_the_last_warm_generation() -> Result {
         let file = File::create(deps.join(&name))?;
         file.set_len(20 * build_cache::MIB)?;
         drop(file);
-        age(&deps.join(&name), 90_000 - generation * 1_000)?;
+        let dep_info = deps.join(format!("big-{generation:016x}.d"));
         fs::write(
-            deps.join(format!("big-{generation:016x}.d")),
+            &dep_info,
             "/x/big.d: /home/u/.cargo/registry/src/big/lib.rs\n",
         )?;
+        // Age every file of the generation: an unaged .d would carry the creation time, and
+        // generations written within one filesystem timestamp tick would tie for newest.
+        let aged = 90_000 - generation * 1_000;
+        age(&deps.join(&name), aged)?;
+        age(&dep_info, aged)?;
     }
     let limited = build_cache::set_policy(
         &f.paths,
