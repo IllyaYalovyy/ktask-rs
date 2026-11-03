@@ -884,9 +884,25 @@ fn resume_answered(service: &mut Service, paths: &Paths) -> Result<bool> {
 }
 
 fn wait_for_backoff(service: &mut Service, run: &Run, ctx: &Context<'_>) -> Result<bool> {
+    wait_for_limit_reset(service, run, ctx.cursor, &ctx.stop)
+}
+
+/// How often a rate-limit wait looks at the database; Pause, Stop and resume-now take
+/// effect within one interval.
+const LIMIT_WAIT_POLL: Duration = Duration::from_millis(500);
+
+/// Idle until the provider limit holding `run` ends: true when the attempt may resume,
+/// false when paused, stopped or the task is no longer current. A poll reads only the
+/// control cursor, the current task id and its resume time.
+pub fn wait_for_limit_reset(
+    service: &Service,
+    run: &Run,
+    cursor: i64,
+    stop: &AtomicBool,
+) -> Result<bool> {
     service.output(run,"system","Automatic rate-limit backoff; Pause stops the scheduler without discarding the wait or session")?;
     loop {
-        if ctx.stop.load(Ordering::Relaxed) || service.control_cursor(run)? > ctx.cursor {
+        if stop.load(Ordering::Relaxed) || service.control_cursor(run)? > cursor {
             service.output(
                 run,
                 "system",
@@ -894,21 +910,18 @@ fn wait_for_backoff(service: &mut Service, run: &Run, ctx: &Context<'_>) -> Resu
             )?;
             return Ok(false);
         }
-        let Some(task) = service.current_task()? else {
+        let Some((task, resume_at_ms)) = service.limit_wait()? else {
             return Ok(false);
         };
-        if task.id != run.task {
+        if task != run.task {
             return Ok(false);
         }
-        if task
-            .attempts
-            .last()
-            .and_then(|a| a.resume_at_ms)
-            .is_some_and(|at| now_ms() >= at)
-        {
-            return Ok(true);
+        let remaining = resume_at_ms.map(|at| at.saturating_sub(now_ms()));
+        match remaining {
+            Some(ms) if ms <= 0 => return Ok(true),
+            Some(ms) => std::thread::sleep(LIMIT_WAIT_POLL.min(Duration::from_millis(ms as u64))),
+            None => std::thread::sleep(LIMIT_WAIT_POLL),
         }
-        std::thread::sleep(Duration::from_millis(100));
     }
 }
 fn ai(

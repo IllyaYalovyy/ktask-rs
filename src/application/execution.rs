@@ -379,6 +379,16 @@ impl Service {
             .optional()?;
         id.map(|id| self.task(id)).transpose().map(Option::flatten)
     }
+    /// The current task's id and when its latest attempt may resume, without loading the task:
+    /// what a provider-limit wait polls.
+    pub fn limit_wait(&self) -> Result<Option<(i64, Option<i64>)>> {
+        Ok(self
+            .db
+            .connection()
+            .prepare_cached("SELECT id, resume_at_ms FROM current_tasks WHERE project_id = ?1")?
+            .query_row([self.project_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?)
+    }
     pub fn checks(&self) -> Result<Vec<Check>> {
         Ok(self.db.connection().prepare("SELECT id, name, command, working_directory, timeout_ms FROM project_checks WHERE project_id = ?1 AND enabled = 1 ORDER BY id")?.query_map([self.project_id], |r| Ok(Check { id: r.get(0)?, name: r.get(1)?, command: r.get(2)?, directory: r.get(3)?, timeout_ms: r.get(4)? }))?.collect::<rusqlite::Result<_>>()?)
     }
