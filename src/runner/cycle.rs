@@ -1,15 +1,19 @@
 //! Findings are normal work within one durable attempt, not failed attempts.
-use super::{Context, Outcome, ai, checks, judge, judge_attempt};
+use super::{
+    Context, Outcome, checks,
+    judge::{judge, judge_attempt},
+    turn::ai,
+};
 use crate::{
     application::{
         Service,
+        delivery::Stage,
         execution::{Check, Run},
-        progress::{Progress, REPAIR_ROUNDS},
+        progress::{Phase, Progress, REPAIR_ROUNDS},
         stop::{BASELINE_RED, CHECKS_STILL_FAIL},
     },
     storage::{Error, Result},
 };
-use std::sync::atomic::Ordering;
 
 /// How a new attempt begins. Resume never opens a new attempt; it continues the saved one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,16 +39,14 @@ pub(super) fn run(
     };
     service.save_progress(run, &progress)?;
     loop {
-        if ctx.stop.load(Ordering::Relaxed) || service.control_cursor(run)? > ctx.cursor {
+        if ctx.interrupted(service, run)? {
             return Ok(Outcome::Paused);
         }
         if matches!(
-            progress.phase.as_str(),
-            "review" | "validate" | "decide" | "complete"
+            progress.phase,
+            Phase::Review | Phase::Validate | Phase::Decide | Phase::Complete
         ) {
-            let observed = ctx
-                .workspace
-                .fingerprint(&ctx.paths.cache.join("workers"))?;
+            let observed = ctx.workspace.fingerprint(&ctx.scratch_root())?;
             if observed != progress.verified_tree {
                 let paths = if progress.verified_tree.is_empty() {
                     "unavailable (no verified tree recorded)".into()
@@ -56,7 +58,7 @@ pub(super) fn run(
                     "Worktree changed since verification · expected tree {}; observed tree {observed}; differing paths: {paths} · rerunning checks, review and validation; repair count retained",
                     progress.verified_tree
                 );
-                progress.phase = "check".into();
+                progress.phase = Phase::Check;
                 progress.evidence = format!("{}\n{change}", progress.context);
                 progress.verified_tree.clear();
                 service.output(run, "system", &change)?;
@@ -68,13 +70,13 @@ pub(super) fn run(
             .task(run.task)?
             .ok_or_else(|| Error::Conflict("Current task disappeared during execution".into()))?
             .attempts_used;
-        let outcome = match progress.phase.as_str() {
-            "fix" if run.definition.attempt_limit.is_some_and(|limit| attempts_used >= limit) => Outcome::Failed("protocol", "Coding attempt limit exhausted after the read-only failure judge; work and evidence retained. c Models raises the limit; r Retry restarts it.".into()),
-            "implement" | "fix" => ai(
+        let outcome = match progress.phase {
+            Phase::Fix if run.definition.attempt_limit.is_some_and(|limit| attempts_used >= limit) => Outcome::Failed("protocol", "Coding attempt limit exhausted after the read-only failure judge; work and evidence retained. c Models raises the limit; r Retry restarts it.".into()),
+            Phase::Implement | Phase::Fix => ai(
                 service,
                 run,
                 ctx,
-                if progress.phase == "fix" {
+                if progress.phase == Phase::Fix {
                     "repair"
                 } else {
                     "execution"
@@ -82,25 +84,21 @@ pub(super) fn run(
                 &format!("{}\nRecorded answers:\n{answers}{}", progress.context,
                     service.artifact_manifest(run.attempt, &ctx.paths.state)?),
             )?,
-            "integrate" => super::delivery::continue_integration(service, run, ctx)?,
-            "baseline" => {
-                let tree = ctx
-                    .workspace
-                    .fingerprint(&ctx.paths.cache.join("workers"))?;
+            Phase::Integrate => super::delivery::continue_integration(service, run, ctx)?,
+            Phase::Baseline => {
+                let tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
                 checks::run(service, run, ctx, checks, &tree)?
             }
-            "judge" if progress.round == 0 => judge(service, run, ctx)?,
-            "judge" => judge_attempt(service, run, ctx, run.attempt)?,
-            "check" if !run.definition.kind.runs_checks() => {
-                let tree = ctx
-                    .workspace
-                    .fingerprint(&ctx.paths.cache.join("workers"))?;
+            Phase::Judge if progress.round == 0 => judge(service, run, ctx)?,
+            Phase::Judge => judge_attempt(service, run, ctx, run.attempt)?,
+            Phase::Check if !run.definition.kind.runs_checks() => {
+                let tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
                 let scope = review_scope(service, run, ctx, &tree)?;
                 progress.verified_tree = tree;
                 Outcome::Passed(scope)
             }
-            "check" => {
-                let workers = ctx.paths.cache.join("workers");
+            Phase::Check => {
+                let workers = ctx.scratch_root();
                 let before = ctx.workspace.fingerprint(&workers)?;
                 match checks::run(service, run, ctx, checks, &before)? {
                     Outcome::Passed(evidence) => {
@@ -117,9 +115,9 @@ pub(super) fn run(
                     other => other,
                 }
             }
-            "review" => ai(service, run, ctx, "review", &progress.evidence)?,
-            "validate" => ai(service, run, ctx, "validation", &progress.evidence)?,
-            "decide" => ai(
+            Phase::Review => ai(service, run, ctx, "review", &progress.evidence)?,
+            Phase::Validate => ai(service, run, ctx, "validation", &progress.evidence)?,
+            Phase::Decide => ai(
                 service,
                 run,
                 ctx,
@@ -129,7 +127,7 @@ pub(super) fn run(
                     progress.evidence,
                 ),
             )?,
-            "complete" => {
+            Phase::Complete => {
                 let minor = progress.evidence.matches("\nMinor: ").count();
                 let gates = if run.definition.kind.runs_checks() {
                     "Checks, independent review"
@@ -145,9 +143,10 @@ pub(super) fn run(
                     }
                 )));
             }
-            _ => return Err(Error::Conflict("Unknown workflow phase".into())),
+            // A replanned attempt has ended; its successor opens with the judge.
+            Phase::Replanned => return Err(Error::Conflict("Unknown workflow phase".into())),
         };
-        if progress.phase == "baseline" {
+        if progress.phase == Phase::Baseline {
             match outcome {
                 Outcome::Passed(_) => {
                     service.output(
@@ -155,7 +154,7 @@ pub(super) fn run(
                         "system",
                         "Starting state verified: every check passes before work begins",
                     )?;
-                    progress.phase = "implement".into();
+                    progress.phase = Phase::Implement;
                     service.save_progress(run, &progress)?;
                     continue;
                 }
@@ -169,8 +168,8 @@ pub(super) fn run(
             }
         }
         match outcome {
-            Outcome::Passed(report) => match progress.phase.as_str() {
-                "implement" | "fix" => {
+            Outcome::Passed(report) => match progress.phase {
+                Phase::Implement | Phase::Fix => {
                     progress.evidence = format!(
                         "{}\nRecorded answers:\n{answers}\nCurrent attempt executor assessment (not independent evidence):\n{report}",
                         progress.context
@@ -178,63 +177,66 @@ pub(super) fn run(
                     progress.verified_tree.clear();
                     progress.phase = if service
                         .attempt_delivery(run)
-                        .is_ok_and(|d| d.stage == "integrating")
+                        .is_ok_and(|d| d.stage == Stage::Integrating)
                     {
-                        "integrate"
+                        Phase::Integrate
                     } else {
-                        "check"
-                    }
-                    .into();
+                        Phase::Check
+                    };
                 }
-                "integrate" => {
-                    progress.phase = "check".into();
+                Phase::Integrate => {
+                    progress.phase = Phase::Check;
                     progress.verified_tree.clear();
                 }
-                "judge" => {
+                Phase::Judge => {
                     let (reason, plan) = report.split_once('\n').unwrap_or((&report, ""));
                     progress.why = reason.to_owned();
                     progress
                         .context
                         .push_str(&format!("\nRepair plan from the failure judge:\n{plan}"));
-                    progress.phase = "fix".into();
+                    progress.phase = Phase::Fix;
                 }
-                "check" => {
+                Phase::Check => {
                     progress.evidence.push_str(&report);
                     progress.why.clear();
-                    progress.phase = "review".into();
+                    progress.phase = Phase::Review;
                 }
-                "review" => {
+                Phase::Review => {
                     progress.evidence.push_str(&format!("\nreview: {report}"));
-                    progress.phase = "validate".into();
+                    progress.phase = Phase::Validate;
                 }
-                "validate" | "decide" => {
+                Phase::Validate | Phase::Decide => {
                     progress
                         .evidence
                         .push_str(&format!("\nvalidation: {report}"));
-                    progress.phase = "complete".into();
+                    progress.phase = Phase::Complete;
                 }
-                _ => unreachable!("phase checked above"),
+                Phase::Baseline | Phase::Replanned | Phase::Complete => {
+                    unreachable!("phase checked above")
+                }
             },
             Outcome::Changes { report, critical } => {
                 if progress.round == REPAIR_ROUNDS {
                     if !critical
-                        && matches!(progress.phase.as_str(), "review" | "validate" | "decide")
+                        && matches!(
+                            progress.phase,
+                            Phase::Review | Phase::Validate | Phase::Decide
+                        )
                     {
                         service.output(run, "system", "Repair limit reached; only minor findings remain. Retaining them for independent acceptance.")?;
                         progress.evidence.push_str(&format!("\n{}: {report}\nOnly minor findings remain; all mandatory criteria passed.", progress.phase));
-                        progress.phase = if progress.phase == "review" {
-                            "validate"
+                        progress.phase = if progress.phase == Phase::Review {
+                            Phase::Validate
                         } else {
-                            "complete"
-                        }
-                        .into();
-                    } else if progress.phase == "decide" {
+                            Phase::Complete
+                        };
+                    } else if progress.phase == Phase::Decide {
                         return Ok(unresolved(&report));
-                    } else if matches!(progress.phase.as_str(), "review" | "validate") {
+                    } else if matches!(progress.phase, Phase::Review | Phase::Validate) {
                         progress
                             .evidence
                             .push_str(&format!("\nLatest critical findings:\n{report}"));
-                        progress.phase = "decide".into();
+                        progress.phase = Phase::Decide;
                     } else {
                         return Ok(unresolved(&report));
                     }
@@ -270,7 +272,7 @@ fn review_scope(service: &Service, run: &Run, ctx: &Context<'_>, tree: &str) -> 
     let base = delivery
         .as_ref()
         .and_then(|d| {
-            (d.stage != "work")
+            (d.stage != Stage::Work)
                 .then_some(d.fetched_base.as_deref())
                 .flatten()
         })
@@ -289,7 +291,7 @@ pub(super) fn request_fixes(
         "Normal review/fix cycle, repair round {}/{REPAIR_ROUNDS}. Preserve useful work and the full goal.\nPrior failure context (scope only; not proof of current success):\n{report}",
         progress.round,
     );
-    progress.phase = "judge".into();
+    progress.phase = Phase::Judge;
     progress.why = finding_headline(report);
     service.output(
         run,
@@ -319,7 +321,7 @@ fn fix_checks(service: &Service, run: &Run, progress: &mut Progress, report: &st
         "Supervisor checks failed, repair round {}/{REPAIR_ROUNDS}. Make every check pass by fixing the cause; never skip, weaken or delete a test. Preserve useful work and the full goal.\nPrior failure context (scope only; not proof of current success):\n{report}",
         progress.round,
     );
-    progress.phase = "fix".into();
+    progress.phase = Phase::Fix;
     progress.why = report.lines().take(2).collect::<Vec<_>>().join(" · ");
     let headline = report.lines().next().unwrap_or(report);
     service.output(
@@ -376,9 +378,9 @@ fn opening_progress(
     ctx: &Context<'_>,
     opening: Opening,
 ) -> Result<Progress> {
-    let fresh = |phase: &str| Progress {
+    let fresh = |phase| Progress {
         round: 0,
-        phase: phase.into(),
+        phase,
         context: String::new(),
         evidence: String::new(),
         verified_tree: String::new(),
@@ -395,10 +397,14 @@ fn opening_progress(
         .find_map(|a| a.outcome.clone())
         .unwrap_or_default();
     let mut progress = match opening {
-        Opening::Fresh { verify } => fresh(if verify { "baseline" } else { "implement" }),
-        Opening::Retry if ctx.workspace.clean()? => fresh("implement"),
+        Opening::Fresh { verify } => fresh(if verify {
+            Phase::Baseline
+        } else {
+            Phase::Implement
+        }),
+        Opening::Retry if ctx.workspace.clean()? => fresh(Phase::Implement),
         Opening::Retry => {
-            let mut progress = fresh("check");
+            let mut progress = fresh(Phase::Check);
             progress.context = format!(
                 "Retry of the failed attempt, continuing from its kept work. It ended: {prior}"
             );
@@ -413,7 +419,7 @@ fn opening_progress(
         }
         Opening::Repair => {
             let previous = service.prior_progress(run)?;
-            let mut progress = fresh("judge");
+            let mut progress = fresh(Phase::Judge);
             progress.round = previous.as_ref().map_or(0, |p| p.round);
             progress.context = format!(
                 "Prior failure context (scope only; not proof of current success): {prior}"

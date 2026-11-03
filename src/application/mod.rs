@@ -1,4 +1,56 @@
 //! Shared application commands. Neither terminal state nor demo fixtures enter this layer.
+
+/// A closed set of names stored as TEXT: `as_str` is the stored and displayed name, the
+/// one spelling Rust code and SQL parameters share, and reading any other name fails.
+macro_rules! stored_names {
+    ($(#[$meta:meta])* pub enum $name:ident { $($variant:ident => $text:literal,)+ }) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum $name {
+            $($variant,)+
+        }
+
+        impl $name {
+            pub const ALL: &[Self] = &[$(Self::$variant,)+];
+
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $text,)+
+                }
+            }
+
+            pub fn parse(name: &str) -> Option<Self> {
+                Self::ALL.iter().copied().find(|value| value.as_str() == name)
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+
+        impl rusqlite::ToSql for $name {
+            fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+                Ok(self.as_str().into())
+            }
+        }
+
+        impl rusqlite::types::FromSql for $name {
+            fn column_result(
+                value: rusqlite::types::ValueRef<'_>,
+            ) -> rusqlite::types::FromSqlResult<Self> {
+                let name = value.as_str()?;
+                Self::parse(name).ok_or_else(|| {
+                    rusqlite::types::FromSqlError::Other(
+                        format!("unknown {} {name:?}", stringify!($name)).into(),
+                    )
+                })
+            }
+        }
+    };
+}
+
 mod artifacts;
 mod commands;
 mod evidence;

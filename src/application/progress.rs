@@ -3,10 +3,27 @@ use super::{execution::Run, *};
 
 pub const REPAIR_ROUNDS: i64 = 10;
 
+stored_names! {
+    /// Where an attempt stands in its workflow (`attempt_progress.phase`).
+    pub enum Phase {
+        Baseline => "baseline",
+        Implement => "implement",
+        Judge => "judge",
+        Replanned => "replanned",
+        Fix => "fix",
+        Integrate => "integrate",
+        Check => "check",
+        Review => "review",
+        Validate => "validate",
+        Decide => "decide",
+        Complete => "complete",
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Progress {
     pub round: i64,
-    pub phase: String,
+    pub phase: Phase,
     pub context: String,
     pub evidence: String,
     pub verified_tree: String,
@@ -16,17 +33,17 @@ pub struct Progress {
 
 impl Progress {
     pub fn label(&self) -> String {
-        let phase = match self.phase.as_str() {
-            "baseline" => "Starting checks",
-            "implement" => "Implement",
-            "judge" => "Plan fixes",
-            "fix" => "Fix",
-            "integrate" => "Integrate remote changes",
-            "check" => "Check",
-            "review" => "Review",
-            "validate" => "Validate",
-            "decide" => "Critical findings need a decision",
-            _ => "Complete",
+        let phase = match self.phase {
+            Phase::Baseline => "Starting checks",
+            Phase::Implement => "Implement",
+            Phase::Judge => "Plan fixes",
+            Phase::Fix => "Fix",
+            Phase::Integrate => "Integrate remote changes",
+            Phase::Check => "Check",
+            Phase::Review => "Review",
+            Phase::Validate => "Validate",
+            Phase::Decide => "Critical findings need a decision",
+            Phase::Replanned | Phase::Complete => "Complete",
         };
         let label = format!(
             "Workflow · {phase} · repair round {}/{REPAIR_ROUNDS}",
@@ -67,8 +84,8 @@ impl Service {
     /// the supervisor's repair and keeps the task's repair-round count.
     pub fn replan_pending(&self, task: i64) -> Result<bool> {
         Ok(self.db.connection().query_row(
-            "SELECT EXISTS(SELECT 1 FROM attempt_progress WHERE phase='replanned' AND attempt_id=(SELECT max(id) FROM attempts WHERE task_id=?1))",
-            [task],
+            "SELECT EXISTS(SELECT 1 FROM attempt_progress WHERE phase=?2 AND attempt_id=(SELECT max(id) FROM attempts WHERE task_id=?1))",
+            params![task, Phase::Replanned],
             |r| r.get(0),
         )?)
     }
@@ -76,9 +93,9 @@ impl Service {
     /// Only the supervisor that applied a judge's replan can authorize its next worker.
     pub fn replan_applied(&self, run: &Run) -> Result<()> {
         require(self.db.connection().execute(
-            "UPDATE attempt_progress SET phase='replanned' WHERE attempt_id=?1 AND phase='judge'
+            "UPDATE attempt_progress SET phase=?3 WHERE attempt_id=?1 AND phase=?4
              AND EXISTS (SELECT 1 FROM attempts WHERE id=?1 AND execution_token=?2 AND state='interrupted')",
-            params![run.attempt,run.token],
+            params![run.attempt,run.token,Phase::Replanned,Phase::Judge],
         )? == 1, "Replanned attempt changed before handoff")
     }
 
@@ -128,4 +145,26 @@ fn read_progress(r: &rusqlite::Row<'_>) -> rusqlite::Result<Progress> {
         verified_tree: r.get(4)?,
         why: r.get(5)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Phase;
+
+    #[test]
+    fn every_phase_name_round_trips_and_is_allowed_by_the_schema() {
+        let allowed = include_str!("../../migrations/0001_relational_state.sql")
+            .lines()
+            .find(|line| line.contains("phase TEXT NOT NULL CHECK"))
+            .expect("phase constraint");
+        for &phase in Phase::ALL {
+            assert_eq!(Phase::parse(phase.as_str()), Some(phase));
+            assert!(
+                allowed.contains(&format!("'{phase}'")),
+                "{phase} missing from schema"
+            );
+        }
+        assert_eq!(allowed.matches('\'').count(), 2 * Phase::ALL.len());
+        assert_eq!(Phase::parse("unknown"), None);
+    }
 }

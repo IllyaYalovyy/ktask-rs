@@ -890,7 +890,10 @@ exec /usr/bin/git "$@"
 }
 #[test]
 fn changed_delivery_policy_never_publishes_a_failed_local_tasks_unreviewed_baseline() -> Result {
-    use ktask_rs_mk3::application::{Service, VersionedTask, progress::Progress};
+    use ktask_rs_mk3::application::{
+        Service, VersionedTask,
+        progress::{Phase, Progress},
+    };
     for (mode, branch) in [("direct", "feature"), ("direct", "main"), ("pr", "feature")] {
         let f = Fixture::new()?;
         remote(&f)?;
@@ -930,7 +933,7 @@ fn changed_delivery_policy_never_publishes_a_failed_local_tasks_unreviewed_basel
             &run,
             &Progress {
                 round: 0,
-                phase: "implement".into(),
+                phase: Phase::Implement,
                 context: "Retained local task".into(),
                 evidence: String::new(),
                 verified_tree: String::new(),

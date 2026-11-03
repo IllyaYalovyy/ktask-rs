@@ -47,6 +47,31 @@ pub struct Invocation {
     pub sandbox: Option<super::sandbox::Sandbox>,
 }
 
+impl Invocation {
+    /// A plain command under the guardian: no prompt, schema, artifacts, callback or sandbox.
+    pub fn new(
+        executable: PathBuf,
+        args: Vec<String>,
+        cwd: PathBuf,
+        scratch_root: PathBuf,
+        worker_lock: PathBuf,
+    ) -> Self {
+        Self {
+            executable,
+            args,
+            env: Vec::new(),
+            cwd,
+            prompt: String::new(),
+            schema: None,
+            scratch_root,
+            artifact_target: None,
+            worker_lock,
+            callback: None,
+            sandbox: None,
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ArtifactTarget {
     pub state: PathBuf,
@@ -58,12 +83,14 @@ pub struct ArtifactTarget {
 }
 
 /// Use the isolated guardian so descendants cannot retain pipes or outlive cancellation.
+/// `supervisor` is the supervisor's recorded executable, which runs the guardian.
 pub fn capture_readonly(
+    supervisor: &std::path::Path,
     spec: &Invocation,
     cancelled: &AtomicBool,
     timeout: Duration,
 ) -> Result<(i32, Vec<u8>, Vec<u8>)> {
-    let mut worker = Worker::spawn(&std::env::current_exe()?, spec)?;
+    let mut worker = Worker::spawn(supervisor, spec)?;
     let started = std::time::Instant::now();
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
@@ -72,8 +99,9 @@ pub fn capture_readonly(
             worker.join()?;
             return Err(Error::Conflict("Remediation cancelled or timed out".into()));
         }
-        match worker.messages.recv_timeout(Duration::from_millis(25)) {
-            Ok(Message::Output { stream, bytes }) => {
+        match worker.receive(Duration::from_millis(25))? {
+            Received::Idle => {}
+            Received::Output { stream, bytes } => {
                 let output = if stream == "stdout" {
                     &mut stdout
                 } else {
@@ -85,26 +113,14 @@ pub fn capture_readonly(
                 }
                 output.extend(bytes);
             }
-            Ok(Message::Exit { code }) => {
-                worker.join()?;
-                return Ok((code, stdout, stderr));
-            }
-            Ok(Message::Artifact { .. }) => {
+            Received::Exited(code) => return Ok((code, stdout, stderr)),
+            Received::Artifact => {
                 return Err(Error::Conflict(
                     "Unexpected artifact from read-only proposal".into(),
                 ));
             }
-            Ok(Message::Error(error)) => {
-                if let Err(Error::Conflict(reason)) = worker.join()
-                    && reason.starts_with("Resource limit:")
-                {
-                    return Err(Error::Conflict(reason));
-                }
-                return Err(Error::Conflict(error));
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                worker.join()?;
+            Received::Failed(error) => return Err(worker.failure(error)),
+            Received::Disconnected => {
                 return Err(Error::Conflict("Remediation worker disconnected".into()));
             }
         }
@@ -660,8 +676,28 @@ fn archive_artifacts(
 
 pub struct Worker {
     child: Child,
-    pub messages: mpsc::Receiver<Message>,
+    messages: mpsc::Receiver<Message>,
+    /// A message read ahead while collecting a batch of output.
+    pending: Option<Message>,
     reader: Option<thread::JoinHandle<()>>,
+}
+
+/// One step of a guardian's message stream, as [`Worker::receive`] reports it.
+pub enum Received {
+    /// Nothing arrived within the wait.
+    Idle,
+    Output {
+        stream: String,
+        bytes: Vec<u8>,
+    },
+    /// The guardian archived an evidence file.
+    Artifact,
+    /// The worker exited with this code; the guardian has been joined.
+    Exited(i32),
+    /// The guardian reported a protocol or I/O error; it has not been joined yet.
+    Failed(String),
+    /// The guardian closed its stream without an exit; it has been joined.
+    Disconnected,
 }
 impl Worker {
     pub fn spawn(executable: &std::path::Path, spec: &Invocation) -> Result<Self> {
@@ -692,6 +728,7 @@ impl Worker {
         let mut worker = Self {
             child,
             messages,
+            pending: None,
             reader: Some(reader),
         };
         // Retain stdin in Child as the lifeline; Drop closes it before wait.
@@ -705,6 +742,54 @@ impl Worker {
     }
     pub fn stop(&mut self) {
         self.child.stdin.take();
+    }
+
+    /// The worker message pump: waits up to `wait` for the next guardian message. Final
+    /// messages join the guardian first, so its cleanup has finished when they return.
+    pub fn receive(&mut self, wait: Duration) -> Result<Received> {
+        let message = match self.pending.take() {
+            Some(message) => Ok(message),
+            None => self.messages.recv_timeout(wait),
+        };
+        Ok(match message {
+            Ok(Message::Output { stream, bytes }) => Received::Output { stream, bytes },
+            Ok(Message::Artifact { .. }) => Received::Artifact,
+            Ok(Message::Exit { code }) => {
+                self.join()?;
+                Received::Exited(code)
+            }
+            Ok(Message::Error(message)) => Received::Failed(message),
+            Err(mpsc::RecvTimeoutError::Timeout) => Received::Idle,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                self.join()?;
+                Received::Disconnected
+            }
+        })
+    }
+
+    /// Output already queued behind the last message, without waiting. Any other message
+    /// is kept for the next [`Self::receive`].
+    pub fn queued_output(&mut self) -> Option<(String, Vec<u8>)> {
+        if self.pending.is_some() {
+            return None;
+        }
+        match self.messages.try_recv() {
+            Ok(Message::Output { stream, bytes }) => Some((stream, bytes)),
+            Ok(other) => {
+                self.pending = Some(other);
+                None
+            }
+            Err(_) => None,
+        }
+    }
+
+    /// The error for a guardian that reported `message`: a partial final frame is a protocol
+    /// error, but the guardian's exit status still carries a resource pause after cleanup.
+    pub fn failure(&mut self, message: String) -> Error {
+        match self.join() {
+            Err(error) if super::resource_limit(&error).is_some() => error,
+            _ => Error::Conflict(message),
+        }
     }
     pub fn join(&mut self) -> Result<()> {
         self.stop();

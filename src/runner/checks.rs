@@ -1,6 +1,8 @@
 use super::{
-    Context, Finish, Outcome, execute, failure_summary, operational_backoff, process::Invocation,
-    test_summary,
+    Context, Outcome,
+    backoff::{self, Notice},
+    failure_summary, test_summary,
+    worker_io::{Finish, execute},
 };
 use crate::{
     application::{
@@ -21,9 +23,7 @@ pub(super) fn run(
 ) -> Result<Outcome> {
     let mut evidence = String::new();
     for (index, check) in checks.iter().enumerate() {
-        let observed = ctx
-            .workspace
-            .fingerprint(&ctx.paths.cache.join("workers"))?;
+        let observed = ctx.workspace.fingerprint(&ctx.scratch_root())?;
         if observed != tree {
             let paths = ctx.workspace.tree_difference(tree, &observed)?;
             let when = if index == 0 {
@@ -63,44 +63,53 @@ pub(super) fn run(
                 continue;
             }
         }
-        for recheck in 0..=2 {
-            let (outcome, path, counts) = run_one(service, run, ctx, check, tree)?;
-            match outcome {
-                Outcome::Passed(_) => {
-                    evidence.push_str(&format!(
-                        "\nSupervisor check evidence: {}",
-                        serde_json::json!({
-                            "name": check.name, "command": check.command, "exit_code": 0,
-                            "transcript": path, "current_counts": counts,
-                            "previous_checkpoint_counts": service.previous_check_counts(run, check.id)?,
-                        })
-                    ));
-                    break;
-                }
-                Outcome::Failed(category, message) => {
-                    let message = format!(
-                        "{message}\nFull log: {}{}",
-                        path.display(),
-                        service.artifact_manifest(run.attempt, &ctx.paths.state)?
-                    );
-                    if category == "environment" && recheck < 2 {
-                        service.output(run, "system", &format!(
-                            "Check infrastructure failed · automatic retry {}/2 after {}s · transcript retained; Pause cancels",
-                            recheck + 1, 1 << recheck,
-                        ))?;
-                        if let Some(outcome) = operational_backoff(service, run, ctx, recheck)? {
-                            return Ok(outcome);
-                        }
-                        continue;
-                    }
-                    return Ok(Outcome::Failed(category, message));
-                }
-                other => return Ok(other),
-            }
+        match backoff::bounded(
+            service,
+            run,
+            ctx,
+            Notice {
+                failed: "Check infrastructure failed",
+                retained: "transcript retained",
+            },
+            |outcome| matches!(outcome, Outcome::Failed("environment", _)),
+            |service, ctx| run_recorded(service, run, ctx, check, tree),
+        )? {
+            Outcome::Passed(recorded) => evidence.push_str(&recorded),
+            other => return Ok(other),
         }
     }
     evidence.push_str(&service.artifact_manifest(run.attempt, &ctx.paths.state)?);
     Ok(Outcome::Passed(evidence))
+}
+
+/// Runs `check` once. A pass carries its evidence entry; a failure names its full log.
+fn run_recorded(
+    service: &mut Service,
+    run: &Run,
+    ctx: &mut Context<'_>,
+    check: &Check,
+    tree: &str,
+) -> Result<Outcome> {
+    let (outcome, path, counts) = run_one(service, run, ctx, check, tree)?;
+    Ok(match outcome {
+        Outcome::Passed(_) => Outcome::Passed(format!(
+            "\nSupervisor check evidence: {}",
+            serde_json::json!({
+                "name": check.name, "command": check.command, "exit_code": 0,
+                "transcript": path, "current_counts": counts,
+                "previous_checkpoint_counts": service.previous_check_counts(run, check.id)?,
+            })
+        )),
+        Outcome::Failed(category, message) => Outcome::Failed(
+            category,
+            format!(
+                "{message}\nFull log: {}{}",
+                path.display(),
+                service.artifact_manifest(run.attempt, &ctx.paths.state)?
+            ),
+        ),
+        other => other,
+    })
 }
 
 fn run_one(
@@ -121,19 +130,11 @@ fn run_one(
         "system",
         &format!("Check {}: {}", check.name, check.command),
     )?;
-    let invocation = Invocation {
-        executable: PathBuf::from("/bin/sh"),
-        args: vec!["-c".into(), check.command.clone()],
-        env: Vec::new(),
+    let invocation = ctx.invocation(
+        PathBuf::from("/bin/sh"),
+        vec!["-c".into(), check.command.clone()],
         cwd,
-        prompt: String::new(),
-        schema: None,
-        scratch_root: ctx.paths.cache.join("workers"),
-        artifact_target: None,
-        worker_lock: ctx.workspace.worker_lock.clone(),
-        callback: None,
-        sandbox: None,
-    };
+    );
     let cursor = service.output_cursor(run)?;
     let finish = execute(
         service,
@@ -145,15 +146,13 @@ fn run_one(
         None,
     );
     let relative = format!("evidence/attempt-{}/step-{}.log", run.attempt, step.id);
-    let scratch = crate::scratch::Scratch::new(&ctx.paths.cache.join("workers"))?;
+    let scratch = crate::scratch::Scratch::new(&ctx.scratch_root())?;
     let temporary = scratch.path().join("check-transcript");
     let mut transcript = std::fs::File::create_new(&temporary)?;
     service.write_output_since(run, cursor, &mut transcript)?;
     transcript.flush()?;
     transcript.sync_all()?;
-    let transcript_tree = ctx
-        .workspace
-        .fingerprint(&ctx.paths.cache.join("workers"))?;
+    let transcript_tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
     service.publish_artifact(
         run.attempt,
         &run.token,

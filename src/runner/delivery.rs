@@ -1,16 +1,20 @@
 //! Verified Git delivery. Every network command runs under the worker guardian.
 use super::{
-    Context, Outcome,
-    process::{Invocation, Message, Worker},
+    Context, Outcome, backoff,
+    process::{Invocation, Received, Worker},
     workspace::{git, is_ancestor},
 };
 use crate::{
-    application::{Service, delivery::DeliveryAttempt, execution::Run, progress::REPAIR_ROUNDS},
+    application::{
+        Service,
+        delivery::{DeliveryAttempt, Stage},
+        execution::Run,
+        progress::{Phase, REPAIR_ROUNDS},
+    },
     storage::{Error, Result},
 };
 use std::{
     path::PathBuf,
-    sync::atomic::Ordering,
     time::{Duration, Instant},
 };
 
@@ -55,7 +59,7 @@ pub(super) fn retry(
     }
     if matches!(error, DeliveryError::Retry(_)) && *retries < 3 {
         service.output(run, "system", &format!("Git delivery retry: {error}"))?;
-        let outcome = super::operational_backoff(service, run, ctx, *retries)?;
+        let outcome = backoff::operational_backoff(service, run, ctx, *retries)?;
         *retries += 1;
         Ok(outcome)
     } else {
@@ -77,8 +81,6 @@ fn command(
 ) -> DeliveryResult<CommandResult> {
     let identity = super::workspace::git_identity(&ctx.workspace.root)?;
     let invocation = Invocation {
-        executable: PathBuf::from(executable),
-        args: args.iter().map(|s| (*s).to_owned()).collect(),
         env: vec![
             ("GIT_TERMINAL_PROMPT".into(), "0".into()),
             ("GCM_INTERACTIVE".into(), "never".into()),
@@ -93,19 +95,16 @@ fn command(
             ("GIT_COMMITTER_NAME".into(), identity.name),
             ("GIT_COMMITTER_EMAIL".into(), identity.email),
         ],
-        cwd: ctx.workspace.root.clone(),
-        prompt: String::new(),
-        schema: None,
-        scratch_root: ctx.paths.cache.join("workers"),
-        artifact_target: None,
-        worker_lock: ctx.workspace.worker_lock.clone(),
-        callback: None,
-        sandbox: None,
+        ..ctx.invocation(
+            PathBuf::from(executable),
+            args.iter().map(|s| (*s).to_owned()).collect(),
+            ctx.workspace.root.clone(),
+        )
     };
     if ctx.deadline_outcome(run).is_some() {
         return Err(DeliveryError::Deadline);
     }
-    let mut worker = Worker::spawn(&std::env::current_exe()?, &invocation)
+    let mut worker = Worker::spawn(&ctx.paths.executable, &invocation)
         .map_err(|e| DeliveryError::Retry(e.to_string()))?;
     let start = Instant::now();
     let mut last_active = Instant::now();
@@ -116,7 +115,7 @@ fn command(
             ctx.persist_active_time(service, run)?;
             last_active = Instant::now();
         }
-        if ctx.stop.load(Ordering::Relaxed) || service.control_cursor(run)? > ctx.cursor {
+        if ctx.interrupted(service, run)? {
             worker.join()?;
             return Ok(CommandResult::Paused);
         }
@@ -132,11 +131,12 @@ fn command(
                 executable
             )));
         }
-        match worker.messages.recv_timeout(Duration::from_millis(50)) {
-            Ok(Message::Artifact { .. }) => {
+        match worker.receive(Duration::from_millis(50))? {
+            Received::Idle => {}
+            Received::Artifact => {
                 return Err(DeliveryError::Retry("Unexpected delivery artifact".into()));
             }
-            Ok(Message::Output { stream, bytes }) => {
+            Received::Output { stream, bytes } => {
                 let buffer = if stream == "stdout" {
                     &mut out
                 } else {
@@ -150,8 +150,7 @@ fn command(
                 }
                 buffer.extend(bytes);
             }
-            Ok(Message::Exit { code }) => {
-                worker.join()?;
+            Received::Exited(code) => {
                 ctx.persist_active_time(service, run)?;
                 if ctx.deadline_outcome(run).is_some() {
                     return Err(DeliveryError::Deadline);
@@ -162,13 +161,11 @@ fn command(
                     String::from_utf8_lossy(&err).trim().into(),
                 ));
             }
-            Ok(Message::Error(error)) => {
+            Received::Failed(error) => {
                 worker.join()?;
                 return Err(DeliveryError::Retry(error));
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(_) => {
-                worker.join()?;
+            Received::Disconnected => {
                 return Err(DeliveryError::Retry("Delivery worker disconnected".into()));
             }
         }
@@ -207,7 +204,7 @@ fn current_branch(root: &std::path::Path) -> Result<String> {
 
 pub(super) fn reconcile_resume(service: &mut Service, run: &Run, ctx: &Context<'_>) -> Result<()> {
     let delivery = service.attempt_delivery(run)?;
-    if delivery.stage == "work" {
+    if delivery.stage == Stage::Work {
         return Ok(());
     }
     let expected = if delivery.mode == "pr" {
@@ -220,7 +217,7 @@ pub(super) fn reconcile_resume(service: &mut Service, run: &Run, ctx: &Context<'
         .iter()
         .any(|name| std::path::Path::new(&git_dir).join(name).exists());
     if rebasing {
-        if delivery.stage != "integrating" {
+        if delivery.stage != Stage::Integrating {
             return Err(Error::Conflict(
                 "Unexpected Git rebase during delivery".into(),
             ));
@@ -247,7 +244,7 @@ pub(super) fn reconcile_resume(service: &mut Service, run: &Run, ctx: &Context<'
             "Delivery branch changed while attempt was paused".into(),
         ));
     }
-    if delivery.stage == "checkpointing" {
+    if delivery.stage == Stage::Checkpointing {
         let saved = delivery
             .checkpoint_head
             .as_deref()
@@ -271,17 +268,17 @@ pub(super) fn reconcile_resume(service: &mut Service, run: &Run, ctx: &Context<'
                     "Checkpoint commit differs from saved intent; publishing stopped".into(),
                 ));
             }
-            service.delivery_stage(run, "checkpointed", Some(&actual), None, None)?;
+            service.delivery_stage(run, Stage::Checkpointed, Some(&actual), None, None)?;
         }
     }
-    if delivery.stage == "integrating" {
+    if delivery.stage == Stage::Integrating {
         let progress = service
             .progress(run)?
             .ok_or_else(|| Error::Conflict("Missing delivery progress".into()))?;
         if rebasing {
             if matches!(
-                progress.phase.as_str(),
-                "complete" | "check" | "review" | "validate"
+                progress.phase,
+                Phase::Complete | Phase::Check | Phase::Review | Phase::Validate
             ) {
                 if has_conflicts(&ctx.workspace.root)? {
                     conflict(
@@ -291,7 +288,7 @@ pub(super) fn reconcile_resume(service: &mut Service, run: &Run, ctx: &Context<'
                     )?;
                 } else {
                     let mut progress = progress;
-                    progress.phase = "integrate".into();
+                    progress.phase = Phase::Integrate;
                     service.save_progress(run, &progress)?;
                 }
             }
@@ -331,15 +328,15 @@ pub(super) fn reconcile_resume(service: &mut Service, run: &Run, ctx: &Context<'
 pub(super) fn prepare(service: &mut Service, run: &Run, ctx: &Context<'_>) -> DeliveryResult<bool> {
     let delivery = service.attempt_delivery(run)?;
     if delivery.retargeted
-        && delivery.stage == "checkpointed"
+        && delivery.stage == Stage::Checkpointed
         && !adopt_checkpoint(service, run, ctx, &delivery)?
     {
         return Ok(false);
     }
-    if delivery.stage != "preparing" {
+    if delivery.stage != Stage::Preparing {
         return Ok(true);
     }
-    service.delivery_stage(run, "preparing", None, None, None)?;
+    service.delivery_stage(run, Stage::Preparing, None, None, None)?;
     check_destination(&ctx.workspace.root, &delivery)?;
     if delivery.mode == "pr" {
         super::executable("gh")?;
@@ -404,7 +401,7 @@ pub(super) fn prepare(service: &mut Service, run: &Run, ctx: &Context<'_>) -> De
                 return Err(Error::Conflict("Local branch contains unpublished commits; direct delivery will not publish an unverified baseline".into()).into());
             }
             // Persist the target before the side effect; a resumed fetch may advance further.
-            service.delivery_stage(run, "preparing", Some(&head), Some(&base), None)?;
+            service.delivery_stage(run, Stage::Preparing, Some(&head), Some(&base), None)?;
             if require_ok(
                 git_network(service, run, ctx, &["merge", "--ff-only", &base])?,
                 "Git fast-forward",
@@ -425,7 +422,7 @@ pub(super) fn prepare(service: &mut Service, run: &Run, ctx: &Context<'_>) -> De
             && head != base
             && is_ancestor(&ctx.workspace.root, &head, &base)?
         {
-            service.delivery_stage(run, "preparing", Some(&head), Some(&base), None)?;
+            service.delivery_stage(run, Stage::Preparing, Some(&head), Some(&base), None)?;
             if require_ok(
                 git_network(service, run, ctx, &["merge", "--ff-only", &base])?,
                 "Git fast-forward",
@@ -580,13 +577,24 @@ fn adopt_checkpoint(
     Ok(true)
 }
 
+/// The remote still fetches from and pushes to the attempt's pinned destination.
 fn check_destination(root: &std::path::Path, delivery: &DeliveryAttempt) -> Result<()> {
+    check_destination_or(
+        root,
+        delivery,
+        "Delivery remote URL changed or fetch/push destinations differ",
+    )
+}
+
+fn check_destination_or(
+    root: &std::path::Path,
+    delivery: &DeliveryAttempt,
+    changed: &str,
+) -> Result<()> {
     let fetch = git(root, &["remote", "get-url", &delivery.remote])?;
     let push = git(root, &["remote", "get-url", "--push", &delivery.remote])?;
     if fetch != delivery.destination_url || push != delivery.destination_url {
-        return Err(Error::Conflict(
-            "Delivery remote URL changed or fetch/push destinations differ".into(),
-        ));
+        return Err(Error::Conflict(changed.into()));
     }
     Ok(())
 }
@@ -611,19 +619,11 @@ pub(super) fn publish(
     if delivery.mode == "pr" {
         repository_identity(&delivery.destination_url)?;
     }
-    let fetch_url = git(
+    check_destination_or(
         &ctx.workspace.root,
-        &["remote", "get-url", &delivery.remote],
+        &delivery,
+        "Delivery remote URL changed during the attempt",
     )?;
-    let push_url = git(
-        &ctx.workspace.root,
-        &["remote", "get-url", "--push", &delivery.remote],
-    )?;
-    if fetch_url != delivery.destination_url || push_url != delivery.destination_url {
-        return Err(
-            Error::Conflict("Delivery remote URL changed during the attempt".into()).into(),
-        );
-    }
     if delivery.mode == "pr"
         && let Some((pending, expected)) = service.pending_delivery_push(run)?
     {
@@ -639,7 +639,7 @@ pub(super) fn publish(
             .into());
         }
     }
-    service.delivery_stage(run, "checkpointed", Some(head), None, None)?;
+    service.delivery_stage(run, Stage::Checkpointed, Some(head), None, None)?;
     let refspec = fetch_refspec(&delivery.remote, &delivery.base_branch);
     let fetched = require_ok(
         git_network(
@@ -689,7 +689,7 @@ pub(super) fn publish(
             }
         }
     }
-    service.delivery_stage(run, "checkpointed", None, Some(&base), None)?;
+    service.delivery_stage(run, Stage::Checkpointed, None, Some(&base), None)?;
     let current = ctx.workspace.head()?;
     if current != head {
         return Err(Error::Conflict(
@@ -756,7 +756,7 @@ pub(super) fn publish(
     if delivery.mode == "pr" {
         service.record_delivery_tip(run, service.delivery_owned_tip()?.as_deref(), &current)?;
     } else {
-        service.delivery_stage(run, "pushed", None, None, None)?;
+        service.delivery_stage(run, Stage::Pushed, None, None, None)?;
     }
     if delivery.mode == "pr"
         && git(&ctx.workspace.root, &["rev-parse", "HEAD^{tree}"])?
@@ -773,7 +773,7 @@ pub(super) fn publish(
         let Some(url) = ensure_pr(service, run, ctx, &delivery)? else {
             return Ok(DeliveryOutcome::Paused);
         };
-        service.delivery_stage(run, "pr_ready", None, None, Some(&url))?;
+        service.delivery_stage(run, Stage::PrReady, None, None, Some(&url))?;
         return Ok(DeliveryOutcome::Done(format!(
             "{summary}; pull request {url}"
         )));

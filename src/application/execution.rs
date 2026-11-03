@@ -1,7 +1,7 @@
 //! Runner-facing commands. Attempts own live state; clients request control through events.
 use super::commands::{allowed, labelled, reason_or};
 use super::lifecycle::Action;
-use super::*;
+use super::{delivery::Stage, *};
 use crate::storage::{execution::StartAttempt, usage::TokenUsage};
 use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
 
@@ -480,8 +480,8 @@ impl Service {
             // The owner may have committed on top while the attempt was paused; its own
             // change, and so its review, starts at the current HEAD. Delivery keeps its base.
             self.db.connection().execute(
-                "UPDATE attempts SET base_commit=?2 WHERE id=?1 AND NOT EXISTS(SELECT 1 FROM attempt_delivery WHERE attempt_id=?1 AND stage<>'work')",
-                params![id, base],
+                "UPDATE attempts SET base_commit=?2 WHERE id=?1 AND NOT EXISTS(SELECT 1 FROM attempt_delivery WHERE attempt_id=?1 AND stage<>?3)",
+                params![id, base, Stage::Work],
             )?;
             (id, rev, saved, active)
         } else {
@@ -1162,7 +1162,7 @@ impl Service {
         if matches!(state, "failed" | "interrupted") {
             // Claimable delivery ownership is committed with the terminal attempt state.
             // A later prerequisite insertion reroutes it in that same command's transaction.
-            tx.execute("UPDATE attempt_delivery SET handoff_target=?2,repair_origin_task=coalesce(repair_origin_task,?2) WHERE attempt_id=?1 AND stage<>'work' AND handoff_claimed_by IS NULL",params![run.attempt,run.task])?;
+            tx.execute("UPDATE attempt_delivery SET handoff_target=?2,repair_origin_task=coalesce(repair_origin_task,?2) WHERE attempt_id=?1 AND stage<>?3 AND handoff_claimed_by IS NULL",params![run.attempt,run.task,Stage::Work])?;
         }
         if state == "waiting" {
             tx.execute("INSERT INTO questions(attempt_id,prompt,state,created_at_ms) VALUES (?1,?2,'open',?3)",params![run.attempt,report,now])?;
@@ -1243,6 +1243,6 @@ fn end_attempt(
     tx.execute("UPDATE questions SET state='cancelled',resolved_at_ms=?2 WHERE attempt_id=?1 AND state='open'", params![attempt,now])?;
     // Keep unclaimed verified delivery work, but make its successor recheck it against the
     // current source before publication.
-    tx.execute("UPDATE attempt_delivery SET handoff_target=?2,repair_origin_task=coalesce(repair_origin_task,?2),restart_sync=1 WHERE attempt_id=?1 AND stage<>'work' AND handoff_claimed_by IS NULL", params![attempt,task])?;
+    tx.execute("UPDATE attempt_delivery SET handoff_target=?2,repair_origin_task=coalesce(repair_origin_task,?2),restart_sync=1 WHERE attempt_id=?1 AND stage<>?3 AND handoff_claimed_by IS NULL", params![attempt,task,Stage::Work])?;
     Ok(())
 }

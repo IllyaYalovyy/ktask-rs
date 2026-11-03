@@ -300,6 +300,7 @@ fn readonly_proposal(
         scratch.path().join("worker.lock"),
     )?;
     let (code, stdout, stderr) = super::process::capture_readonly(
+        &paths.executable,
         &invocation,
         cancelled,
         std::time::Duration::from_secs(120),

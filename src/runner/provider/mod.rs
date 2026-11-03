@@ -21,7 +21,8 @@ pub enum Provider {
 
 pub const SUPPORTED: &str = "codex, claude or opencode";
 
-/// What a turn may do to the workspace. Review, validation and every judge are read-only.
+/// What a turn may do to the workspace. Only execution (and its repair turns) writes;
+/// review, validation and every judge are read-only, because judges never run anything.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Access {
     ReadOnly,
@@ -30,12 +31,29 @@ pub enum Access {
 
 impl Access {
     pub fn for_role(role: &str) -> Self {
-        if matches!(role, "execution" | "remediation") {
+        if role == "execution" {
             Self::Write
         } else {
             Self::ReadOnly
         }
     }
+}
+
+/// The provider's own words for a rate or usage limit, matched in lowercase text.
+const RATE_LIMIT_MARKERS: [&str; 7] = [
+    "rate_limit",
+    "rate limit",
+    "usage limit",
+    "hit your limit",
+    "too many requests",
+    "http 429",
+    "status 429",
+];
+
+fn names_rate_limit(lowercase: &str) -> bool {
+    RATE_LIMIT_MARKERS
+        .iter()
+        .any(|marker| lowercase.contains(marker))
 }
 
 /// Everything the worker needs to start one provider turn.
@@ -224,17 +242,7 @@ impl Stream {
         self.failed = true;
         self.completed = false;
         self.note_error(text);
-        let lower = text.to_lowercase();
-        if [
-            "rate_limit",
-            "rate limit",
-            "usage limit",
-            "hit your limit",
-            "too many requests",
-        ]
-        .iter()
-        .any(|s| lower.contains(s))
-        {
+        if names_rate_limit(&text.to_lowercase()) {
             self.limit(super::reset::reset_at(text, crate::application::now_ms()));
         }
     }
@@ -289,16 +297,7 @@ impl Stream {
                 self.error_context[self.error_context.floor_char_boundary(start)..].to_owned();
         }
         let lower = self.error_context.to_ascii_lowercase();
-        if [
-            "rate_limit",
-            "rate limit",
-            "too many requests",
-            "http 429",
-            "status 429",
-        ]
-        .iter()
-        .any(|needle| lower.contains(needle))
-        {
+        if names_rate_limit(&lower) {
             return;
         }
         let setting = if lower.contains("effort") || lower.contains("variant") {
@@ -666,8 +665,36 @@ mod tests {
         for role in ["review", "validation"] {
             assert_eq!(Access::for_role(role), Access::ReadOnly);
         }
-        for role in ["execution", "remediation"] {
-            assert_eq!(Access::for_role(role), Access::Write);
+        assert_eq!(Access::for_role("execution"), Access::Write);
+    }
+
+    #[test]
+    fn only_execution_writes_and_judges_never_run_anything() {
+        for role in crate::application::ROLES {
+            let expected = if role == "execution" {
+                Access::Write
+            } else {
+                Access::ReadOnly
+            };
+            assert_eq!(Access::for_role(role), expected, "{role}");
+        }
+        // A repair turn is an execution turn; the failure judge is the remediation role.
+        assert_eq!(
+            Access::for_role(crate::runner::agent::model_role("repair")),
+            Access::Write
+        );
+        assert_eq!(Access::for_role("remediation"), Access::ReadOnly);
+    }
+
+    #[test]
+    fn one_rate_limit_vocabulary_marks_limits_and_never_configuration() {
+        for marker in RATE_LIMIT_MARKERS {
+            let mut failed = Stream::new(Provider::Codex);
+            failed.fail(&format!("Error: {}", marker.to_uppercase()));
+            assert!(failed.rate_limited, "{marker}");
+            let mut noted = Stream::new(Provider::Codex);
+            noted.note_error(&format!("HTTP 400 invalid model: {marker}"));
+            assert!(noted.configuration_error.is_none(), "{marker}");
         }
     }
 }
