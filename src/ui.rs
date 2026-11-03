@@ -1836,17 +1836,12 @@ fn shortened(text: &str, width: usize) -> String {
 /// Below this list width the Queue omits its Model column; details still list every role.
 const QUEUE_MODEL_MIN_WIDTH: u16 = 60;
 
-/// The execution model and effort, marked "(mixed)" when another role uses something else.
+/// The execution model and effort; details list every role.
 fn model_summary(settings: &crate::presentation::Settings) -> String {
-    let label = |m: &crate::presentation::Model| match &m.effort {
+    let m = &settings.models[0];
+    match &m.effort {
         Some(effort) => format!("{} {effort}", m.name),
         None => m.name.clone(),
-    };
-    let execution = label(&settings.models[0]);
-    if settings.models[1..].iter().all(|m| label(m) == execution) {
-        execution
-    } else {
-        format!("{execution} (mixed)")
     }
 }
 

@@ -7130,7 +7130,7 @@ fn queue_shows_the_model_each_task_will_use_by_keyboard_and_mouse() -> Result {
         }
         let queue = t.screen("queue models", |s| {
             s.contains("Queue · 1 / 2 · Model")
-                && s.contains("codex/execution (mixed)")
+                && s.contains("codex/execution")
                 && s.contains("codex/gpt-6-sol high")
         })?;
         println!("QUEUE MODELS mouse={mouse}\n{queue}");
@@ -7139,13 +7139,14 @@ fn queue_shows_the_model_each_task_will_use_by_keyboard_and_mouse() -> Result {
                 .lines()
                 .find(|l| l.contains(&format!("#{id}   Pending")))
         };
-        let mixed = row("1").unwrap();
-        assert!(mixed.contains("codex/execution (mixed)"), "{mixed}");
-        let sol = row("2").unwrap();
+        // A differing review model does not change the Model column.
+        let differing = row("1").unwrap();
         assert!(
-            sol.contains("codex/gpt-6-sol high") && !sol.contains("mixed"),
-            "{sol}"
+            differing.contains("codex/execution") && !differing.contains("mixed"),
+            "{differing}"
         );
+        let sol = row("2").unwrap();
+        assert!(sol.contains("codex/gpt-6-sol high"), "{sol}");
         // The details pane lists every role of the selected task.
         assert!(queue.contains("Review codex/review / default"), "{queue}");
         t.send("q")?;
