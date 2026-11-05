@@ -52,7 +52,8 @@ Planner/remediator work uses ordinary tasks, not proposal tables. Approval is a 
 decision on the revision. Mark done, Cancel and Supersede close the task without rewriting its
 attempts; Copy to queue creates a new task linked by `derived_from`. Changing role models creates a new revision with the new role settings.
 An active execution worker may use the supervisor's absolute executable and its attempt token
-to file a follow-up draft immediately after current. The CLI sends the request through a
+to file a follow-up draft at the end of the queue, preserving the order of existing work.
+The CLI sends the request through a
 guardian-owned endpoint in the worker's TMPDIR; only the guardian opens SQLite and applies this
 command. The draft records both origin IDs and AI creator attribution. The worker sandbox cannot
 write the supervisor's state root, and the endpoint accepts no other mutation.

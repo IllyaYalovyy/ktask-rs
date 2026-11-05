@@ -362,7 +362,7 @@ pub enum Command {
     /// Models and effort come from the project defaults (model-default) unless --model or
     /// --effort is given. New tasks allow 3 attempts and have no time limits.
     Add(Add),
-    /// File a follow-up draft from inside an attempt (worker callback only).
+    /// Append a follow-up draft to the queue from inside an attempt (worker callback only).
     FollowUp {
         /// Short title.
         #[arg(long, value_parser = nonempty)]

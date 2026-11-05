@@ -4394,7 +4394,7 @@ case '{mode}' in
    if (printf tamper >> "$artifact") 2>/dev/null; then exit 24; fi
   fi;;
  follow-up)
-  if [ "$model" = execution ]; then
+  if [ "$model" = execution ] && [ ! -f "$HOME/follow-up-created" ]; then
    export XDG_STATE_HOME="$TMPDIR/no-supervisor-state"
    callback=$(printf '%s\n' "$prompt" | sed -n 's/.*exact executable: \(.*\) --title TITLE.*/\1/p')
    [ -n "$callback" ] || exit 12
@@ -4729,12 +4729,12 @@ impl Drop for Running {
 }
 
 #[test]
-fn worker_callback_files_only_linked_drafts_and_terminal_shows_both_links() -> Result {
+fn worker_callback_appends_linked_drafts_without_interrupting_queued_work() -> Result {
     let f = Fixture::new()?;
     f.provider("follow-up")?;
     f.add("Origin task")?;
     f.add("Later task")?;
-    let mut runner = Running(f.process().args(["run", "--one"]).spawn()?);
+    let mut runner = Running(f.process().args(["run", "--queue"]).spawn()?);
     // Release and reap the held provider even if a PTY assertion unwinds.
     let result = std::panic::catch_unwind(|| -> Result {
         let marker = f.scratch.path().join("follow-up-created");
@@ -4747,12 +4747,13 @@ fn worker_callback_files_only_linked_drafts_and_terminal_shows_both_links() -> R
             rows.iter()
                 .map(|row| row["id"].as_i64().unwrap())
                 .collect::<Vec<_>>(),
-            [1, 3, 4, 2]
+            [1, 2, 3, 4]
         );
         assert_eq!(rows[0]["status"], "running");
-        assert_eq!(rows[1]["status"], "new");
-        assert_eq!(rows[1]["origin_task_id"], 1);
-        let attempt = rows[1]["origin_attempt_id"].as_i64().unwrap();
+        assert_eq!(rows[1]["status"], "ready");
+        assert_eq!(rows[2]["status"], "new");
+        assert_eq!(rows[2]["origin_task_id"], 1);
+        let attempt = rows[2]["origin_attempt_id"].as_i64().unwrap();
         assert!(attempt > 0);
         let draft = f.ok(&["show", "3"])?;
         assert_eq!(draft["revisions"][0]["lifecycle"], "draft");
@@ -4793,6 +4794,29 @@ fn worker_callback_files_only_linked_drafts_and_terminal_shows_both_links() -> R
                 })?
             );
             if mouse {
+                t.click("2 Queue")?;
+            } else {
+                t.send("2")?;
+            }
+            let queue = t.screen("follow-ups at queue end", |s| {
+                s.contains("Origin task")
+                    && s.contains("Later task")
+                    && s.contains("Discovered follow")
+                    && s.contains("Second discovery")
+            })?;
+            assert!(queue.find("Origin task") < queue.find("Later task"));
+            assert!(queue.find("Later task") < queue.find("Discovered follow"));
+            assert!(queue.find("Discovered follow") < queue.find("Second discovery"));
+            println!("FOLLOW-UP APPENDED QUEUE mouse={mouse} {cols}x{rows}\n{queue}");
+            if mouse {
+                t.click("1 Current")?;
+            } else {
+                t.send("1")?;
+            }
+            t.screen("running current retained", |s| {
+                s.contains("Current #1 · Running") && s.contains("Follow-ups: #3, #4")
+            })?;
+            if mouse {
                 t.click("Enter Details")?;
             } else {
                 t.send("\r")?;
@@ -4825,6 +4849,7 @@ fn worker_callback_files_only_linked_drafts_and_terminal_shows_both_links() -> R
     }
     assert!(status.success(), "runner exited {status}");
     assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
     let stale_token: String = f.db()?.connection().query_row(
         "SELECT execution_token FROM attempts WHERE task_id=1",
         [],
@@ -4870,6 +4895,10 @@ fn worker_callback_files_only_linked_drafts_and_terminal_shows_both_links() -> R
         s.contains("3 History") && !s.contains("Task details / attempts")
     })?;
     t.click("3 History")?;
+    t.screen("queued work completed before follow-ups", |s| {
+        s.contains("Later task") && s.contains("Origin task")
+    })?;
+    t.click("Origin task")?;
     println!(
         "FOLLOW-UP HISTORY MOUSE\n{}",
         t.screen("source link", |s| s
