@@ -1,4 +1,5 @@
 mod args;
+mod evidence;
 mod execute;
 mod output;
 
@@ -133,6 +134,22 @@ fn emit(reply: output::Reply, json_output: bool) -> Result<()> {
 }
 
 fn run(instance: Instance, cli: &Cli) -> Result<()> {
+    if let Some(Command::Evidence {
+        file,
+        offset,
+        limit,
+        search,
+    }) = &cli.command
+    {
+        let data = evidence::read(file, *offset, *limit as usize, search.as_deref())?;
+        return emit(
+            output::Reply {
+                text: format!("{}\n", data),
+                data,
+            },
+            cli.json,
+        );
+    }
     validate(cli)?;
     if cli.paths {
         let paths = instance.paths()?;

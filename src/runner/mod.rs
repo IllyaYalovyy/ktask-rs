@@ -7,6 +7,7 @@ pub(crate) mod agent;
 mod attempt;
 mod backoff;
 pub(crate) mod callback;
+mod check_report;
 mod checks;
 mod context;
 pub mod control;

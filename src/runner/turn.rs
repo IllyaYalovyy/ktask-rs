@@ -23,13 +23,16 @@ use std::path::{Path, PathBuf};
 /// whatever its provider allows, it cannot change the project or ktask's own records.
 pub(crate) fn provider_invocation(
     provider: Provider,
-    launch: provider::Launch,
+    mut launch: provider::Launch,
     access: Access,
     project: &Path,
     paths: &Paths,
     scratch_root: PathBuf,
     worker_lock: PathBuf,
 ) -> Result<Invocation> {
+    if access == Access::ReadOnly {
+        launch.allow_evidence(provider, &paths.executable)?;
+    }
     Ok(Invocation {
         env: launch.env,
         prompt: launch.prompt,
@@ -126,12 +129,25 @@ fn ai_turn(
             }
         ),
     )?;
+    let packet = crate::scratch::Scratch::new(&ctx.paths.state.join("review-packets"))?;
+    let tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
+    let packet_context = service.review_bundle(
+        run.attempt,
+        &ctx.paths.state,
+        packet.path(),
+        &tree,
+        evidence,
+    )?;
+    let packet_context = format!(
+        "{packet_context}\nRead/search without opening the database: '{}' evidence FILE --offset 0 --limit 4096 [--search TEXT]. Use next_offset until eof. This command works in the read-only sandbox.\n",
+        ctx.paths.executable.display()
+    );
     let prompt = nudge.map_or_else(
         || {
             agent::prompt(
                 run,
                 role,
-                evidence,
+                &packet_context,
                 &ctx.paths.executable,
                 &ctx.workspace.root,
             )

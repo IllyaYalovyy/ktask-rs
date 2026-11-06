@@ -208,6 +208,16 @@ impl Walk {
 
     /// Count one entry by its category; return the opened directory to descend into.
     fn count(&mut self, directory: &File, name: &[u8]) -> Result<Option<File>> {
+        // SQLite may remove and recreate these entries behind a directory cookie.
+        // Measure the fixed set only after the resumable walk finishes.
+        if self.frames.len() == 1
+            && matches!(
+                name,
+                b"ktask.sqlite3" | b"ktask.sqlite3-wal" | b"ktask.sqlite3-shm"
+            )
+        {
+            return Ok(None);
+        }
         let name = OsStr::from_bytes(name);
         let stat = match rustix::fs::statat(directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
         {
@@ -251,12 +261,27 @@ impl Walk {
     }
 }
 
+pub(super) fn with_sqlite(root: &File, mut usage: Allocation) -> Result<Allocation> {
+    for name in ["ktask.sqlite3", "ktask.sqlite3-wal", "ktask.sqlite3-shm"] {
+        if let Some(bytes) = entry_bytes(root, name)? {
+            usage.bytes = usage.bytes.saturating_add(bytes);
+            usage.files += 1;
+            match name {
+                "ktask.sqlite3" => usage.database = bytes,
+                "ktask.sqlite3-wal" => usage.wal = bytes,
+                _ => {}
+            }
+        }
+    }
+    Ok(usage)
+}
+
 /// The whole instance in one walk.
 pub(super) fn allocation(root: &File) -> Result<Allocation> {
     let mut walk = Walk::start(root)?;
     walk.step(root, usize::MAX)?;
     debug_assert!(walk.finished());
-    Ok(walk.usage)
+    with_sqlite(root, walk.usage)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -285,7 +310,9 @@ pub(super) fn scan_state(db: &Connection) -> Result<ScanState> {
             },
         }, r.get(1)?))
     )?;
-    state.walk.frames = serde_json::from_str(&frames)
+    let cursor: serde_json::Value = serde_json::from_str(&frames)
+        .map_err(|e| Error::Conflict(format!("Invalid storage scan cursor: {e}")))?;
+    state.walk.frames = serde_json::from_value(cursor["frames"].clone())
         .map_err(|e| Error::Conflict(format!("Invalid storage scan cursor: {e}")))?;
     Ok(state)
 }
@@ -305,7 +332,7 @@ fn start_scan(db: &Database) -> Result<()> {
         return Ok(());
     }
     let walk = Walk::start(db.state_dir())?;
-    let frames = serde_json::to_string(&walk.frames).expect("scan cursor");
+    let frames = serde_json::json!({"sqlite_excluded":true,"frames":walk.frames}).to_string();
     // Scan progress is redoable: a lost commit repeats the step, and a lost settlement
     // leaves the larger projection.
     unsynced(db.connection(), || {
@@ -320,6 +347,12 @@ fn start_scan(db: &Database) -> Result<()> {
 
 /// One bounded step of the shared allocation scan; any process may advance it.
 pub(super) fn bounded_allocation_scan(db: &Database) -> Result<ScanProgress> {
+    // Old cursors counted SQLite through directory cookies. Restart that ephemeral
+    // measurement once when upgrading, without changing any retained evidence.
+    let legacy: bool = db.connection().query_row("SELECT EXISTS(SELECT 1 FROM instance_allocation_scan WHERE coalesce(json_extract(frames_json,'$.sqlite_excluded'),0)=0)",[],|r|r.get(0))?;
+    if legacy {
+        db.connection().execute("DELETE FROM instance_allocation_scan WHERE coalesce(json_extract(frames_json,'$.sqlite_excluded'),0)=0", [])?;
+    }
     start_scan(db)?;
     let mut state = scan_state(db.connection())?;
     if state.complete == 2 {
@@ -334,7 +367,7 @@ pub(super) fn bounded_allocation_scan(db: &Database) -> Result<ScanProgress> {
                 db.connection(),
                 TransactionBehavior::Immediate,
             )?;
-            let changed = tx.execute("UPDATE instance_allocation_scan SET revision=revision+1,frames_json=?1,bytes=?2,files=?3,database_bytes=?4,wal_bytes=?5,runner_log_bytes=?6,evidence_bytes=?7,evidence_entries=?8,directory_entries=?9,entries_visited=?10,complete=?11 WHERE id=1 AND revision=?12 AND complete=0", params![serde_json::to_string(&walk.frames).expect("scan cursor"),walk.usage.bytes,walk.usage.files,walk.usage.database,walk.usage.wal,walk.usage.runner_logs,walk.usage.evidence,walk.usage.evidence_entries,walk.usage.directories,walk.visited,complete,state.revision])?;
+            let changed = tx.execute("UPDATE instance_allocation_scan SET revision=revision+1,frames_json=?1,bytes=?2,files=?3,database_bytes=?4,wal_bytes=?5,runner_log_bytes=?6,evidence_bytes=?7,evidence_entries=?8,directory_entries=?9,entries_visited=?10,complete=?11 WHERE id=1 AND revision=?12 AND complete=0", params![serde_json::json!({"sqlite_excluded":true,"frames":walk.frames}).to_string(),walk.usage.bytes,walk.usage.files,walk.usage.database,walk.usage.wal,walk.usage.runner_logs,walk.usage.evidence,walk.usage.evidence_entries,walk.usage.directories,walk.visited,complete,state.revision])?;
             tx.commit()?;
             Ok(changed)
         })?;

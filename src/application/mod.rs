@@ -58,6 +58,7 @@ mod evidence_path;
 pub mod evidence_pin;
 mod model_validation;
 mod output_text;
+mod review_bundle;
 pub use evidence::{EvidenceCursor, EvidenceMatch, EvidenceSearch};
 pub mod configuration;
 pub mod delivery;

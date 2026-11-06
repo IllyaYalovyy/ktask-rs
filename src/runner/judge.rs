@@ -76,6 +76,14 @@ fn judge_once(
         ),
     )?;
     let (evidence, normal_cycle) = evidence(service, run, ctx, failed)?;
+    let packet = crate::scratch::Scratch::new(&ctx.paths.state.join("review-packets"))?;
+    let tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
+    let evidence =
+        service.review_bundle(failed, &ctx.paths.state, packet.path(), &tree, &evidence)?;
+    let evidence = format!(
+        "{evidence}\nRead/search with '{}' evidence FILE --offset 0 --limit 4096 [--search TEXT]; follow next_offset.\n",
+        ctx.paths.executable.display()
+    );
     let (prompt, schema) = request(run, &evidence, normal_cycle);
     let launch = provider.launch(
         model,

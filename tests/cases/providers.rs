@@ -12,6 +12,12 @@ while [ "$#" -gt 0 ]; do
  shift
 done
 prompt=$(cat)
+packet=$(printf '%s\n' "$prompt" | sed -n 's/^Read-only index directory: //p' | head -n 1)
+if [ -n "$packet" ]; then
+ context=$(cat "$packet/workflow.txt")
+ prompt="$prompt
+$context"
+fi
 printf '%s|%s|%s\n' "$model" "$session" "$args" >> "$HOME/claude-calls"
 [ -n "$session" ] || session="claude-$model-$$"
 printf '{"type":"system","subtype":"init","session_id":"%s"}\n' "$session"
@@ -53,6 +59,12 @@ while [ "$#" -gt 0 ]; do
  shift
 done
 prompt=$(cat)
+packet=$(printf '%s\n' "$prompt" | sed -n 's/^Read-only index directory: //p' | head -n 1)
+if [ -n "$packet" ]; then
+ context=$(cat "$packet/workflow.txt")
+ prompt="$prompt
+$context"
+fi
 printf '%s|%s|auto=%s|%s\n' "$model" "$session" "$auto" "${OPENCODE_PERMISSION:-none}" >> "$HOME/opencode-calls"
 [ -n "$session" ] || session="ses_$model$$"
 ev() { printf '{"type":"%s","timestamp":1,"sessionID":"%s","part":%s}\n' "$1" "$session" "$2"; }

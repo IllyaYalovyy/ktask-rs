@@ -177,15 +177,30 @@ fn run_one(
             })?)
             .into_owned();
             let counts = test_summary::parse(&transcript);
-            let outcome = match verdict(&check.name, code, counts) {
+            let suites = super::check_report::parse(&transcript);
+            let suite_json = serde_json::to_string(&suites).expect("suite serialization");
+            let verdict = match verdict(&check.name, code, counts) {
+                Outcome::Passed(_) if suites.blocks() => Outcome::Failed(
+                    "check",
+                    format!(
+                        "Check {} has failed, crashed, incomplete or unknown suites",
+                        check.name
+                    ),
+                ),
+                other => other,
+            };
+            let outcome = match verdict {
                 Outcome::Failed(category, headline) => Outcome::Failed(
                     category,
                     format!(
-                        "{headline}\n{}",
+                        "{headline}\n{}\nSuite results: {suite_json}",
                         failure_summary::summarize(&transcript).join("\n")
                     ),
                 ),
-                passed => passed,
+                Outcome::Passed(message) => {
+                    Outcome::Passed(format!("{message}\nSuite results: {suite_json}"))
+                }
+                other => other,
             };
             (outcome, Some(code), counts)
         }

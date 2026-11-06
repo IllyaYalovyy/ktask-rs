@@ -89,7 +89,10 @@ WHEN EXECUTION STOPS ON A FAILED TASK
 
 OUTPUT CONTRACT
   Workers and checks can save flat regular files in KTASK_ARTIFACT_DIR. Files are
-  archived per attempt before scratch cleanup, up to 8 MiB each and 64 MiB total.
+  archived per attempt before scratch cleanup, up to 128 MiB each, 1 GiB and 4096 files per attempt.
+  Judges start with bounded evidence indexes; full logs stay in the archive.
+  ktask evidence FILE --offset 0 --limit 4096 pages text without opening the database.
+  Add --search TEXT for literal search; follow next_offset until eof.
   ktask show ID (or current) lists artifact IDs, media types, sizes, SHA-256 digests
   and source trees. ktask artifact ID opens retained UTF-8 text/JSON. Storage retention
   keeps Queue and unresolved-failure evidence; eligible History artifacts are pruned.

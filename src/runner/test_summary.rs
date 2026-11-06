@@ -18,14 +18,7 @@ pub(super) fn parse(transcript: &str) -> Option<CheckCounts> {
     let mut total: Option<CheckCounts> = None;
     for (index, line) in lines.iter().enumerate() {
         let rest = &lines[index + 1..];
-        let Some(next) = cargo(line)
-            .or_else(|| pytest(line))
-            .or_else(|| unittest(line, rest))
-            .or_else(|| jest(line))
-            .or_else(|| vitest(line))
-            .or_else(|| mocha(line, rest))
-            .or_else(|| node(line, rest))
-        else {
+        let Some(next) = summary(line, rest) else {
             continue;
         };
         total = Some(match total {
@@ -34,6 +27,17 @@ pub(super) fn parse(transcript: &str) -> Option<CheckCounts> {
         });
     }
     total
+}
+
+/// One framework summary, with following lines only for multiline formats.
+pub(super) fn summary(line: &str, rest: &[Cow<'_, str>]) -> Option<CheckCounts> {
+    cargo(line)
+        .or_else(|| pytest(line))
+        .or_else(|| unittest(line, rest))
+        .or_else(|| jest(line))
+        .or_else(|| vitest(line))
+        .or_else(|| mocha(line, rest))
+        .or_else(|| node(line, rest))
 }
 
 /// The line without terminal colour codes or trailing whitespace.

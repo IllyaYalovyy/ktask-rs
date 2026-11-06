@@ -210,7 +210,7 @@ pub(super) fn settle_scan(db: &Database, revision: i64, walk: &Walk) -> Result<b
         [],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
-        let observed = walk.usage;
+        let observed = super::measure::with_sqlite(db.state_dir(), walk.usage)?;
         let bytes = observed
             .bytes
             .saturating_add(projected_bytes.saturating_sub(base_bytes).max(0));
@@ -229,8 +229,8 @@ pub(super) fn settle_scan(db: &Database, revision: i64, walk: &Walk) -> Result<b
             started
         };
         tx.execute(
-        "UPDATE instance_allocation_scan SET generation=?1,complete=2,revision=revision+1 WHERE id=1",
-        [settled],
+        "UPDATE instance_allocation_scan SET generation=?1,complete=2,revision=revision+1,bytes=?2,files=?3,database_bytes=?4,wal_bytes=?5 WHERE id=1",
+        params![settled, observed.bytes, observed.files, observed.database, observed.wal],
     )?;
         tx.commit()?;
         Ok(true)

@@ -689,27 +689,15 @@ impl Service {
         Ok((artifact, content))
     }
 
-    pub fn artifact_manifest(&self, attempt: i64, root: &std::path::Path) -> Result<String> {
-        let mut stmt = self.db.connection().prepare("SELECT name,media_type,size_bytes,checksum_sha256,source_tree,relative_path FROM artifacts WHERE attempt_id=?1 AND pruned_at_ms IS NULL ORDER BY id")?;
-        let rows = stmt.query_map([attempt], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, Option<String>>(3)?,
-                r.get::<_, Option<String>>(4)?,
-                r.get::<_, String>(5)?,
-            ))
-        })?;
-        let mut result = String::new();
-        for (name, media, size, checksum, tree, relative) in
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
-        {
-            if let Some(path) = retained_artifact_path(root, &relative) {
-                result.push_str(&format!("\nArtifact {name}: {media}, {size} bytes, sha256 {}, source tree {}, read-only path {}", checksum.as_deref().unwrap_or("unrecorded"), tree.as_deref().unwrap_or("unrecorded"), path.display()));
-            }
-        }
-        Ok(result)
+    pub fn artifact_manifest(&self, attempt: i64, _root: &std::path::Path) -> Result<String> {
+        let count: i64 = self.db.connection().query_row(
+            "SELECT count(*) FROM artifacts WHERE attempt_id=?1",
+            [attempt],
+            |r| r.get(0),
+        )?;
+        Ok(format!(
+            "\nAttempt #{attempt}: {count} archived artifacts. Consult the evidence packet index by criterion and source tree."
+        ))
     }
     /// Persisted waiting-attempt timing, read without changing the attempt or its guards.
     pub fn waiting_resume(&self, task: i64) -> Result<Option<WaitingResume>> {
@@ -765,102 +753,21 @@ impl Service {
         }
         Ok(evidence)
     }
-    /// Durable output, retained check transcripts and findings of one attempt.
-    /// Evidence of one attempt for a read-only judge or remediator. Each source keeps its own
-    /// tail budget so verbose runner output never erases check failures or findings; together
-    /// they stay well under the provider's input limit.
+    /// A failure judge uses the structured review bundle, never raw output tails.
     pub fn attempt_evidence(
         &self,
         attempt: i64,
-        artifact_root: &std::path::Path,
+        _artifact_root: &std::path::Path,
     ) -> Result<String> {
-        let mut evidence = String::from(
-            "Latest attempt output, including execution, checks, review, and validation:\n",
-        );
-        let mut output = self.db.connection().prepare("SELECT stream,content FROM attempt_output WHERE attempt_id=?1 ORDER BY sequence DESC LIMIT 2000")?;
-        let rows = output.query_map([attempt], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?;
-        let mut chunks = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-        chunks.reverse();
-        for (stream, text) in chunks {
-            evidence.push_str(&format!("\n[{stream}] {text}"));
-            retain_tail(&mut evidence, OUTPUT_TAIL);
-        }
-        evidence.push_str(&self.artifact_manifest(attempt, artifact_root)?);
-        let mut transcripts = String::new();
-        let mut artifacts = self.db.connection().prepare("SELECT name,relative_path,media_type,size_bytes,checksum_sha256,source_tree FROM artifacts WHERE attempt_id=?1 AND pruned_at_ms IS NULL ORDER BY id")?;
-        let paths = artifacts.query_map([attempt], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, i64>(3)?,
-                r.get::<_, Option<String>>(4)?,
-                r.get::<_, Option<String>>(5)?,
-            ))
-        })?;
-        for (name, relative, media, size, checksum, tree) in
-            paths.collect::<rusqlite::Result<Vec<_>>>()?
-        {
-            let relative = std::path::Path::new(&relative);
-            if relative
-                .components()
-                .any(|c| !matches!(c, std::path::Component::Normal(_)))
-            {
-                continue;
-            }
-            let path = artifact_root.join(relative);
-            transcripts.push_str(&format!("\n\nArtifact {name} ({media}, {size} bytes, sha256 {}, source tree {}, read-only path {}):", checksum.as_deref().unwrap_or("unrecorded"), tree.as_deref().unwrap_or("unrecorded"), path.display()));
-            if matches!(media.as_str(), "text/plain" | "application/json")
-                && let Ok(mut file) = std::fs::File::open(&path)
-            {
-                let start = file
-                    .metadata()?
-                    .len()
-                    .saturating_sub(TRANSCRIPT_TAIL as u64);
-                file.seek(std::io::SeekFrom::Start(start))?;
-                let mut bytes = Vec::new();
-                file.take(TRANSCRIPT_TAIL as u64).read_to_end(&mut bytes)?;
-                transcripts.push_str(&format!("\n{}", String::from_utf8_lossy(&bytes)));
-                retain_tail(&mut transcripts, TRANSCRIPT_TAIL);
-            }
-        }
-        evidence.push_str(&transcripts);
-        // Decisions can precede megabytes of check output. Keep their original
-        // structured responses available independently of the general log tail.
-        let mut decisions = String::new();
-        let mut stmt = self.db.connection().prepare(
-            "SELECT content FROM attempt_output o WHERE attempt_id=?1 AND stream='stdout'
-             AND CASE WHEN json_valid(content) THEN json_type(content,'$.judgment')='object' ELSE 0 END
-             AND EXISTS (SELECT 1 FROM attempt_steps s WHERE s.attempt_id=o.attempt_id
-                 AND s.role='remediation' AND s.state='succeeded' AND s.report LIKE 'Repair:%'
-                 AND o.recorded_at_ms BETWEEN s.started_at_ms AND s.finished_at_ms)
-             ORDER BY sequence",
+        let (state, report): (String, Option<String>) = self.db.connection().query_row(
+            "SELECT state,coalesce(report,outcome) FROM attempts WHERE id=?1 AND project_id=?2",
+            params![attempt, self.project_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
-        for row in stmt.query_map([attempt], |r| r.get::<_, String>(0))? {
-            decisions.push_str(&format!("\nRecorded judgment output:\n{}", row?));
-            retain_tail(&mut decisions, FINDINGS_TAIL);
-        }
-        evidence.push_str(&decisions);
-        // Structured findings can be absent from output, or precede a verbose final check.
-        let mut reports = String::new();
-        let mut stmt = self.db.connection().prepare(
-            "SELECT 'attempt', coalesce(report,outcome,'') FROM attempts WHERE id=?1
-             UNION ALL SELECT role, report FROM attempt_steps WHERE attempt_id=?1 AND report IS NOT NULL
-             UNION ALL SELECT s.role || ' criterion ' || r.criterion_ordinal, r.evidence
-             FROM criterion_results r JOIN attempt_steps s ON s.id=r.step_id
-             WHERE s.attempt_id=?1 AND r.evidence IS NOT NULL"
-        )?;
-        for row in stmt.query_map([attempt], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })? {
-            let (role, report) = row?;
-            reports.push_str(&format!("\n[{role} finding] {report}"));
-            retain_tail(&mut reports, FINDINGS_TAIL);
-        }
-        evidence.push_str(&reports);
-        Ok(evidence)
+        Ok(format!(
+            "Attempt #{attempt}: {state}. Last outcome (claim, see step reports for evidence): {}",
+            report.unwrap_or_default()
+        ))
     }
     /// Any task of this project, finished or not; never another project's task.
     pub fn task(&mut self, id: i64) -> Result<Option<Task>> {
@@ -1265,23 +1172,6 @@ fn waiting_time(db: &Connection, attempt: i64) -> Result<i64> {
         total = total.saturating_add(finished.unwrap_or_else(now_ms).saturating_sub(start));
     }
     Ok(total)
-}
-
-/// Keep the newest evidence, advancing over any partial UTF-8 character.
-/// Codex rejects a turn above 1,048,576 characters; the three tails sum to 768 KiB of bytes,
-/// which is never more characters than that.
-const OUTPUT_TAIL: usize = 384 * 1024;
-const TRANSCRIPT_TAIL: usize = 256 * 1024;
-const FINDINGS_TAIL: usize = 128 * 1024;
-
-fn retain_tail(text: &mut String, limit: usize) {
-    let mut start = text.len().saturating_sub(limit);
-    while !text.is_char_boundary(start) {
-        start += 1;
-    }
-    if start > 0 {
-        text.drain(..start);
-    }
 }
 
 #[cfg(test)]

@@ -357,6 +357,29 @@ relational artifact records. Read-only reviewers receive their paths and inspect
 not just an executor's summary. `make check` retains passing-test output, including rendered PTY
 screens. Include `--show-output` or `--nocapture` in custom PTY checks to preserve those screens.
 
+Reviewers start with an evidence packet, not raw log tails. Its inline result preview is at
+most 12 KiB regardless of archive size. Read-only JSONL indexes list every criterion,
+latest check, prior step and artifact, with source-tree identity, checksums and missing/pruned
+status. Full reports and workflow context remain accessible separately. Review and validation
+must inspect each criterion's cited proof, unresolved critical findings and required images;
+old assessments and executor claims do not establish a pass.
+
+`ktask evidence FILE --offset 0 --limit 4096` reads a bounded page without opening the database.
+Add `--search TEXT` for literal search. Follow `next_offset` until `eof`; each search scans at
+most 1 MiB. The maximum page is 8192 bytes. Use the image viewer for image evidence.
+
+Checks can print one `KTASK_CHECK_RESULT ` line per suite followed by JSON, for example:
+```text
+KTASK_CHECK_RESULT {"name":"integration","status":"passed","passed":42,"failed":0,"skipped":0}
+```
+Statuses are `passed`, `failed`, `crashed`, `incomplete`, and `unknown`. Optional count fields
+and an `evidence` reference describe the suite. Malformed records or any non-passing suite
+fail the check even if its process exits zero. A nonzero exit still fails. Native framework
+summaries and Minecraft GameTest completion/crash messages produce separate suite records;
+Python results cannot stand in for GameTests. Checks without recognized suite reports retain
+their exit-code contract and have no invented suite completion proof. Full transcripts remain
+archived under the finite safeguards in [resource limits](docs/RESOURCE_LIMITS.md).
+
 Opt-in live verification (incurs model usage; disposable project and app state):
 ```sh
 KTASK_LIVE_MODEL=gpt-6-sol KTASK_LIVE_JUDGE_MODEL=gpt-6-astra \

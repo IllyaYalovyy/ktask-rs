@@ -123,6 +123,20 @@ pub enum Switch {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Page or search an evidence file without opening the database (safe in judge sandboxes).
+    Evidence {
+        /// Regular evidence file to inspect.
+        file: PathBuf,
+        /// Start at this byte offset; continue with next_offset from the reply.
+        #[arg(long, default_value_t = 0)]
+        offset: u64,
+        /// Maximum text bytes per page (at most 8192).
+        #[arg(long, default_value_t = 4096, value_parser = clap::value_parser!(u32).range(1..=8192))]
+        limit: u32,
+        /// Find a literal string, scanning at most 1 MiB per call.
+        #[arg(long)]
+        search: Option<String>,
+    },
     /// Show or change how verified commits leave this project.
     Delivery {
         /// Local commits only, direct push to the base branch, or one project pull request.

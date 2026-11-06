@@ -65,6 +65,40 @@ pub struct Launch {
     pub prompt: String,
 }
 
+impl Launch {
+    /// Permit only the supervisor's bounded reader, not its mutating commands.
+    pub(super) fn allow_evidence(
+        &mut self,
+        provider: Provider,
+        executable: &std::path::Path,
+    ) -> Result<()> {
+        let command = format!("{} evidence", executable.display());
+        match provider {
+            Provider::Claude => {
+                let index = self
+                    .args
+                    .iter()
+                    .position(|a| a == "--allowedTools")
+                    .ok_or_else(|| Error::Conflict("Missing read-only tool policy".into()))?;
+                self.args.insert(index + 1, format!("Bash({command} *)"));
+            }
+            Provider::OpenCode => {
+                let (_, policy) = self
+                    .env
+                    .iter_mut()
+                    .find(|(k, _)| k == "OPENCODE_PERMISSION")
+                    .ok_or_else(|| Error::Conflict("Missing read-only tool policy".into()))?;
+                let mut value: Value =
+                    serde_json::from_str(policy).map_err(|e| Error::Conflict(e.to_string()))?;
+                value["bash"][format!("{command} *")] = Value::String("allow".into());
+                *policy = value.to_string();
+            }
+            Provider::Codex => {}
+        }
+        Ok(())
+    }
+}
+
 pub enum Event {
     Session(String),
     Usage(TokenUsage, Option<i64>),
@@ -696,5 +730,40 @@ mod tests {
             noted.note_error(&format!("HTTP 400 invalid model: {marker}"));
             assert!(noted.configuration_error.is_none(), "{marker}");
         }
+    }
+}
+
+#[cfg(test)]
+mod evidence_tests {
+    use super::*;
+    #[test]
+    fn reader_permission_does_not_allow_other_supervisor_commands() {
+        let mut claude = Launch {
+            args: vec!["--allowedTools".into(), "Read".into()],
+            env: vec![],
+            schema_file: None,
+            prompt: String::new(),
+        };
+        claude
+            .allow_evidence(Provider::Claude, std::path::Path::new("/installed/ktask"))
+            .unwrap();
+        assert_eq!(claude.args[1], "Bash(/installed/ktask evidence *)");
+        let mut opencode = Launch {
+            args: vec![],
+            env: vec![(
+                "OPENCODE_PERMISSION".into(),
+                r#"{"bash":{"*":"deny"},"edit":"deny"}"#.into(),
+            )],
+            schema_file: None,
+            prompt: String::new(),
+        };
+        opencode
+            .allow_evidence(Provider::OpenCode, std::path::Path::new("/installed/ktask"))
+            .unwrap();
+        let policy: Value = serde_json::from_str(&opencode.env[0].1).unwrap();
+        assert_eq!(policy["bash"]["*"], "deny");
+        assert_eq!(policy["bash"]["/installed/ktask evidence *"], "allow");
+        assert_eq!(policy["edit"], "deny");
+        assert_eq!(policy["bash"].as_object().unwrap().len(), 2);
     }
 }

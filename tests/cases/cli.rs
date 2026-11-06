@@ -1638,3 +1638,38 @@ fn init_sets_up_new_projects_from_saved_defaults_and_their_own_files() -> Result
     );
     Ok(())
 }
+
+#[test]
+fn evidence_reader_pages_and_searches_without_creating_app_state() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let file = root.join("large.log");
+    let mut bytes = vec![b'x'; 3 * 1024 * 1024];
+    bytes[10..15].copy_from_slice(b"ERROR");
+    bytes[1024 * 1024 - 2..1024 * 1024 + 3].copy_from_slice(b"ERROR");
+    std::fs::write(&file, bytes)?;
+    let call = |args: &[&str]| -> Result<Value> {
+        let output = Command::new(DEV)
+            .env_clear()
+            .env("HOME", root.join("no-home"))
+            .args(["--json", "evidence", file.to_str().unwrap()])
+            .args(args)
+            .output()?;
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stdout.len() < 16384);
+        Ok(serde_json::from_slice::<Value>(&output.stdout)?["data"].clone())
+    };
+    let page = call(&["--limit", "100"])?;
+    assert_eq!(page["text"].as_str().unwrap().len(), 100);
+    assert_eq!(page["next_offset"], 100);
+    let first = call(&["--search", "ERROR"])?;
+    assert_eq!(first["matches"][0]["offset"], 10);
+    let next = first["next_offset"].to_string();
+    let second = call(&["--search", "ERROR", "--offset", &next])?;
+    assert_eq!(second["matches"][0]["offset"], 1024 * 1024 - 2);
+    assert!(
+        !root.join("no-home").exists(),
+        "reader must not open or initialize app state"
+    );
+    Ok(())
+}

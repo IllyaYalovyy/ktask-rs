@@ -11,14 +11,14 @@ use nix::{
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, OpenOptions, TryLockError},
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::Path,
 };
 
-const FILE_LIMIT: u64 = 8 * 1024 * 1024;
-const ATTEMPT_LIMIT: u64 = 64 * 1024 * 1024;
-const COUNT_LIMIT: u64 = 128;
+const FILE_LIMIT: u64 = 128 * 1024 * 1024;
+const ATTEMPT_LIMIT: u64 = 1024 * 1024 * 1024;
+const COUNT_LIMIT: u64 = 4096;
 
 fn budget_label(bytes: u64) -> String {
     if bytes.is_multiple_of(1024 * 1024) {
@@ -28,13 +28,33 @@ fn budget_label(bytes: u64) -> String {
     }
 }
 
-fn media_type(name: &str, bytes: &[u8]) -> &'static str {
+fn media_type(name: &str, bytes: &[u8], text: bool) -> &'static str {
     match Path::new(name).extension().and_then(|e| e.to_str()) {
-        Some("json") if std::str::from_utf8(bytes).is_ok() => "application/json",
+        Some("json") if text => "application/json",
         Some("png") if bytes.starts_with(b"\x89PNG\r\n\x1a\n") => "image/png",
         Some("jpg" | "jpeg") if bytes.starts_with(b"\xff\xd8") => "image/jpeg",
-        _ if std::str::from_utf8(bytes).is_ok() => "text/plain",
+        _ if text => "text/plain",
         _ => "application/octet-stream",
+    }
+}
+
+/// Preserve UTF-8 validation across streamed chunk boundaries.
+fn valid_utf8_chunk(tail: &mut Vec<u8>, bytes: &[u8]) -> bool {
+    tail.extend_from_slice(bytes);
+    match std::str::from_utf8(tail) {
+        Ok(_) => {
+            tail.clear();
+            true
+        }
+        Err(error) if error.error_len().is_none() => {
+            let valid = error.valid_up_to();
+            tail.drain(..valid);
+            true
+        }
+        Err(_) => {
+            tail.clear();
+            false
+        }
     }
 }
 
@@ -237,7 +257,7 @@ impl Service {
             matches!(tree.len(), 40 | 64),
             "Artifact source tree is required",
         )?;
-        let input = OpenOptions::new()
+        let mut input = OpenOptions::new()
             .read(true)
             .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
             .open(source)?;
@@ -256,14 +276,32 @@ impl Service {
                 budget_label(file_limit)
             ),
         )?;
-        let mut bytes = Vec::with_capacity(metadata.len() as usize);
-        input.take(file_limit + 1).read_to_end(&mut bytes)?;
-        require(
-            bytes.len() as u64 == metadata.len(),
-            &format!("Artifact {name} changed while being archived"),
-        )?;
-        let checksum = format!("{:x}", Sha256::digest(&bytes));
-        let media = media_type(name, &bytes);
+        let size = metadata.len();
+        let mut hash = Sha256::new();
+        let mut buffer = [0u8; 64 * 1024];
+        let mut prefix = Vec::new();
+        let mut read = 0u64;
+        let mut utf8_tail = Vec::new();
+        let mut text = true;
+        loop {
+            let n = input.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            read = read.saturating_add(n as u64);
+            require(read <= size, "Artifact changed while being archived")?;
+            if prefix.is_empty() {
+                prefix.extend_from_slice(&buffer[..n.min(512)]);
+            }
+            if text {
+                text = valid_utf8_chunk(&mut utf8_tail, &buffer[..n]);
+            }
+            hash.update(&buffer[..n]);
+        }
+        require(read == size, "Artifact changed while being archived")?;
+        let checksum = format!("{:x}", hash.finalize());
+        let media = media_type(name, &prefix, text && utf8_tail.is_empty());
+        input.seek(SeekFrom::Start(0))?;
         let root = self.db.state_dir();
         let publication = publication_lock(&self.db.state_file("")?)?;
         publication.lock()?;
@@ -273,16 +311,16 @@ impl Service {
         }
         let tx = Transaction::new_unchecked(self.db.connection(), TransactionBehavior::Immediate)?;
         require(tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND project_id=?2 AND execution_token=?3)", params![attempt,self.project_id,token], |r| r.get::<_, bool>(0))?, "Runner lost ownership of artifact attempt")?;
-        require_budget(&tx, attempt, name, bytes.len() as u64)?;
+        require_budget(&tx, attempt, name, size)?;
         super::retention::admit_capacity(
             &tx,
             super::retention::measure_known_bytes(&self.db)?,
             0,
             0,
-            bytes.len() as u64,
+            size,
             1,
         )?;
-        tx.execute("INSERT INTO artifact_reservations(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)", params![attempt,name,media,relative,bytes.len() as i64,checksum,tree,now_ms()])?;
+        tx.execute("INSERT INTO artifact_reservations(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)", params![attempt,name,media,relative,size as i64,checksum,tree,now_ms()])?;
         tx.commit()?;
         // A crash from here on leaves a reservation that recovery can inspect.
         after_reservation();
@@ -309,7 +347,22 @@ impl Service {
                 .map_err(io)?,
             );
             staged_created = true;
-            output.write_all(&bytes)?;
+            let mut copied = 0u64;
+            let mut copy_hash = Sha256::new();
+            loop {
+                let n = input.read(&mut buffer)?;
+                if n == 0 {
+                    break;
+                }
+                copied = copied.saturating_add(n as u64);
+                require(copied <= size, "Artifact changed while being archived")?;
+                copy_hash.update(&buffer[..n]);
+                output.write_all(&buffer[..n])?;
+            }
+            require(
+                copied == size && format!("{:x}", copy_hash.finalize()) == checksum,
+                "Artifact changed while being archived",
+            )?;
             output.sync_all()?;
             output.set_permissions(fs::Permissions::from_mode(0o444))?;
             safe.publish_pending()?;
@@ -419,6 +472,19 @@ impl Service {
 mod tests {
     use super::*;
     use std::os::unix::fs::{MetadataExt, symlink};
+
+    #[test]
+    fn streamed_utf8_handles_boundaries_and_late_invalid_bytes() {
+        let mut tail = Vec::new();
+        assert!(valid_utf8_chunk(&mut tail, &[b'x', 0xe2]));
+        assert!(valid_utf8_chunk(&mut tail, &[0x9c, 0x93]));
+        assert!(tail.is_empty());
+        assert!(!valid_utf8_chunk(&mut tail, &[0xff]));
+        assert_eq!(
+            media_type("binary.log", b"valid prefix", false),
+            "application/octet-stream"
+        );
+    }
 
     #[test]
     fn substituted_recovery_parent_never_touches_external_evidence() -> Result<()> {
@@ -617,120 +683,83 @@ mod tests {
         let source = scratch.path().join("source");
         let tree = "a".repeat(40);
 
-        fs::write(&source, vec![b'x'; FILE_LIMIT as usize + 1])?;
-        assert!(
-            service
-                .publish_artifact(
-                    run.attempt,
-                    &run.token,
-                    "oversized.txt",
-                    &source,
-                    &relative("oversized"),
-                    &tree,
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("8 MiB per-artifact")
-        );
-        assert!(!folder.join("oversized").exists());
-
-        fs::write(&source, vec![b'x'; FILE_LIMIT as usize])?;
-        for index in 0..8 {
+        // A real 100 MiB file is copied and hashed with bounded buffers, not loaded into a prompt.
+        let mut out = fs::File::create(&source)?;
+        out.write_all(b"failure near the start\n")?;
+        out.set_len(100 * 1024 * 1024)?;
+        service.publish_artifact(
+            run.attempt,
+            &run.token,
+            "large.log",
+            &source,
+            &relative("file-0-0"),
+            &tree,
+        )?;
+        fs::write(&source, b"small capture fixture")?;
+        for index in 1..95 {
+            let source_tree = if index % 3 == 0 {
+                tree.clone()
+            } else if index % 3 == 1 {
+                "b".repeat(40)
+            } else {
+                "c".repeat(40)
+            };
             service.publish_artifact(
                 run.attempt,
                 &run.token,
-                "capture.txt",
+                "repeated.png",
                 &source,
                 &relative(&format!("file-0-{index}")),
-                &tree,
+                &source_tree,
             )?;
         }
-        fs::write(&source, b"x")?;
-        assert!(
-            service
-                .publish_artifact(
-                    run.attempt,
-                    &run.token,
-                    "extra.txt",
-                    &source,
-                    &relative("file-0-8"),
-                    &tree,
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("64 MiB per-attempt")
+        let packet = scratch.path().join("packet");
+        let summary = service.review_bundle(
+            run.attempt,
+            &state,
+            &packet,
+            &tree,
+            "Review scope: fixture diff",
+        )?;
+        assert!(summary.len() < 24 * 1024);
+        assert!(!summary.contains("failure near the start"));
+        assert!(summary.contains("95 artifacts"));
+        let index = fs::read_to_string(packet.join("artifacts.jsonl"))?;
+        assert_eq!(index.lines().count(), 95);
+        assert!(index.contains("\"matches_current_tree\":false"));
+        assert!(index.contains("\"matches_current_tree\":true"));
+        assert_eq!(
+            fs::metadata(folder.join("file-0-0"))?.len(),
+            100 * 1024 * 1024
         );
-
-        let (count, recorded): (i64, i64) = service.db.connection().query_row(
-            "SELECT count(*),sum(size_bytes) FROM artifacts WHERE attempt_id=?1",
-            [run.attempt],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        assert_eq!(count, 8);
-        assert_eq!(recorded, ATTEMPT_LIMIT as i64);
-        let retained = fs::read_dir(&folder)?
-            .map(|entry| {
-                entry
-                    .and_then(|entry| entry.metadata())
-                    .map(|metadata| metadata.len())
-            })
-            .collect::<std::io::Result<Vec<_>>>()?;
-        assert_eq!(retained.len(), 8);
-        assert_eq!(retained.into_iter().sum::<u64>(), ATTEMPT_LIMIT);
-        assert!(!folder.join("file-0-8").exists());
-        assert!(!folder.join("file-0-8.pending").exists());
-        let reservations: i64 = service.db.connection().query_row(
-            "SELECT count(*) FROM artifact_reservations WHERE attempt_id=?1",
-            [run.attempt],
-            |row| row.get(0),
-        )?;
-        assert_eq!(reservations, 0);
-        fs::write(&source, b"")?;
-        for index in 8..128 {
-            service.publish_artifact(
-                run.attempt,
-                &run.token,
-                "empty.txt",
-                &source,
-                &relative(&format!("empty-{index}")),
-                &tree,
-            )?;
-        }
         let reopened = Service::open(crate::storage::Database::open_in(&state)?, &project, None)?;
+        let summary2 = reopened.review_bundle(
+            run.attempt,
+            &state,
+            &packet,
+            &tree,
+            "Review scope: fixture diff",
+        )?;
+        assert_eq!(summary, summary2);
+        // Finite storage budgets still reject oversized evidence before allocating memory.
+        fs::File::create(&source)?.set_len(FILE_LIMIT + 1)?;
         assert!(
             reopened
                 .publish_artifact(
                     run.attempt,
                     &run.token,
-                    "last.txt",
+                    "too-big",
                     &source,
-                    &relative("last"),
+                    &relative("oversized"),
                     &tree
                 )
-                .unwrap_err()
-                .to_string()
-                .contains("Artifact count limit")
+                .is_err()
         );
+        assert!(!folder.join("oversized").exists());
         let tx =
             Transaction::new_unchecked(reopened.db.connection(), TransactionBehavior::Immediate)?;
-        tx.execute(
-            "DELETE FROM artifacts WHERE attempt_id=?1 AND relative_path=?2",
-            params![run.attempt, relative("empty-8")],
-        )?;
-        tx.execute("INSERT INTO artifact_reservations(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms) VALUES (?1,'pending','text/plain',?2,0,?3,?4,0)", params![run.attempt, relative("pending"), "a".repeat(64), tree])?;
-        assert!(
-            require_budget(&tx, run.attempt, "another-empty", 0)
-                .unwrap_err()
-                .to_string()
-                .contains("Artifact count limit")
-        );
-        // A reservation occupies a slot even without bytes or a finalized row.
-        let count: i64 = tx.query_row(
-            "SELECT count(*) FROM artifacts WHERE attempt_id=?1",
-            [run.attempt],
-            |r| r.get(0),
-        )?;
-        assert_eq!(count, 127);
+        assert!(require_budget(&tx, run.attempt, "too-much", ATTEMPT_LIMIT).is_err());
+
         Ok(())
     }
 }

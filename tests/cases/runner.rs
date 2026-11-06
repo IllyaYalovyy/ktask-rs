@@ -420,22 +420,33 @@ fn bounded_reconciliation_remains_pausable_in_real_terminal() -> Result {
         let f = Fixture::new()?;
         f.add("Pause while protected storage is counted")?;
         f.ok(&["retention", "30", "--max-bytes", "1048576"])?;
-        // Reconciliation must outlast the TUI's 10 s wait for the supervisor's startup
-        // handshake, which comes only once an attempt begins.
+        // Observe the runner externally so a fast scan need not outlast the
+        // launching CLI's startup handshake before the TUI can request pause.
         let evidence = f.scratch.path().join("state/ktask-dev/evidence");
         for index in 0..80_000 {
             fs::create_dir_all(evidence.join(format!("held-{index}")))?;
         }
+        // Direct fixture writes bypass admission; invalidate the prior measurement.
+        f.db()?.connection().execute(
+            "UPDATE instance_storage_admission SET generation=generation+1 WHERE id=1",
+            [],
+        )?;
         let (cols, rows) = if mouse { (120, 42) } else { (105, 32) };
         let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
         terminal.screen("task ready before bounded accounting", |s| {
             s.contains("Pause while protected storage is counted")
         })?;
-        if mouse {
-            terminal.click("r Run queue")?;
-        } else {
-            terminal.send("r")?;
-        }
+        let mut launcher = Running(
+            f.process()
+                .args(["run", "--queue", "--background"])
+                .stdout(Stdio::null())
+                .spawn()?,
+        );
+        support::eventually("allocation scan is active", || {
+            let db = f.db()?;
+            let active:bool=db.connection().query_row("SELECT EXISTS(SELECT 1 FROM instance_allocation_scan WHERE complete=0 AND entries_visited>0)",[],|r|r.get(0))?;
+            Ok(active.then_some(()))
+        })?;
         let running = terminal.screen("bounded accounting active", |s| {
             s.contains("Session: Queue · running") && s.contains("p Pause")
         })?;
@@ -458,6 +469,8 @@ fn bounded_reconciliation_remains_pausable_in_real_terminal() -> Result {
         assert!(evidence.join("held-79999").is_dir());
         terminal.send("q")?;
         terminal.finish()?;
+        launcher.0.wait()?;
+        f.supervisor_stopped()?;
         f.no_scratch()?;
     }
     Ok(())
@@ -814,14 +827,11 @@ fn worker_artifact_survives_scratch_and_reaches_later_judge_and_attempt() -> Res
     );
     let judge_prompt = fs::read_to_string(f.scratch.path().join("prompt-judge"))?;
     assert!(
-        judge_prompt.contains("CAPTURE FROM FIRST TURN"),
+        !judge_prompt.contains("CAPTURE FROM FIRST TURN"),
         "{judge_prompt}"
     );
     let repair_prompt = fs::read_to_string(f.scratch.path().join("prompt-repair-worker"))?;
-    assert!(
-        repair_prompt.contains("Artifact capture.txt") && repair_prompt.contains("read-only path"),
-        "{repair_prompt}"
-    );
+    assert!(repair_prompt.contains("artifacts.jsonl"), "{repair_prompt}");
     assert_eq!(
         f.ok(&["artifact", &artifact_id])?["content"],
         "CAPTURE FROM FIRST TURN\n"
@@ -837,9 +847,7 @@ fn worker_artifact_survives_scratch_and_reaches_later_judge_and_attempt() -> Res
         f.ok(&["artifact", &check_file["id"].as_i64().unwrap().to_string()])?["content"],
         "CHECK CAPTURE\n"
     );
-    assert!(
-        fs::read_to_string(f.scratch.path().join("prompt-review"))?.contains("Artifact check.txt")
-    );
+    assert!(f.packet_artifact("review", "check.txt")?["path"].is_string());
     for role in ["review", "validation"] {
         assert_eq!(
             fs::read_to_string(f.scratch.path().join(format!("read-artifact-{role}")))?,
@@ -862,7 +870,11 @@ fn oversized_worker_artifact_reports_limit_and_releases_scratch() -> Result {
     let f = Fixture::new()?;
     f.provider("artifact-oversize")?;
     f.add("Reject oversized capture")?;
-    let run = f.process().args(["run", "--one"]).output()?;
+    let run = f
+        .process()
+        .env("KTASK_ARTIFACT_FILE_BYTES", "8388608")
+        .args(["run", "--one"])
+        .output()?;
     assert_eq!(run.status.code(), Some(0));
     assert!(
         String::from_utf8_lossy(&run.stdout).contains("8 MiB per-artifact limit"),
@@ -890,7 +902,11 @@ fn many_empty_artifacts_and_nested_entry_pause_with_bounded_records() -> Result 
     let f = Fixture::new()?;
     f.provider("artifact-empty-flood")?;
     f.add("Bound empty evidence")?;
-    let output = f.process().args(["run", "--one"]).output()?;
+    let output = f
+        .process()
+        .env("KTASK_ARTIFACT_ATTEMPT_FILES", "128")
+        .args(["run", "--one"])
+        .output()?;
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stdout).contains("Resource limit"));
     let db = f.db()?;
@@ -919,7 +935,14 @@ fn resource_pause_is_visible_in_real_terminal_by_keyboard_and_mouse() -> Result 
         let f = Fixture::new()?;
         f.provider("artifact-oversize")?;
         f.add("Inspect resource pause")?;
-        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 34)?;
+        let mut t = Terminal::open_project_with_env(
+            BIN,
+            f.scratch.path(),
+            &f.root,
+            120,
+            34,
+            &[("KTASK_ARTIFACT_FILE_BYTES", "8388608")],
+        )?;
         t.screen("resource fixture ready", |screen| {
             screen.contains("Inspect resource pause") && screen.contains("r Run queue")
         })?;
@@ -1536,7 +1559,11 @@ fn mixed_artifacts_keep_valid_siblings_and_reject_oversize_without_orphans() -> 
     let f = Fixture::new()?;
     f.provider("artifact-mixed")?;
     f.add("Archive valid siblings")?;
-    let output = f.process().args(["run", "--one"]).output()?;
+    let output = f
+        .process()
+        .env("KTASK_ARTIFACT_FILE_BYTES", "8388608")
+        .args(["run", "--one"])
+        .output()?;
     assert_eq!(output.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&output.stdout).contains("8 MiB per-artifact limit"));
     let db = f.db()?;
@@ -1668,7 +1695,11 @@ fn cross_turn_budget_rejects_new_file_without_retaining_untracked_bytes() -> Res
         "head -c 8388608 /dev/zero > \"$KTASK_ARTIFACT_DIR/extra.bin\"; test -f result.txt",
     ])?;
     f.add("Bound attempt evidence")?;
-    let run = f.process().args(["run", "--one"]).output()?;
+    let run = f
+        .process()
+        .env("KTASK_ARTIFACT_ATTEMPT_BYTES", "67108864")
+        .args(["run", "--one"])
+        .output()?;
     assert_eq!(run.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&run.stdout).contains("64 MiB per-attempt artifact limit"));
     let db = f.db()?;
@@ -1743,7 +1774,11 @@ fn oversized_check_transcript_is_rejected_without_state_file() -> Result {
         "head -c 8388609 /dev/zero | tr '\\000' x",
     ])?;
     f.add("Bound check transcript")?;
-    let run = f.process().args(["run", "--one"]).output()?;
+    let run = f
+        .process()
+        .env("KTASK_ARTIFACT_FILE_BYTES", "8388608")
+        .args(["run", "--one"])
+        .output()?;
     assert_eq!(run.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&run.stdout).contains("8 MiB per-artifact limit"));
     assert_eq!(f.ok(&["show", "1"])?["attempts"][0]["state"], "paused");
@@ -1773,7 +1808,7 @@ fn failed_check_capture_is_read_by_next_repair_turn() -> Result {
     );
     let prompt = fs::read_to_string(f.scratch.path().join("prompt-repair-worker"))?;
     assert!(
-        prompt.contains("Artifact diagnostic.txt") && prompt.contains("read-only path"),
+        f.packet_artifact("repair-worker", "diagnostic.txt")?["path"].is_string(),
         "{prompt}"
     );
     f.no_scratch()?;
@@ -4246,6 +4281,19 @@ impl Fixture {
         ])?;
         Ok(())
     }
+    fn packet_text(&self, role: &str, name: &str) -> Result<String> {
+        let directory = fs::read_to_string(self.scratch.path().join(format!("packet-{role}")))?;
+        Ok(fs::read_to_string(Path::new(&directory).join(name))?)
+    }
+    fn packet_artifact(&self, role: &str, name: &str) -> Result<Value> {
+        for line in self.packet_text(role, "artifacts.jsonl")?.lines() {
+            let item: Value = serde_json::from_str(line)?;
+            if item["name"] == name && item["availability"] == "available" {
+                return Ok(item);
+            }
+        }
+        Err(format!("Missing {name} in {role} evidence index").into())
+    }
     fn db(&self) -> Result<Database> {
         Ok(Database::open_in(
             &self.scratch.path().join("state/ktask-dev"),
@@ -4274,6 +4322,15 @@ if [ '{mode}' = check-launch-failure ]; then
  printf '%s %s\n' "$$" "$PPID" >> "$HOME/launch-fixture-pids"
 fi
 prompt=$(cat)
+printf '%s' "$prompt" > "$HOME/input-$model"
+packet=$(printf '%s\n' "$prompt" | sed -n 's/^Read-only index directory: //p' | head -n 1)
+if [ -n "$packet" ]; then
+ cp -R "$packet" "$HOME/evidence-$model-$$"
+ printf '%s' "$HOME/evidence-$model-$$" > "$HOME/packet-$model"
+ context=$(cat "$packet/workflow.txt")
+ prompt="$prompt
+$context"
+fi
 printf '%s' "$prompt" > "$HOME/prompt-$model"
 case "$prompt" in *"Verify the revised goal after Stop"*)
  if [ "$model" = execution ]; then printf '%s' "$prompt" > "$HOME/revised-prompt"; fi;;
@@ -4282,7 +4339,7 @@ if [ "$model" = review ] && [ -f "$HOME/first-review-prompt" ] && [ ! -f "$HOME/
 if [ "$model" = review ] && [ ! -f "$HOME/first-review-prompt" ]; then printf '%s' "$prompt" > "$HOME/first-review-prompt"; fi
 if [ "$model" = validation ] && [ ! -f "$HOME/first-validation-prompt" ]; then printf '%s' "$prompt" > "$HOME/first-validation-prompt"; fi
 repair=no
-case "$prompt" in *"Fix what Context reports"*) repair=yes; printf '%s' "$prompt" > "$HOME/prompt-repair-worker";; esac
+case "$prompt" in *"Fix what Context reports"*) repair=yes; cp "$HOME/packet-$model" "$HOME/packet-repair-worker"; printf '%s' "$prompt" > "$HOME/prompt-repair-worker";; esac
 [ -n "$session" ] || session="session-$model-$$"
 printf '{{"type":"thread.started","thread_id":"%s"}}\n' "$session"
 printf '%s\n' "$model" >> "$HOME/provider-invocations"
@@ -4388,7 +4445,7 @@ case '{mode}' in
   fi;;
  read-repair-capture)
   if [ "$repair" = yes ]; then
-   artifact=$(printf '%s\n' "$prompt" | sed -n 's/.*Artifact diagnostic.txt:.*read-only path \(.*\)$/\1/p' | head -n 1)
+   artifact=$(grep '"name":"diagnostic.txt"' "$packet/artifacts.jsonl" | sed -n 's/.*"path":"\([^"]*\)".*/\1/p' | head -n 1)
    [ -n "$artifact" ] || exit 22
    cat "$artifact" > "$HOME/repair-capture-read" || exit 23
    if (printf tamper >> "$artifact") 2>/dev/null; then exit 24; fi
@@ -4502,14 +4559,15 @@ case '{mode}' in
  review-asks) case "$model" in review) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"blocked\",\"summary\":\"Need direction\",\"question\":\"Which content?\",\"criteria\":[]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;; esac;;
 esac
 if [ '{mode}' = normal ] && {{ [ "$model" = review ] || [ "$model" = validation ]; }}; then
- artifact=$(printf '%s\n' "$prompt" | sed -n 's/.*Artifact check.txt:.*read-only path \(.*\)$/\1/p' | head -n 1)
+ artifact=$(grep '"name":"check.txt"' "$packet/artifacts.jsonl" | sed -n 's/.*"path":"\([^"]*\)".*/\1/p' | head -n 1)
  if [ -n "$artifact" ]; then
   cat "$artifact" > "$HOME/read-artifact-$model" || exit 20
   if (printf 'write-test' >> "$artifact") 2>/dev/null; then exit 21; fi
  fi
 fi
 if [ "$repair" = yes ]; then
- if [ '{mode}' = resolve-conflict ] || [ '{mode}' = resolve-conflict-pause ]; then printf 'remote\nverified\n' > result.txt; elif [ '{mode}' = reuse-changed ]; then printf 'verified after repair\n' > result.txt; else printf 'verified\n' > result.txt; fi
+ if [ '{mode}' = judge-noisy ]; then printf 'verified repair\n' >> result.txt
+ elif [ '{mode}' = resolve-conflict ] || [ '{mode}' = resolve-conflict-pause ]; then printf 'remote\nverified\n' > result.txt; elif [ '{mode}' = reuse-changed ]; then printf 'verified after repair\n' > result.txt; else printf 'verified\n' > result.txt; fi
 elif [ "$model" = execution ]; then
  if [ '{mode}' = sequential-pr ]; then n=0; [ ! -f "$HOME/pr-executions" ] || n=$(cat "$HOME/pr-executions"); n=$((n+1)); printf '%s' "$n" > "$HOME/pr-executions"; printf 'verified %s\n' "$n" > result.txt; elif [ '{mode}' = attributes-checkpoint ]; then printf 'verified\n' > result.txt; printf '*.txt text=auto\n' > .gitattributes; else printf 'verified\n' > result.txt; fi
 fi
@@ -5559,7 +5617,10 @@ fn reviewers_receive_current_proof_and_authorized_repair_context() -> Result {
     let remediation = fs::read_to_string(f.scratch.path().join("prompt-repair-worker"))?;
     let writable_checks = "Run only focused builds, lints and tests for what you change";
     assert!(remediation.contains(writable_checks));
-    assert!(remediation.contains(failed_artifact.to_str().unwrap()));
+    assert!(
+        f.packet_text("repair-worker", "artifacts.jsonl")?
+            .contains(failed_artifact.to_str().unwrap())
+    );
     assert!(remediation.contains("Check build failed (exit 7)\nprevious failed check"));
     for role in ["review", "validation"] {
         let prompt = fs::read_to_string(f.scratch.path().join(format!("prompt-{role}")))?;
@@ -5573,7 +5634,10 @@ fn reviewers_receive_current_proof_and_authorized_repair_context() -> Result {
         // A red check went straight back to the worker; no judge planned this round.
         assert!(prompt.contains("Supervisor checks failed, repair round 1/10"));
         assert!(!prompt.contains("Repair plan from the failure judge"));
-        assert!(prompt.contains(failed_artifact.to_str().unwrap()));
+        assert!(
+            f.packet_text(role, "artifacts.jsonl")?
+                .contains(failed_artifact.to_str().unwrap())
+        );
         assert!(prompt.contains("Check build failed (exit 7)"));
     }
     let execution = fs::read_to_string(f.scratch.path().join("prompt-execution"))?;
@@ -6529,7 +6593,7 @@ fn failure_judge_can_rewrite_the_task_without_spending_budget() -> Result {
 #[test]
 fn judge_evidence_stays_within_the_provider_input_limit() -> Result {
     let f = Fixture::new()?;
-    f.provider("judge")?;
+    f.provider("judge-noisy")?;
     // Two critical reviews in one attempt: the second judge reads a 1.5 MB check transcript
     // recorded after the first judge's decision.
     f.fail_reviews(2)?;
@@ -6544,17 +6608,48 @@ fn judge_evidence_stays_within_the_provider_input_limit() -> Result {
     assert_eq!(f.ok(&["show", "1"])?["lifecycle"], "succeeded");
     let prompt = fs::read_to_string(f.scratch.path().join("prompt-judge"))?;
     assert!(prompt.contains("You are the failure judge"));
+    let input = fs::read_to_string(f.scratch.path().join("input-remediation"))?;
     assert!(
-        prompt.contains("second check passes"),
-        "the latest check output survives trimming"
+        input.len() < 32 * 1024,
+        "bounded starting packet: {} bytes",
+        input.len()
+    );
+    let artifacts = f.packet_text("remediation", "artifacts.jsonl")?;
+    assert!(
+        artifacts
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .any(|row| {
+                row["path"]
+                    .as_str()
+                    .and_then(|path| fs::read_to_string(path).ok())
+                    .is_some_and(|text| text.contains("second check passes"))
+            }),
+        "complete noisy check remains accessible"
     );
     assert!(prompt.contains("result.txt:1: boundary case is wrong"));
-    assert!(prompt.contains("Authorized repair plan:\nRerun the check after writing result.txt"));
-    assert!(prompt.contains("Recorded judgment output:\n{\"judgment\":"));
+    let steps = f.packet_text("remediation", "steps.jsonl")?;
     assert!(
-        prompt.chars().count() < 1_048_576,
-        "Codex rejects longer turns; prompt was {} chars",
-        prompt.chars().count()
+        steps
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .any(|row| {
+                row["report"]
+                    .as_str()
+                    .and_then(|path| Path::new(path).file_name())
+                    .and_then(|name| name.to_str())
+                    .and_then(|name| f.packet_text("remediation", name).ok())
+                    .is_some_and(|report| {
+                        report.contains(
+                            "Authorized repair plan:\nRerun the check after writing result.txt",
+                        )
+                    })
+            }),
+        "prior authorized plan remains in the complete step report"
+    );
+    assert!(
+        f.packet_text("remediation", "steps.jsonl")?
+            .contains("remediation")
     );
     f.no_scratch()?;
     Ok(())
@@ -10084,7 +10179,7 @@ fn review_failure_is_judged_repaired_and_queue_continues_automatically() -> Resu
         t.finish()?;
         let repair = fs::read_to_string(f.scratch.path().join("prompt-repair-worker"))?;
         assert!(
-            repair.contains("Artifact review-proof.txt") && repair.contains("read-only path"),
+            f.packet_artifact("repair-worker", "review-proof.txt")?["path"].is_string(),
             "{repair}"
         );
         let first = f.ok(&["show", "1"])?;
