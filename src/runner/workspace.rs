@@ -510,12 +510,7 @@ impl Workspace {
         let output = Command::new("git")
             .arg("-C")
             .arg(&self.root)
-            .args([
-                "-c",
-                "commit.gpgsign=false",
-                "-c",
-                "core.hooksPath=/dev/null",
-            ])
+            .args(["-c", "commit.gpgsign=false"])
             .args(args)
             .env("GIT_AUTHOR_NAME", &identity.name)
             .env("GIT_AUTHOR_EMAIL", &identity.email)
@@ -804,6 +799,43 @@ mod fingerprint_tests {
             assert_eq!(git(root, &["rev-parse", "HEAD^{tree}"])?, amended_tree);
             assert_excluded_blobs(root)?;
         }
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_and_amend_respect_commit_hooks() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let project = tempfile::tempdir()?;
+        let root = project.path();
+        run(root, &["init", "-q"]);
+        run(root, &["config", "user.name", "Illya Yalovyy"]);
+        run(root, &["config", "user.email", "yalovoy@gmail.com"]);
+        std::fs::write(root.join("tracked.txt"), "baseline\n")?;
+        run(root, &["add", "tracked.txt"]);
+        run(root, &["commit", "-qm", "Create baseline"]);
+        let hooks = root.join(".git/test-hooks");
+        std::fs::create_dir(&hooks)?;
+        run(root, &["config", "core.hooksPath", hooks.to_str().unwrap()]);
+        let hook = hooks.join("commit-msg");
+        std::fs::write(&hook, "#!/bin/sh\necho hook-rejected >&2\nexit 1\n")?;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
+        let workspace = Workspace::acquire(root)?;
+        let base = workspace.head()?;
+        std::fs::write(root.join("tracked.txt"), "first\n")?;
+        let tree = fingerprint(&workspace)?;
+        let error = workspace.checkpoint(1, 1, &base, &tree, false).unwrap_err();
+        assert!(error.to_string().contains("hook-rejected"));
+        assert_eq!(workspace.head()?, base);
+        std::fs::write(&hook, "#!/bin/sh\nexit 0\n")?;
+        let committed = workspace.checkpoint(1, 1, &base, &tree, false)?;
+        std::fs::write(&hook, "#!/bin/sh\necho hook-rejected >&2\nexit 1\n")?;
+        std::fs::write(root.join("tracked.txt"), "second\n")?;
+        let tree = fingerprint(&workspace)?;
+        let error = workspace
+            .checkpoint(1, 1, &committed, &tree, true)
+            .unwrap_err();
+        assert!(error.to_string().contains("hook-rejected"));
+        assert_eq!(workspace.head()?, committed);
         Ok(())
     }
 
