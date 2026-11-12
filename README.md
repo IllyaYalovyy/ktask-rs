@@ -11,6 +11,7 @@ with human questions reserved for consequential product decisions.
 Requires Linux, Rust 1.97+, Git and a terminal. AI execution requires at least one authenticated
 agent CLI: Codex (tested with 0.163.0), Claude Code (`claude`, tested with 2.1.305) or OpenCode
 (`opencode`, tested with 1.19.3). Each role may use a different provider. Start with `cargo run --locked`; run checks with `make check`.
+To configure ktask, see [Configure ktask](#configure-ktask).
 
 | Instance | Start | App directory under each XDG root |
 | --- | --- | --- |
@@ -186,83 +187,138 @@ Run `make check` for formatting, Clippy, terminal flows, storage/migrations, iso
 cleanup, and build checks.
 The normal tests use deterministic provider processes; the opt-in live test uses authenticated Codex.
 
-## Use ktask on your project
+## Configure ktask
 
-Install once with `make install`; it puts `ktask` in `~/.cargo/bin`. Execution also needs
-bubblewrap (`bwrap`) and a signed-in agent CLI. Save model defaults once, and every project
-you set up afterwards starts with them:
+Settings live at three levels. A lower level overrides the one above it:
+
+| Level | Applies to | Set it with |
+| --- | --- | --- |
+| 1. Global | Role models: every project without its own override. Other defaults: copied into a project when it is registered | `ktask model-default --new-projects`, `ktask defaults`, `ktask profile default`; TUI Configuration → **u User defaults** |
+| 2. Project | One Git repository | `ktask init`, `check-set`, `model-default`, `profile select`, `delivery`; TUI Configuration |
+| 3. Task | One task | `ktask add` / `ktask edit` flags; TUI task form and **Models** |
+
+Install once with `make install` (puts `ktask` in `~/.cargo/bin`). Execution also needs
+bubblewrap (`bwrap`) and a signed-in agent CLI. Run every command inside a project directory or pass
+`--project DIR`; `model-default`, `defaults` and `profile` register the current directory as a
+project if it is not one, so run them inside your first real project. `ktask` and `ktask-dev`
+keep separate settings.
+
+### 1. Global configuration
+
+**Role models.** A task needs `execution`, `review`, `validation` and `remediation` models;
+`planning` is used only by `breakdown`. `--provider` is `codex`, `claude` or `opencode`; `--model`
+is optional for `claude` (Sonnet); `--effort` is optional. Any role may use any provider.
 
 ```sh
-ktask model-default execution --provider claude --model opus --effort high --new-projects
-ktask model-default planning --provider claude --model opus --effort high --new-projects
-# likewise review, validation and remediation
+ktask model-default execution   --provider claude --model sonnet --effort medium --new-projects
+ktask model-default review      --provider claude --model opus   --effort high   --new-projects
+ktask model-default validation  --provider claude --model opus   --effort high   --new-projects
+ktask model-default remediation --provider claude --model opus   --effort high   --new-projects
+ktask model-default planning    --provider claude --model opus   --effort high   --new-projects
 ```
 
-The same user-wide defaults also cover the agent network, baseline checks, check timeout, run
-mode, planner approval and delivery mode, so a new project needs only its verification command,
-delivery destination and domain instructions:
+`--new-projects` saves the global default and also sets the current project's own override for
+that role. To remove the project's own overrides, so its selected profile or the global models
+apply, run `ktask profile inherit --all`. Role models are inherited, not copied: every project
+without its own override uses the current global models for tasks added afterwards.
+
+To reuse one set of roles across projects, save it as a named profile and make it the global
+default (`profile create --model ROLE=PROVIDER/MODEL` also works; a profile a project selects
+cannot be deleted; TUI: Configuration → **f Profiles**):
+
+```sh
+ktask profile create Anthropic --from-project   # capture this project's roles as they are
+ktask profile default Anthropic                 # new projects start with it (or --none)
+```
+
+**Other defaults.** These are copied into a project when it is registered:
 
 ```sh
 ktask defaults --agent-network off --check-before-task on --check-timeout-ms 600000 \
-    --run-mode queue --planner-approval automatic --delivery-mode local
-ktask defaults            # the saved defaults, and what they would change in this project
-ktask defaults --apply    # explicitly apply them to this existing project
+    --run-mode queue --planner-approval automatic --delivery-mode local   # all options optional
+ktask defaults           # show the saved defaults and what they would change in this project
+ktask defaults --apply   # apply them to an existing project
 ```
 
-Named profiles reuse a role/model/effort mapping across projects without repeating it.
-Profiles map roles to models for the existing providers; ktask never claims a model exists.
+The project where you ran these commands was registered before the settings were saved, so run
+`ktask defaults --apply` there once; it also applies the default profile and keeps the project's
+check commands, remote and base branch. Those three are never global.
 
-```sh
-ktask profile create Anthropic --from-project           # capture this project's roles as they are
-ktask profile create Qwen --model execution=opencode/vendor/qwen-model --model review=opencode/vendor/qwen-model
-ktask profile select Anthropic                          # this project; or --none
-ktask profile default Anthropic                         # new projects start with it
-ktask profile effective                                 # each role's model and where it comes from
-```
+### 2. Project configuration
 
-A role's model resolves through the user defaults, the project's profile, the project's own
-overrides (`model-default`, cleared by `profile inherit`), then a task's own models. A task
-copies the result into its revision, so profile edits and selections affect only tasks defined
-afterwards; apply them to a pending task with `edit --apply-project-defaults`. A profile a
-project selects cannot be deleted. TUI: Configuration → **f Profiles**.
-
-They are saved once per user and instance (TUI: Configuration → **u User defaults**, which
-can preview and apply them to the open project). Only a project registered afterwards copies
-the other settings; an existing project keeps them until you apply the defaults. Role models are
-inherited, not copied, unless the project overrides them. Tasks and attempts keep their pinned inputs. Applying keeps the project's check commands, remote and base
-branch. The check command, directories, remote and branch are never inherited.
-
-Review, validation and remediation (the failure judge that plans each repair) may use any provider and model,
-including the execution model's; the execution model applies the repair plans in its
-own session, so a fix does not start cold. Workers run focused tests; the supervisor's full check
-run is the gate that reviewers read. Then, in each project (a Git repository root with at least one commit):
+In the project's Git repository (at least one commit, with `git config user.name` and
+`user.email` set):
 
 ```sh
 cd ~/src/my-project
-ktask init     # registers the project, detects its check, lists anything still missing
-ktask          # TUI: a Add, then r Run
+ktask init --check-command 'make check'   # register; omit the option to detect the check
+ktask                                     # TUI: a Add, then r Run
 ```
 
-`init` detects the check from a Makefile `check` or `test` target, `Cargo.toml`, a
-`package.json` test script, `go.mod`, or Python tests (pytest or unittest, at the root or in
-`tests/`); `--check-command CMD` sets it explicitly. The supervisor reads the test summaries
-of `cargo test`, pytest, unittest (and Django), Jest, Vitest, Mocha and `node --test`: a
-reported failed test fails the check even when the command exits 0, and fewer passing or more
-ignored tests than at the previous checkpoint block validation. Other runners, such as
-`go test`, are judged by exit code alone. `--agent-network on` lets Codex agents that change the project use the network,
-for example to install dependencies; it is off by default. `--check-before-task off` skips the
-checks on a task's starting commit (on by default; Configuration → Preferences has the same
-switch). `init` exits 4 and lists each fix
-when the project still cannot run tasks. The TUI covers the same setup: in a new project
-**u Readiness** lists what is missing, with **c Checks** (the first check is prefilled with
-the detected command), **d Defaults** (choose "New projects: Start with these" to save them
-for later projects), Configuration → **u User defaults** and **e Preferences** → Agent network.
-`init` applies the user defaults, then your options, and prints "Project-specific setup still
-to do": the verification command, the delivery destination (when the inherited mode pushes)
-and domain instructions (AGENTS.md or CLAUDE.md). Each project keeps
-its own queue, checks and model defaults in the same instance database, and has its own
-supervisor: several projects run at the same time, each with its own TUI or CLI, and pausing
-one leaves the others running.
+`init` applies the global defaults only when it registers the project. On a registered project it
+sets the check and any switches you pass, then lists what is still missing. It
+detects the check from a Makefile `check` or `test` target, `Cargo.toml`, a `package.json` test
+script, `go.mod`, or Python tests; `--check-name NAME` names it. Override only what differs for this
+project:
+
+```sh
+ktask check-set lint --command 'make lint' --timeout-ms 600000          # add a check; all must pass
+ktask model-default review --provider codex --model gpt-6-sol --effort high   # this project only
+ktask profile select Anthropic          # use a profile here (or --none)
+ktask delivery --mode pr --remote origin --base main                    # local (default), direct or pr
+ktask init --agent-network on           # let agents that change the project use the network
+ktask init --check-before-task off      # skip the checks on a task's starting commit
+ktask profile effective                 # each role's model and which level supplies it
+ktask profile inherit --all             # drop this project's model overrides
+```
+
+Project model settings change only tasks added afterwards. Checks cannot change while an
+attempt is running. TUI: Configuration → **m Defaults** (models), **c Checks**, **e Preferences** (run
+mode, mouse, agent network, baseline checks) and **g Git delivery**. Put project rules for agents
+in `AGENTS.md` or `CLAUDE.md` at the repository root.
+
+### 3. Task configuration
+
+A new task copies the project's effective models. Override them, and set limits, on the task itself:
+
+```sh
+ktask add --title "Fix pagination" --goal "Show every task" --criterion "Final row is visible" \
+    --model review=codex/gpt-6-sol --effort review=high \
+    --attempt-limit 5 --task-limit 6h --stage-limit 45m
+ktask edit 7 --model execution=claude/opus --effort execution=high --if-version 2
+ktask edit 7 --clear-model review                 # remove a role's model and effort
+ktask edit 7 --apply-project-defaults             # re-copy the project's current models
+```
+
+`--model` is `ROLE=PROVIDER/MODEL` (repeat per role); `--effort ROLE=VALUE` sets effort (`none`
+clears it). Limits are `--attempt-limit N|unlimited` (default 3), `--task-limit off|on|DURATION` and
+`--stage-limit off|on|DURATION`. Other per-task options are `--kind ai|human|docs`,
+`--category NAME` and `--lens NAME`. An edit adds a new revision; a running or finished task cannot
+be edited, and `ktask show 7` prints the effective settings. TUI: **e** Edit the task, then **Models**.
+
+### Which value wins
+
+A role's model comes from the first of these that is set: the task, the project's own overrides
+(`model-default`), the project's selected profile, the global defaults. Profile and default
+changes affect only tasks defined afterwards.
+
+## Use ktask on your project
+
+Set up the project with `ktask init` as described in [Configure ktask](#configure-ktask).
+Workers run focused tests; the supervisor's full check run is the gate that reviewers read.
+
+The supervisor reads the test summaries of `cargo test`, pytest, unittest (and Django), Jest,
+Vitest, Mocha and `node --test`: a reported failed test fails the check even when the command
+exits 0, and fewer passing or more ignored tests than at the previous checkpoint block
+validation. Other runners, such as `go test`, are judged by exit code alone. `--agent-network on`
+applies to Codex agents; it is off by default. `init` exits 4 and lists each fix when the project
+still cannot run tasks and prints "Project-specific setup still to do": the verification
+command, the delivery destination (when the inherited mode pushes) and domain instructions.
+In the TUI, **u Readiness** lists what is missing, with **c Checks** (the first check is
+prefilled with the detected command) and **d Defaults** (choose "New projects: Start with
+these" to save them globally). Each project keeps its own queue, checks and model defaults in
+the same instance database, and has its own supervisor: several projects run at the same time,
+each with its own TUI or CLI, and pausing one leaves the others running.
 
 ## Task kinds
 
@@ -420,23 +476,7 @@ during running, paused, or waiting attempts. Cancel and invalid edits leave save
 stale forms must be reopened. Defaults and checks use relational SQLite rows; preferences use
 a typed, atomically replaced file under the instance config directory.
 
-Alternatively, configure checks and model defaults through CLI (replace model placeholders):
-
-```sh
-ktask check-set build --command 'make check' --timeout-ms 600000
-ktask model-default execution --provider codex --model CHEAP_MODEL --effort medium
-ktask model-default review --provider codex --model CAPABLE_MODEL --effort high
-ktask model-default validation --provider codex --model CAPABLE_MODEL --effort high
-ktask model-default remediation --provider codex --model CAPABLE_MODEL --effort high
-ktask
-```
-
-Claude Code and OpenCode work the same way, for example
-`ktask model-default execution --provider claude --effort high` (Sonnet) with
-`--provider claude --model opus` for the judging roles, or
-`--provider opencode --model anthropic/claude-sonnet-5-5`.
-
-Defaults apply to new tasks only. Use **Models** or `edit --model` for existing tasks.
+Defaults apply to new tasks only; see [Configure ktask](#configure-ktask) for existing tasks.
 In Current, **Run** starts a detached supervisor using the saved run mode. Run one stops after
 current succeeds; Continue queue advances after verified success. The Run button names its mode;
 **m Run mode** opens preferences directly from Current. The global strip shows that preference
