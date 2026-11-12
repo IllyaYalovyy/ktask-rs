@@ -1177,6 +1177,10 @@ fn blocked_supervisor_delivery_pauses_and_resumes_same_attempt() -> Result {
         unistd::Pid,
     };
 
+    // The quota leaves room beyond startup files for enough output to block the stopped
+    // supervisor, and stdout is emitted before scratch increases.
+    const BLOCKED_SCRATCH_BYTES: u64 = 256 * 1024;
+
     for mouse in [false, true] {
         let f = Fixture::new()?;
         f.provider("scratch-blocked-supervisor")?;
@@ -1184,7 +1188,7 @@ fn blocked_supervisor_delivery_pauses_and_resumes_same_attempt() -> Result {
         f.add("Do not advance the queue")?;
         let mut supervisor = f
             .process()
-            .env("KTASK_SCRATCH_BYTES", "65536")
+            .env("KTASK_SCRATCH_BYTES", BLOCKED_SCRATCH_BYTES.to_string())
             .args(["run", "--one"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1269,7 +1273,10 @@ fn blocked_supervisor_delivery_pauses_and_resumes_same_attempt() -> Result {
             remediation,
             String::from_utf8_lossy(&output.stdout)
         );
-        assert!(peak.0 > 65536 && peak.0 < 2 * 1024 * 1024, "peak={peak:?}");
+        assert!(
+            peak.0 > BLOCKED_SCRATCH_BYTES && peak.0 < 2 * 1024 * 1024,
+            "peak={peak:?}"
+        );
         assert!(!f.scratch.path().join("scratch-natural-completion").exists());
         assert!(!PathBuf::from(format!("/proc/{provider_pid}")).exists());
         assert_eq!(first["attempts"][0]["state"], "paused", "{first}");
@@ -4424,7 +4431,9 @@ case '{mode}' in
    printf '%s' "$$" > "$HOME/blocked-provider-pid"
    touch "$HOME/blocked-provider-ready"
    until [ -f "$HOME/blocked-provider-go" ]; do sleep 0.01; done
-   i=0; while [ "$i" -lt 2000 ]; do head -c 16384 /dev/zero >> "$TMPDIR/flood.bin"; head -c 4096 /dev/zero; i=$((i + 1)); sleep 0.01; done
+   # Write stdout before growing scratch: each 4096-byte chunk is an ~8 KiB guardian frame,
+   # so the quota (256 KiB = 16 iterations) is not seen before the stopped supervisor's 64 KiB pipe fills.
+   i=0; while [ "$i" -lt 2000 ]; do head -c 4096 /dev/zero; head -c 16384 /dev/zero >> "$TMPDIR/flood.bin"; i=$((i + 1)); sleep 0.01; done
    touch "$HOME/scratch-natural-completion"
   fi;;
  scratch-closed-pipe-entries)
@@ -9691,41 +9700,71 @@ fn exhausted_original_retries_with_restarted_limits_in_mouse_and_keyboard_tuis()
 #[test]
 fn configured_task_deadline_counts_earlier_repairs_and_retry_restarts_it() -> Result {
     let f = Fixture::new()?;
-    f.provider("malformed-work")?;
-    // The first attempt fails after about 3 s of provider retries; its repair worker then
-    // runs until the task-wide limit stops it.
-    let provider = f.scratch.path().join("bin/codex");
-    let script = fs::read_to_string(&provider)?;
-    let anchor = r"malformed-work) printf 'verified\n' > result.txt;";
-    assert_eq!(script.matches(anchor).count(), 1, "provider anchor changed");
-    let held = r#"malformed-work) if [ "$repair" = yes ]; then sleep 30; fi; printf 'verified\n' > result.txt;"#;
-    support::write_executable(&provider, script.replace(anchor, held))?;
     f.add("Deadline across repairs")?;
-    let limit = 6000;
+    // A generous limit that the two seeded attempts reach only together, so no wall clock
+    // decides the outcome: recorded elapsed time does.
+    let (limit, first_ms, repair_ms) = (60_000_i64, 35_000_i64, 25_000_i64);
     f.ok(&["edit", "1", "--timeout-ms", &limit.to_string()])?;
+    let head = f.git(&["rev-parse", "HEAD"])?;
+    let head = head.trim();
+    let mut service = Service::open(f.db()?, &f.root, None)?;
+    let target = |service: &mut Service| -> Result<VersionedTask> {
+        Ok(VersionedTask {
+            id: 1,
+            version: service.current_task()?.expect("current task").version,
+        })
+    };
+    let first_target = target(&mut service)?;
+    let first = service.begin_run(first_target, "deadline-first", head, true)?;
+    service.active_time(&first, first_ms)?;
+    service.finish_run(
+        &first,
+        "failed",
+        Some("agent"),
+        "First attempt failed",
+        None,
+    )?;
+    let repair_target = target(&mut service)?;
+    let repair = service.begin_run(repair_target, "deadline-repair", head, false)?;
+    service.active_time(&repair, repair_ms)?;
+    service.finish_run(&repair, "paused", None, "Repair paused", None)?;
+    drop(service);
+    // The useful work the attempts left behind.
+    fs::write(f.root.join("result.txt"), "verified\n")?;
+
+    // Resuming the repair finds the task's recorded time already used up.
     assert_eq!(
         f.process().args(["run", "--one"]).output()?.status.code(),
         Some(4)
     );
     let task = f.ok(&["show", "1"])?;
-    assert_eq!(task["status"], "failed");
+    assert_eq!(task["status"], "failed", "{task}");
     let attempts = task["attempts"].as_array().unwrap();
     assert_eq!(attempts.len(), 2, "{task}");
     let active = |n: usize| attempts[n]["active_ms"].as_i64().unwrap();
-    println!("DEADLINE ACTIVE first={} repair={}", active(0), active(1));
-    // The repair stopped at the limit that both attempts used up together.
+    assert_eq!(attempts[1]["state"], "failed", "{task}");
     let outcome = attempts[1]["outcome"].as_str().unwrap();
     assert!(outcome.contains("configured task-wide limit"), "{outcome}");
+    assert_eq!(active(0), first_ms, "{task}");
+    assert!(active(1) >= repair_ms, "{task}");
     assert!(active(0) < limit && active(1) < limit, "{task}");
     assert!(active(0) + active(1) >= limit, "{task}");
+    assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
 
-    // Retry restarts the limit along with the attempt count.
-    f.provider("normal")?;
+    // Retry restarts the limit along with the attempt count, keeping the work.
     f.ok(&["run", "--one"])?;
     let task = f.ok(&["show", "1"])?;
-    assert_eq!(task["status"], "succeeded");
+    assert_eq!(task["status"], "succeeded", "{task}");
     assert_eq!(task["attempts"].as_array().unwrap().len(), 3);
     assert_eq!(task["attempts_used"], 1);
+    assert_eq!(
+        f.db()?
+            .connection()
+            .query_row("SELECT counted_from FROM tasks WHERE id=1", [], |r| r
+                .get::<_, i64>(0))?,
+        2
+    );
+    assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
     f.no_scratch()?;
     Ok(())
 }
