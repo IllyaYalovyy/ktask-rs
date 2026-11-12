@@ -38,6 +38,10 @@ pub enum DialogKind {
     ProjectModels(Box<crate::application::configuration::Defaults>),
     UserDefaults(crate::application::user_defaults::UserDefaults),
     ApplyDefaults(Vec<crate::application::user_defaults::DefaultsRow>),
+    Profiles(Vec<crate::application::profiles::Profile>),
+    Profile {
+        expected: Option<Box<crate::application::profiles::Profile>>,
+    },
     ProjectChecks(Vec<crate::application::configuration::ProjectCheck>),
     ProjectCheck {
         expected: Vec<crate::application::configuration::ProjectCheck>,

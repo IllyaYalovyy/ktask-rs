@@ -33,16 +33,16 @@ fn any_model_name_saves_and_only_structure_is_rejected_atomically() -> Result {
         ] {
             let mut values = defaults.clone();
             values[index] = Some(chosen.clone());
-            service.save_defaults(&service.project_defaults()?, &values)?;
+            service.save_project_overrides(&service.project_overrides()?, &values)?;
             assert_eq!(service.project_defaults()?[index], Some(chosen.clone()));
             service.save_new_project_defaults(&values)?;
             assert_eq!(service.new_project_defaults()?[index], Some(chosen.clone()));
             service.set_default(role, &chosen, true)?;
         }
-        service.save_defaults(&service.project_defaults()?, &defaults)?;
+        service.save_project_overrides(&service.project_overrides()?, &defaults)?;
     }
     // Structure is still checked, and a rejected save changes nothing.
-    let before = service.project_defaults()?;
+    let before = service.project_overrides()?;
     let before_new = service.new_project_defaults()?;
     for (index, role) in MODEL_ROLES.iter().enumerate() {
         for (bad, needle) in [
@@ -65,7 +65,9 @@ fn any_model_name_saves_and_only_structure_is_rejected_atomically() -> Result {
             let mut values = before.clone();
             values[index] = Some(bad.clone());
             for error in [
-                service.save_defaults(&before, &values).unwrap_err(),
+                service
+                    .save_project_overrides(&before, &values)
+                    .unwrap_err(),
                 service.save_new_project_defaults(&values).unwrap_err(),
                 service.set_default(role, &bad, true).unwrap_err(),
             ] {
@@ -75,7 +77,7 @@ fn any_model_name_saves_and_only_structure_is_rejected_atomically() -> Result {
                     "{message}"
                 );
             }
-            assert_eq!(service.project_defaults()?, before);
+            assert_eq!(service.project_overrides()?, before);
             assert_eq!(service.new_project_defaults()?, before_new);
         }
     }
@@ -414,8 +416,8 @@ fn configuration_stale_writes_pinned_revisions_and_scope() -> Result {
             effort: None,
         })
     });
-    a.save_defaults(&defaults, &configured)?;
-    assert!(b.save_defaults(&defaults, &defaults).is_err());
+    a.save_project_overrides(&defaults, &configured)?;
+    assert!(b.save_project_overrides(&defaults, &defaults).is_err());
     let d = ktask_rs_mk3::application::Definition {
         title: "Pinned".into(),
         goal: "Goal".into(),
@@ -429,7 +431,7 @@ fn configuration_stale_writes_pinned_revisions_and_scope() -> Result {
     let id = a.create(std::slice::from_ref(&d), None, true)?[0];
     let mut updated = configured.clone();
     updated[1].as_mut().unwrap().model = "new".into();
-    b.save_defaults(&configured, &updated)?;
+    b.save_project_overrides(&configured, &updated)?;
     assert_eq!(a.task(id)?.unwrap().definition().definition, d);
     let mut check = ProjectCheck {
         id: None,
@@ -709,7 +711,10 @@ fn new_projects_inherit_user_defaults_and_existing_ones_change_only_when_applied
     assert!(early.check_before_task()? && !early.agent_network()?);
     assert_eq!(early.delivery_config()?.mode, "local");
     assert_eq!(early.preferences(&config)?, early_prefs);
-    assert!(early.project_defaults()?.iter().all(Option::is_none));
+    // Models are inherited, not copied: the project overrides nothing and now sees the
+    // user defaults, which only tasks defined afterwards use.
+    assert!(early.project_overrides()?.iter().all(Option::is_none));
+    assert_eq!(early.project_defaults()?, models);
 
     let late = open_project(root, "late")?;
     assert_inherited(&late, &config, &models)?;
@@ -784,13 +789,13 @@ fn apply_to_own_project(mut own: Service, config: &Path, models: &Defaults) -> R
         stage_timeout_ms: None,
     };
     let id = own.create(std::slice::from_ref(&definition), None, true)?[0];
-    let mut own_models = own.project_defaults()?;
+    let mut own_models = own.project_overrides()?;
     own_models[1] = Some(ModelConfig {
         provider: "codex".into(),
         model: "project-own".into(),
         effort: None,
     });
-    own.save_defaults(&own.project_defaults()?, &own_models)?;
+    own.save_project_overrides(&own.project_overrides()?, &own_models)?;
 
     // Preview shows effective values before anything changes; apply then matches it.
     let preview = own.defaults_preview(config)?;
@@ -1014,7 +1019,7 @@ fn applying_user_defaults_is_atomic_current_and_refused_during_live_work() -> Re
             enabled: true,
         },
     )?;
-    own.save_defaults(&own.project_defaults()?, &models)?;
+    own.save_project_overrides(&own.project_overrides()?, &models)?;
     let preview = own.defaults_preview(&config)?;
 
     // Another handle changes the project after the preview: nothing is applied.

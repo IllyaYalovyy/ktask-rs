@@ -1,8 +1,9 @@
 //! Reusable settings a new project starts with, kept once per user and instance.
 //!
-//! Models live in `default_models`; the rest is one versioned row. A new project copies them
-//! at registration. An existing project changes only through [`Service::apply_user_defaults`],
-//! after [`Service::defaults_preview`] showed each effective value. Commands, directories,
+//! Models live in `default_models`; the rest is one versioned row, including the profile a
+//! new project selects. A new project copies the settings and inherits the models. An
+//! existing project changes only through [`Service::apply_user_defaults`], after
+//! [`Service::defaults_preview`] showed each effective value. Commands, directories,
 //! remotes and branches are never part of the defaults.
 use super::{
     configuration::{self, DeliveryConfig, MODEL_ROLES},
@@ -24,6 +25,8 @@ pub struct UserDefaults {
     pub continuation: Continuation,
     pub planner_approval: PlannerApproval,
     pub delivery_mode: String,
+    /// Name of the profile a newly registered project selects.
+    pub default_profile: Option<String>,
 }
 
 impl Default for UserDefaults {
@@ -36,6 +39,7 @@ impl Default for UserDefaults {
             continuation: Continuation::default(),
             planner_approval: PlannerApproval::default(),
             delivery_mode: DeliveryConfig::default().mode,
+            default_profile: None,
         }
     }
 }
@@ -57,7 +61,7 @@ pub fn on_off(value: bool) -> &'static str {
 pub(super) fn read_user_defaults(db: &Connection) -> Result<UserDefaults> {
     Ok(db
         .query_row(
-            "SELECT row_version,agent_network,check_before_task,check_timeout_ms,continuation,planner_approval,delivery_mode FROM user_defaults WHERE id=1",
+            "SELECT row_version,agent_network,check_before_task,check_timeout_ms,continuation,planner_approval,delivery_mode,(SELECT name FROM model_profiles WHERE id=default_profile_id) FROM user_defaults WHERE id=1",
             [],
             |r| {
                 let continuation: String = r.get(4)?;
@@ -70,6 +74,7 @@ pub(super) fn read_user_defaults(db: &Connection) -> Result<UserDefaults> {
                     continuation: Continuation::parse(&continuation).unwrap_or_default(),
                     planner_approval: PlannerApproval::parse(&approval).unwrap_or_default(),
                     delivery_mode: r.get(6)?,
+                    default_profile: r.get(7)?,
                 })
             },
         )
@@ -77,7 +82,7 @@ pub(super) fn read_user_defaults(db: &Connection) -> Result<UserDefaults> {
         .unwrap_or_default())
 }
 
-fn model_text(model: Option<&ModelConfig>) -> String {
+pub fn model_text(model: Option<&ModelConfig>) -> String {
     model.map_or_else(
         || "unconfigured".into(),
         |model| match &model.effort {
@@ -131,12 +136,22 @@ impl Service {
             read_user_defaults(&tx)? == *expected,
             "User defaults changed elsewhere; reopen the form",
         )?;
+        let profile: Option<i64> = match &value.default_profile {
+            Some(name) => Some(
+                tx.query_row("SELECT id FROM model_profiles WHERE name=?1", [name], |r| {
+                    r.get(0)
+                })
+                .optional()?
+                .ok_or_else(|| Error::Conflict(format!("Unknown profile {name}")))?,
+            ),
+            None => None,
+        };
         let version = expected
             .version
             .checked_add(1)
             .ok_or_else(|| Error::Conflict("User defaults version exhausted".into()))?;
         tx.execute(
-            "INSERT INTO user_defaults(id,row_version,agent_network,check_before_task,check_timeout_ms,continuation,planner_approval,delivery_mode) VALUES (1,?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET row_version=excluded.row_version,agent_network=excluded.agent_network,check_before_task=excluded.check_before_task,check_timeout_ms=excluded.check_timeout_ms,continuation=excluded.continuation,planner_approval=excluded.planner_approval,delivery_mode=excluded.delivery_mode",
+            "INSERT INTO user_defaults(id,row_version,agent_network,check_before_task,check_timeout_ms,continuation,planner_approval,delivery_mode,default_profile_id) VALUES (1,?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET row_version=excluded.row_version,agent_network=excluded.agent_network,check_before_task=excluded.check_before_task,check_timeout_ms=excluded.check_timeout_ms,continuation=excluded.continuation,planner_approval=excluded.planner_approval,delivery_mode=excluded.delivery_mode,default_profile_id=excluded.default_profile_id",
             params![
                 version,
                 value.agent_network,
@@ -144,7 +159,8 @@ impl Service {
                 value.check_timeout_ms,
                 value.continuation.name(),
                 value.planner_approval.name(),
-                value.delivery_mode
+                value.delivery_mode,
+                profile
             ],
         )?;
         tx.commit()?;
@@ -190,10 +206,9 @@ impl Service {
     ) -> Result<Vec<DefaultsRow>> {
         let saved = self.preferences(config)?;
         let user = self.user_defaults()?;
-        let new_models = self.new_project_defaults()?;
-        for (role, model) in MODEL_ROLES.iter().zip(&new_models) {
-            if let Some(model) = model {
-                self.validate_model(role, model)?;
+        for row in self.new_project_effective()? {
+            if let Some(model) = &row.model {
+                self.validate_model(row.role, model)?;
             }
         }
         let project = self.project_id;
@@ -233,11 +248,27 @@ impl Service {
             "UPDATE project_checks SET timeout_ms=?2 WHERE project_id=?1",
             params![project, user.check_timeout_ms],
         )?;
-        for (role, model) in MODEL_ROLES.iter().zip(&new_models) {
-            if let Some(model) = model {
-                tx.execute("INSERT INTO project_models(project_id,role,provider,model,effort) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(project_id,role) DO UPDATE SET provider=excluded.provider,model=excluded.model,effort=excluded.effort", params![project, role, model.provider, model.model, model.effort])?;
+        // The project inherits what a new project would: the default profile, and for each
+        // role the user's value. A role with no such value keeps its current model, pinned
+        // as the project's own when it came from a layer that is about to change.
+        let now = profiles::resolve(&tx, Some(project))?;
+        let target = profiles::resolve(&tx, None)?;
+        for (now, target) in now.iter().zip(&target) {
+            if target.model.is_some() {
+                tx.execute(
+                    "DELETE FROM project_models WHERE project_id=?1 AND role=?2",
+                    params![project, now.role],
+                )?;
+            } else if let (Some(model), false) =
+                (&now.model, now.source == profiles::Source::Project)
+            {
+                tx.execute("INSERT INTO project_models(project_id,role,provider,model,effort) VALUES (?1,?2,?3,?4,?5)", params![project, now.role, model.provider, model.model, model.effort])?;
             }
         }
+        tx.execute(
+            "UPDATE projects SET profile_id=(SELECT default_profile_id FROM user_defaults WHERE id=1) WHERE id=?1",
+            [project],
+        )?;
         tx.commit()?;
         if saved.continuation != user.continuation
             || saved.planner_approval != user.planner_approval
@@ -261,20 +292,43 @@ fn preview_rows(
     preferences: &preferences::Preferences,
 ) -> Result<Vec<DefaultsRow>> {
     let user = read_user_defaults(db)?;
-    let new_models = configuration::models(
-        db,
-        "SELECT role,provider,model,effort FROM default_models",
-        [],
-    )?;
-    let own_models = configuration::defaults(db, project)?;
-    let mut rows = Vec::new();
-    for (index, role) in MODEL_ROLES.iter().enumerate() {
-        let current = model_text(own_models[index].as_ref());
-        // A role without a user default keeps the project's own model.
-        let default = new_models[index]
+    let own = profiles::resolve(db, Some(project))?;
+    let new = profiles::resolve(db, None)?;
+    let profile_name = |id: Option<i64>| -> Result<String> {
+        Ok(id
+            .map(|id| {
+                db.query_row("SELECT name FROM model_profiles WHERE id=?1", [id], |r| {
+                    r.get(0)
+                })
+            })
+            .transpose()?
+            .unwrap_or_else(|| "none".into()))
+    };
+    let mut rows = vec![row(
+        "profile",
+        profile_name(db.query_row(
+            "SELECT profile_id FROM projects WHERE id=?1",
+            [project],
+            |r| r.get(0),
+        )?)?,
+        profile_name(
+            db.query_row(
+                "SELECT default_profile_id FROM user_defaults WHERE id=1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten(),
+        )?,
+    )];
+    for (own, new) in own.iter().zip(&new) {
+        let current = model_text(own.model.as_ref());
+        // A role without a user value keeps the project's own model.
+        let default = new
+            .model
             .as_ref()
             .map_or_else(|| current.clone(), |model| model_text(Some(model)));
-        rows.push(row(&format!("{role} model"), current, default));
+        rows.push(row(&format!("{} model", own.role), current, default));
     }
     let mut timeouts: Vec<i64> = configuration::checks(db, project)?
         .iter()

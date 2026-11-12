@@ -85,6 +85,118 @@ pub enum CacheAction {
     },
 }
 
+#[derive(Subcommand)]
+pub enum ProfileAction {
+    /// List profiles with what selects them.
+    List,
+    /// Show one profile's role models.
+    Show {
+        /// Profile name (case-insensitive).
+        #[arg(value_parser = nonempty)]
+        name: String,
+    },
+    /// Create a profile from role models, or from this project's effective models.
+    ///
+    /// Roles: planning, execution, review, validation, remediation. Models are written
+    /// ROLE=PROVIDER/MODEL with the providers and model names the provider CLI accepts; ktask
+    /// checks the shape and effort spelling, never that a model exists. --from-project copies
+    /// every effective model of this project, so a profile can capture the Claude/high
+    /// setup the project already uses. Roles a profile leaves out inherit the user defaults.
+    Create {
+        /// Profile name, at most 64 characters; "none" is reserved.
+        #[arg(value_parser = nonempty)]
+        name: String,
+        /// Start from this project's effective role models.
+        #[arg(long)]
+        from_project: bool,
+        /// ROLE=PROVIDER/MODEL; repeat per role. Replaces a role copied by --from-project.
+        #[arg(long, value_parser = profile_model)]
+        model: Vec<ProfileModel>,
+        /// ROLE=EFFORT or ROLE=none; the role needs a model.
+        #[arg(long, value_parser = profile_effort)]
+        effort: Vec<ProfileEffort>,
+        /// Also select it for this project.
+        #[arg(long)]
+        select: bool,
+        /// Also make it the profile new projects start with.
+        #[arg(long)]
+        make_default: bool,
+    },
+    /// Change a profile's name or role models; only tasks defined later use the change.
+    ///
+    /// A profile that a project or the new-project default selects may change a role's
+    /// model but not drop the role.
+    Edit {
+        /// Profile name.
+        #[arg(value_parser = nonempty)]
+        name: String,
+        /// New name.
+        #[arg(long, value_parser = nonempty)]
+        rename: Option<String>,
+        /// ROLE=PROVIDER/MODEL; repeat per role.
+        #[arg(long, value_parser = profile_model)]
+        model: Vec<ProfileModel>,
+        /// ROLE=EFFORT or ROLE=none. Omitted effort is preserved.
+        #[arg(long, value_parser = profile_effort)]
+        effort: Vec<ProfileEffort>,
+        /// Remove a role from the profile so it inherits the user default.
+        #[arg(long, value_parser = model_role)]
+        clear_model: Vec<usize>,
+        /// Reject a stale edit; the version comes from show or list.
+        #[arg(long)]
+        if_version: Option<i64>,
+    },
+    /// Delete a profile that no project and no new-project default selects.
+    Delete {
+        /// Profile name.
+        #[arg(value_parser = nonempty)]
+        name: String,
+        /// Reject a stale delete.
+        #[arg(long)]
+        if_version: Option<i64>,
+    },
+    /// Select a profile for this project, or --none to inherit the user defaults alone.
+    Select {
+        /// Profile name.
+        #[arg(value_parser = nonempty, required_unless_present = "none")]
+        name: Option<String>,
+        /// Stop using a profile.
+        #[arg(long, conflicts_with = "name")]
+        none: bool,
+    },
+    /// Choose the profile new projects select, or --none for no default profile.
+    Default {
+        /// Profile name.
+        #[arg(value_parser = nonempty, required_unless_present = "none")]
+        name: Option<String>,
+        /// Clear the default profile.
+        #[arg(long, conflicts_with = "name")]
+        none: bool,
+    },
+    /// Show each role's effective model and which layer supplies it.
+    ///
+    /// Precedence: user defaults, the selected profile, this project's overrides, then a
+    /// task's own models. With --task, shows that task's pinned models beside what a new
+    /// revision would get now; pinned models never change on their own.
+    Effective {
+        /// A task whose pinned models to compare.
+        #[arg(long, value_parser = positive)]
+        task: Option<i64>,
+        /// Show what a project registered now would get instead.
+        #[arg(long, conflicts_with = "task")]
+        new_project: bool,
+    },
+    /// Clear this project's own model overrides so the roles inherit again.
+    Inherit {
+        /// Roles to clear: planning, execution, review, validation or remediation.
+        #[arg(value_parser = model_role)]
+        roles: Vec<usize>,
+        /// Clear every role.
+        #[arg(long, conflicts_with = "roles")]
+        all: bool,
+    },
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 pub enum ActorKind {
     Human,
@@ -380,6 +492,19 @@ pub enum Command {
         #[arg(long)]
         new_projects: bool,
     },
+    /// Manage named role/model/effort profiles and see where each model comes from.
+    ///
+    /// A profile maps roles to models for the existing providers (codex, claude,
+    /// opencode); it adds no provider and promises no model's availability. Models resolve
+    /// through the user defaults (model-default --new-projects), the project's selected
+    /// profile, the project's own overrides (model-default), then a task's own models.
+    /// Profile changes affect only tasks defined afterwards; existing revisions and attempts
+    /// keep their pinned models, and pending tasks change only through
+    /// edit --apply-project-defaults.
+    Profile {
+        #[command(subcommand)]
+        action: ProfileAction,
+    },
     /// List tasks in execution order (history: newest resolution first).
     List {
         /// Which tasks to list.
@@ -545,10 +670,10 @@ pub struct Add {
 
 #[derive(Args, Default)]
 pub struct Changes {
-    /// Copy the current project model and effort defaults into a new task revision.
+    /// Copy the project's current effective models (user defaults, selected profile, project overrides) into a new task revision.
     #[arg(long)]
     pub apply_project_defaults: bool,
-    /// Show each effective project default without changing the task.
+    /// Show each effective project model without changing the task.
     #[arg(long, conflicts_with = "apply_project_defaults")]
     pub preview_project_defaults: bool,
     /// New title.
@@ -594,6 +719,17 @@ pub struct Settings {
     /// Stage limit, one agent turn without a result: off, on (30 min) or a duration such as 45m.
     #[arg(long, value_parser = stage_limit)]
     pub stage_limit: Option<Limit>,
+}
+#[derive(Clone)]
+pub struct ProfileModel {
+    pub role: usize,
+    pub provider: String,
+    pub model: String,
+}
+#[derive(Clone)]
+pub struct ProfileEffort {
+    pub role: usize,
+    pub effort: Option<String>,
 }
 #[derive(Clone)]
 pub struct ModelSetting {
@@ -645,6 +781,34 @@ fn role(s: &str) -> Result<usize, String> {
         .iter()
         .position(|r| *r == s)
         .ok_or_else(|| "expected execution, review, validation, or remediation".into())
+}
+fn model_role(s: &str) -> Result<usize, String> {
+    crate::application::configuration::MODEL_ROLES
+        .iter()
+        .position(|r| *r == s)
+        .ok_or_else(|| "expected planning, execution, review, validation or remediation".into())
+}
+fn profile_model(s: &str) -> Result<ProfileModel, String> {
+    let (r, value) = s.split_once('=').ok_or("expected ROLE=PROVIDER/MODEL")?;
+    let (provider, model) = crate::application::ModelConfig::split_identifier(value)?;
+    Ok(ProfileModel {
+        role: model_role(r)?,
+        provider,
+        model,
+    })
+}
+fn profile_effort(s: &str) -> Result<ProfileEffort, String> {
+    let (r, value) = s
+        .split_once('=')
+        .ok_or("expected ROLE=EFFORT or ROLE=none")?;
+    Ok(ProfileEffort {
+        role: model_role(r)?,
+        effort: if value == "none" {
+            None
+        } else {
+            Some(nonempty(value)?)
+        },
+    })
 }
 fn model_setting(s: &str) -> Result<ModelSetting, String> {
     let (r, value) = s.split_once('=').ok_or("expected ROLE=PROVIDER/MODEL")?;

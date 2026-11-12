@@ -443,6 +443,7 @@ pub(super) fn command(
             };
             defaults(service, config, &saved, changed, *apply)
         }
+        Command::Profile { action } => super::profile::profile(service, action),
         Command::Run { .. }
         | Command::Storage { .. }
         | Command::Cache { .. }

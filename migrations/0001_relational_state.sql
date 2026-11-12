@@ -1,6 +1,25 @@
 -- Unreleased V1 schema. Edit this definition in place until the first release.
 -- No historical data conversions or compatibility-only fields.
 
+-- Named role/model/effort mappings shared by every project in the instance. A profile only
+-- maps roles to models the existing provider adapters run; it never names a new provider.
+CREATE TABLE model_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE CHECK (length(trim(name)) > 0 AND length(name) <= 64),
+    row_version INTEGER NOT NULL DEFAULT 1 CHECK (row_version > 0),
+    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+    updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0)
+) STRICT;
+
+CREATE TABLE model_profile_roles (
+    profile_id INTEGER NOT NULL REFERENCES model_profiles(id),
+    role TEXT NOT NULL CHECK (role IN ('planning', 'execution', 'review', 'validation', 'remediation')),
+    provider TEXT NOT NULL CHECK (length(trim(provider)) > 0),
+    model TEXT NOT NULL CHECK (length(trim(model)) > 0),
+    effort TEXT CHECK (length(trim(effort)) > 0),
+    PRIMARY KEY (profile_id, role)
+) STRICT;
+
 CREATE TABLE projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE CHECK (length(trim(name)) > 0),
@@ -13,7 +32,10 @@ CREATE TABLE projects (
     -- Run mode and planner approval the project started with. They apply until the project
     -- saves its own preferences file; later changes to the user defaults never reach it.
     initial_continuation TEXT NOT NULL DEFAULT 'queue' CHECK (initial_continuation IN ('single', 'queue')),
-    initial_planner_approval TEXT NOT NULL DEFAULT 'automatic' CHECK (initial_planner_approval IN ('automatic', 'review_required'))
+    initial_planner_approval TEXT NOT NULL DEFAULT 'automatic' CHECK (initial_planner_approval IN ('automatic', 'review_required')),
+    -- The model profile this project inherits from; NULL inherits the user defaults alone.
+    -- A profile a project selects cannot be deleted.
+    profile_id INTEGER REFERENCES model_profiles(id)
 ) STRICT;
 
 -- Project delivery is guarded independently of task and preference versions.
@@ -52,7 +74,9 @@ CREATE TABLE pending_controls (
     completed_version INTEGER
 ) STRICT;
 
--- Defaults are copied into revision_models, not followed through a mutable reference.
+-- This project's own model overrides, the layer above its profile. A missing role inherits the
+-- selected profile, then the user defaults. Resolved values are copied into revision_models,
+-- never followed through a mutable reference.
 CREATE TABLE project_models (
     project_id INTEGER NOT NULL REFERENCES projects(id),
     role TEXT NOT NULL CHECK (role IN ('planning', 'execution', 'review', 'validation', 'remediation')),
@@ -62,7 +86,7 @@ CREATE TABLE project_models (
     PRIMARY KEY (project_id, role)
 ) STRICT;
 
--- Model defaults a newly registered project starts with; each project then keeps its own.
+-- The user-wide model defaults, the lowest layer every project inherits.
 CREATE TABLE default_models (
     role TEXT PRIMARY KEY CHECK (role IN ('planning', 'execution', 'review', 'validation', 'remediation')),
     provider TEXT NOT NULL CHECK (length(trim(provider)) > 0),
@@ -80,7 +104,9 @@ CREATE TABLE user_defaults (
     check_timeout_ms INTEGER NOT NULL CHECK (check_timeout_ms > 0),
     continuation TEXT NOT NULL CHECK (continuation IN ('single', 'queue')),
     planner_approval TEXT NOT NULL CHECK (planner_approval IN ('automatic', 'review_required')),
-    delivery_mode TEXT NOT NULL CHECK (delivery_mode IN ('local', 'direct', 'pr'))
+    delivery_mode TEXT NOT NULL CHECK (delivery_mode IN ('local', 'direct', 'pr')),
+    -- The profile a newly registered project selects.
+    default_profile_id INTEGER REFERENCES model_profiles(id)
 ) STRICT;
 
 -- Commands are executed by the supervisor, never inferred from a model's claim.

@@ -66,6 +66,7 @@ pub mod execution;
 pub mod lifecycle;
 pub mod limits;
 pub mod preferences;
+pub mod profiles;
 pub mod progress;
 mod queries;
 pub mod retention;
@@ -486,7 +487,7 @@ impl Service {
             )?;
             let user = user_defaults::read_user_defaults(&tx)?;
             tx.execute(
-                "INSERT INTO projects(name, root_path, created_at_ms, check_before_task, agent_network, initial_continuation, initial_planner_approval) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO projects(name, root_path, created_at_ms, check_before_task, agent_network, initial_continuation, initial_planner_approval, profile_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, (SELECT default_profile_id FROM user_defaults WHERE id = 1))",
                 params![
                     name,
                     bytes,
@@ -498,10 +499,6 @@ impl Service {
                 ],
             )?;
             let id = tx.last_insert_rowid();
-            tx.execute(
-                "INSERT INTO project_models(project_id,role,provider,model,effort) SELECT ?1,role,provider,model,effort FROM default_models",
-                [id],
-            )?;
             // Only the mode is inherited; the remote and branch are this project's own.
             if user.delivery_mode != configuration::DeliveryConfig::default().mode {
                 tx.execute(
@@ -525,27 +522,16 @@ impl Service {
         service.reconcile_artifact_reservations()?;
         Ok(service)
     }
+    /// The four execution-role models a task defined now starts with: this project's
+    /// override, else its selected profile, else the user defaults.
     pub fn defaults(&self) -> Result<[Option<ModelConfig>; 4]> {
-        let mut models = std::array::from_fn(|_| None);
-        let mut stmt = self.db.connection().prepare(
-            "SELECT role, provider, model, effort FROM project_models WHERE project_id = ?1",
-        )?;
-        for row in stmt.query_map([self.project_id], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                ModelConfig {
-                    provider: r.get(1)?,
-                    model: r.get(2)?,
-                    effort: r.get(3)?,
-                },
-            ))
-        })? {
-            let (role, model) = row?;
-            if let Some(index) = ROLES.iter().position(|r| *r == role) {
-                models[index] = Some(model);
-            }
-        }
-        Ok(models)
+        let effective = self.effective_models()?;
+        Ok(std::array::from_fn(|index| {
+            effective
+                .iter()
+                .find(|row| row.role == ROLES[index])
+                .and_then(|row| row.model.clone())
+        }))
     }
     pub fn externally_changed(&self) -> Result<bool> {
         let version: i64 = self

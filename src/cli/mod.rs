@@ -2,6 +2,7 @@ mod args;
 mod evidence;
 mod execute;
 mod output;
+mod profile;
 
 use crate::{
     application::{self, Service},
@@ -243,6 +244,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             | Command::CheckSet { .. }
             | Command::ModelDefault { .. }
             | Command::Defaults { .. }
+            | Command::Profile { .. }
             | Command::Init { .. }
     );
     let mut service = if creates_project {
@@ -582,6 +584,8 @@ fn validate(cli: &Cli) -> Result<()> {
                 && changes.criterion.is_empty()
                 && changes.approval.is_none()
                 && changes.settings.empty()
+                && !changes.apply_project_defaults
+                && !changes.preview_project_defaults
             {
                 return Err(Failure::usage("edit requires at least one changed field"));
             }

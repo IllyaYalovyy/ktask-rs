@@ -163,10 +163,16 @@ impl Service {
             ..value.clone()
         })
     }
+    /// The models a task defined now starts with, resolved through the project override,
+    /// the selected profile and the user defaults.
     pub fn project_defaults(&self) -> Result<Defaults> {
+        Ok(profiles::effective_models(&self.effective_models()?))
+    }
+    /// Only this project's own overrides; an unset role inherits.
+    pub fn project_overrides(&self) -> Result<Defaults> {
         defaults(self.db.connection(), self.project_id)
     }
-    /// The model defaults a newly registered project starts with.
+    /// The user-wide model defaults every project inherits below its profile.
     pub fn new_project_defaults(&self) -> Result<Defaults> {
         models(
             self.db.connection(),
@@ -174,7 +180,7 @@ impl Service {
             [],
         )
     }
-    /// Replaces the defaults new projects start with; existing projects keep their own.
+    /// Replaces the user-wide defaults; a project's own overrides still win.
     pub fn save_new_project_defaults(&mut self, values: &Defaults) -> Result<()> {
         for (role, model) in MODEL_ROLES.iter().zip(values) {
             if let Some(model) = model {
@@ -189,6 +195,22 @@ impl Service {
                     "INSERT INTO default_models(role,provider,model,effort) VALUES (?1,?2,?3,?4)",
                     params![role, model.provider, model.model, model.effort],
                 )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+    /// Sets the user-wide default of every role `values` configures and leaves the others.
+    pub fn merge_new_project_defaults(&mut self, values: &Defaults) -> Result<()> {
+        for (role, model) in MODEL_ROLES.iter().zip(values) {
+            if let Some(model) = model {
+                self.validate_model(role, model)?;
+            }
+        }
+        let tx = self.db.connection_mut().transaction()?;
+        for (role, model) in MODEL_ROLES.iter().zip(values) {
+            if let Some(model) = model {
+                tx.execute("INSERT INTO default_models(role,provider,model,effort) VALUES (?1,?2,?3,?4) ON CONFLICT(role) DO UPDATE SET provider=excluded.provider,model=excluded.model,effort=excluded.effort", params![role, model.provider, model.model, model.effort])?;
             }
         }
         tx.commit()?;
@@ -227,7 +249,9 @@ impl Service {
     pub fn project_checks(&self) -> Result<Vec<ProjectCheck>> {
         checks(self.db.connection(), self.project_id)
     }
-    pub fn save_defaults(&mut self, expected: &Defaults, values: &Defaults) -> Result<()> {
+    /// Replaces this project's overrides. `expected` is what [`Self::project_overrides`]
+    /// returned; an unset role is cleared and inherits again.
+    pub fn save_project_overrides(&mut self, expected: &Defaults, values: &Defaults) -> Result<()> {
         for (role, model) in MODEL_ROLES.iter().zip(values) {
             if let Some(model) = model {
                 self.validate_model(role, model)?;

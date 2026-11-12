@@ -50,9 +50,22 @@ TUI's refresh or `run`) settles it to paused with its work kept.
 
 `default_models` and the one-row `user_defaults` hold what a newly registered project starts
 with (five role models, agent network, baseline checks, check timeout, run mode, planner
-approval, delivery mode). Registration copies them into the project; run mode and planner
-approval land in `projects.initial_*` and apply until the project saves its own preferences
-file. Existing projects change only through `apply_user_defaults`, after `defaults_preview`.
+approval, delivery mode, default profile). Registration copies the settings into the project;
+run mode and planner approval land in `projects.initial_*` and apply until the project saves
+its own preferences file. Existing projects change settings only through
+`apply_user_defaults`, after `defaults_preview`.
+
+Role models are resolved, not copied. For each of the five roles the first layer that sets it
+wins: the project's own `project_models` row (override), the profile the project selected
+(`projects.profile_id`, from `model_profiles`/`model_profile_roles`), then `default_models`.
+Clearing an override deletes its row, so the role inherits again. A new task or revision
+copies the resolved values into `revision_models` and keeps them; a task's own override is
+whatever its revision sets explicitly. Editing a profile, selecting another or changing the
+defaults therefore affects only tasks defined afterwards. A pending task changes only when the
+owner applies the current defaults, which writes a new revision. A profile selected by a
+project or by `user_defaults.default_profile_id` cannot be deleted and cannot drop a role.
+Profiles map roles to models the existing provider adapters run; they never name a new
+provider or promise a model's availability.
 
 Planner/remediator work uses ordinary tasks, not proposal tables. Approval is a human or AI
 decision on the revision. Mark done, Cancel and Supersede close the task without rewriting its
@@ -151,6 +164,9 @@ erDiagram
         INTEGER id PK
     }
     projects ||--o{ project_models : "project_id"
+    model_profiles ||--o{ model_profile_roles : "profile_id"
+    model_profiles ||--o{ projects : "profile_id"
+    model_profiles ||--o{ user_defaults : "default_profile_id"
     projects ||--o{ project_checks : "project_id"
     projects ||--o| project_delivery : "project_id"
     projects ||--o| project_retention : "project_id"
@@ -497,7 +513,7 @@ A step's verdict and evidence for one criterion of the same revision. Terminal v
 
 ### default_models
 
-Model defaults a newly registered project starts with. They are copied once, at registration; each project then keeps and edits its own `project_models`.
+The user-wide model defaults, the lowest layer of role resolution. Every project inherits them below its selected profile and its own `project_models` overrides.
 
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
@@ -810,9 +826,39 @@ execution sessions. Only recorded owned PR tips may be replaced using an exact l
 - PK `(project_id)`.
 - FK `(project_id)` → `projects(id)`.
 
+### model_profiles
+
+Named role/model/effort mappings shared by the instance's projects. A profile only maps roles to models for the existing provider adapters. `row_version` guards concurrent edits and increments when the name or roles change; deletion is refused while any `projects.profile_id` or `user_defaults.default_profile_id` selects the profile.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `id` | INTEGER | no | Stable row ID. |
+| `name` | TEXT | no | Unique case-insensitively, 1 to 64 characters; "none" is reserved by the CLI and forms. |
+| `row_version` | INTEGER | no | Positive optimistic guard, default 1. |
+| `created_at_ms` | INTEGER | no | Creation time. |
+| `updated_at_ms` | INTEGER | no | Last change time. |
+
+- PK `(id)`.
+- UQ `(name)` (NOCASE).
+
+### model_profile_roles
+
+The roles one profile sets. A role without a row inherits the user defaults.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `profile_id` | INTEGER | no | Owning profile; deleting a profile deletes its roles first. |
+| `role` | TEXT | no | planning, execution, review, validation, remediation. |
+| `provider` | TEXT | no | Provider/adapter identifier; never a credential. |
+| `model` | TEXT | no | Explicit model identifier, chosen by the owner. |
+| `effort` | TEXT | yes | Provider-supported effort; NULL means no effort setting. |
+
+- PK `(profile_id, role)`.
+- FK `(profile_id)` → `model_profiles(id)`.
+
 ### project_models
 
-Default model configuration per project role. Copy into each new revision; later default changes do not change existing tasks.
+A project's own model overrides, the layer above its selected profile. A role without a row inherits the profile, then `default_models`. Resolved values are copied into each new revision; later changes do not change existing tasks.
 
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
@@ -839,10 +885,12 @@ Registered checkout. Names and canonical native root paths are independently uni
 | `agent_network` | INTEGER | no | 1 lets writable agent turns use the network; 0 (default) leaves Codex's sandbox without it. |
 | `initial_continuation` | TEXT | no | Run mode (single or queue) the project started with; applies until it saves its own preferences. |
 | `initial_planner_approval` | TEXT | no | Planner approval (automatic or review_required) the project started with; applies until it saves its own preferences. |
+| `profile_id` | INTEGER | yes | Selected model profile; NULL inherits the user defaults alone. New projects start with `user_defaults.default_profile_id`. A selected profile cannot be deleted. |
 
 - PK `(id)`.
 - UQ `(root_path)`.
 - UQ `(name)`.
+- FK `(profile_id)` → `model_profiles(id)`.
 
 ### project_retention
 
@@ -1032,8 +1080,10 @@ The one row of reusable settings a newly registered project starts with; row_ver
 | `continuation` | TEXT | no | Starting run mode: single or queue. |
 | `planner_approval` | TEXT | no | Starting planner approval: automatic or review_required. |
 | `delivery_mode` | TEXT | no | Starting delivery mode: local, direct or pr. |
+| `default_profile_id` | INTEGER | yes | Profile a newly registered project selects; NULL means none. That profile cannot be deleted while set. |
 
 - PK `(id)`.
+- FK `(default_profile_id)` → `model_profiles(id)`.
 
 ## Views
 

@@ -1575,8 +1575,9 @@ fn init_sets_up_new_projects_from_saved_defaults_and_their_own_files() -> Result
     assert_eq!(fixed["data"]["check_source"], "given");
     assert_eq!(fixed["data"]["agent_network"], true);
 
-    // Later changes to the saved defaults leave registered projects alone, and a judge
-    // may explicitly reuse the execution model.
+    // Role models are inherited, not copied: a project that overrides nothing follows the
+    // user default (only tasks defined afterwards use it), and a judge may explicitly
+    // reuse the execution model.
     ktask(
         &first,
         &[
@@ -1592,7 +1593,7 @@ fn init_sets_up_new_projects_from_saved_defaults_and_their_own_files() -> Result
     )?;
     assert_eq!(
         ktask(&second, &["init"], 0)?["data"]["models"]["review"],
-        "codex/gpt-6-astra"
+        "codex/gpt-6-sol"
     );
     let fourth = repository("fourth", &[("Cargo.toml", "[package]\n")])?;
     let ready = ktask(&fourth, &["init"], 0)?;

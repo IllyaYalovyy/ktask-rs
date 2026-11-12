@@ -2053,7 +2053,7 @@ fn attempt_browser_shows_pinned_inputs_after_defaults_and_new_revisions_change()
             effort: Some("xhigh".into()),
         })
     });
-    writer.save_defaults(&previous_defaults, &changed_defaults)?;
+    writer.save_project_overrides(&previous_defaults, &changed_defaults)?;
     let mut revised = definition("New ready intent");
     revised.goal = "New ready goal".into();
     revised.models = std::array::from_fn(|index| changed_defaults[index + 1].clone());
@@ -3791,7 +3791,7 @@ fn breakdown_pty_keyboard_mouse_pending_stopped_approval_cancel() -> Result {
                         model: "planning-fixture".into(),
                         effort: Some("high".into()),
                     });
-                    service.save_defaults(&old, &models)?;
+                    service.save_project_overrides(&old, &models)?;
                     if approval == PlannerApproval::ReviewRequired {
                         let config = root.join("config/ktask-dev");
                         let previous = service.preferences(&config)?;
@@ -3910,7 +3910,7 @@ fn breakdown_pty_uses_approval_preference_at_apply() -> Result {
                 model: "planning-fixture".into(),
                 effort: None,
             });
-            service.save_defaults(&old, &models)?;
+            service.save_project_overrides(&old, &models)?;
             let config = root.join("config/ktask-dev");
             let previous = service.preferences(&config)?;
             let initial = if updated == PlannerApproval::Automatic {
@@ -3992,7 +3992,7 @@ fn breakdown_cli_preview_apply_and_version_guard() -> Result {
             model: "planning-fixture".into(),
             effort: None,
         });
-        service.save_defaults(&old, &models)?;
+        service.save_project_overrides(&old, &models)?;
         let config = root.join("config/ktask-dev");
         let previous = service.preferences(&config)?;
         let initial = if stopped {
@@ -4126,7 +4126,7 @@ fn breakdown_pending_queue_row_keeps_failed_current_in_place() -> Result {
             model: "planning-fixture".into(),
             effort: None,
         });
-        service.save_defaults(&old, &models)?;
+        service.save_project_overrides(&old, &models)?;
         provider_fixture(root, breakdown_proposal(), false)?;
         let mut t = terminal(root)?;
         t.screen("failed current", |s| s.contains("Failed current"))?;
@@ -4629,7 +4629,7 @@ fn queue_add_whitespace_fields_keep_project_model_default() -> Result {
         model: "default".into(),
         effort: Some("medium".into()),
     });
-    writer.save_defaults(&old, &defaults)?;
+    writer.save_project_overrides(&old, &defaults)?;
     drop(writer);
 
     let mut t = Terminal::open_project(

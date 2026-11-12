@@ -44,6 +44,10 @@ BEFORE THE FIRST RUN
     (bwrap) is installed: review, validation and judges run in a sandbox where the project
     and ktask's own records are read-only, whatever the provider allows.
   Defaults apply only to tasks added later; change an existing task with edit --model.
+  Named profiles reuse role models: ktask profile create NAME --from-project, then profile
+  select NAME (this project) or profile default NAME (new projects). Models resolve in the
+  order user defaults, selected profile, project override (model-default), task models;
+  profile effective shows each value and its source, profile inherit clears an override.
 
 TYPICAL SESSION
   ktask --json add --title 'Export CSV' --goal 'Users can export the report as CSV.' \

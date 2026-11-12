@@ -16,6 +16,7 @@ const DAYS: &str = "Retain completed attempts (days)";
 const STORAGE_ACTION: &str = "Action";
 const MAX_BYTES: &str = "Maximum allocated bytes";
 const MAX_FILES: &str = "Maximum files and directories";
+pub(crate) const DEFAULT_PROFILE: &str = "Default profile";
 const NEW_PROJECTS: &str = "New projects";
 const CHECK_TO_OPEN: &str = "Check to open";
 const NAME: &str = "Name";
@@ -140,7 +141,11 @@ impl StoredWorkspace {
                 )
             }
             Action::ProjectModels => {
-                let values = self.service.project_defaults().map_err(|e| e.to_string())?;
+                let values = self
+                    .service
+                    .project_overrides()
+                    .map_err(|e| e.to_string())?;
+                let effective = self.service.effective_models().map_err(|e| e.to_string())?;
                 let mut fields = model_fields(&values);
                 fields.push(Field::choice(
                     NEW_PROJECTS,
@@ -150,7 +155,10 @@ impl StoredWorkspace {
                 Dialog::new(
                     DialogKind::ProjectModels(Box::new(values)),
                     "Project model defaults",
-                    "New tasks copy these defaults; existing revisions stay pinned.\nBreak down uses the planning model. \"Start with these\" also makes them the defaults of projects you set up later.\nUse provider/model: codex/gpt-6-sol, claude/sonnet, opencode/anthropic/claude-sonnet-5-5.\nBlank clears the default.",
+                    &format!(
+                        "Effective models for tasks defined now, and where each comes from (user defaults, then the selected profile, then these overrides):\n{}\nNew tasks copy these; existing revisions stay pinned. Break down uses the planning model.\nThe fields below are this project's own overrides: blank inherits the profile or user default. \"Start with these\" also makes the models you set the user defaults for every project.\nUse provider/model: codex/gpt-6-sol, claude/sonnet, opencode/anthropic/claude-sonnet-5-5.",
+                        crate::profile_ui::effective_text(&effective)
+                    ),
                     fields,
                 )
             }
@@ -193,14 +201,19 @@ impl StoredWorkspace {
                         delivery_label(&saved.delivery_mode),
                     ),
                     Field::choice(AFTER_SAVE, &[SAVE_ONLY, SAVE_PREVIEW], SAVE_ONLY),
+                    crate::profile_ui::default_profile_field(
+                        &self.service,
+                        saved.default_profile.as_deref(),
+                    )?,
                 ]);
                 Dialog::new(
                     DialogKind::UserDefaults(saved),
                     "User defaults for new projects",
-                    "Saved once for this user and instance. A project registered later starts with them; existing projects, tasks and attempts keep their own settings.\nBlank model clears a role. Never inherited: the check command, directories, remote and base branch.\nChoose \"Preview applying to this project\" to see this project's values beside these before anything changes.",
+                    "Saved once for this user and instance. A project registered later starts with them and selects the default profile; existing projects, tasks and attempts keep their own settings.\nBlank model clears a role. A profile or project override takes precedence over these models. Never inherited: the check command, directories, remote and base branch.\nChoose \"Preview applying to this project\" to see this project's values beside these before anything changes.",
                     fields,
                 )
             }
+            Action::Profiles => self.open_profiles()?,
             Action::ProjectChecks => {
                 let checks = self.service.project_checks().map_err(|e| e.to_string())?;
                 let mut field = Field::choice(CHECK_TO_OPEN, &["Add new check"], "Add new check");
@@ -286,6 +299,9 @@ impl StoredWorkspace {
             return self.save_build_cache(screen, dialog);
         }
         match &dialog.kind {
+            DialogKind::Profiles(_) | DialogKind::Profile { .. } => {
+                return self.save_profile_form(screen, dialog);
+            }
             DialogKind::Storage(preview) => {
                 let days: i64 = dialog
                     .get(DAYS)
@@ -359,11 +375,11 @@ impl StoredWorkspace {
                 let values = models_from(dialog)?;
                 let service = &mut self.service;
                 service
-                    .save_defaults(expected, &values)
+                    .save_project_overrides(expected, &values)
                     .map_err(|e| e.to_string())?;
                 if dialog.get(NEW_PROJECTS) == "Start with these" {
                     service
-                        .save_new_project_defaults(&values)
+                        .merge_new_project_defaults(&values)
                         .map_err(|e| e.to_string())?;
                 }
             }
@@ -389,6 +405,7 @@ impl StoredWorkspace {
                         PlannerApproval::Automatic
                     },
                     delivery_mode: delivery_mode_from(dialog.get(MODE)).into(),
+                    default_profile: crate::profile_ui::chosen_profile(dialog.get(DEFAULT_PROFILE)),
                 };
                 self.service
                     .save_new_project_setup(expected, &value, &models)
@@ -551,7 +568,7 @@ impl StoredWorkspace {
     }
 }
 /// Provider/model and effort fields for the five roles.
-fn model_fields(values: &Defaults) -> Vec<Field> {
+pub(crate) fn model_fields(values: &Defaults) -> Vec<Field> {
     MODEL_ROLES
         .iter()
         .zip(values)
@@ -575,7 +592,7 @@ fn model_fields(values: &Defaults) -> Vec<Field> {
         })
         .collect()
 }
-fn models_from(dialog: &Dialog) -> Result<Defaults, String> {
+pub(crate) fn models_from(dialog: &Dialog) -> Result<Defaults, String> {
     let mut values: Defaults = std::array::from_fn(|_| None);
     for (role, value) in MODEL_ROLES.iter().zip(values.iter_mut()) {
         *value = ModelConfig::from_fields(

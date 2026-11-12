@@ -4,8 +4,8 @@ use super::{ALL, Migration, apply};
 use crate::{scratch::Scratch, storage::Database};
 
 /// The last column of `projects` and the end of its definition, where tests add columns.
-const PROJECTS_COLUMN: &str = "    initial_planner_approval TEXT NOT NULL DEFAULT 'automatic' CHECK (initial_planner_approval IN ('automatic', 'review_required'))";
-const PROJECTS_END: &str = "    initial_planner_approval TEXT NOT NULL DEFAULT 'automatic' CHECK (initial_planner_approval IN ('automatic', 'review_required'))\n) STRICT;";
+const PROJECTS_COLUMN: &str = "    profile_id INTEGER REFERENCES model_profiles(id)";
+const PROJECTS_END: &str = "    profile_id INTEGER REFERENCES model_profiles(id)\n) STRICT;";
 
 type Result = std::result::Result<(), Box<dyn std::error::Error>>;
 

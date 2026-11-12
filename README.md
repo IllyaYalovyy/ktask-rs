@@ -209,10 +209,27 @@ ktask defaults            # the saved defaults, and what they would change in th
 ktask defaults --apply    # explicitly apply them to this existing project
 ```
 
+Named profiles reuse a role/model/effort mapping across projects without repeating it.
+Profiles map roles to models for the existing providers; ktask never claims a model exists.
+
+```sh
+ktask profile create Anthropic --from-project           # capture this project's roles as they are
+ktask profile create Qwen --model execution=opencode/vendor/qwen-model --model review=opencode/vendor/qwen-model
+ktask profile select Anthropic                          # this project; or --none
+ktask profile default Anthropic                         # new projects start with it
+ktask profile effective                                 # each role's model and where it comes from
+```
+
+A role's model resolves through the user defaults, the project's profile, the project's own
+overrides (`model-default`, cleared by `profile inherit`), then a task's own models. A task
+copies the result into its revision, so profile edits and selections affect only tasks defined
+afterwards; apply them to a pending task with `edit --apply-project-defaults`. A profile a
+project selects cannot be deleted. TUI: Configuration → **f Profiles**.
+
 They are saved once per user and instance (TUI: Configuration → **u User defaults**, which
-can preview and apply them to the open project). Only a project registered afterwards inherits
-them; an existing project keeps its settings until you apply the defaults, and its tasks and
-attempts keep their pinned inputs. Applying keeps the project's check commands, remote and base
+can preview and apply them to the open project). Only a project registered afterwards copies
+the other settings; an existing project keeps them until you apply the defaults. Role models are
+inherited, not copied, unless the project overrides them. Tasks and attempts keep their pinned inputs. Applying keeps the project's check commands, remote and base
 branch. The check command, directories, remote and branch are never inherited.
 
 Review, validation and remediation (the failure judge that plans each repair) may use any provider and model,

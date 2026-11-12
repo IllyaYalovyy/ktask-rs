@@ -93,6 +93,7 @@ pub enum Action {
     Configure,
     ProjectModels,
     UserDefaults,
+    Profiles,
     ProjectChecks,
     Delivery,
     Storage,
@@ -636,6 +637,7 @@ impl App {
                 let action = match code {
                     KeyCode::Char('m') => Action::ProjectModels,
                     KeyCode::Char('u') => Action::UserDefaults,
+                    KeyCode::Char('f') => Action::Profiles,
                     KeyCode::Char('c') => Action::ProjectChecks,
                     KeyCode::Char('k') => Action::Storage,
                     KeyCode::Char('b') => Action::BuildCache,

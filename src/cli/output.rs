@@ -6,6 +6,14 @@ pub struct Reply {
     pub text: String,
 }
 impl Reply {
+    /// Adds a one-line note to the text output and the `note` JSON field.
+    pub fn with_note(mut self, note: &str) -> Self {
+        self.text = format!("{note}\n{}", self.text);
+        if let Some(map) = self.data.as_object_mut() {
+            map.insert("note".into(), json!(note));
+        }
+        self
+    }
     pub fn task(task: &Task) -> Self {
         Self {
             data: task_value(task),

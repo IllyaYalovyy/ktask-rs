@@ -16,6 +16,7 @@ pub mod instance;
 mod mock;
 mod persistent;
 mod presentation;
+mod profile_ui;
 mod projection;
 mod readiness;
 pub(crate) mod resource;
