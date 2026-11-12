@@ -823,6 +823,8 @@ impl Backend for DemoWorkspace {
                 return Err("Persistent proposal is unavailable in demo mode".into());
             }
             DialogKind::ProjectModels(_)
+            | DialogKind::UserDefaults(_)
+            | DialogKind::ApplyDefaults(_)
             | DialogKind::ProjectChecks(_)
             | DialogKind::ProjectCheck { .. }
             | DialogKind::Preferences(..)

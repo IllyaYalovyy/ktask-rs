@@ -5,6 +5,7 @@ use crate::{
         ModelConfig,
         configuration::{Defaults, DeliveryConfig, MODEL_ROLES, ProjectCheck},
         preferences::{Continuation, PlannerApproval, Preferences},
+        user_defaults::{DefaultsRow, UserDefaults},
     },
     dialog::{Dialog, DialogKind, Field},
     forms,
@@ -28,6 +29,14 @@ const BASE: &str = "Base branch";
 const RUN_MODE: &str = "Run mode";
 const NETWORK: &str = "Agent network";
 const CHECK_FIRST: &str = "Check before task";
+const BASELINE: &str = "Baseline checks";
+const PLANNER: &str = "Planner approval";
+const AFTER_SAVE: &str = "After saving";
+const SAVE_ONLY: &str = "Only save";
+const SAVE_PREVIEW: &str = "Preview applying to this project";
+const PROJECT_SETTINGS: &str = "Project settings";
+const KEEP_SETTINGS: &str = "Keep project settings";
+const APPLY_SETTINGS: &str = "Apply user defaults";
 
 fn model_label(role: &str) -> String {
     format!("{role} provider/model")
@@ -132,28 +141,7 @@ impl StoredWorkspace {
             }
             Action::ProjectModels => {
                 let values = self.service.project_defaults().map_err(|e| e.to_string())?;
-                let mut fields: Vec<Field> = MODEL_ROLES
-                    .iter()
-                    .zip(&values)
-                    .flat_map(|(role, value)| {
-                        [
-                            Field::text(
-                                &model_label(role),
-                                &value
-                                    .as_ref()
-                                    .map(ModelConfig::identifier)
-                                    .unwrap_or_default(),
-                            ),
-                            Field::text(
-                                &effort_label(role),
-                                value
-                                    .as_ref()
-                                    .and_then(|m| m.effort.as_deref())
-                                    .unwrap_or(""),
-                            ),
-                        ]
-                    })
-                    .collect();
+                let mut fields = model_fields(&values);
                 fields.push(Field::choice(
                     NEW_PROJECTS,
                     &["Keep their defaults", "Start with these"],
@@ -163,6 +151,53 @@ impl StoredWorkspace {
                     DialogKind::ProjectModels(Box::new(values)),
                     "Project model defaults",
                     "New tasks copy these defaults; existing revisions stay pinned.\nBreak down uses the planning model. \"Start with these\" also makes them the defaults of projects you set up later.\nUse provider/model: codex/gpt-6-sol, claude/sonnet, opencode/anthropic/claude-sonnet-5-5.\nBlank clears the default.",
+                    fields,
+                )
+            }
+            Action::UserDefaults => {
+                let saved = self.service.user_defaults().map_err(|e| e.to_string())?;
+                let models = self
+                    .service
+                    .new_project_defaults()
+                    .map_err(|e| e.to_string())?;
+                let mut fields = model_fields(&models);
+                fields.extend([
+                    Field::choice(NETWORK, &["Off", "On"], switch_label(saved.agent_network)),
+                    Field::choice(
+                        BASELINE,
+                        &["On", "Off"],
+                        switch_label(saved.check_before_task),
+                    ),
+                    Field::text(TIMEOUT, &saved.check_timeout_ms.to_string()),
+                    Field::choice(
+                        RUN_MODE,
+                        &["Run one", "Continue queue"],
+                        if saved.continuation == Continuation::Queue {
+                            "Continue queue"
+                        } else {
+                            "Run one"
+                        },
+                    ),
+                    Field::choice(
+                        PLANNER,
+                        &["Automatic", "Review required"],
+                        if saved.planner_approval == PlannerApproval::ReviewRequired {
+                            "Review required"
+                        } else {
+                            "Automatic"
+                        },
+                    ),
+                    Field::choice(
+                        MODE,
+                        &["Local", "Direct push", "Pull request"],
+                        delivery_label(&saved.delivery_mode),
+                    ),
+                    Field::choice(AFTER_SAVE, &[SAVE_ONLY, SAVE_PREVIEW], SAVE_ONLY),
+                ]);
+                Dialog::new(
+                    DialogKind::UserDefaults(saved),
+                    "User defaults for new projects",
+                    "Saved once for this user and instance. A project registered later starts with them; existing projects, tasks and attempts keep their own settings.\nBlank model clears a role. Never inherited: the check command, directories, remote and base branch.\nChoose \"Preview applying to this project\" to see this project's values beside these before anything changes.",
                     fields,
                 )
             }
@@ -199,11 +234,7 @@ impl StoredWorkspace {
                         Field::choice(
                             MODE,
                             &["Local", "Direct push", "Pull request"],
-                            match delivery.mode.as_str() {
-                                "direct" => "Direct push",
-                                "pr" => "Pull request",
-                                _ => "Local",
-                            },
+                            delivery_label(&delivery.mode),
                         ),
                         Field::text(REMOTE, &delivery.remote),
                         Field::text(BASE, &delivery.base_branch),
@@ -325,13 +356,7 @@ impl StoredWorkspace {
                 return Ok(true);
             }
             DialogKind::ProjectModels(expected) => {
-                let mut values: Defaults = std::array::from_fn(|_| None);
-                for (role, value) in MODEL_ROLES.iter().zip(values.iter_mut()) {
-                    *value = ModelConfig::from_fields(
-                        dialog.get(&model_label(role)),
-                        dialog.get(&effort_label(role)),
-                    )?;
-                }
+                let values = models_from(dialog)?;
                 let service = &mut self.service;
                 service
                     .save_defaults(expected, &values)
@@ -341,6 +366,72 @@ impl StoredWorkspace {
                         .save_new_project_defaults(&values)
                         .map_err(|e| e.to_string())?;
                 }
+            }
+            DialogKind::UserDefaults(expected) => {
+                let models = models_from(dialog)?;
+                let value = UserDefaults {
+                    version: expected.version,
+                    agent_network: dialog.get(NETWORK) == "On",
+                    check_before_task: dialog.get(BASELINE) == "On",
+                    check_timeout_ms: dialog
+                        .get(TIMEOUT)
+                        .trim()
+                        .parse()
+                        .map_err(|_| "Check timeout must be a positive integer (ms)")?,
+                    continuation: if dialog.get(RUN_MODE) == "Continue queue" {
+                        Continuation::Queue
+                    } else {
+                        Continuation::Single
+                    },
+                    planner_approval: if dialog.get(PLANNER) == "Review required" {
+                        PlannerApproval::ReviewRequired
+                    } else {
+                        PlannerApproval::Automatic
+                    },
+                    delivery_mode: delivery_mode_from(dialog.get(MODE)).into(),
+                };
+                self.service
+                    .save_new_project_setup(expected, &value, &models)
+                    .map_err(|e| e.to_string())?;
+                if dialog.get(AFTER_SAVE) == SAVE_PREVIEW {
+                    let paths = screen.instance.paths().map_err(|e| e.to_string())?;
+                    let rows = self
+                        .service
+                        .defaults_preview(&paths.config)
+                        .map_err(|e| e.to_string())?;
+                    *dialog = Dialog::new(
+                        DialogKind::ApplyDefaults(rows.clone()),
+                        "Apply user defaults to this project?",
+                        &format!(
+                            "Defaults saved for new projects. This project keeps its settings unless you apply them.\nApplying keeps check commands, remote and base branch, and changes no existing task or attempt.\n\n{}",
+                            preview_text(&rows)
+                        ),
+                        vec![Field::choice(
+                            PROJECT_SETTINGS,
+                            &[KEEP_SETTINGS, APPLY_SETTINGS],
+                            KEEP_SETTINGS,
+                        )],
+                    );
+                    screen.message("User defaults saved");
+                    return Ok(false);
+                }
+            }
+            DialogKind::ApplyDefaults(expected) => {
+                if dialog.get(PROJECT_SETTINGS) == APPLY_SETTINGS {
+                    let paths = screen.instance.paths().map_err(|e| e.to_string())?;
+                    let service = &mut self.service;
+                    service
+                        .apply_user_defaults(&paths.config, expected)
+                        .map_err(|e| e.to_string())?;
+                    let saved = service
+                        .preferences(&paths.config)
+                        .map_err(|e| e.to_string())?;
+                    self.use_preferences(screen, &saved);
+                    screen.message("User defaults applied to this project");
+                    return Ok(true);
+                }
+                screen.message("Project settings kept");
+                return Ok(true);
             }
             DialogKind::ProjectChecks(checks) => {
                 let chosen = dialog.get(CHECK_TO_OPEN);
@@ -361,7 +452,11 @@ impl StoredWorkspace {
                         name: detected.as_ref().map_or("", |_| "check").into(),
                         command: detected.as_ref().map_or_else(String::new, |d| d.0.clone()),
                         directory: ".".into(),
-                        timeout_ms: 600_000,
+                        timeout_ms: self
+                            .service
+                            .user_defaults()
+                            .map_err(|e| e.to_string())?
+                            .check_timeout_ms,
                         enabled: true,
                     }
                 } else {
@@ -413,12 +508,7 @@ impl StoredWorkspace {
             DialogKind::Delivery(expected) => {
                 let value = DeliveryConfig {
                     version: expected.version,
-                    mode: match dialog.get(MODE) {
-                        "Direct push" => "direct",
-                        "Pull request" => "pr",
-                        _ => "local",
-                    }
-                    .into(),
+                    mode: delivery_mode_from(dialog.get(MODE)).into(),
                     remote: dialog.get(REMOTE).into(),
                     base_branch: dialog.get(BASE).into(),
                 };
@@ -459,6 +549,71 @@ impl StoredWorkspace {
         screen.message("Project configuration saved");
         Ok(true)
     }
+}
+/// Provider/model and effort fields for the five roles.
+fn model_fields(values: &Defaults) -> Vec<Field> {
+    MODEL_ROLES
+        .iter()
+        .zip(values)
+        .flat_map(|(role, value)| {
+            [
+                Field::text(
+                    &model_label(role),
+                    &value
+                        .as_ref()
+                        .map(ModelConfig::identifier)
+                        .unwrap_or_default(),
+                ),
+                Field::text(
+                    &effort_label(role),
+                    value
+                        .as_ref()
+                        .and_then(|m| m.effort.as_deref())
+                        .unwrap_or(""),
+                ),
+            ]
+        })
+        .collect()
+}
+fn models_from(dialog: &Dialog) -> Result<Defaults, String> {
+    let mut values: Defaults = std::array::from_fn(|_| None);
+    for (role, value) in MODEL_ROLES.iter().zip(values.iter_mut()) {
+        *value = ModelConfig::from_fields(
+            dialog.get(&model_label(role)),
+            dialog.get(&effort_label(role)),
+        )?;
+    }
+    Ok(values)
+}
+fn switch_label(on: bool) -> &'static str {
+    if on { "On" } else { "Off" }
+}
+fn delivery_mode_from(label: &str) -> &'static str {
+    match label {
+        "Direct push" => "direct",
+        "Pull request" => "pr",
+        _ => "local",
+    }
+}
+fn delivery_label(mode: &str) -> &'static str {
+    match mode {
+        "direct" => "Direct push",
+        "pr" => "Pull request",
+        _ => "Local",
+    }
+}
+/// Each setting with the project's value, and the default where it would change.
+fn preview_text(rows: &[DefaultsRow]) -> String {
+    rows.iter()
+        .map(|row| {
+            if row.changes {
+                format!("{}: {} -> {}", row.setting, row.current, row.default)
+            } else {
+                format!("{}: {} (unchanged)", row.setting, row.current)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 fn check_label(check: &ProjectCheck) -> String {
     format!(

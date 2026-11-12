@@ -48,6 +48,12 @@ the target owns the checkout; a paused prerequisite keeps its work and attempt.
 A runner that died leaves its attempt running; whoever next holds the workspace lease (the
 TUI's refresh or `run`) settles it to paused with its work kept.
 
+`default_models` and the one-row `user_defaults` hold what a newly registered project starts
+with (five role models, agent network, baseline checks, check timeout, run mode, planner
+approval, delivery mode). Registration copies them into the project; run mode and planner
+approval land in `projects.initial_*` and apply until the project saves its own preferences
+file. Existing projects change only through `apply_user_defaults`, after `defaults_preview`.
+
 Planner/remediator work uses ordinary tasks, not proposal tables. Approval is a human or AI
 decision on the revision. Mark done, Cancel and Supersede close the task without rewriting its
 attempts; Copy to queue creates a new task linked by `derived_from`. Changing role models creates a new revision with the new role settings.
@@ -831,6 +837,8 @@ Registered checkout. Names and canonical native root paths are independently uni
 | `created_at_ms` | INTEGER | no | Creation time. |
 | `check_before_task` | INTEGER | no | 1 (default) runs the project checks on a task's clean starting commit before its first agent turn; a red start stops the task without spending tokens. 0 skips that run. |
 | `agent_network` | INTEGER | no | 1 lets writable agent turns use the network; 0 (default) leaves Codex's sandbox without it. |
+| `initial_continuation` | TEXT | no | Run mode (single or queue) the project started with; applies until it saves its own preferences. |
+| `initial_planner_approval` | TEXT | no | Planner approval (automatic or review_required) the project started with; applies until it saves its own preferences. |
 
 - PK `(id)`.
 - UQ `(root_path)`.
@@ -1009,6 +1017,23 @@ Stable task identity, readiness, and final resolution. Execution status exists o
 - Index `ix_tasks_origin`: `INDEX ix_tasks_origin ON tasks(origin_task_id, order_key) WHERE origin_task_id IS NOT NULL`.
 - UQ `(project_id, order_key)`.
 - UQ `(id, project_id)`.
+
+### user_defaults
+
+The one row of reusable settings a newly registered project starts with; row_version guards concurrent edits. Never a command, path, remote or branch. Models live in `default_models`.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `id` | INTEGER | no | Always 1. |
+| `row_version` | INTEGER | no | Increments on every save. |
+| `agent_network` | INTEGER | no | Starting `projects.agent_network`. |
+| `check_before_task` | INTEGER | no | Starting `projects.check_before_task`. |
+| `check_timeout_ms` | INTEGER | no | Timeout for a check `init` creates and for checks when defaults are applied. |
+| `continuation` | TEXT | no | Starting run mode: single or queue. |
+| `planner_approval` | TEXT | no | Starting planner approval: automatic or review_required. |
+| `delivery_mode` | TEXT | no | Starting delivery mode: local, direct or pr. |
+
+- PK `(id)`.
 
 ## Views
 

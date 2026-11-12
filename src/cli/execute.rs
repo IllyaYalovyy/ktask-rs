@@ -151,11 +151,15 @@ fn init(
     service: &mut Service,
     check_command: Option<&str>,
     check_name: &str,
-    timeout_ms: i64,
+    timeout_ms: Option<i64>,
     agent_network: Option<Switch>,
     check_before_task: Option<Switch>,
 ) -> Result<Reply> {
     let root = service.project_root()?;
+    let timeout_ms = match timeout_ms {
+        Some(timeout) => timeout,
+        None => service.user_defaults()?.check_timeout_ms,
+    };
     let check_source = if let Some(command) = check_command {
         service.set_check(check_name, command, timeout_ms)?;
         Some("given".to_owned())
@@ -182,6 +186,8 @@ fn init(
     let network = service.agent_network()?;
     let verify_first = service.check_before_task()?;
     let problems = crate::runner::setup::problems(service)?;
+    let delivery = service.delivery_config()?;
+    let remaining = remaining_setup(&root, !checks.is_empty(), &delivery);
     let mut text = format!("Project {} at {}\n", service.project_name, root.display());
     for check in &checks {
         text.push_str(&format!(
@@ -205,6 +211,16 @@ fn init(
         if network { "on" } else { "off" },
         if verify_first { "on" } else { "off" }
     ));
+    text.push_str(&format!(
+        "Delivery: {} via {}/{}\n",
+        delivery.mode, delivery.remote, delivery.base_branch
+    ));
+    if !remaining.is_empty() {
+        text.push_str("Project-specific setup still to do:\n");
+        for (item, fix) in &remaining {
+            text.push_str(&format!("- {item}: {fix}\n"));
+        }
+    }
     if !problems.is_empty() {
         let missing = problems
             .iter()
@@ -222,7 +238,8 @@ fn init(
         data: json!({
             "project": service.project_name, "root": root, "checks": checks,
             "check_source": check_source, "agent_network": network,
-            "check_before_task": verify_first,
+            "check_before_task": verify_first, "delivery": delivery,
+            "remaining_setup": remaining.iter().map(|(item, fix)| json!({"item":item,"fix":fix})).collect::<Vec<_>>(),
             "models": models.into_iter().map(|(role, model)| (role.to_owned(), json!(model.as_ref().map(ModelConfig::identifier))))
                 .collect::<serde_json::Map<_, _>>(),
         }),
@@ -230,7 +247,106 @@ fn init(
     })
 }
 
-pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply> {
+/// What no user default can supply: this project's own check, delivery destination and
+/// domain instructions. Nothing here is copied from another project.
+fn remaining_setup(
+    root: &std::path::Path,
+    has_check: bool,
+    delivery: &crate::application::configuration::DeliveryConfig,
+) -> Vec<(&'static str, String)> {
+    let mut remaining = Vec::new();
+    if !has_check {
+        remaining.push((
+            "Verification command",
+            "none detected; ktask init --check-command CMD".to_owned(),
+        ));
+    }
+    if delivery.mode != "local" && delivery.version <= 1 {
+        remaining.push((
+            "Delivery destination",
+            format!(
+                "mode {} uses the default remote {} and branch {}; confirm with ktask delivery --remote R --base B",
+                delivery.mode, delivery.remote, delivery.base_branch
+            ),
+        ));
+    }
+    if !root.join("AGENTS.md").is_file() && !root.join("CLAUDE.md").is_file() {
+        remaining.push((
+            "Domain instructions",
+            "add AGENTS.md or CLAUDE.md with this project's conventions".to_owned(),
+        ));
+    }
+    remaining
+}
+
+/// The defaults new projects start with, and this project's values beside them.
+fn defaults(
+    service: &mut Service,
+    config: &std::path::Path,
+    value: &crate::application::user_defaults::UserDefaults,
+    saved: bool,
+    apply: bool,
+) -> Result<Reply> {
+    use crate::application::user_defaults::on_off;
+    let preview = service.defaults_preview(config)?;
+    let (applied, rows) = if apply {
+        (true, service.apply_user_defaults(config, &preview)?)
+    } else {
+        (false, preview.clone())
+    };
+    let mut text = format!(
+        "User defaults v{}{}\nAgent network: {}\nBaseline checks: {}\nCheck timeout: {} ms\nRun mode: {}\nPlanner approval: {}\nDelivery mode: {}\n",
+        value.version,
+        if saved { " (saved)" } else { "" },
+        on_off(value.agent_network),
+        on_off(value.check_before_task),
+        value.check_timeout_ms,
+        value.continuation.name(),
+        value.planner_approval.name(),
+        value.delivery_mode
+    );
+    for (role, model) in app::configuration::MODEL_ROLES
+        .iter()
+        .zip(service.new_project_defaults()?)
+    {
+        text.push_str(&format!(
+            "{}\n",
+            output::safe(&crate::presentation::role_setting(role, model.as_ref()))
+        ));
+    }
+    text.push_str(if applied {
+        "\nApplied to this project; its tasks and attempts keep their pinned inputs:\n"
+    } else {
+        "\nThis project (not changed; --apply sets the right-hand values):\n"
+    });
+    for row in &rows {
+        text.push_str(&format!(
+            "- {}: {}{}\n",
+            row.setting,
+            output::safe(&row.current),
+            if applied || !row.changes {
+                String::new()
+            } else {
+                format!(" -> {}", output::safe(&row.default))
+            }
+        ));
+    }
+    Ok(Reply {
+        data: json!({
+            "defaults": value, "applied": applied, "preview": rows,
+            "models": app::configuration::MODEL_ROLES.iter().zip(service.new_project_defaults()?)
+                .map(|(role, model)| ((*role).to_owned(), json!(model)))
+                .collect::<serde_json::Map<_, _>>(),
+        }),
+        text,
+    })
+}
+
+pub(super) fn command(
+    service: &mut Service,
+    config: &std::path::Path,
+    command: &Command,
+) -> Result<Reply> {
     match command {
         Command::Delivery {
             mode,
@@ -270,6 +386,62 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
                     saved.version, saved.mode, saved.remote, saved.base_branch
                 ),
             })
+        }
+        Command::Defaults {
+            agent_network,
+            check_before_task,
+            check_timeout_ms,
+            run_mode,
+            planner_approval,
+            delivery_mode,
+            if_version,
+            apply,
+        } => {
+            use crate::application::preferences::{Continuation, PlannerApproval};
+            let current = service.user_defaults()?;
+            if let Some(version) = if_version
+                && *version != current.version
+            {
+                return Err(crate::storage::Error::Conflict(format!(
+                    "User defaults are version {}, not {}",
+                    current.version, version
+                ))
+                .into());
+            }
+            let mut value = current.clone();
+            if let Some(switch) = agent_network {
+                value.agent_network = matches!(switch, Switch::On);
+            }
+            if let Some(switch) = check_before_task {
+                value.check_before_task = matches!(switch, Switch::On);
+            }
+            if let Some(timeout) = check_timeout_ms {
+                value.check_timeout_ms = *timeout;
+            }
+            if let Some(mode) = run_mode {
+                value.continuation = if mode == "one" {
+                    Continuation::Single
+                } else {
+                    Continuation::Queue
+                };
+            }
+            if let Some(approval) = planner_approval {
+                value.planner_approval = if approval == "review-required" {
+                    PlannerApproval::ReviewRequired
+                } else {
+                    PlannerApproval::Automatic
+                };
+            }
+            if let Some(mode) = delivery_mode {
+                value.delivery_mode.clone_from(mode);
+            }
+            let changed = value != current;
+            let saved = if changed {
+                service.save_user_defaults(&current, &value)?
+            } else {
+                current
+            };
+            defaults(service, config, &saved, changed, *apply)
         }
         Command::Run { .. }
         | Command::Storage { .. }

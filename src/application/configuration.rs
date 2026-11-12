@@ -58,14 +58,18 @@ pub struct ProjectCheck {
     pub enabled: bool,
 }
 
-fn defaults(db: &Connection, project: i64) -> Result<Defaults> {
+pub(super) fn defaults(db: &Connection, project: i64) -> Result<Defaults> {
     models(
         db,
         "SELECT role,provider,model,effort FROM project_models WHERE project_id=?1",
         [project],
     )
 }
-fn models(db: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<Defaults> {
+pub(super) fn models(
+    db: &Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+) -> Result<Defaults> {
     let mut values = std::array::from_fn(|_| None);
     let mut stmt = db.prepare(sql)?;
     for row in stmt.query_map(params, |r| {
@@ -85,16 +89,40 @@ fn models(db: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<D
     }
     Ok(values)
 }
-fn checks(db: &Connection, project: i64) -> Result<Vec<ProjectCheck>> {
+pub(super) fn checks(db: &Connection, project: i64) -> Result<Vec<ProjectCheck>> {
     Ok(db.prepare("SELECT id,name,command,working_directory,timeout_ms,enabled FROM project_checks WHERE project_id=?1 ORDER BY id")?.query_map([project], |r| Ok(ProjectCheck { id: Some(r.get(0)?), name: r.get(1)?, command: r.get(2)?, directory: r.get(3)?, timeout_ms: r.get(4)?, enabled: r.get(5)? }))?.collect::<rusqlite::Result<_>>()?)
+}
+pub(super) fn delivery(db: &Connection, project: i64) -> Result<DeliveryConfig> {
+    Ok(db
+        .query_row(
+            "SELECT row_version,mode,remote,base_branch FROM project_delivery WHERE project_id=?1",
+            [project],
+            |r| {
+                Ok(DeliveryConfig {
+                    version: r.get(0)?,
+                    mode: r.get(1)?,
+                    remote: r.get(2)?,
+                    base_branch: r.get(3)?,
+                })
+            },
+        )
+        .optional()?
+        .unwrap_or_default())
+}
+/// Stores `value` as delivery version `version`; the branch and owned tip survive only when
+/// mode, remote and base branch are unchanged.
+pub(super) fn write_delivery(
+    tx: &Transaction<'_>,
+    project: i64,
+    version: i64,
+    value: &DeliveryConfig,
+) -> Result<()> {
+    tx.execute("INSERT INTO project_delivery(project_id,row_version,mode,remote,base_branch) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(project_id) DO UPDATE SET row_version=excluded.row_version,mode=excluded.mode,remote=excluded.remote,base_branch=excluded.base_branch,branch=CASE WHEN project_delivery.mode=excluded.mode AND project_delivery.remote=excluded.remote AND project_delivery.base_branch=excluded.base_branch THEN project_delivery.branch ELSE NULL END,owned_tip=CASE WHEN project_delivery.mode=excluded.mode AND project_delivery.remote=excluded.remote AND project_delivery.base_branch=excluded.base_branch THEN project_delivery.owned_tip ELSE NULL END", params![project,version,value.mode,value.remote,value.base_branch])?;
+    Ok(())
 }
 impl Service {
     pub fn delivery_config(&self) -> Result<DeliveryConfig> {
-        Ok(self.db.connection().query_row(
-            "SELECT row_version,mode,remote,base_branch FROM project_delivery WHERE project_id=?1",
-            [self.project_id],
-            |r| Ok(DeliveryConfig { version: r.get(0)?, mode: r.get(1)?, remote: r.get(2)?, base_branch: r.get(3)? }),
-        ).optional()?.unwrap_or_default())
+        delivery(self.db.connection(), self.project_id)
     }
     pub fn save_delivery_config(
         &mut self,
@@ -119,7 +147,7 @@ impl Service {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         require(!tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE project_id=?1 AND state IN ('running','paused','waiting'))", [self.project_id], |r| r.get::<_, bool>(0))?, "Cannot change delivery during a live attempt")?;
         require(!tx.query_row("SELECT EXISTS(SELECT 1 FROM execution_sessions WHERE project_id=?1 AND state IN ('running','resume_requested'))", [self.project_id], |r| r.get::<_, bool>(0))?, "Cannot change delivery during a live queue session")?;
-        let current = tx.query_row("SELECT row_version,mode,remote,base_branch FROM project_delivery WHERE project_id=?1", [self.project_id], |r| Ok(DeliveryConfig { version: r.get(0)?, mode: r.get(1)?, remote: r.get(2)?, base_branch: r.get(3)? })).optional()?.unwrap_or_default();
+        let current = delivery(&tx, self.project_id)?;
         require(
             &current == expected,
             "Delivery configuration changed elsewhere; reopen the form",
@@ -128,7 +156,7 @@ impl Service {
             .version
             .checked_add(1)
             .ok_or_else(|| Error::Conflict("Delivery version exhausted".into()))?;
-        tx.execute("INSERT INTO project_delivery(project_id,row_version,mode,remote,base_branch) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(project_id) DO UPDATE SET row_version=excluded.row_version,mode=excluded.mode,remote=excluded.remote,base_branch=excluded.base_branch,branch=CASE WHEN project_delivery.mode=excluded.mode AND project_delivery.remote=excluded.remote AND project_delivery.base_branch=excluded.base_branch THEN project_delivery.branch ELSE NULL END,owned_tip=CASE WHEN project_delivery.mode=excluded.mode AND project_delivery.remote=excluded.remote AND project_delivery.base_branch=excluded.base_branch THEN project_delivery.owned_tip ELSE NULL END", params![self.project_id,version,value.mode,value.remote,value.base_branch])?;
+        write_delivery(&tx, self.project_id, version, value)?;
         tx.commit()?;
         Ok(DeliveryConfig {
             version,

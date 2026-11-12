@@ -28,12 +28,16 @@ CONCEPTS
              "claude" means claude/sonnet. Providers: codex, claude or opencode.
 
 BEFORE THE FIRST RUN
-  - Once per machine, save the model defaults new projects start with:
-        ktask model-default execution --provider codex --model gpt-6-sol --effort high \
+  - Once per user and instance, save what new projects start with:
+        ktask model-default execution --provider claude --model opus --effort high \
             --new-projects
     Repeat for planning, review, validation and remediation; choose each role explicitly.
+    Then ktask defaults sets agent network, baseline checks, check timeout, run mode,
+    planner approval and delivery mode; ktask defaults --apply copies them to an existing
+    project (without --apply it only shows what would change).
   - In each project, a Git repository root with at least one commit and a clean worktree:
-        ktask init       registers it, detects a check, exits 4 listing anything missing
+        ktask init       registers it with the user defaults, detects a check, lists the
+                         project-specific setup left, exits 4 listing anything missing
     --check-command CMD sets the check; --agent-network on lets agents that change the
     project use the network, for example to install dependencies.
   - The provider CLI (codex, claude or opencode) is on PATH and logged in, and bubblewrap

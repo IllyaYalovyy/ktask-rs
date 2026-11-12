@@ -9,7 +9,11 @@ CREATE TABLE projects (
     -- A task starts only after the project checks pass on its clean starting commit.
     check_before_task INTEGER NOT NULL DEFAULT 1 CHECK (check_before_task IN (0, 1)),
     -- Writable agent turns may use the network (offline mode requires provider enforcement).
-    agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1))
+    agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1)),
+    -- Run mode and planner approval the project started with. They apply until the project
+    -- saves its own preferences file; later changes to the user defaults never reach it.
+    initial_continuation TEXT NOT NULL DEFAULT 'queue' CHECK (initial_continuation IN ('single', 'queue')),
+    initial_planner_approval TEXT NOT NULL DEFAULT 'automatic' CHECK (initial_planner_approval IN ('automatic', 'review_required'))
 ) STRICT;
 
 -- Project delivery is guarded independently of task and preference versions.
@@ -64,6 +68,19 @@ CREATE TABLE default_models (
     provider TEXT NOT NULL CHECK (length(trim(provider)) > 0),
     model TEXT NOT NULL CHECK (length(trim(model)) > 0),
     effort TEXT CHECK (length(trim(effort)) > 0)
+) STRICT;
+
+-- Reusable settings a newly registered project starts with (one row, versioned). Never a
+-- command, path, remote or branch: those belong to each project.
+CREATE TABLE user_defaults (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    row_version INTEGER NOT NULL CHECK (row_version > 0),
+    agent_network INTEGER NOT NULL CHECK (agent_network IN (0, 1)),
+    check_before_task INTEGER NOT NULL CHECK (check_before_task IN (0, 1)),
+    check_timeout_ms INTEGER NOT NULL CHECK (check_timeout_ms > 0),
+    continuation TEXT NOT NULL CHECK (continuation IN ('single', 'queue')),
+    planner_approval TEXT NOT NULL CHECK (planner_approval IN ('automatic', 'review_required')),
+    delivery_mode TEXT NOT NULL CHECK (delivery_mode IN ('local', 'direct', 'pr'))
 ) STRICT;
 
 -- Commands are executed by the supervisor, never inferred from a model's claim.

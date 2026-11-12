@@ -92,6 +92,7 @@ pub enum Action {
     RefreshEvidence,
     Configure,
     ProjectModels,
+    UserDefaults,
     ProjectChecks,
     Delivery,
     Storage,
@@ -634,6 +635,7 @@ impl App {
             View::Config => {
                 let action = match code {
                     KeyCode::Char('m') => Action::ProjectModels,
+                    KeyCode::Char('u') => Action::UserDefaults,
                     KeyCode::Char('c') => Action::ProjectChecks,
                     KeyCode::Char('k') => Action::Storage,
                     KeyCode::Char('b') => Action::BuildCache,

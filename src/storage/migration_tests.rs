@@ -3,6 +3,10 @@ use rusqlite::Connection;
 use super::{ALL, Migration, apply};
 use crate::{scratch::Scratch, storage::Database};
 
+/// The last column of `projects` and the end of its definition, where tests add columns.
+const PROJECTS_COLUMN: &str = "    initial_planner_approval TEXT NOT NULL DEFAULT 'automatic' CHECK (initial_planner_approval IN ('automatic', 'review_required'))";
+const PROJECTS_END: &str = "    initial_planner_approval TEXT NOT NULL DEFAULT 'automatic' CHECK (initial_planner_approval IN ('automatic', 'review_required'))\n) STRICT;";
+
 type Result = std::result::Result<(), Box<dyn std::error::Error>>;
 
 fn sandbox() -> std::io::Result<Scratch> {
@@ -186,7 +190,10 @@ fn v1_reconciliation_copies_data_and_rejects_incompatible_columns() -> Result {
     let incompatible = Box::leak(
         ALL[0]
             .sql
-            .replace("    agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1))\n) STRICT;", "    agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1)),\n    required_new TEXT NOT NULL\n) STRICT;")
+            .replace(
+                PROJECTS_END,
+                &format!("{PROJECTS_COLUMN},\n    required_new TEXT NOT NULL\n) STRICT;"),
+            )
             .into_boxed_str(),
     );
     let newer = [Migration {
@@ -495,7 +502,7 @@ fn v1_accepts_sqlite_quoted_table_declaration_but_rejects_changed_constraints() 
 /// The V1 schema with one nullable column added to `projects`.
 fn with_project_description() -> String {
     ALL[0].sql.replace(
-        "    agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1))\n) STRICT;",
-        "    agent_network INTEGER NOT NULL DEFAULT 0 CHECK (agent_network IN (0, 1)),\n    description TEXT\n) STRICT;",
+        PROJECTS_END,
+        &format!("{PROJECTS_COLUMN},\n    description TEXT\n) STRICT;"),
     )
 }

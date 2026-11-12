@@ -14,6 +14,20 @@ pub enum PlannerApproval {
     Automatic,
     ReviewRequired,
 }
+impl PlannerApproval {
+    /// The name stored in SQLite and shown by the CLI.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::ReviewRequired => "review_required",
+        }
+    }
+    pub fn parse(name: &str) -> Option<Self> {
+        [Self::Automatic, Self::ReviewRequired]
+            .into_iter()
+            .find(|value| value.name() == name)
+    }
+}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Continuation {
@@ -21,6 +35,20 @@ pub enum Continuation {
     /// The supervisor keeps taking the next task until something needs the owner.
     #[default]
     Queue,
+}
+impl Continuation {
+    /// The name stored in SQLite and shown by the CLI.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Single => "single",
+            Self::Queue => "queue",
+        }
+    }
+    pub fn parse(name: &str) -> Option<Self> {
+        [Self::Single, Self::Queue]
+            .into_iter()
+            .find(|value| value.name() == name)
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,20 +68,40 @@ impl Default for Preferences {
         }
     }
 }
-fn read(path: &Path) -> Result<Preferences> {
-    match fs::read(path) {
-        Ok(data) => serde_json::from_slice(&data)
-            .map_err(|e| Error::Conflict(format!("Invalid preferences: {e}"))),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Preferences::default()),
-        Err(e) => Err(e.into()),
-    }
-}
 impl Service {
+    /// The saved file, or what the project started with from the user defaults.
+    fn read_preferences(&self, path: &Path) -> Result<Preferences> {
+        match fs::read(path) {
+            Ok(data) => serde_json::from_slice(&data)
+                .map_err(|e| Error::Conflict(format!("Invalid preferences: {e}"))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let (continuation, approval): (Continuation, PlannerApproval) =
+                    self.db.connection().query_row(
+                        "SELECT initial_continuation, initial_planner_approval FROM projects WHERE id=?1",
+                        [self.project_id],
+                        |r| {
+                            let continuation: String = r.get(0)?;
+                            let approval: String = r.get(1)?;
+                            Ok((
+                                Continuation::parse(&continuation).unwrap_or_default(),
+                                PlannerApproval::parse(&approval).unwrap_or_default(),
+                            ))
+                        },
+                    )?;
+                Ok(Preferences {
+                    continuation,
+                    planner_approval: approval,
+                    ..Preferences::default()
+                })
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
     fn preferences_path(&self, config: &Path) -> PathBuf {
         config.join(format!("project-{}.json", self.project_id))
     }
     pub fn preferences(&self, config: &Path) -> Result<Preferences> {
-        read(&self.preferences_path(config))
+        self.read_preferences(&self.preferences_path(config))
     }
     pub fn save_preferences(
         &self,
@@ -71,7 +119,7 @@ impl Service {
             .open(path.with_extension("lock"))?;
         lock.lock()?;
         require(
-            read(&path)? == *expected,
+            self.read_preferences(&path)? == *expected,
             "Preferences changed elsewhere; cancel and reopen this form",
         )?;
         let mut saved = value.clone();

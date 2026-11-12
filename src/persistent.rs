@@ -826,6 +826,8 @@ impl StoredWorkspace {
             | DialogKind::Overwrite { .. }
             | DialogKind::BreakdownReview { .. }
             | DialogKind::ProjectModels(_)
+            | DialogKind::UserDefaults(_)
+            | DialogKind::ApplyDefaults(_)
             | DialogKind::ProjectChecks(_)
             | DialogKind::ProjectCheck { .. }
             | DialogKind::Preferences(_)
@@ -1020,6 +1022,7 @@ impl Backend for StoredWorkspace {
         Ok(match action {
             Action::Configure
             | Action::ProjectModels
+            | Action::UserDefaults
             | Action::ProjectChecks
             | Action::Delivery
             | Action::Storage
@@ -1069,6 +1072,8 @@ impl Backend for StoredWorkspace {
         if matches!(
             dialog.kind,
             DialogKind::ProjectModels(_)
+                | DialogKind::UserDefaults(_)
+                | DialogKind::ApplyDefaults(_)
                 | DialogKind::ProjectChecks(_)
                 | DialogKind::ProjectCheck { .. }
                 | DialogKind::Preferences(..)
@@ -1264,7 +1269,7 @@ impl Backend for StoredWorkspace {
         }
         let delivery = self.service.delivery_config().unwrap_or_default();
         format!(
-            "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup; b for build caches.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\nDelivery: {} via {}/{}\n\nDefaults apply to new tasks; existing revisions stay pinned.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
+            "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup; b for build caches.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\nDelivery: {} via {}/{}\n\nDefaults apply to new tasks; existing revisions stay pinned.\nu User defaults: what new projects start with; preview and apply them here.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
             screen.project_name,
             if screen.mouse_enabled {
                 "Enabled"
@@ -1290,6 +1295,7 @@ impl Backend for StoredWorkspace {
     fn config_controls(&self) -> Vec<(&'static str, Action)> {
         vec![
             ("m Defaults", Action::ProjectModels),
+            ("u User defaults", Action::UserDefaults),
             ("c Checks", Action::ProjectChecks),
             ("g Git delivery", Action::Delivery),
             ("k Storage", Action::Storage),

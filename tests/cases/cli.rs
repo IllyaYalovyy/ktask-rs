@@ -1673,3 +1673,182 @@ fn evidence_reader_pages_and_searches_without_creating_app_state() -> Result {
     );
     Ok(())
 }
+
+struct Projects<'a>(&'a Path);
+
+impl Projects<'_> {
+    fn repository(&self, name: &str, files: &[(&str, &str)]) -> Result<String> {
+        let path = self.0.join(name);
+        std::fs::create_dir(&path)?;
+        support::empty_repository(&path)?;
+        for (file, content) in files {
+            std::fs::write(path.join(file), content)?;
+        }
+        Ok(path.to_string_lossy().into_owned())
+    }
+    fn run(&self, project: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
+        process(DEV, self.0)
+            .env(
+                "PATH",
+                format!("{}:/usr/bin:/bin", self.0.join("bin").display()),
+            )
+            .args(["--json", "--project", project])
+            .args(args)
+            .output()
+    }
+    fn ktask(&self, project: &str, args: &[&str], exit: i32) -> Result<Value> {
+        json_result(self.run(project, args)?, exit)
+    }
+}
+
+fn save_defaults_for_new_projects(projects: &Projects, first: &str) -> Result {
+    for role in [
+        "planning",
+        "execution",
+        "review",
+        "validation",
+        "remediation",
+    ] {
+        projects.ktask(
+            first,
+            &[
+                "model-default",
+                role,
+                "--provider",
+                "claude",
+                "--model",
+                "opus",
+                "--effort",
+                "high",
+                "--new-projects",
+            ],
+            0,
+        )?;
+    }
+    let before = projects.ktask(first, &["defaults"], 0)?["data"].clone();
+    assert_eq!(before["applied"], false);
+    assert_eq!(before["defaults"]["check_timeout_ms"], 600000);
+    assert_eq!(before["defaults"]["delivery_mode"], "local");
+    assert_eq!(before["models"]["review"]["effort"], "high");
+    let saved = projects.ktask(
+        first,
+        &[
+            "defaults",
+            "--agent-network",
+            "on",
+            "--check-before-task",
+            "off",
+            "--check-timeout-ms",
+            "45000",
+            "--run-mode",
+            "one",
+            "--planner-approval",
+            "review-required",
+            "--delivery-mode",
+            "pr",
+            "--if-version",
+            "0",
+        ],
+        0,
+    )?["data"]
+        .clone();
+    assert_eq!(saved["defaults"]["version"], 1);
+    let stale = projects.ktask(
+        first,
+        &["defaults", "--delivery-mode", "direct", "--if-version", "0"],
+        4,
+    )?;
+    assert!(
+        stale["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("version 1")
+    );
+    // Previewing changes nothing in the registered project.
+    let rows = saved["preview"].as_array().unwrap();
+    let row = |name: &str| rows.iter().find(|r| r["setting"] == name).unwrap();
+    assert_eq!(row("agent network")["current"], "off");
+    assert_eq!(row("agent network")["default"], "on");
+    assert_eq!(row("delivery mode")["default"], "pr");
+    let init = projects.ktask(first, &["init", "--check-command", "true"], 0)?;
+    assert_eq!(init["data"]["agent_network"], false);
+    Ok(())
+}
+
+fn new_projects_start_from_defaults(projects: &Projects) -> Result {
+    let second = projects.repository("second", &[("Makefile", "check:\n\t./t\n")])?;
+    let init = projects.ktask(&second, &["init"], 0)?["data"].clone();
+    assert_eq!(init["agent_network"], true);
+    assert_eq!(init["check_before_task"], false);
+    assert_eq!(init["checks"][0]["timeout_ms"], 45000);
+    assert_eq!(init["checks"][0]["command"], "make check");
+    assert_eq!(init["delivery"]["mode"], "pr");
+    assert_eq!(init["delivery"]["remote"], "origin");
+    assert_eq!(init["models"]["execution"], "claude/opus");
+    // What only the project can supply is named, never copied from another project.
+    let remaining: Vec<&str> = init["remaining_setup"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["item"].as_str().unwrap())
+        .collect();
+    assert_eq!(remaining, ["Delivery destination", "Domain instructions"]);
+    // Explicit options override the user defaults for this project only.
+    let third = projects.repository("third", &[])?;
+    let init = projects.ktask(
+        &third,
+        &[
+            "init",
+            "--check-command",
+            "true",
+            "--check-timeout-ms",
+            "5000",
+            "--agent-network",
+            "off",
+        ],
+        0,
+    )?["data"]
+        .clone();
+    assert_eq!(init["checks"][0]["timeout_ms"], 5000);
+    assert_eq!(init["agent_network"], false);
+    let fourth = projects.repository("fourth", &[])?;
+    let missing = projects.ktask(&fourth, &["init"], 4)?;
+    assert!(
+        missing["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Project check")
+    );
+    Ok(())
+}
+
+#[test]
+fn defaults_command_saves_user_defaults_previews_and_applies_them_to_a_project() -> Result {
+    let sandbox = support::sandbox()?;
+    let root = sandbox.path();
+    std::fs::create_dir(root.join("bin"))?;
+    support::write_executable(&root.join("bin/claude"), "#!/bin/sh\nexit 0\n")?;
+    let projects = Projects(root);
+    let first = projects.repository("first", &[])?;
+    save_defaults_for_new_projects(&projects, &first)?;
+    new_projects_start_from_defaults(&projects)?;
+    // Applying makes the registered project match, keeping its command and remote.
+    let text = String::from_utf8(projects.run(&first, &["defaults"])?.stdout)?;
+    assert!(text.contains("\"changes\":true"));
+    let applied = projects.ktask(&first, &["defaults", "--apply"], 0)?["data"].clone();
+    assert_eq!(applied["applied"], true);
+    assert!(
+        applied["preview"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["changes"] == false)
+    );
+    let init = projects.ktask(&first, &["init"], 0)?["data"].clone();
+    assert_eq!(init["agent_network"], true);
+    assert_eq!(init["check_before_task"], false);
+    assert_eq!(init["checks"][0]["command"], "true");
+    assert_eq!(init["checks"][0]["timeout_ms"], 45000);
+    assert_eq!(init["delivery"]["remote"], "origin");
+    Ok(())
+}

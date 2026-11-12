@@ -137,6 +137,40 @@ pub enum Command {
         #[arg(long)]
         search: Option<String>,
     },
+    /// Show or change the settings every new project starts with; --apply applies them here.
+    ///
+    /// Saved once per user and instance, next to model-default --new-projects (the five role
+    /// models and effort). Only a project registered later inherits them; an existing project
+    /// keeps its settings until --apply, and tasks and attempts keep their pinned inputs.
+    /// Output lists, per setting, this project's value and what the defaults would set; the
+    /// check command, remote and base branch are never part of them. --apply changes the
+    /// project to the defaults shown, refusing during a live attempt or if they moved on.
+    Defaults {
+        /// Let writable agent turns use the network.
+        #[arg(long, value_enum)]
+        agent_network: Option<Switch>,
+        /// Run the project checks on a task's clean starting commit first.
+        #[arg(long, value_enum)]
+        check_before_task: Option<Switch>,
+        /// Time allowed for one run of a check.
+        #[arg(long, value_parser=positive)]
+        check_timeout_ms: Option<i64>,
+        /// one runs a single task; queue continues until something needs the owner.
+        #[arg(long, value_parser=["one", "queue"])]
+        run_mode: Option<String>,
+        /// Whether the planner's and remediator's tasks need the owner's approval.
+        #[arg(long, value_parser=["automatic", "review-required"])]
+        planner_approval: Option<String>,
+        /// Local commits only, direct push to the base branch, or one pull request.
+        #[arg(long, value_parser=["local", "direct", "pr"])]
+        delivery_mode: Option<String>,
+        /// Reject a stale edit of the defaults.
+        #[arg(long)]
+        if_version: Option<i64>,
+        /// Apply the defaults to this project, as previewed.
+        #[arg(long)]
+        apply: bool,
+    },
     /// Show or change how verified commits leave this project.
     Delivery {
         /// Local commits only, direct push to the base branch, or one project pull request.
@@ -154,8 +188,12 @@ pub enum Command {
     },
     /// Set up this project: register it, configure its check, report what is missing.
     ///
-    /// A new project starts with the model defaults saved by model-default --new-projects.
-    /// Without --check-command, a project that has no check gets one detected from its files:
+    /// A new project starts with the user defaults: the models saved by model-default
+    /// --new-projects and the settings saved by the defaults command (agent network,
+    /// baseline checks, check timeout, run mode, planner approval, delivery mode). Options
+    /// given here override them for this project. Never copied from another project: the
+    /// check command, directories, remote and base branch; the output lists what is left to
+    /// set. Without --check-command, a project that has no check gets one detected from its files:
     /// a Makefile check or test target, Cargo.toml, a package.json test script, go.mod, or
     /// Python test files. Rerunning is safe. Exits 4, after saving what it could, when the
     /// project still cannot run tasks; the message lists each missing piece and its fix.
@@ -166,9 +204,9 @@ pub enum Command {
         /// Name of the check that --check-command sets.
         #[arg(long, default_value = "check", value_parser=nonempty)]
         check_name: String,
-        /// Time allowed for one run of the check.
-        #[arg(long, default_value_t=600000, value_parser=positive)]
-        check_timeout_ms: i64,
+        /// Time allowed for one run of the check (default: the user default, 600000).
+        #[arg(long, value_parser=positive)]
+        check_timeout_ms: Option<i64>,
         /// Let agents that change the project use the network, for example to install
         /// dependencies. Codex otherwise runs them without network. Unchanged when omitted.
         #[arg(long, value_enum)]

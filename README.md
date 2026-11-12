@@ -193,11 +193,27 @@ bubblewrap (`bwrap`) and a signed-in agent CLI. Save model defaults once, and ev
 you set up afterwards starts with them:
 
 ```sh
-ktask model-default execution --provider codex --model gpt-6-sol --effort high --new-projects
-ktask model-default planning --provider codex --model gpt-6-sol --effort high --new-projects
-ktask model-default review --provider codex --model gpt-6-astra --effort high --new-projects
-# likewise validation and remediation
+ktask model-default execution --provider claude --model opus --effort high --new-projects
+ktask model-default planning --provider claude --model opus --effort high --new-projects
+# likewise review, validation and remediation
 ```
+
+The same user-wide defaults also cover the agent network, baseline checks, check timeout, run
+mode, planner approval and delivery mode, so a new project needs only its verification command,
+delivery destination and domain instructions:
+
+```sh
+ktask defaults --agent-network off --check-before-task on --check-timeout-ms 600000 \
+    --run-mode queue --planner-approval automatic --delivery-mode local
+ktask defaults            # the saved defaults, and what they would change in this project
+ktask defaults --apply    # explicitly apply them to this existing project
+```
+
+They are saved once per user and instance (TUI: Configuration → **u User defaults**, which
+can preview and apply them to the open project). Only a project registered afterwards inherits
+them; an existing project keeps its settings until you apply the defaults, and its tasks and
+attempts keep their pinned inputs. Applying keeps the project's check commands, remote and base
+branch. The check command, directories, remote and branch are never inherited.
 
 Review, validation and remediation (the failure judge that plans each repair) may use any provider and model,
 including the execution model's; the execution model applies the repair plans in its
@@ -223,7 +239,10 @@ switch). `init` exits 4 and lists each fix
 when the project still cannot run tasks. The TUI covers the same setup: in a new project
 **u Readiness** lists what is missing, with **c Checks** (the first check is prefilled with
 the detected command), **d Defaults** (choose "New projects: Start with these" to save them
-for later projects) and Configuration → **e Preferences** → Agent network. Each project keeps
+for later projects), Configuration → **u User defaults** and **e Preferences** → Agent network.
+`init` applies the user defaults, then your options, and prints "Project-specific setup still
+to do": the verification command, the delivery destination (when the inherited mode pushes)
+and domain instructions (AGENTS.md or CLAUDE.md). Each project keeps
 its own queue, checks and model defaults in the same instance database, and has its own
 supervisor: several projects run at the same time, each with its own TUI or CLI, and pausing
 one leaves the others running.

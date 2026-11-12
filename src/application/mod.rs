@@ -73,6 +73,7 @@ pub mod search;
 pub mod session;
 pub mod stop;
 pub mod usage_report;
+pub mod user_defaults;
 pub use queries::{Event, WaitingResume};
 pub mod transfer;
 
@@ -483,15 +484,31 @@ impl Service {
                 !taken,
                 "Project name already exists; use --project-name with a unique name",
             )?;
+            let user = user_defaults::read_user_defaults(&tx)?;
             tx.execute(
-                "INSERT INTO projects(name, root_path, created_at_ms) VALUES (?1, ?2, ?3)",
-                params![name, bytes, now_ms()],
+                "INSERT INTO projects(name, root_path, created_at_ms, check_before_task, agent_network, initial_continuation, initial_planner_approval) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    name,
+                    bytes,
+                    now_ms(),
+                    user.check_before_task,
+                    user.agent_network,
+                    user.continuation.name(),
+                    user.planner_approval.name()
+                ],
             )?;
             let id = tx.last_insert_rowid();
             tx.execute(
                 "INSERT INTO project_models(project_id,role,provider,model,effort) SELECT ?1,role,provider,model,effort FROM default_models",
                 [id],
             )?;
+            // Only the mode is inherited; the remote and branch are this project's own.
+            if user.delivery_mode != configuration::DeliveryConfig::default().mode {
+                tx.execute(
+                    "INSERT INTO project_delivery(project_id,mode) VALUES (?1,?2)",
+                    params![id, user.delivery_mode],
+                )?;
+            }
             (id, name.to_owned())
         };
         tx.commit()?;

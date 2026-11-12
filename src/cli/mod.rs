@@ -242,6 +242,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             | Command::Import { preview: false, .. }
             | Command::CheckSet { .. }
             | Command::ModelDefault { .. }
+            | Command::Defaults { .. }
             | Command::Init { .. }
     );
     let mut service = if creates_project {
@@ -485,7 +486,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             cli.json,
         );
     }
-    let mut reply = execute::command(&mut service, command)?;
+    let mut reply = execute::command(&mut service, &paths.config, command)?;
     if matches!(
         command,
         Command::Answer { .. } | Command::Approve { .. } | Command::Done { .. }

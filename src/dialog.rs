@@ -36,6 +36,8 @@ pub enum DialogKind {
         data: String,
     },
     ProjectModels(Box<crate::application::configuration::Defaults>),
+    UserDefaults(crate::application::user_defaults::UserDefaults),
+    ApplyDefaults(Vec<crate::application::user_defaults::DefaultsRow>),
     ProjectChecks(Vec<crate::application::configuration::ProjectCheck>),
     ProjectCheck {
         expected: Vec<crate::application::configuration::ProjectCheck>,

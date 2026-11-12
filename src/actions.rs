@@ -296,6 +296,7 @@ impl App {
             | Action::Help
             | Action::Configure
             | Action::ProjectModels
+            | Action::UserDefaults
             | Action::ProjectChecks
             | Action::Delivery
             | Action::Storage
