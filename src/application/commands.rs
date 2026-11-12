@@ -35,6 +35,7 @@ fn insert_revision(
         r.get(0)
     })?;
     let category = categories::pin_for(tx, project, task, definition)?;
+    let lenses = lenses::pin_for(tx, project, task, definition)?;
     tx.execute("INSERT INTO task_revisions(task_id, revision, lifecycle, kind, title, goal, created_by_kind, created_by, attempt_limit, attempt_timeout_ms, created_at_ms, decided_at_ms, decided_by_kind, decided_by, stage_timeout_ms)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![task, number, if ready { "ready" } else { "draft" }, definition.kind.as_str(), definition.title, definition.goal, actor.kind.as_str(), actor.name, definition.attempt_limit, definition.timeout_ms, now,
@@ -42,6 +43,7 @@ fn insert_revision(
     if let Some(category) = &category {
         categories::write_pin(tx, task, number, category)?;
     }
+    lenses::write_pin(tx, task, number, &lenses)?;
     for (index, criterion) in definition.criteria.iter().enumerate() {
         tx.execute("INSERT INTO acceptance_criteria(task_id, revision, ordinal, description) VALUES (?1, ?2, ?3, ?4)", params![task, number, index as i64 + 1, criterion])?;
     }

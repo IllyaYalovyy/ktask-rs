@@ -77,6 +77,7 @@ fn definition(title: &str, kind: Kind, category: Option<&str>) -> Definition {
         goal: "Goal with {{context}} kept literally".into(),
         kind,
         category: category.map(Into::into),
+        lenses: None,
         criteria: vec!["First".into(), "Second".into()],
         models: std::array::from_fn(|_| None),
         attempt_limit: Some(3),
@@ -741,14 +742,20 @@ fn cli_selects_categories_on_tasks_previews_them_and_delete_uncovers_the_next_sc
 }
 
 #[test]
-fn tsv_export_keeps_the_category_and_older_exports_still_import() -> Result {
+fn tsv_export_keeps_the_category_and_lenses_and_older_exports_still_import() -> Result {
     use ktask_rs_mk3::application::transfer;
+    let mut chosen = definition("Reviewed", Kind::Ai, None);
+    chosen.lenses = Some(vec!["security".into(), "Data races".into()]);
+    let mut plain = definition("Plain", Kind::Ai, None);
+    plain.lenses = Some(Vec::new());
     let definitions = vec![
         definition("Art", Kind::Ai, Some("art")),
         definition("Owner", Kind::Human, None),
+        chosen,
+        plain,
     ];
     let text = transfer::encode(&definitions)?;
-    assert!(text.starts_with("ktask-tasks-v3\n"));
+    assert!(text.starts_with("ktask-tasks-v4\n"));
     assert_eq!(transfer::decode(&text)?, definitions);
     let mut row = vec!["ai", "Title", "Goal", "3", "", ""];
     row.extend(std::iter::repeat_n("", 12));
@@ -758,6 +765,14 @@ fn tsv_export_keeps_the_category_and_older_exports_still_import() -> Result {
     assert_eq!(
         (old[0].category.clone(), old[0].criteria.clone()),
         (None, vec!["Only criterion".to_owned()])
+    );
+    // A v3 row names a category but no lenses: the project's defaults apply.
+    let mut v3_row = row.clone();
+    v3_row.insert(1, "art");
+    let v3 = transfer::decode(&format!("ktask-tasks-v3\n{}\n", v3_row.join("\t")))?;
+    assert_eq!(
+        (v3[0].category.clone(), v3[0].lenses.clone()),
+        (Some("art".to_owned()), None)
     );
     Ok(())
 }

@@ -261,6 +261,7 @@ pub(super) fn apply_judgment(
                     goal: t.goal.clone(),
                     kind: run.definition.kind,
                     category: run.definition.category.clone(),
+                    lenses: run.definition.lenses.clone(),
                     criteria: t.criteria.clone(),
                     models: defaults.clone(),
                     attempt_limit: Some(3),

@@ -4,9 +4,12 @@
 //! The rules cover what only the supervisor can guarantee: restrictions, evidence handling,
 //! callbacks and the structured response. They are built here from the role and whether the
 //! category's checks apply, never from an editable template, so no category can loosen them.
-use super::categories::{
-    Category,
-    template::{self, Values},
+use super::{
+    categories::{
+        Category,
+        template::{self, Values},
+    },
+    lenses::Lens,
 };
 use crate::storage::Result;
 
@@ -169,6 +172,26 @@ fn callback_text(callback: &Callback<'_>) -> String {
     )
 }
 
+fn render_work(
+    template_text: &str,
+    category: &Category,
+    task: &Task<'_>,
+    context: &str,
+) -> Result<String> {
+    let criteria = template::numbered(task.criteria);
+    template::render(
+        template_text,
+        &Values {
+            title: task.title,
+            goal: task.goal,
+            criteria: &criteria,
+            category: &category.name,
+            context,
+        },
+    )
+    .map_err(crate::storage::Error::Conflict)
+}
+
 /// Builds the prompt of `turn` for `task` from the category's template. `callback` is the
 /// worker's follow-up command when the turn may file one; `None` adds nothing.
 pub fn compose(
@@ -178,24 +201,70 @@ pub fn compose(
     context: &str,
     callback: Option<&Callback<'_>>,
 ) -> Result<Prompt> {
-    let criteria = template::numbered(task.criteria);
-    let work = template::render(
-        turn.template(category),
-        &Values {
-            title: task.title,
-            goal: task.goal,
-            criteria: &criteria,
-            category: &category.name,
-            context,
-        },
-    )
-    .map_err(crate::storage::Error::Conflict)?;
+    let work = render_work(turn.template(category), category, task, context)?;
     Ok(Prompt {
         rules: rules(turn, category.checks),
         category: format!("{} ({} scope)", category.name, category.scope.label()),
         work,
         callback: callback.map(callback_text).unwrap_or_default(),
     })
+}
+
+/// What the supervisor adds to a review turn that runs through a lens.
+fn lens_rule(lens: &Lens) -> String {
+    format!(
+        "This is one of several independent specialist reviews of the same change. Judge it only through the {} lens, in its own session: other lenses have their own reviews, whose findings you cannot see, and the work category's general review is not run. All selected lens reviews finish before any repair is requested.",
+        lens.name
+    )
+}
+
+/// The prompt of a specialist review turn: the lens's instructions take the place of the
+/// category's review template, under the same fixed review rules.
+pub fn compose_lens(
+    category: &Category,
+    lens: &Lens,
+    task: &Task<'_>,
+    context: &str,
+) -> Result<Prompt> {
+    Ok(Prompt {
+        rules: format!(
+            "{} {}",
+            rules(Turn::Review, category.checks),
+            lens_rule(lens)
+        ),
+        category: format!(
+            "{} ({} scope), review lens {} ({} scope)",
+            category.name,
+            category.scope.label(),
+            lens.name,
+            lens.scope.label()
+        ),
+        work: render_work(&lens.instructions, category, task, context)?,
+        callback: String::new(),
+    })
+}
+
+/// The prompt of a lens review as a preview shows it.
+pub fn preview_lens(
+    category: &Category,
+    lens: &Lens,
+    task: &Task<'_>,
+    example: bool,
+) -> Result<String> {
+    let parts = compose_lens(category, lens, task, RUNTIME_CONTEXT)?;
+    Ok(format!(
+        "== Review lens {} ({} scope) for work category {}; {} filled in; the model reads the supervisor rules first ==\n{}\n\n== Supervisor rules: fixed, not editable by the lens ==\n{}",
+        lens.name,
+        lens.scope.label(),
+        category.name,
+        if example {
+            "example task content"
+        } else {
+            "task content"
+        },
+        parts.work,
+        parts.rules,
+    ))
 }
 
 /// The prompt as a preview shows it: the three parts labelled, with stand-ins that say
@@ -281,6 +350,32 @@ mod tests {
         assert!(text.contains("== Supervisor rules") && text.contains("== Work category code"));
         assert!(text.contains(RUNTIME_CONTEXT) && text.contains("runtime-only: for execution"));
         assert!(text.contains("Goal: G") && text.contains("1. First"));
+    }
+
+    #[test]
+    fn a_lens_replaces_the_review_template_under_the_same_fixed_rules() {
+        let code = builtin::named("code").unwrap();
+        let lens = crate::application::lenses::builtin::named("security").unwrap();
+        let (criteria, mut task) = task();
+        task.criteria = &criteria;
+        let text = compose_lens(&code, &lens, &task, "evidence")
+            .unwrap()
+            .text();
+        for needed in [
+            "read-only by design",
+            "Judge it only through the security lens",
+            "Specialist review through the security lens",
+            "Goal: G",
+            "1. First\n2. Second",
+            "Context:\nevidence",
+            "review lens security (built-in scope)",
+        ] {
+            assert!(text.contains(needed), "{needed}");
+        }
+        assert!(
+            !text.contains("Clean Code bar"),
+            "the category review is not run"
+        );
     }
 
     #[test]

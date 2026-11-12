@@ -829,6 +829,9 @@ impl Backend for DemoWorkspace {
             | DialogKind::Profile { .. }
             | DialogKind::Categories(_)
             | DialogKind::Category { .. }
+            | DialogKind::Lenses(_)
+            | DialogKind::Lens { .. }
+            | DialogKind::LensDefaults(_)
             | DialogKind::ProjectChecks(_)
             | DialogKind::ProjectCheck { .. }
             | DialogKind::Preferences(..)

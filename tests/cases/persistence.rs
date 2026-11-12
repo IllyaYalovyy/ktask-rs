@@ -19,6 +19,7 @@ fn definition(title: &str) -> Definition {
         criteria: vec!["Survives restart".into()],
         kind: Kind::Ai,
         category: None,
+        lenses: None,
         models: std::array::from_fn(|_| None),
         attempt_limit: Some(3),
         timeout_ms: Some(600_000),
@@ -4335,12 +4336,12 @@ fn project_identity_and_definition_transfer_are_lossless_and_safe() -> Result {
     transfer::export(&file, &text, Some(text.as_bytes()))?;
     assert_eq!(transfer::import(&file)?, transfer::decode(&text)?);
     assert!(transfer::decode("ktask-tasks-v1\nbad").is_err());
-    // Stage limits and categories round-trip in v3; v1 rows (no stage column) still import without one.
+    // Stage limits, categories and lenses round-trip in v4; v1 rows (no stage column) still import without one.
     let mut staged = d.clone();
     staged.stage_timeout_ms = Some(ktask_rs_mk3::application::limits::STAGE_LIMIT_MS);
-    let v3 = transfer::encode(&[staged.clone()])?;
-    assert!(v3.starts_with("ktask-tasks-v3\n"));
-    assert_eq!(transfer::decode(&v3)?, vec![staged]);
+    let v4 = transfer::encode(&[staged.clone()])?;
+    assert!(v4.starts_with("ktask-tasks-v4\n"));
+    assert_eq!(transfer::decode(&v4)?, vec![staged]);
     let v1: Vec<String> = text
         .lines()
         .enumerate()
@@ -4349,7 +4350,8 @@ fn project_identity_and_definition_transfer_are_lossless_and_safe() -> Result {
                 "ktask-tasks-v1".into()
             } else {
                 let mut fields: Vec<&str> = line.split('\t').collect();
-                // v1 rows have neither the category (after the kind) nor the stage limit.
+                // v1 rows have neither the category nor the lenses (after the kind) nor the stage limit.
+                fields.remove(1);
                 fields.remove(1);
                 fields.remove(5);
                 fields.join("\t")

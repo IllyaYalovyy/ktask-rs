@@ -12,14 +12,6 @@ use serde_json::json;
 
 const MAX_FILE: u64 = 64 * 1024;
 
-fn scope(value: CategoryScope) -> Scope {
-    match value {
-        CategoryScope::User => Scope::User,
-        CategoryScope::Project => Scope::Project,
-        CategoryScope::BuiltIn => Scope::BuiltIn,
-    }
-}
-
 fn role(value: CategoryRole) -> &'static str {
     match value {
         CategoryRole::Execution => "execution",
@@ -31,7 +23,7 @@ fn role(value: CategoryRole) -> &'static str {
 
 fn found(service: &Service, name: &str, in_scope: Option<CategoryScope>) -> Result<Entry> {
     match in_scope {
-        Some(chosen) => service.category_in(scope(chosen), name)?,
+        Some(chosen) => service.category_in(Scope::from(chosen), name)?,
         None => service.category(name)?,
     }
     .ok_or_else(|| {
@@ -39,7 +31,7 @@ fn found(service: &Service, name: &str, in_scope: Option<CategoryScope>) -> Resu
             "No work category named {name}{}; list them with `category list`",
             in_scope.map_or(String::new(), |s| format!(
                 " in the {} scope",
-                scope(s).label()
+                Scope::from(s).label()
             ))
         ))
     })
@@ -76,7 +68,7 @@ fn text(entry: &Entry) -> String {
 }
 
 /// A template given on the command line, or read from the file after `@`.
-fn template_text(value: &str) -> Result<String> {
+pub(super) fn template_text(value: &str) -> Result<String> {
     if let Some(literal) = value.strip_prefix("@@") {
         return Ok(format!("@{literal}"));
     }
@@ -107,7 +99,7 @@ struct Save<'a> {
 }
 
 fn save(service: &mut Service, args: &Save<'_>) -> Result<Reply> {
-    let target = scope(args.scope);
+    let target = Scope::from(args.scope);
     if target == Scope::BuiltIn {
         return Err(Failure::usage(
             "Built-in categories are fixed; save into --scope user or --scope project to override one",
@@ -319,12 +311,12 @@ pub(super) fn category(service: &mut Service, action: &CategoryAction) -> Result
             scope: chosen,
             if_version,
         } => {
-            service.delete_category(scope(*chosen), name, *if_version)?;
+            service.delete_category(Scope::from(*chosen), name, *if_version)?;
             Ok(Reply {
-                data: json!({"action": "deleted", "name": name, "scope": scope(*chosen)}),
+                data: json!({"action": "deleted", "name": name, "scope": Scope::from(*chosen)}),
                 text: format!(
                     "deleted {} category {}; tasks that pinned it keep their copy\n",
-                    scope(*chosen).label(),
+                    Scope::from(*chosen).label(),
                     safe(name)
                 ),
             })

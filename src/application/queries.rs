@@ -286,7 +286,7 @@ impl Service {
     pub fn browse_results(&self, attempt: i64) -> Result<String> {
         let db = self.db.connection();
         let mut text = String::from("Role steps, findings and acceptance results\n");
-        let mut stmt = db.prepare("SELECT s.id,s.ordinal,s.role,s.state,coalesce(c.name,''),coalesce(s.report,''),s.command,s.exit_code,s.passed_count,s.failed_count,s.ignored_count,s.provider,s.model FROM attempt_steps s LEFT JOIN project_checks c ON c.id=s.project_check_id WHERE s.attempt_id=?1 ORDER BY s.ordinal")?;
+        let mut stmt = db.prepare("SELECT s.id,s.ordinal,s.role,s.state,coalesce(c.name,''),coalesce(s.report,''),s.command,s.exit_code,s.passed_count,s.failed_count,s.ignored_count,s.provider,s.model,(SELECT lens FROM lens_reviews WHERE step_id=s.id) FROM attempt_steps s LEFT JOIN project_checks c ON c.id=s.project_check_id WHERE s.attempt_id=?1 ORDER BY s.ordinal")?;
         let steps = stmt
             .query_map([attempt], |r| {
                 Ok((
@@ -303,6 +303,7 @@ impl Service {
                     r.get::<_, Option<i64>>(10)?,
                     r.get::<_, Option<String>>(11)?,
                     r.get::<_, Option<String>>(12)?,
+                    r.get::<_, Option<String>>(13)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -323,10 +324,12 @@ impl Service {
             ignored,
             provider,
             model,
+            lens,
         ) in steps
         {
             text.push_str(&format!(
-                "\nStep {ordinal} · {role}{}{} · {state}\n",
+                "\nStep {ordinal} · {role}{}{}{} · {state}\n",
+                lens.map_or_else(String::new, |lens| format!(" ({lens} lens)")),
                 if check.is_empty() {
                     String::new()
                 } else {
@@ -385,7 +388,7 @@ impl Service {
     pub fn browse_step_outline(&self, attempt: i64) -> Result<String> {
         let db = self.db.connection();
         let mut text = String::from("Recorded steps (select Reviews or Failures for findings)\n");
-        let mut stmt = db.prepare("SELECT ordinal,role,state,coalesce(failed_count,0),report,provider,model,check_name FROM attempt_steps WHERE attempt_id=?1 ORDER BY ordinal")?;
+        let mut stmt = db.prepare("SELECT ordinal,role,state,coalesce(failed_count,0),report,provider,model,check_name,(SELECT lens FROM lens_reviews WHERE step_id=attempt_steps.id) FROM attempt_steps WHERE attempt_id=?1 ORDER BY ordinal")?;
         let mut count = 0;
         for row in stmt.query_map([attempt], |r| {
             Ok((
@@ -397,11 +400,14 @@ impl Service {
                 r.get::<_, Option<String>>(5)?,
                 r.get::<_, Option<String>>(6)?,
                 r.get::<_, Option<String>>(7)?,
+                r.get::<_, Option<String>>(8)?,
             ))
         })? {
-            let (ordinal, role, state, failed, report, provider, model, check_name) = row?;
+            let (ordinal, role, state, failed, report, provider, model, check_name, lens) = row?;
             text.push_str(&format!(
-                "Step {ordinal} · {role} · {state}{}{}\n",
+                "Step {ordinal} · {role}{} · {state}{}{}\n",
+                lens.as_deref()
+                    .map_or_else(String::new, |lens| format!(" ({lens} lens)")),
                 model
                     .as_deref()
                     .map(|model| format!(
@@ -494,7 +500,7 @@ impl Service {
             "(state IN ('failed','interrupted','changes_requested') OR coalesce(failed_count,0)>0)"
         };
         let sql = format!(
-            "SELECT id,ordinal,role,state,coalesce(report,''),coalesce(command,''),exit_code,coalesce(failed_count,0) FROM attempt_steps WHERE attempt_id=?1 AND {filter} ORDER BY ordinal"
+            "SELECT id,ordinal,role || coalesce(' (' || (SELECT lens FROM lens_reviews WHERE step_id=attempt_steps.id) || ' lens)',''),state,coalesce(report,''),coalesce(command,''),exit_code,coalesce(failed_count,0) FROM attempt_steps WHERE attempt_id=?1 AND {filter} ORDER BY ordinal"
         );
         let mut stmt = db.prepare(&sql)?;
         let rows = stmt
@@ -930,11 +936,13 @@ pub(super) fn revisions(db: &Connection, task: i64) -> Result<Vec<Revision>> {
                 lifecycle: r.get(1)?,
                 actor: r.get(7)?,
                 category: None,
+                lenses: Vec::new(),
                 definition: Definition {
                     title: r.get(2)?,
                     goal: r.get(3)?,
                     kind: Kind::parse(&r.get::<_, String>(4)?).unwrap_or(Kind::Human),
                     category: None,
+                    lenses: None,
                     attempt_limit: r.get(5)?,
                     timeout_ms: r.get(6)?,
                     stage_timeout_ms: r.get(8)?,
@@ -948,6 +956,8 @@ pub(super) fn revisions(db: &Connection, task: i64) -> Result<Vec<Revision>> {
         let pin = categories::pinned(db, task, revision.number, revision.definition.kind)?;
         revision.definition.category = pin.as_ref().map(|c| c.name.clone());
         revision.category = pin;
+        revision.lenses = lenses::pinned(db, task, revision.number)?;
+        revision.definition.lenses = Some(revision.lenses.iter().map(|l| l.name.clone()).collect());
         let mut criteria = db.prepare_cached("SELECT description FROM acceptance_criteria WHERE task_id = ?1 AND revision = ?2 ORDER BY ordinal")?;
         revision.definition.criteria = criteria
             .query_map(params![task, revision.number], |r| r.get(0))?
@@ -1059,6 +1069,7 @@ fn attempts(
                 worker_claim: None,
                 question: r.get(10)?,
                 steps: Vec::new(),
+                lens_reviews: Vec::new(),
                 artifacts: Vec::new(),
             })
         })?
@@ -1104,8 +1115,9 @@ fn attempts(
             }
         }
         let mut steps = db.prepare_cached(
-            "SELECT s.role, s.state, s.report, c.name, s.passed_count, s.failed_count, s.ignored_count, s.provider, s.model
+            "SELECT s.role, s.state, s.report, c.name, s.passed_count, s.failed_count, s.ignored_count, s.provider, s.model, l.lens
              FROM attempt_steps s LEFT JOIN project_checks c ON c.id=s.project_check_id
+             LEFT JOIN lens_reviews l ON l.step_id=s.id
              WHERE s.attempt_id = ?1 ORDER BY s.ordinal",
         )?;
         attempt.steps = steps
@@ -1125,6 +1137,7 @@ fn attempts(
                     state,
                     report: r.get(2)?,
                     report_kind: report_kind.into(),
+                    lens: r.get(9)?,
                     provider: r.get(7)?,
                     model: r.get(8)?,
                     check_name: r.get(3)?,
@@ -1139,6 +1152,7 @@ fn attempts(
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        attempt.lens_reviews = lenses::reviews_of(db, attempt.id)?;
         attempt.worker_claim = attempt
             .steps
             .iter()

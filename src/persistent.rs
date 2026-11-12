@@ -8,7 +8,7 @@ use crate::{
     },
     backend::{Backend, Column, EvidenceAt},
     dialog::{Dialog, DialogKind, Field},
-    forms,
+    forms, lens_ui,
     presentation::{
         self as model, Kind, ROLES, Status, Task, attempt_time, budget, duration, finished_label,
         model_label,
@@ -468,8 +468,34 @@ impl StoredWorkspace {
             &names.iter().map(String::as_str).collect::<Vec<_>>(),
             current.as_deref().unwrap_or(forms::DEFAULT_CATEGORY),
         ));
+        dialog.fields.extend(self.lens_slots(stored));
         dialog.expected = stored.map(versioned);
         dialog
+    }
+
+    /// The review lens choice of a task form: the project default for a new task, the pinned
+    /// lenses (or an explicit ordinary review) for an edited one.
+    fn lens_slots(&self, stored: Option<&domain::Task>) -> Vec<Field> {
+        let pinned: Vec<String> = stored
+            .map(|t| {
+                t.definition()
+                    .lenses
+                    .iter()
+                    .map(|lens| lens.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let available = lens_ui::available(self.service.lenses().unwrap_or_default());
+        let mut fields = lens_ui::slots(&pinned, &available, true);
+        // An edited task that pinned no lens while the project defaults select some chose the
+        // ordinary review; keep that choice rather than silently adopting the defaults.
+        if stored.is_some()
+            && pinned.is_empty()
+            && !self.service.lens_defaults().unwrap_or_default().is_empty()
+        {
+            fields[0].value = lens_ui::NO_LENS.into();
+        }
+        fields
     }
 
     fn models_form(&self, task: &Task) -> Result<Dialog, String> {
@@ -639,6 +665,7 @@ impl StoredWorkspace {
                 goal: String::new(),
                 kind: domain::Kind::Ai,
                 category: None,
+                lenses: None,
                 criteria: Vec::new(),
                 models: self.service.defaults().map_err(|e| e.to_string())?,
                 attempt_limit: Some(3),
@@ -660,6 +687,7 @@ impl StoredWorkspace {
         };
         definition.category =
             chosen_category(dialog.get(forms::CATEGORY), &previous, definition.kind)?;
+        definition.lenses = lens_ui::selection(dialog)?;
         let ready = dialog.get(APPROVAL) == "Ready";
         let selected = if let Some(id) = id {
             self.service
@@ -859,6 +887,9 @@ impl StoredWorkspace {
             | DialogKind::Profile { .. }
             | DialogKind::Categories(_)
             | DialogKind::Category { .. }
+            | DialogKind::Lenses(_)
+            | DialogKind::Lens { .. }
+            | DialogKind::LensDefaults(_)
             | DialogKind::ProjectChecks(_)
             | DialogKind::ProjectCheck { .. }
             | DialogKind::Preferences(_)
@@ -1056,6 +1087,7 @@ impl Backend for StoredWorkspace {
             | Action::UserDefaults
             | Action::Profiles
             | Action::Categories
+            | Action::Lenses
             | Action::ProjectChecks
             | Action::Delivery
             | Action::Storage
@@ -1081,7 +1113,7 @@ impl Backend for StoredWorkspace {
             Action::Import => Some(Dialog::new(
                 DialogKind::Import,
                 "Import task definitions · disk",
-                "Read a ktask-tasks-v3 (or v2, v1) TSV export. Preview before committing.\nImports create new tasks, not copied attempt/history records.",
+                "Read a ktask-tasks-v4 (or v3, v2, v1) TSV export. Preview before committing.\nImports create new tasks, not copied attempt/history records.",
                 vec![Field::text(forms::SOURCE, "tasks.tsv")],
             )),
             Action::Export => Some(Dialog::new(
@@ -1111,6 +1143,9 @@ impl Backend for StoredWorkspace {
                 | DialogKind::Profile { .. }
                 | DialogKind::Categories(_)
                 | DialogKind::Category { .. }
+                | DialogKind::Lenses(_)
+                | DialogKind::Lens { .. }
+                | DialogKind::LensDefaults(_)
                 | DialogKind::ProjectChecks(_)
                 | DialogKind::ProjectCheck { .. }
                 | DialogKind::Preferences(..)
@@ -1306,7 +1341,7 @@ impl Backend for StoredWorkspace {
         }
         let delivery = self.service.delivery_config().unwrap_or_default();
         format!(
-            "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup; b for build caches.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\nDelivery: {} via {}/{}\n\nDefaults apply to new tasks; existing revisions stay pinned.\nu User defaults: what new projects start with; preview and apply them here.\nf Profiles: named role models to reuse; select one here or as the new-project default.\nw Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art; override per project.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
+            "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup; b for build caches.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\nDelivery: {} via {}/{}\n\nDefaults apply to new tasks; existing revisions stay pinned.\nu User defaults: what new projects start with; preview and apply them here.\nf Profiles: named role models to reuse; select one here or as the new-project default.\nw Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art; override per project.\nL Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default selection.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
             screen.project_name,
             if screen.mouse_enabled {
                 "Enabled"
@@ -1335,6 +1370,7 @@ impl Backend for StoredWorkspace {
             ("u User defaults", Action::UserDefaults),
             ("f Profiles", Action::Profiles),
             ("w Work categories", Action::Categories),
+            ("L Review lenses", Action::Lenses),
             ("c Checks", Action::ProjectChecks),
             ("g Git delivery", Action::Delivery),
             ("k Storage", Action::Storage),
@@ -1647,6 +1683,7 @@ mod tests {
             goal: "Exercise model selection".into(),
             kind: domain::Kind::Ai,
             category: None,
+            lenses: None,
             criteria: vec!["Saved".into()],
             models: std::array::from_fn(|_| default.clone()),
             attempt_limit: Some(3),
@@ -1681,6 +1718,7 @@ mod tests {
             goal: "Use configured model".into(),
             kind: domain::Kind::Ai,
             category: None,
+            lenses: None,
             criteria: vec!["Saved".into()],
             models: std::array::from_fn(|_| default.clone()),
             attempt_limit: Some(3),

@@ -474,6 +474,7 @@ fn automatic_housekeeping_drains_large_closed_history_and_empty_directories() ->
         goal: "Bound retained evidence".into(),
         kind: Kind::Ai,
         category: None,
+        lenses: None,
         criteria: vec!["Done".into()],
         models: std::array::from_fn(|_| {
             Some(ModelConfig {
@@ -620,6 +621,7 @@ fn paused_and_waiting_attempts_keep_output_while_closed_history_is_cleaned() -> 
             goal: "Keep current evidence".into(),
             kind: Kind::Ai,
             category: None,
+            lenses: None,
             criteria: vec!["Done".into()],
             models: std::array::from_fn(|_| {
                 Some(ModelConfig {
@@ -973,6 +975,7 @@ fn closed_service() -> Result<(crate::scratch::Scratch, Service, i64)> {
             goal: "Test cleanup".into(),
             kind: Kind::Ai,
             category: None,
+            lenses: None,
             criteria: vec!["Done".into()],
             models,
             attempt_limit: Some(1),
@@ -1033,6 +1036,7 @@ fn sweep_fixture() -> Result<SweepFixture> {
             goal: "Sweep".into(),
             kind: Kind::Ai,
             category: None,
+            lenses: None,
             criteria: vec!["Done".into()],
             models,
             attempt_limit: Some(1),
@@ -1392,6 +1396,7 @@ fn sweep_receipt_requests_wrap_for_earlier_newly_closed_attempt() -> Result<()> 
             goal: "Sweep".into(),
             kind: Kind::Ai,
             category: None,
+            lenses: None,
             criteria: vec!["Done".into()],
             models,
             attempt_limit: Some(1),
@@ -1662,6 +1667,7 @@ fn directory_phase_rechecks_protection_acquired_after_file_phase() -> Result<()>
             goal: "Test cleanup".into(),
             kind: Kind::Ai,
             category: None,
+            lenses: None,
             criteria: vec!["Done".into()],
             models,
             attempt_limit: Some(1),

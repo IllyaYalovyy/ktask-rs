@@ -445,6 +445,7 @@ pub(super) fn command(
         }
         Command::Profile { action } => super::profile::profile(service, action),
         Command::Category { action } => super::category::category(service, action),
+        Command::Lens { action } => super::lens::lens(service, action),
         Command::Run { .. }
         | Command::Storage { .. }
         | Command::Cache { .. }
@@ -633,6 +634,7 @@ pub(super) fn command(
                 goal: add.goal.clone(),
                 kind: kind(add.kind),
                 category: add.category.clone(),
+                lenses: add.lenses.selection(),
                 criteria: add.criterion.clone(),
                 models: service.defaults()?,
                 attempt_limit: Some(3),
@@ -778,11 +780,16 @@ fn edit(service: &mut Service, input: &Target, pending: bool, changes: &Changes)
     }
     if let Some(k) = changes.kind {
         d.kind = kind(k);
-        // The kind's own default applies again unless a category is named.
+        // The kind's own default applies again unless a category is named, and the
+        // project's default lenses unless lenses are chosen.
         d.category = None;
+        d.lenses = None;
     }
     if let Some(name) = &changes.category {
         d.category = Some(name.clone());
+    }
+    if let Some(lenses) = changes.lenses.selection() {
+        d.lenses = Some(lenses);
     }
     if !changes.criterion.is_empty() {
         d.criteria.clone_from(&changes.criterion);

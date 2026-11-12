@@ -14,6 +14,7 @@ mod demo;
 mod dialog;
 mod forms;
 pub mod instance;
+mod lens_ui;
 mod mock;
 mod persistent;
 mod presentation;

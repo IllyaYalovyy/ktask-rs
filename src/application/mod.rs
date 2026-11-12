@@ -64,6 +64,7 @@ pub mod categories;
 pub mod configuration;
 pub mod delivery;
 pub mod execution;
+pub mod lenses;
 pub mod lifecycle;
 pub mod limits;
 pub mod preferences;
@@ -72,6 +73,7 @@ pub mod progress;
 pub mod prompt;
 mod queries;
 pub mod retention;
+pub(crate) mod scoped;
 pub mod search;
 pub mod session;
 pub mod stop;
@@ -215,6 +217,10 @@ pub struct Definition {
     /// The work category by name; `None` takes the default of the kind. A stored revision
     /// always names the category it pinned (none for Human work).
     pub category: Option<String>,
+    /// The review lenses by name, in review order. `None` takes the project's defaults and
+    /// an empty list keeps the ordinary single review; a stored revision always names the
+    /// lenses it pinned.
+    pub lenses: Option<Vec<String>>,
     pub criteria: Vec<String>,
     pub models: [Option<ModelConfig>; 4],
     pub attempt_limit: Option<i64>,
@@ -256,6 +262,9 @@ pub struct Revision {
     pub actor: Option<String>,
     /// The category and templates this revision pinned; `None` for Human work.
     pub category: Option<categories::Category>,
+    /// The review lenses this revision pinned, in review order; none means the ordinary
+    /// single review.
+    pub lenses: Vec<lenses::Lens>,
 }
 impl Revision {
     /// Whether the project's checks gate this revision's work.
@@ -292,6 +301,8 @@ pub struct Attempt {
     /// Open question text while the attempt waits for an answer.
     pub question: Option<String>,
     pub steps: Vec<Step>,
+    /// Every specialist review of this attempt, each attributed to its lens.
+    pub lens_reviews: Vec<lenses::Review>,
     pub artifacts: Vec<Artifact>,
 }
 #[derive(Clone, Debug, Serialize)]
@@ -312,6 +323,8 @@ pub struct Step {
     pub report: Option<String>,
     /// Provenance of `report` in CLI JSON.
     pub report_kind: String,
+    /// The review lens a specialist review step ran through.
+    pub lens: Option<String>,
     pub provider: Option<String>,
     pub model: Option<String>,
     pub check_name: Option<String>,

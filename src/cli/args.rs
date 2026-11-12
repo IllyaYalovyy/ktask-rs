@@ -518,6 +518,19 @@ pub enum Command {
         #[command(subcommand)]
         action: CategoryAction,
     },
+    /// Manage review lenses: named specialist reviews a task can opt into.
+    ///
+    /// Built-in lenses are concurrency, security and simplicity. Save your own in the user
+    /// scope, override any of them per project, choose the project's defaults with
+    /// `lens defaults`, and select lenses on a task with `add --lens NAME` or
+    /// `edit --lens NAME`. A task with lenses is reviewed once per lens, each in its own
+    /// read-only session on the configured review model, instead of by the single ordinary
+    /// review; all of them finish before one repair is requested. A revision pins the
+    /// instructions it was defined with. The supervisor's rules are not part of a lens.
+    Lens {
+        #[command(subcommand)]
+        action: LensAction,
+    },
     /// List tasks in execution order (history: newest resolution first).
     List {
         /// Which tasks to list.
@@ -610,7 +623,7 @@ pub enum Command {
         #[arg(long)]
         apply: bool,
     },
-    /// Preview or atomically import a ktask-tasks-v3 (or v2, v1) TSV file.
+    /// Preview or atomically import a ktask-tasks-v4 (or v3, v2, v1) TSV file.
     Import {
         /// TSV file written by export.
         file: PathBuf,
@@ -675,6 +688,8 @@ pub struct Add {
     /// follows the kind: code for ai, documents for docs.
     #[arg(long, value_parser = nonempty)]
     pub category: Option<String>,
+    #[command(flatten)]
+    pub lenses: LensChoice,
     /// ready may run at once; draft waits for approve.
     #[arg(long, value_enum, default_value = "ready")]
     pub approval: Approval,
@@ -708,11 +723,37 @@ pub struct Changes {
     /// New work category, pinned with its current templates by the new revision.
     #[arg(long, value_parser = nonempty)]
     pub category: Option<String>,
+    #[command(flatten)]
+    pub lenses: LensChoice,
     /// Store the revision as ready or draft; kept from the edited revision by default.
     #[arg(long, value_enum)]
     pub approval: Option<Approval>,
     #[command(flatten)]
     pub settings: Settings,
+}
+
+/// A task's review lenses: opt-in specialist reviews that replace the ordinary single review.
+#[derive(Args, Default)]
+pub struct LensChoice {
+    /// Review through this lens (see `lens list`); repeat for several, reviewed in the order
+    /// given. Without --lens or --no-lenses a new task takes the project's default lenses
+    /// (`lens defaults`) and an edited task keeps its own.
+    #[arg(long = "lens", value_parser = nonempty)]
+    pub lens: Vec<String>,
+    /// Keep the ordinary single review, whatever the project's default lenses are.
+    #[arg(long = "no-lenses", conflicts_with = "lens")]
+    pub none: bool,
+}
+
+impl LensChoice {
+    /// The selection this asks for; `None` leaves the choice to the default.
+    pub fn selection(&self) -> Option<Vec<String>> {
+        if self.none {
+            Some(Vec::new())
+        } else {
+            (!self.lens.is_empty()).then(|| self.lens.clone())
+        }
+    }
 }
 
 #[derive(Args, Default)]
@@ -885,6 +926,87 @@ mod tests {
     }
 }
 
+#[derive(Subcommand)]
+pub enum LensAction {
+    /// List the lenses this project can choose, each from the scope that wins.
+    List,
+    /// Show a lens: where it comes from and its instructions.
+    Show {
+        /// Lens name (case-insensitive).
+        #[arg(value_parser = nonempty)]
+        name: String,
+        /// Show one scope's definition instead of the effective one.
+        #[arg(long, value_enum)]
+        scope: Option<CategoryScope>,
+    },
+    /// Create or change a lens in the user or project scope.
+    ///
+    /// The first save of a name in a scope starts from the lens it would override (project
+    /// over user over built-in) and a brand-new name needs --instructions. Instructions use
+    /// {{title}}, {{goal}}, {{criteria}}, {{category}} and {{context}} (see `category
+    /// placeholders`); pass @PATH to read them from a file. Only tasks defined afterwards use
+    /// the change.
+    Save {
+        /// Lens name: letters, digits, spaces, '-', '_' or '.', at most 64 characters.
+        #[arg(value_parser = nonempty)]
+        name: String,
+        /// Where to save it.
+        #[arg(long, value_enum, default_value = "user")]
+        scope: CategoryScope,
+        /// One line saying what the lens looks for.
+        #[arg(long)]
+        description: Option<String>,
+        /// The review instructions, or @PATH.
+        #[arg(long)]
+        instructions: Option<String>,
+        /// Reject a stale save; the version comes from show or list.
+        #[arg(long)]
+        if_version: Option<i64>,
+    },
+    /// Delete a user or project lens so the name inherits again.
+    ///
+    /// Tasks that already pinned the lens keep their copy.
+    Delete {
+        /// Lens name.
+        #[arg(value_parser = nonempty)]
+        name: String,
+        /// The scope to delete from.
+        #[arg(long, value_enum, default_value = "user")]
+        scope: CategoryScope,
+        /// Reject a stale delete.
+        #[arg(long)]
+        if_version: Option<i64>,
+    },
+    /// Show or set the lenses new tasks of this project select, in review order.
+    ///
+    /// Without options the current defaults are shown. Existing tasks keep the lenses their
+    /// revisions pinned; a task can always override the defaults.
+    Defaults {
+        /// Replace the defaults with these lenses, in review order.
+        #[arg(long = "set", value_parser = nonempty, num_args = 1.., conflicts_with = "clear")]
+        set: Vec<String>,
+        /// Remove the defaults: new tasks use the ordinary single review.
+        #[arg(long)]
+        clear: bool,
+        /// Reject the change if the defaults are no longer these lenses (comma separated,
+        /// as shown by `lens defaults`); an empty value means none.
+        #[arg(long, value_delimiter = ',')]
+        if_current: Option<Vec<String>>,
+    },
+    /// Show the effective prompt of a lens review, with runtime-only parts labelled.
+    ///
+    /// With --task, the task's title, goal and criteria are filled in and its category is
+    /// used; otherwise an example task is.
+    Preview {
+        /// Lens name; with --task, defaults to the task's first pinned lens.
+        #[arg(value_parser = nonempty, required_unless_present = "task")]
+        name: Option<String>,
+        /// Preview this task's content and category.
+        #[arg(long, value_parser = positive)]
+        task: Option<i64>,
+    },
+}
+
 /// A scope of work categories on the command line.
 #[derive(Clone, Copy, ValueEnum)]
 pub enum CategoryScope {
@@ -895,6 +1017,16 @@ pub enum CategoryScope {
     /// Compiled-in defaults (read only).
     #[value(name = "built-in")]
     BuiltIn,
+}
+
+impl From<CategoryScope> for crate::application::categories::Scope {
+    fn from(value: CategoryScope) -> Self {
+        match value {
+            CategoryScope::User => Self::User,
+            CategoryScope::Project => Self::Project,
+            CategoryScope::BuiltIn => Self::BuiltIn,
+        }
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]

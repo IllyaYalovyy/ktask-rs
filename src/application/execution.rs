@@ -68,6 +68,8 @@ pub struct Run {
     pub definition: Definition,
     /// The category and templates pinned by the revision this attempt runs.
     pub category: Option<super::categories::Category>,
+    /// The review lenses pinned by that revision; none means the ordinary single review.
+    pub lenses: Vec<super::lenses::Lens>,
     pub active_ms: i64,
 }
 impl Run {
@@ -533,6 +535,7 @@ impl Service {
             token,
             definition: pinned.definition.clone(),
             category: pinned.category.clone(),
+            lenses: pinned.lenses.clone(),
             active_ms,
         })
     }
@@ -847,11 +850,37 @@ impl Service {
         scope: &str,
         nudge: bool,
     ) -> Result<Step> {
+        self.begin_ai_step(run, role, model, scope, nudge, false)
+    }
+    /// A step that starts a provider session of its own, never resuming an earlier one: a
+    /// specialist review is independent of every other review.
+    pub fn start_independent_step(
+        &mut self,
+        run: &Run,
+        role: &str,
+        model: &ModelConfig,
+        scope: &str,
+    ) -> Result<Step> {
+        self.begin_ai_step(run, role, model, scope, false, true)
+    }
+    fn begin_ai_step(
+        &mut self,
+        run: &Run,
+        role: &str,
+        model: &ModelConfig,
+        scope: &str,
+        nudge: bool,
+        independent: bool,
+    ) -> Result<Step> {
         let tx = self
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let previous: Option<(i64,Option<String>)> = tx.query_row("SELECT s.id,s.provider_session_id FROM ai_sessions s JOIN attempt_steps p ON p.session_id=s.id WHERE s.project_id=?1 AND s.task_id=?2 AND s.role=?3 AND s.provider=?4 AND s.provider_scope=?5 AND s.state='open' AND p.model=?6 AND p.effort IS ?7 ORDER BY p.id DESC LIMIT 1", params![self.project_id,run.task,role,model.provider,scope,model.model,model.effort], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
+        let previous: Option<(i64, Option<String>)> = if independent {
+            None
+        } else {
+            tx.query_row("SELECT s.id,s.provider_session_id FROM ai_sessions s JOIN attempt_steps p ON p.session_id=s.id WHERE s.project_id=?1 AND s.task_id=?2 AND s.role=?3 AND s.provider=?4 AND s.provider_scope=?5 AND s.state='open' AND p.model=?6 AND p.effort IS ?7 ORDER BY p.id DESC LIMIT 1", params![self.project_id,run.task,role,model.provider,scope,model.model,model.effort], |r| Ok((r.get(0)?,r.get(1)?))).optional()?
+        };
         let (session, provider_session) = if let Some(saved) = previous {
             saved
         } else {

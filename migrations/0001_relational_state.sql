@@ -108,6 +108,33 @@ CREATE TABLE work_categories (
 CREATE UNIQUE INDEX ux_work_categories_user ON work_categories(name) WHERE project_id IS NULL;
 CREATE UNIQUE INDEX ux_work_categories_project ON work_categories(project_id, name) WHERE project_id IS NOT NULL;
 
+-- Review lenses: named specialist review instructions (concurrency, security, simplicity or the
+-- user's own). A row with a NULL project_id is user scope; a row with a project_id overrides the
+-- user scope and the built-in lenses of that project by name. Selected lenses are copied into
+-- revision_lenses, never followed through a mutable reference.
+CREATE TABLE review_lenses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER REFERENCES projects(id),
+    name TEXT NOT NULL COLLATE NOCASE CHECK (length(trim(name)) > 0 AND length(name) <= 64),
+    description TEXT NOT NULL DEFAULT '',
+    instructions TEXT NOT NULL CHECK (length(trim(instructions)) > 0),
+    row_version INTEGER NOT NULL DEFAULT 1 CHECK (row_version > 0),
+    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+    updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0)
+) STRICT;
+CREATE UNIQUE INDEX ux_review_lenses_user ON review_lenses(name) WHERE project_id IS NULL;
+CREATE UNIQUE INDEX ux_review_lenses_project ON review_lenses(project_id, name) WHERE project_id IS NOT NULL;
+
+-- The ordered lenses a project's new tasks select unless a task chooses its own. Absent rows mean
+-- the ordinary single review. Names are resolved when a revision is defined, not here.
+CREATE TABLE project_lens_defaults (
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+    lens TEXT NOT NULL COLLATE NOCASE CHECK (length(trim(lens)) > 0),
+    PRIMARY KEY (project_id, ordinal),
+    UNIQUE (project_id, lens)
+) STRICT;
+
 -- The user-wide model defaults, the lowest layer every project inherits.
 CREATE TABLE default_models (
     role TEXT PRIMARY KEY CHECK (role IN ('planning', 'execution', 'review', 'validation', 'remediation')),
@@ -256,6 +283,20 @@ CREATE TABLE revision_categories (
     FOREIGN KEY (task_id, revision) REFERENCES task_revisions(task_id, revision)
 ) WITHOUT ROWID, STRICT;
 
+-- The ordered lenses a revision pinned, with the instructions they had when it was defined. No
+-- rows means the ordinary single review. Later edits of review_lenses never reach the revision.
+CREATE TABLE revision_lenses (
+    task_id INTEGER NOT NULL,
+    revision INTEGER NOT NULL,
+    ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+    name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+    scope TEXT NOT NULL CHECK (scope IN ('built_in', 'user', 'project')),
+    instructions TEXT NOT NULL CHECK (length(trim(instructions)) > 0),
+    PRIMARY KEY (task_id, revision, ordinal),
+    UNIQUE (task_id, revision, name),
+    FOREIGN KEY (task_id, revision) REFERENCES task_revisions(task_id, revision)
+) WITHOUT ROWID, STRICT;
+
 CREATE TABLE acceptance_criteria (
     task_id INTEGER NOT NULL,
     revision INTEGER NOT NULL,
@@ -346,6 +387,35 @@ CREATE TABLE attempt_progress (
     -- One readable line: why the current fix round runs (failing check or judge's reason).
     why TEXT NOT NULL DEFAULT ''
 ) STRICT;
+
+-- One finished specialist review of one source state in one repair round: which lens, which step ran
+-- it and whether it found a critical problem. A resumed attempt reuses the row instead of reviewing
+-- the same tree again; a later repair round reviews afresh, whatever the repair left behind.
+CREATE TABLE lens_reviews (
+    attempt_id INTEGER NOT NULL REFERENCES attempts(id),
+    repair_round INTEGER NOT NULL CHECK (repair_round BETWEEN 0 AND 10),
+    source_tree TEXT NOT NULL CHECK (length(source_tree) IN (40,64)),
+    ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+    lens TEXT NOT NULL CHECK (length(trim(lens)) > 0),
+    step_id INTEGER NOT NULL REFERENCES attempt_steps(id),
+    critical INTEGER NOT NULL CHECK (critical IN (0, 1)),
+    summary TEXT NOT NULL CHECK (length(trim(summary)) > 0),
+    PRIMARY KEY (attempt_id, repair_round, source_tree, ordinal),
+    UNIQUE (step_id)
+) WITHOUT ROWID, STRICT;
+
+-- The findings of a lens review, attributed through their review row.
+CREATE TABLE lens_review_findings (
+    attempt_id INTEGER NOT NULL,
+    repair_round INTEGER NOT NULL,
+    source_tree TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    finding INTEGER NOT NULL CHECK (finding > 0),
+    severity TEXT NOT NULL CHECK (severity IN ('critical', 'minor')),
+    description TEXT NOT NULL CHECK (length(trim(description)) > 0),
+    PRIMARY KEY (attempt_id, repair_round, source_tree, ordinal, finding),
+    FOREIGN KEY (attempt_id, repair_round, source_tree, ordinal) REFERENCES lens_reviews(attempt_id, repair_round, source_tree, ordinal)
+) WITHOUT ROWID, STRICT;
 
 -- Provider session != worker process != attempt. Waiting may have no process at all.
 CREATE TABLE ai_sessions (

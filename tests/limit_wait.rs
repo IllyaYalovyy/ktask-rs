@@ -43,6 +43,7 @@ fn definition() -> Definition {
         criteria: vec!["Resumes".into()],
         kind: Kind::Ai,
         category: None,
+        lenses: None,
         models: std::array::from_fn(|role| {
             Some(ModelConfig {
                 provider: "codex".into(),

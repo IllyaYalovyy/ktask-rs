@@ -76,6 +76,19 @@ categories existed) runs the built-in category of its kind. Human work has no ca
 Profiles map roles to models the existing provider adapters run; they never name a new
 provider or promise a model's availability.
 
+Review lenses are opt-in specialist reviews and follow the same pinning rule. A lens name
+resolves through the project's own `review_lenses` row, then the user-scope row, then the
+built-in concurrency, security and simplicity lenses. A project's ordered default selection is
+`project_lens_defaults`; no rows means the ordinary single review. A new revision of AI-run work
+copies the task's own selection, or the project defaults when it makes none, into
+`revision_lenses` with the instructions each lens had, so editing a lens or the defaults never
+changes a running or resumed attempt. An attempt whose revision pinned lenses reviews each
+source state once per lens, in independent read-only sessions, instead of by the single
+review. Each finished lens review is kept in `lens_reviews` (with its findings in
+`lens_review_findings`) keyed by attempt, repair round, source tree and the lens's position, so
+a resumed attempt never repeats a completed review of an unchanged tree. The lenses add no repair
+counter: the attempt's `attempt_progress.repair_round` is the one shared budget.
+
 Planner/remediator work uses ordinary tasks, not proposal tables. Approval is a human or AI
 decision on the revision. Mark done, Cancel and Supersede close the task without rewriting its
 attempts; Copy to queue creates a new task linked by `derived_from`. Changing role models creates a new revision with the new role settings.
@@ -178,6 +191,8 @@ erDiagram
     model_profiles ||--o{ user_defaults : "default_profile_id"
     projects ||--o{ project_checks : "project_id"
     projects ||--o{ work_categories : "project_id"
+    projects ||--o{ review_lenses : "project_id"
+    projects ||--o{ project_lens_defaults : "project_id"
     projects ||--o| project_delivery : "project_id"
     projects ||--o| project_retention : "project_id"
     projects ||--o| project_storage_limits : "project_id"
@@ -195,6 +210,7 @@ erDiagram
     task_revisions ||--o{ revision_models : "task_id, revision"
     task_revisions ||--o| revision_categories : "task_id, revision"
     category_snapshots ||--o{ revision_categories : "snapshot_id"
+    task_revisions ||--o{ revision_lenses : "task_id, revision"
     task_revisions ||--o{ acceptance_criteria : "task_id, revision"
     tasks ||--o{ task_links : "related_task_id, project_id"
     tasks ||--o{ task_links : "task_id, project_id"
@@ -216,6 +232,9 @@ erDiagram
     project_checks o|--o{ attempt_steps : "project_check_id, project_id"
     ai_sessions o|--o{ attempt_steps : "session_id, project_id, task_id, role, provider"
     attempts ||--o| attempt_progress : "attempt_id"
+    attempts ||--o{ lens_reviews : "attempt_id"
+    attempt_steps ||--o| lens_reviews : "step_id"
+    lens_reviews ||--o{ lens_review_findings : "attempt_id, repair_round, source_tree, ordinal"
     attempts ||--o| attempt_delivery : "attempt_id"
     attempts o|--o{ attempt_delivery : "handoff_claimed_by"
     tasks o|--o{ attempt_delivery : "handoff_target"
@@ -729,6 +748,43 @@ baselines, including across rotation and restart.
 
 - PK `(id)`.
 
+### lens_review_findings
+
+The findings of one lens review, in the order the reviewer reported them. A critical finding makes the whole review critical; minor findings are kept with the accepted result and never cost a repair round.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `attempt_id` | INTEGER | no | Attempt of the review. |
+| `repair_round` | INTEGER | no | Repair round of the review. |
+| `source_tree` | TEXT | no | Source tree the review judged. |
+| `ordinal` | INTEGER | no | Position of the lens in the revision's selection. |
+| `finding` | INTEGER | no | Position of the finding in the review, from 1. |
+| `severity` | TEXT | no | critical or minor. |
+| `description` | TEXT | no | Nonblank finding: location, trigger, consequence and correction. |
+
+- PK `(attempt_id, repair_round, source_tree, ordinal, finding)`.
+- FK `(attempt_id, repair_round, source_tree, ordinal)` → `lens_reviews(attempt_id, repair_round, source_tree, ordinal)`.
+
+### lens_reviews
+
+One finished specialist review of one source state in one repair round: the lens, the step that ran it and whether it found a critical problem. A resumed attempt reads these rows instead of reviewing the same tree again; a later repair round has no rows and is reviewed by every lens again, whether or not the repair changed the tree. Rows are never updated.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `attempt_id` | INTEGER | no | Attempt that ran the review. |
+| `repair_round` | INTEGER | no | Repair rounds already spent when the review ran, 0 to 10. |
+| `source_tree` | TEXT | no | 40- or 64-character source tree the review judged. |
+| `ordinal` | INTEGER | no | Position of the lens in the revision's selection, from 1. |
+| `lens` | TEXT | no | Lens name as the revision pinned it. |
+| `step_id` | INTEGER | no | The review step; its provider session is closed after the turn. |
+| `critical` | INTEGER | no | 1 when any finding is critical, including an unmet criterion or a failed verdict. |
+| `summary` | TEXT | no | The reviewer's nonblank summary. |
+
+- PK `(attempt_id, repair_round, source_tree, ordinal)`.
+- FK `(attempt_id)` → `attempts(id)`.
+- FK `(step_id)` → `attempt_steps(id)`.
+- UQ `(step_id)`.
+
 ### model_calls
 
 Billable provider requests, including project planning before a task exists. Input is always UNCACHED input; cache-read and cache-write are disjoint buckets. Running calls have no finish/error; failed/interrupted calls require both.
@@ -888,6 +944,20 @@ The roles one profile sets. A role without a row inherits the user defaults.
 - PK `(profile_id, role)`.
 - FK `(profile_id)` → `model_profiles(id)`.
 
+### project_lens_defaults
+
+The ordered lenses a project's new tasks select unless a task chooses its own. No rows means the ordinary single review. Names are resolved when a revision is defined, so a name with no definition left is refused then, not stored here.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `project_id` | INTEGER | no | Owning project. |
+| `ordinal` | INTEGER | no | Review order, from 1. |
+| `lens` | TEXT | no | Lens name, case-insensitive, at most once per project. |
+
+- PK `(project_id, ordinal)`.
+- FK `(project_id)` → `projects(id)`.
+- UQ `(project_id, lens)`.
+
 ### project_models
 
 A project's own model overrides, the layer above its selected profile. A role without a row inherits the profile, then `default_models`. Resolved values are copied into each new revision; later changes do not change existing tasks.
@@ -968,6 +1038,43 @@ Human intervention requested during an attempt. Open has no answer/resolution; a
 - PK `(id)`.
 - FK `(attempt_id)` → `attempts(id)`.
 - Index `ix_questions_attempt`: `INDEX ix_questions_attempt ON questions(attempt_id, id)`.
+
+### review_lenses
+
+User-scope (`project_id` NULL) and project-scope review lenses: named specialist review instructions. A project row overrides the user row, and both override the built-in concurrency, security and simplicity lenses, by name. Instructions use `{{title}}`, `{{goal}}`, `{{criteria}}`, `{{category}}` and `{{context}}` like category templates and are checked when saved. `row_version` guards concurrent edits. The supervisor's rules, evidence handling and response schema are not stored here.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `id` | INTEGER | no | Stable row ID. |
+| `project_id` | INTEGER | yes | Owning project for an override; NULL for the user scope. |
+| `name` | TEXT | no | Lens name, 1 to 64 characters, unique per scope case-insensitively. |
+| `description` | TEXT | no | One line saying what the lens looks for; may be empty. |
+| `instructions` | TEXT | no | Nonblank review instructions with their placeholders. |
+| `row_version` | INTEGER | no | Positive optimistic guard, default 1. |
+| `created_at_ms` | INTEGER | no | Creation time. |
+| `updated_at_ms` | INTEGER | no | Last change time. |
+
+- PK `(id)`.
+- FK `(project_id)` → `projects(id)`.
+- Index `ux_review_lenses_user`: `UNIQUE INDEX ux_review_lenses_user ON review_lenses(name) WHERE project_id IS NULL`.
+- Index `ux_review_lenses_project`: `UNIQUE INDEX ux_review_lenses_project ON review_lenses(project_id, name) WHERE project_id IS NOT NULL`.
+
+### revision_lenses
+
+The ordered review lenses one exact revision pinned, with the instructions each had when the revision was defined. Written with the revision and never changed, so later edits of `review_lenses` or the project defaults cannot alter a running or resumed attempt. No rows means the ordinary single review (also Human revisions and revisions defined before lenses existed).
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `task_id` | INTEGER | no | Owning task. |
+| `revision` | INTEGER | no | Exact task revision number. |
+| `ordinal` | INTEGER | no | Review order, from 1. |
+| `name` | TEXT | no | Lens name as resolved, at most once per revision. |
+| `scope` | TEXT | no | built_in, user or project: the layer the lens came from. |
+| `instructions` | TEXT | no | Nonblank instructions the review prompt renders. |
+
+- PK `(task_id, revision, ordinal)`.
+- FK `(task_id, revision)` → `task_revisions(task_id, revision)`.
+- UQ `(task_id, revision, name)`.
 
 ### revision_models
 

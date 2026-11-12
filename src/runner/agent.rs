@@ -4,6 +4,7 @@ use crate::{
         ModelConfig,
         categories::Category,
         execution::Run,
+        lenses::Lens,
         prompt::{self, Callback, Turn, compose},
     },
     storage::{Error, Result},
@@ -218,6 +219,7 @@ pub fn breakdown_definitions(
             goal: t.goal.clone(),
             kind: parent.kind,
             category: parent.category.clone(),
+            lenses: parent.lenses.clone(),
             criteria: t.criteria.clone(),
             models: defaults.clone(),
             attempt_limit: Some(3),
@@ -390,6 +392,20 @@ pub fn prompt(
     )
     .map(|prompt| prompt.text())
 }
+/// The prompt of one specialist review turn of `run`.
+pub fn lens_prompt(run: &Run, lens: &Lens, context: &str) -> Result<String> {
+    prompt::compose_lens(
+        &run.effective_category(),
+        lens,
+        &prompt::Task {
+            title: &run.definition.title,
+            goal: &run.definition.goal,
+            criteria: &run.definition.criteria,
+        },
+        context,
+    )
+    .map(|prompt| prompt.text())
+}
 /// The agent's structured assessment, validated against the task's numbered criteria.
 pub fn assessment(stream: &Stream, count: usize) -> Result<Assessment> {
     if !stream.drained() || !stream.completed || stream.failed {
@@ -548,6 +564,7 @@ mod tests {
                 goal: "G".into(),
                 kind: crate::application::Kind::Ai,
                 category: None,
+                lenses: None,
                 criteria: vec!["C".into()],
                 models: std::array::from_fn(|_| None),
                 attempt_limit: None,

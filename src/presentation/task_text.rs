@@ -44,8 +44,21 @@ pub fn revision(revision: &Revision, escape: fn(&str) -> String) -> String {
             }
         )
     });
+    let lenses = if revision.lenses.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " · Review lenses: {}",
+            revision
+                .lenses
+                .iter()
+                .map(|lens| escape(&lens.name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
     format!(
-        "Revision {} · {}\nApproval: {} · {}{category}\nGoal: {}\nAcceptance: {}\n{models}\nAttempt limit: {} · Task limit: {} · Stage limit: {}",
+        "Revision {} · {}\nApproval: {} · {}{category}{lenses}\nGoal: {}\nAcceptance: {}\n{models}\nAttempt limit: {} · Task limit: {} · Stage limit: {}",
         revision.number,
         escape(&definition.title),
         revision.lifecycle,
@@ -218,7 +231,10 @@ fn evidence(text: &mut String, a: &crate::application::Attempt, escape: fn(&str)
     {
         text.push_str(&format!(
             "  {} verdict · {}/{} · {}: {}\n",
-            step.role,
+            match &step.lens {
+                Some(lens) => format!("{} ({} lens)", step.role, escape(lens)),
+                None => step.role.clone(),
+            },
             step.provider.as_deref().unwrap_or("unknown"),
             step.model.as_deref().unwrap_or("unknown"),
             step.state,
@@ -248,11 +264,13 @@ mod tests {
             lifecycle: lifecycle.into(),
             actor: Some("Human: owner".into()),
             category: None,
+            lenses: Vec::new(),
             definition: Definition {
                 title: title.into(),
                 goal: format!("{title} goal"),
                 kind: Kind::Ai,
                 category: None,
+                lenses: None,
                 criteria: vec!["First".into(), "Second".into()],
                 models: std::array::from_fn(|i| {
                     (i != 3).then(|| ModelConfig {
@@ -308,6 +326,7 @@ mod tests {
                 worker_claim: None,
                 question: None,
                 steps: Vec::new(),
+                lens_reviews: Vec::new(),
                 artifacts: Vec::new(),
             }],
             attempts_used: 1,

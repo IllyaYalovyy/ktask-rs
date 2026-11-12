@@ -15,6 +15,7 @@ mod cycle;
 mod delivery;
 mod failure_summary;
 mod judge;
+mod lens;
 mod log;
 mod output;
 pub(crate) mod process;

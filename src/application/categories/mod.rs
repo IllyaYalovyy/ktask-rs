@@ -6,7 +6,10 @@
 //! keeps it, so editing a category later never changes a running or resumed attempt.
 //! Templates only describe the work; the supervisor's rules, evidence handling and response
 //! schema are added around them by [`super::prompt`] and cannot be edited here.
-use super::*;
+use super::{
+    scoped::{Layered, Table},
+    *,
+};
 use rusqlite::Connection;
 use serde::Serialize;
 
@@ -141,7 +144,15 @@ pub struct Entry {
 const RESERVED: [&str; 2] = ["default", "none"];
 
 pub fn valid_name(name: &str) -> Result<()> {
-    require(!name.trim().is_empty(), "Category name is required")?;
+    check_name("Category", name)
+}
+
+/// The naming rules categories and lenses share; `subject` words the messages.
+pub fn check_name(subject: &str, name: &str) -> Result<()> {
+    require(
+        !name.trim().is_empty(),
+        &format!("{subject} name is required"),
+    )?;
     require(
         name == name.trim()
             && name.chars().count() <= MAX_NAME_CHARS
@@ -149,11 +160,13 @@ pub fn valid_name(name: &str) -> Result<()> {
                 .chars()
                 .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.'))
             && name.chars().next().is_some_and(char::is_alphanumeric),
-        "Category name must start with a letter or digit and use at most 64 letters, digits, spaces, '-', '_' or '.'",
+        &format!(
+            "{subject} name must start with a letter or digit and use at most 64 letters, digits, spaces, '-', '_' or '.'"
+        ),
     )?;
     require(
         !RESERVED.iter().any(|r| name.eq_ignore_ascii_case(r)),
-        "Category names default and none are reserved",
+        &format!("{subject} names default and none are reserved"),
     )
 }
 
@@ -177,33 +190,6 @@ fn read(scope: Scope, row: &rusqlite::Row<'_>) -> rusqlite::Result<Entry> {
     })
 }
 
-fn stored(db: &Connection, project: Option<i64>, name: &str) -> Result<Option<Entry>> {
-    let (scope, filter) = match project {
-        Some(_) => (Scope::Project, "project_id = ?1"),
-        None => (Scope::User, "project_id IS NULL AND ?1 IS NULL"),
-    };
-    Ok(db
-        .query_row(
-            &format!("SELECT {COLUMNS} FROM work_categories WHERE {filter} AND name = ?2"),
-            params![project, name.trim()],
-            |row| read(scope, row),
-        )
-        .optional()?)
-}
-
-fn stored_all(db: &Connection, project: Option<i64>) -> Result<Vec<Entry>> {
-    let (scope, filter) = match project {
-        Some(_) => (Scope::Project, "project_id = ?1"),
-        None => (Scope::User, "project_id IS NULL AND ?1 IS NULL"),
-    };
-    let mut statement = db.prepare(&format!(
-        "SELECT {COLUMNS} FROM work_categories WHERE {filter} ORDER BY name"
-    ))?;
-    Ok(statement
-        .query_map([project], |row| read(scope, row))?
-        .collect::<rusqlite::Result<_>>()?)
-}
-
 fn built_in(name: &str) -> Option<Entry> {
     builtin::named(name).map(|category| Entry {
         version: 0,
@@ -211,15 +197,38 @@ fn built_in(name: &str) -> Option<Entry> {
     })
 }
 
+fn built_ins() -> Vec<Entry> {
+    builtin::all()
+        .into_iter()
+        .map(|category| Entry {
+            version: 0,
+            category,
+        })
+        .collect()
+}
+
+impl Layered for Entry {
+    fn name(&self) -> &str {
+        &self.category.name
+    }
+    fn version(&self) -> i64 {
+        self.version
+    }
+}
+
+const TABLE: Table<Entry> = Table {
+    name: "work_categories",
+    columns: COLUMNS,
+    subject: "Category",
+    plural: "categories",
+    read,
+    built_in,
+    built_ins,
+};
+
 /// The category `name` resolves to for `project`: its override, the user scope, a built-in.
 pub(super) fn resolve(db: &Connection, project: i64, name: &str) -> Result<Option<Entry>> {
-    if let Some(found) = stored(db, Some(project), name)? {
-        return Ok(Some(found));
-    }
-    if let Some(found) = stored(db, None, name)? {
-        return Ok(Some(found));
-    }
-    Ok(built_in(name))
+    TABLE.resolve(db, project, name)
 }
 
 /// The category copied into a revision being defined, or `None` for Human work. A name that
@@ -344,29 +353,7 @@ pub(super) fn pinned(
 impl Service {
     /// Every category this project can choose, by name, each from the layer that wins.
     pub fn categories(&self) -> Result<Vec<Entry>> {
-        let db = self.db.connection();
-        let mut all: Vec<Entry> = builtin::all()
-            .into_iter()
-            .map(|category| Entry {
-                version: 0,
-                category,
-            })
-            .collect();
-        for layer in [
-            stored_all(db, None)?,
-            stored_all(db, Some(self.project_id))?,
-        ] {
-            for entry in layer {
-                match all
-                    .iter_mut()
-                    .find(|e| e.category.name.eq_ignore_ascii_case(&entry.category.name))
-                {
-                    Some(slot) => *slot = entry,
-                    None => all.push(entry),
-                }
-            }
-        }
-        Ok(all)
+        TABLE.list(self.db.connection(), self.project_id)
     }
 
     /// The category `name` resolves to for this project.
@@ -376,11 +363,7 @@ impl Service {
 
     /// The definition of `name` in one scope only, without falling through.
     pub fn category_in(&self, scope: Scope, name: &str) -> Result<Option<Entry>> {
-        match scope {
-            Scope::BuiltIn => Ok(built_in(name)),
-            Scope::User => stored(self.db.connection(), None, name),
-            Scope::Project => stored(self.db.connection(), Some(self.project_id), name),
-        }
+        TABLE.in_scope(self.db.connection(), self.project_id, scope, name)
     }
 
     /// Creates the category in `scope`, or replaces the one of that name there.
@@ -391,54 +374,28 @@ impl Service {
         expected: Option<i64>,
         category: &Category,
     ) -> Result<Entry> {
-        require(
-            scope != Scope::BuiltIn,
-            "Built-in categories are fixed; override one in the user or project scope",
-        )?;
         category.validate()?;
-        let project = (scope == Scope::Project).then_some(self.project_id);
-        let tx = self
-            .db
-            .connection_mut()
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let now = now_ms();
-        let existing = stored(&tx, project, &category.name)?;
-        match existing {
-            Some(found) => {
-                if let Some(version) = expected {
-                    require(
-                        version == found.version,
-                        &format!(
-                            "Category {} is version {}, not {version}; read it again before retrying",
-                            found.category.name, found.version
-                        ),
-                    )?;
-                }
-                let t = &category.templates;
-                tx.execute(
-                    "UPDATE work_categories SET description=?3, run_checks=?4, execution_template=?5, review_template=?6, validation_template=?7, remediation_template=?8, row_version=row_version+1, updated_at_ms=?9 WHERE name=?2 AND ((?1 IS NULL AND project_id IS NULL) OR project_id=?1)",
-                    params![project, found.category.name, category.description.trim(), category.checks, t.execution, t.review, t.validation, t.remediation, now],
-                )?;
-            }
-            None => {
-                require(
-                    expected.is_none(),
-                    &format!(
-                        "Category {} no longer exists in the {} scope",
-                        category.name,
-                        scope.label()
-                    ),
-                )?;
-                let t = &category.templates;
-                tx.execute(
-                    "INSERT INTO work_categories(project_id, name, description, run_checks, execution_template, review_template, validation_template, remediation_template, created_at_ms, updated_at_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)",
-                    params![project, category.name, category.description.trim(), category.checks, t.execution, t.review, t.validation, t.remediation, now],
-                )?;
-            }
-        }
-        let saved = stored(&tx, project, &category.name)?.expect("saved category exists");
-        tx.commit()?;
-        Ok(saved)
+        let t = &category.templates;
+        TABLE.save(
+            self.db.connection_mut(),
+            self.project_id,
+            scope,
+            &category.name,
+            expected,
+            |tx, project, existing, now| {
+                match existing {
+                    Some(found) => tx.execute(
+                        "UPDATE work_categories SET description=?3, run_checks=?4, execution_template=?5, review_template=?6, validation_template=?7, remediation_template=?8, row_version=row_version+1, updated_at_ms=?9 WHERE name=?2 AND ((?1 IS NULL AND project_id IS NULL) OR project_id=?1)",
+                        params![project, found.category.name, category.description.trim(), category.checks, t.execution, t.review, t.validation, t.remediation, now],
+                    )?,
+                    None => tx.execute(
+                        "INSERT INTO work_categories(project_id, name, description, run_checks, execution_template, review_template, validation_template, remediation_template, created_at_ms, updated_at_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)",
+                        params![project, category.name, category.description.trim(), category.checks, t.execution, t.review, t.validation, t.remediation, now],
+                    )?,
+                };
+                Ok(())
+            },
+        )
     }
 
     /// Removes a user or project definition so the name inherits again. Tasks that pinned
@@ -449,33 +406,13 @@ impl Service {
         name: &str,
         expected: Option<i64>,
     ) -> Result<()> {
-        require(
-            scope != Scope::BuiltIn,
-            "Built-in categories cannot be deleted",
-        )?;
-        let project = (scope == Scope::Project).then_some(self.project_id);
-        let tx = self
-            .db
-            .connection_mut()
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let found = stored(&tx, project, name)?.ok_or_else(|| {
-            Error::Conflict(format!("No {} category named {name}", scope.label()))
-        })?;
-        if let Some(version) = expected {
-            require(
-                version == found.version,
-                &format!(
-                    "Category {} is version {}, not {version}; read it again before retrying",
-                    found.category.name, found.version
-                ),
-            )?;
-        }
-        tx.execute(
-            "DELETE FROM work_categories WHERE name=?2 AND ((?1 IS NULL AND project_id IS NULL) OR project_id=?1)",
-            params![project, found.category.name],
-        )?;
-        tx.commit()?;
-        Ok(())
+        TABLE.delete(
+            self.db.connection_mut(),
+            self.project_id,
+            scope,
+            name,
+            expected,
+        )
     }
 }
 

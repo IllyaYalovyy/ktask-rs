@@ -50,6 +50,7 @@ fn task(service: &mut Service, title: &str) -> Result<i64> {
         criteria: vec!["Check".into()],
         kind: Kind::Ai,
         category: None,
+        lenses: None,
         models: service.defaults()?,
         attempt_limit: Some(3),
         timeout_ms: None,

@@ -6,7 +6,9 @@ use std::{
     path::Path,
 };
 
-const HEADER: &str = "ktask-tasks-v3";
+const HEADER: &str = "ktask-tasks-v4";
+/// v3 rows have no review lens column (the project's defaults apply); they still import.
+const HEADER_V3: &str = "ktask-tasks-v3";
 /// v2 rows have no category column (the category is the kind's default); they still import.
 const HEADER_V2: &str = "ktask-tasks-v2";
 /// v1 rows have no stage limit column; they still import.
@@ -20,6 +22,7 @@ pub fn encode(definitions: &[Definition]) -> Result<String> {
         let mut fields = vec![
             d.kind.as_str().into(),
             d.category.clone().unwrap_or_default(),
+            lens_field(d.lenses.as_deref()),
             d.title.clone(),
             d.goal.clone(),
             d.attempt_limit.map_or(String::new(), |n| n.to_string()),
@@ -48,24 +51,46 @@ pub fn encode(definitions: &[Definition]) -> Result<String> {
     }
     Ok(lines.join("\n") + "\n")
 }
+/// The lens column: `default` takes the project's lenses, `none` keeps the ordinary review,
+/// otherwise the ordered names (which never contain a comma) joined by commas.
+fn lens_field(lenses: Option<&[String]>) -> String {
+    match lenses {
+        None => "default".into(),
+        Some([]) => "none".into(),
+        Some(names) => names.join(","),
+    }
+}
+fn lens_names(field: &str) -> Option<Vec<String>> {
+    match field {
+        "" | "default" => None,
+        "none" => Some(Vec::new()),
+        names => Some(names.split(',').map(|n| n.trim().to_owned()).collect()),
+    }
+}
 pub fn decode(text: &str) -> Result<Vec<Definition>> {
     let mut lines = text.lines();
-    let (stage, with_category) = match lines.next() {
-        Some(HEADER) => (1, true),
-        Some(HEADER_V2) => (1, false),
-        Some(HEADER_V1) => (0, false),
+    let (stage, with_category, with_lenses) = match lines.next() {
+        Some(HEADER) => (1, true, true),
+        Some(HEADER_V3) => (1, true, false),
+        Some(HEADER_V2) => (1, false, false),
+        Some(HEADER_V1) => (0, false, false),
         _ => {
             return Err(Error::Conflict(
-                "Expected a ktask-tasks-v3 TSV export".into(),
+                "Expected a ktask-tasks-v4 TSV export".into(),
             ));
         }
     };
     let mut result = Vec::new();
     for line in lines {
         let mut f = line.split('\t').map(unescape).collect::<Result<Vec<_>>>()?;
-        // The category follows the kind; the rest of the row is the v2 layout.
+        // The category and the lenses follow the kind; the rest of the row is the v2 layout.
         let category = if with_category && f.len() > 1 {
             Some(f.remove(1)).filter(|name| !name.is_empty())
+        } else {
+            None
+        };
+        let lenses = if with_lenses && f.len() > 1 {
+            lens_names(&f.remove(1))
         } else {
             None
         };
@@ -87,6 +112,7 @@ pub fn decode(text: &str) -> Result<Vec<Definition>> {
             goal: f[2].clone(),
             kind,
             category,
+            lenses,
             criteria: f[17 + stage..].to_vec(),
             models,
             attempt_limit: number(&f[3])?,

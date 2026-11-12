@@ -115,7 +115,17 @@ pub(super) fn run(
                     other => other,
                 }
             }
-            Phase::Review => ai(service, run, ctx, "review", &progress.evidence)?,
+            Phase::Review if run.lenses.is_empty() => {
+                ai(service, run, ctx, "review", &progress.evidence)?
+            }
+            Phase::Review => super::lens::review(
+                service,
+                run,
+                ctx,
+                &progress.evidence,
+                &progress.verified_tree,
+                progress.round,
+            )?,
             Phase::Validate => ai(service, run, ctx, "validation", &progress.evidence)?,
             Phase::Decide => ai(
                 service,

@@ -53,7 +53,10 @@ fn project_revision(revision: &domain::Revision) -> Result<model::Revision, Stri
     })
 }
 /// An execution step after the failure judge's plan in the same attempt is a repair.
-fn step_label(steps: &[domain::Step], index: usize) -> &'static str {
+fn step_label(steps: &[domain::Step], index: usize) -> String {
+    if let (Some(lens), "review") = (&steps[index].lens, steps[index].role.as_str()) {
+        return format!("Review ({lens} lens)");
+    }
     match steps[index].role.as_str() {
         "execution"
             if steps[..index]
@@ -69,6 +72,7 @@ fn step_label(steps: &[domain::Step], index: usize) -> &'static str {
         "validation" => "Validation",
         _ => "Remediation",
     }
+    .to_owned()
 }
 /// Keep the worker's claim distinct from the supervisor's outcome and recorded steps.
 fn report_text(attempt: &domain::Attempt) -> String {
@@ -221,7 +225,7 @@ pub(crate) fn project_task(task: &domain::Task) -> Result<model::Task, String> {
                         } else {
                             s.state.clone()
                         };
-                        (step_label(&a.steps, i).to_owned(), state)
+                        (step_label(&a.steps, i), state)
                     })
                     .collect(),
                 step: 0,

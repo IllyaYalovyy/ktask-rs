@@ -173,6 +173,7 @@ fn stop_cancels_failed_attempt_question_and_terminal_lifecycle_wins() -> Result 
             goal: "Finish remaining work".into(),
             kind: Kind::Ai,
             category: None,
+            lenses: None,
             criteria: vec!["Done".into()],
             models: [None, None, None, None],
             attempt_limit: None,
@@ -238,6 +239,7 @@ fn stopped_successor_starts_fresh_and_rechecks_handed_off_delivery() -> Result {
             goal: "Changed goal".into(),
             kind: Kind::Ai,
             category: None,
+            lenses: None,
             criteria: vec!["Done".into()],
             models: [None, None, None, None],
             attempt_limit: None,
@@ -245,6 +247,7 @@ fn stopped_successor_starts_fresh_and_rechecks_handed_off_delivery() -> Result {
             stage_timeout_ms: None,
         },
         category: None,
+        lenses: Vec::new(),
         active_ms: 0,
     };
     assert!(service.claim_delivery_handoff(&run, &Default::default(), None, "")?);

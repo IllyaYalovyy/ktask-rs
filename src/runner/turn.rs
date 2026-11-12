@@ -4,6 +4,7 @@ use super::{
     Context, Outcome, agent,
     backoff::{self, Notice},
     callback,
+    lens::LensTurn,
     process::Invocation,
     provider::{self, Access, Provider},
     sandbox,
@@ -13,6 +14,7 @@ use crate::{
     application::{
         ModelConfig, ROLES, Service,
         execution::{Run, Step},
+        lenses::Lens,
     },
     instance::Paths,
     storage::Result,
@@ -76,7 +78,28 @@ pub(super) fn ai(
             retained: "same attempt, work retained",
         },
         operational_failure,
-        |service, ctx| ai_turn(service, run, ctx, role, evidence, None),
+        |service, ctx| ai_turn(service, run, ctx, role, evidence, None, None),
+    )
+}
+
+/// A review turn through one lens, retried like any other after an operational failure.
+pub(super) fn ai_lens(
+    service: &mut Service,
+    run: &Run,
+    ctx: &mut Context<'_>,
+    evidence: &str,
+    lens: &LensTurn<'_>,
+) -> Result<Outcome> {
+    backoff::bounded(
+        service,
+        run,
+        ctx,
+        Notice {
+            failed: "Provider turn failed",
+            retained: "same attempt, work retained",
+        },
+        operational_failure,
+        |service, ctx| ai_turn(service, run, ctx, "review", evidence, None, Some(lens)),
     )
 }
 
@@ -98,6 +121,7 @@ fn ai_turn(
     role: &'static str,
     evidence: &str,
     nudge: Option<&str>,
+    lens: Option<&LensTurn<'_>>,
 ) -> Result<Outcome> {
     let configured = agent::model_role(role);
     let model = role_model(run, configured).expect("preflight models");
@@ -106,18 +130,21 @@ fn ai_turn(
         model,
         provider: Provider::of(model)?,
     };
-    let step = service.start_ai_step(
-        run,
-        configured,
-        model,
-        &turn.provider.auth_scope()?,
-        nudge.is_some(),
-    )?;
+    let scope = turn.provider.auth_scope()?;
+    // A lens review starts its own session; its nudge continues that same session.
+    let step = match lens.filter(|_| nudge.is_none()) {
+        Some(_) => service.start_independent_step(run, configured, model, &scope)?,
+        None => service.start_ai_step(run, configured, model, &scope, nudge.is_some())?,
+    };
     service.output(
         run,
         "system",
         &format!(
-            "{role}: {}/{} · {}",
+            "{}: {}/{} · {}",
+            lens.map_or_else(
+                || role.to_owned(),
+                |l| format!("{role} ({} lens)", l.lens.name)
+            ),
             model.provider,
             model.model,
             if nudge.is_some() {
@@ -129,6 +156,47 @@ fn ai_turn(
             }
         ),
     )?;
+    let ask = Ask {
+        role,
+        evidence,
+        nudge,
+        lens,
+    };
+    let outcome = answered_turn(service, run, ctx, &ask, &turn, &step);
+    if lens.is_some() {
+        // However it ended, no later turn resumes a lens review's session.
+        let closed = service.close_session(&step);
+        outcome.and_then(|outcome| closed.map(|()| outcome))
+    } else {
+        outcome
+    }
+}
+
+/// What a turn is asked: the role it plays, the evidence it reads, the question it was
+/// nudged with and the lens it reviews through.
+struct Ask<'a> {
+    role: &'static str,
+    evidence: &'a str,
+    nudge: Option<&'a str>,
+    lens: Option<&'a LensTurn<'a>>,
+}
+
+/// The provider process and the recorded verdict of a turn whose step has started.
+fn answered_turn(
+    service: &mut Service,
+    run: &Run,
+    ctx: &mut Context<'_>,
+    ask: &Ask<'_>,
+    turn: &Turn<'_>,
+    step: &Step,
+) -> Result<Outcome> {
+    let Ask {
+        role,
+        evidence,
+        nudge,
+        lens,
+    } = *ask;
+    let configured = turn.role;
     let packet = crate::scratch::Scratch::new(&ctx.paths.state.join("review-packets"))?;
     let tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
     let packet_context = service.review_bundle(
@@ -142,9 +210,10 @@ fn ai_turn(
         "{packet_context}\nRead/search without opening the database: '{}' evidence FILE --offset 0 --limit 4096 [--search TEXT]. Use next_offset until eof. This command works in the read-only sandbox.\n",
         ctx.paths.executable.display()
     );
-    let prompt = match nudge {
-        Some(question) => agent::nudge(role, question),
-        None => agent::prompt(
+    let prompt = match (nudge, lens) {
+        (Some(question), _) => agent::nudge(role, question),
+        (None, Some(lens)) => agent::lens_prompt(run, lens.lens, &packet_context)?,
+        (None, None) => agent::prompt(
             run,
             role,
             &packet_context,
@@ -152,12 +221,12 @@ fn ai_turn(
             &ctx.workspace.root,
         )?,
     };
-    let invocation = turn.invocation(service, run, ctx, &step, prompt)?;
+    let invocation = turn.invocation(service, run, ctx, step, prompt)?;
     let mut stream = provider::Stream::new(turn.provider);
     if let Some(outcome) = provider_turn(
         service,
         run,
-        &step,
+        step,
         ctx,
         &invocation,
         &mut stream,
@@ -168,7 +237,7 @@ fn ai_turn(
     let mut assessment = match agent::assessment(&stream, run.definition.criteria.len()) {
         Ok(a) => a,
         Err(e) => {
-            service.finish_step(&step, false, &e.to_string())?;
+            service.finish_step(step, false, &e.to_string())?;
             return Ok(Outcome::Failed("protocol", e.to_string()));
         }
     };
@@ -176,10 +245,10 @@ fn ai_turn(
         add_check_regressions(service, run, &mut assessment)?;
     }
     if assessment.outcome == "blocked" {
-        service.finish_assessment(&step, false, &assessment.summary)?;
+        service.finish_assessment(step, false, &assessment.summary)?;
         let question = assessment.question.expect("validated");
         if nudge.is_none() {
-            return ai_turn(service, run, ctx, role, evidence, Some(&question));
+            return ai_turn(service, run, ctx, role, evidence, Some(&question), lens);
         }
         if matches!(role, "review" | "validation") {
             return Ok(Outcome::Failed(
@@ -189,7 +258,13 @@ fn ai_turn(
         }
         return Ok(Outcome::Question(question));
     }
-    record_assessment(service, run, &step, role, assessment)
+    let Some(lens) = lens else {
+        return record_assessment(service, run, step, role, assessment, None);
+    };
+    let review = lens.review(step, &assessment);
+    let outcome = record_assessment(service, run, step, role, assessment, Some(lens.lens))?;
+    service.record_lens_review(run, lens.tree, &review)?;
+    Ok(outcome)
 }
 
 /// Who answers a turn: the configured role and its model.
@@ -273,6 +348,7 @@ fn record_assessment(
     step: &Step,
     role: &str,
     assessment: agent::Assessment,
+    lens: Option<&Lens>,
 ) -> Result<Outcome> {
     let critical = assessment.criteria.iter().any(|c| !c.passed)
         || assessment
@@ -293,7 +369,10 @@ fn record_assessment(
             &criterion.evidence,
         )?;
     }
-    let mut summary = assessment.summary.clone();
+    let mut summary = match lens {
+        Some(lens) => format!("{} lens: {}", lens.name, assessment.summary),
+        None => assessment.summary.clone(),
+    };
     for finding in &assessment.findings {
         let severity = if finding.severity == agent::Severity::Critical {
             "Critical"

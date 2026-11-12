@@ -14,12 +14,12 @@ const OPEN: &str = "Category";
 const NEW: &str = "New category";
 const NAME: &str = "Category name";
 const ACTION: &str = "Action";
-const SCOPE: &str = "Save in";
+pub(crate) const SCOPE: &str = "Save in";
 const CHECKS: &str = "Project checks";
 const DESCRIPTION: &str = "Description";
 const SAVE: &str = "Save";
-const USER: &str = "User scope";
-const PROJECT: &str = "Project scope";
+pub(crate) const USER: &str = "User scope";
+pub(crate) const PROJECT: &str = "Project scope";
 const APPLY: &str = "Apply";
 const SKIP: &str = "Do not apply";
 const DELETE: &str = "Delete (inherit again)";
@@ -62,12 +62,59 @@ pub(crate) fn from_line(line: &str) -> String {
     out
 }
 
-fn scope_label(scope: Scope) -> &'static str {
+pub(crate) fn scope_label(scope: Scope) -> &'static str {
     if scope == Scope::Project {
         PROJECT
     } else {
         USER
     }
+}
+
+/// The position of the list entry a list dialog's choice field `label` has selected.
+pub(crate) fn chosen_position(
+    dialog: &Dialog,
+    label: &str,
+    missing: &str,
+) -> Result<usize, String> {
+    let chosen = dialog.get(label);
+    dialog
+        .fields
+        .iter()
+        .find(|field| field.label == label)
+        .and_then(|field| field.choices.iter().position(|c| c == chosen))
+        .ok_or_else(|| missing.to_owned())
+}
+
+/// The version a save may be guarded by: that of the entry the form opened, when it is
+/// still the one being saved (same scope and name).
+pub(crate) fn save_guard(
+    opened: Option<(Scope, &str, i64)>,
+    scope: Scope,
+    name: &str,
+) -> Option<i64> {
+    opened
+        .filter(|(opened_scope, opened_name, _)| {
+            *opened_scope == scope && opened_name.eq_ignore_ascii_case(name)
+        })
+        .map(|(_, _, version)| version)
+}
+
+/// Saving onto an entry that was not the one opened (new, renamed or moved to another
+/// scope) must never replace what is already there.
+pub(crate) fn refuse_existing<E>(
+    guard: Option<i64>,
+    subject: &str,
+    scope: Scope,
+    name: &str,
+    lookup: impl FnOnce() -> Result<Option<E>, String>,
+) -> Result<(), String> {
+    if guard.is_none() && lookup()?.is_some() {
+        return Err(format!(
+            "{subject} {name} already exists in the {} scope; open it from the list to edit it",
+            scope.label()
+        ));
+    }
+    Ok(())
 }
 
 fn checks_text(checks: bool) -> &'static str {
@@ -210,7 +257,7 @@ fn category_from(dialog: &Dialog) -> Result<Category, String> {
 }
 
 /// What a preview fills in: the selected task, else an example.
-fn preview_task(screen: &Screen) -> (String, String, Vec<String>, String) {
+pub(crate) fn preview_task(screen: &Screen) -> (String, String, Vec<String>, String) {
     match screen
         .selected_task()
         .filter(|t| t.definition().kind.runs_ai())
@@ -263,13 +310,7 @@ impl StoredWorkspace {
     ) -> Result<bool, String> {
         match &dialog.kind {
             DialogKind::Categories(entries) => {
-                let chosen = dialog.get(OPEN).to_owned();
-                let position = dialog
-                    .fields
-                    .iter()
-                    .find(|field| field.label == OPEN)
-                    .and_then(|field| field.choices.iter().position(|c| *c == chosen))
-                    .ok_or("Select a category")?;
+                let position = chosen_position(dialog, OPEN, "Select a category")?;
                 let note = preview_task(screen).3;
                 if position == 0 {
                     let base = builtin::named(builtin::CODE).expect("code is built in");
@@ -312,27 +353,18 @@ impl StoredWorkspace {
                     dialog.scroll = 0;
                     return Ok(false);
                 }
-                let guard = expected
-                    .as_ref()
-                    .filter(|e| {
-                        e.category.scope == category.scope
-                            && e.category.name.eq_ignore_ascii_case(&category.name)
-                    })
-                    .map(|e| e.version);
-                // Saving onto an entry that was not the one opened (new, renamed or moved to
-                // another scope) must never replace what is already there.
-                if guard.is_none() {
+                let guard = save_guard(
+                    expected
+                        .as_ref()
+                        .map(|e| (e.category.scope, e.category.name.as_str(), e.version)),
+                    category.scope,
+                    &category.name,
+                );
+                refuse_existing(guard, "Category", category.scope, &category.name, || {
                     service
                         .category_in(category.scope, &category.name)
-                        .map_err(|e| e.to_string())?
-                        .map_or(Ok(()), |_| {
-                            Err(format!(
-                                "Category {} already exists in the {} scope; open it from the list to edit it",
-                                category.name,
-                                category.scope.label()
-                            ))
-                        })?;
-                }
+                        .map_err(|e| e.to_string())
+                })?;
                 let saved = service
                     .save_category(category.scope, guard, &category)
                     .map_err(|e| e.to_string())?;

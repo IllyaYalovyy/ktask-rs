@@ -152,8 +152,8 @@ In `--demo`, task/settings changes last only for the session. Import/export uses
 files**, not disk: `/demo/import.tsv` is valid and `/demo/invalid.tsv` exercises errors.
 An exported `/demo/*.tsv` file includes model/effort settings and limits and can be imported
 again during the same session. These are definition exports, not history backups.
-Normal import/export reads and writes **real files**. The `ktask-tasks-v3` escaped TSV format (v2 and v1 still import)
-preserves all acceptance criteria, work category, provider/model/effort, and limits. Imports preview and commit
+Normal import/export reads and writes **real files**. The `ktask-tasks-v4` escaped TSV format (v3, v2 and v1 still import)
+preserves all acceptance criteria, work category, review lenses, provider/model/effort, and limits. Imports preview and commit
 as one batch; exports replace files atomically after confirmation. These are definition exports,
 not history backups. Relative file paths use the invocation working directory. Files are limited to 4 MiB
 on import. Demo files are not interchangeable with this format.
@@ -343,6 +343,58 @@ editing or deleting a category never changes a running or resumed attempt; the n
 (an edit, or one the judge writes) pins the then-current templates. An attempted task keeps its
 category: naming a different one is refused, so switch by copying the task to a new one.
 
+## Review lenses
+
+By default every AI-run task gets one independent review, held to its category's bar. A **review
+lens** is an opt-in specialist review that a task can use instead, such as **concurrency**,
+**security** or **simplicity** (built in), or one you write. Selecting lenses never creates audit
+tasks: the same task, attempt and ten-round repair budget cover them all.
+
+A task with lenses is reviewed once per lens, in the order selected. Each lens gets its own
+read-only session on the configured review model, with the task's title, goal and criteria and
+the same review scope and evidence (the diff and the check results), and nothing from the other
+lenses. The review fixed rules still apply, and the category's general review is not run for the
+task, so choose a lens such as simplicity when you want that bar kept. Findings keep the lens
+that raised them. Only after **every** selected lens has finished does ktask act: a critical
+finding from any lens makes one repair request for that reviewed source state, through the
+usual failure judge and repair worker, and counts as one of the attempt's ten repair rounds
+however many lenses found something; minor observations are recorded and never trigger a
+repair. Lenses add no owner approval step. After a repair the new source state is reviewed by
+every lens again. A paused or interrupted attempt resumes without repeating a lens whose review
+of the unchanged source state is finished.
+
+The built-in lenses ask only for defects a reviewer can reach: each finding names the file and
+line, the concrete trigger (a step-by-step interleaving, an attacker-controlled input, or the
+future change that gets harder), the consequence and the smallest proportionate correction;
+anything weaker is minor.
+
+```sh
+ktask lens list                                       # concurrency, security, simplicity and your own
+ktask lens save "Data races" --scope user --description "Shared state in the scheduler" \
+    --instructions 'Review only unsynchronized shared state in the change. Task: {{title}} ... {{context}}'
+ktask lens save security --scope project --instructions @security.txt   # this project's override
+ktask lens preview security --task 7                  # the effective prompt with the task's content
+ktask lens defaults --set security simplicity         # new tasks select these, in this order
+ktask lens defaults --clear                           # back to the ordinary single review
+ktask add --title "Lock the cache" --goal "..." --criterion "..." --lens concurrency --lens security
+ktask edit 7 --no-lenses                              # this task keeps the ordinary review
+ktask show 7                                          # steps and attempts[].lens_reviews name each lens
+```
+
+Instructions use the category placeholders (`ktask category placeholders`); a placeholder only
+chooses where content goes and anything left out is appended. A name resolves through the
+project's override, then the user scope, then the built-ins. `lens save` takes `--if-version N`
+and `lens defaults` `--if-current a,b` to reject a stale edit. A task revision pins the selected
+lenses with the instructions they had, so editing a lens or the defaults never changes a running
+or resumed attempt. Without `--lens` or `--no-lenses`, a new task takes the project defaults
+and an edited task keeps its own. Up to five lenses per task.
+
+TUI: Configuration → **L Review lenses** lists, creates, edits, overrides per project, previews
+and deletes lenses and sets the project defaults; the task form's **Review lens 1…n** fields
+choose the ordered selection (the first reads Project default, None or a lens; the others add
+lenses). Task details list **Review lenses**, and each attempt's report and Reviews view
+label every lens verdict and its findings.
+
 ## Run real work
 
 Use an ordinary Git baseline commit and a clean checkout for a new task. No hidden worktrees,
@@ -516,6 +568,9 @@ cargo run --locked -- approve 1 --if-version 1
   `ID, version, state, kind, title`, and JSON carries `"kind"` and `"category"`.
 - Categories: `category list|show|save|delete|preview|placeholders`, and `add`/`edit --category NAME`
   (see Work categories); `edit --kind` alone returns to that kind's default category.
+- Review lenses: `lens list|show|save|delete|defaults|preview`, and `add`/`edit --lens NAME` (repeat,
+  in review order) or `--no-lenses` (see Review lenses); JSON carries `"lenses"` and, per attempt,
+  `"lens_reviews"` with each lens's summary and findings.
 - Change: `add`, `edit ID`, `move ID --before ID`, `approve`, `reject --reason`, `stop`, `done`,
   `cancel`, `supersede --by`, `copy [--before ID]`. Each task's JSON lists its `state` and the
   `actions` it offers; a refused action exits 4 naming both.

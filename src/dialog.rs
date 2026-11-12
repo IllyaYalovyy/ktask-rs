@@ -46,6 +46,11 @@ pub enum DialogKind {
     Category {
         expected: Option<Box<crate::application::categories::Entry>>,
     },
+    Lenses(Vec<crate::application::lenses::Entry>),
+    Lens {
+        expected: Option<Box<crate::application::lenses::Entry>>,
+    },
+    LensDefaults(Vec<String>),
     ProjectChecks(Vec<crate::application::configuration::ProjectCheck>),
     ProjectCheck {
         expected: Vec<crate::application::configuration::ProjectCheck>,

@@ -313,6 +313,7 @@ fn protected_closed_attempt_directories_settle_after_bounded_sweep() -> Result {
         goal: "Keep unknown proof files".into(),
         kind: Kind::Ai,
         category: None,
+        lenses: None,
         criteria: vec!["Preserved".into()],
         models: std::array::from_fn(|role| {
             Some(ModelConfig {
@@ -491,6 +492,7 @@ fn run_starts_while_another_project_streams_output_over_a_large_evidence_tree() 
             goal: "Stream output".into(),
             kind: Kind::Ai,
             category: None,
+            lenses: None,
             criteria: vec!["Streams".into()],
             models: std::array::from_fn(|role| {
                 Some(ModelConfig {
@@ -574,6 +576,7 @@ fn queued_run_drains_more_than_four_cleanup_batches_before_starting_work() -> Re
         goal: "Retain before cleanup".into(),
         kind: Kind::Ai,
         category: None,
+        lenses: None,
         criteria: vec!["Recorded".into()],
         models: std::array::from_fn(|role| {
             Some(ModelConfig {
@@ -4129,6 +4132,8 @@ exec /usr/bin/git "$@"
 }
 #[path = "delivery.rs"]
 mod delivery;
+#[path = "lenses.rs"]
+mod lenses;
 #[path = "providers.rs"]
 mod providers;
 struct Fixture {
@@ -4330,6 +4335,7 @@ while [ "$#" -gt 0 ]; do
  shift
 done
 printf '%s %s\n' "$model" "$network" >> "$HOME/provider-network"
+resumed_session="$session"
 if [ '{mode}' = check-launch-failure ]; then
  printf '%s %s\n' "$$" "$PPID" >> "$HOME/launch-fixture-pids"
 fi
@@ -4498,6 +4504,30 @@ case '{mode}' in
    case "$prompt" in *"Final decision after"*) printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Mandatory proof is missing\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": false, \"evidence\": \"Required boundary behavior is not verified\"}}], \"findings\": [{{\"severity\": \"minor\", \"description\": \"result.txt:1: boundary case needs correction\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{}}}}'; exit 0;; esac
    if [ "$model" = review ]; then printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Mandatory proof is missing\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": false, \"evidence\": \"Required boundary behavior is not verified\"}}], \"findings\": [{{\"severity\": \"minor\", \"description\": \"result.txt:1: boundary case needs correction\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{}}}}'; exit 0; fi
   fi;;
+ lens-flow)
+  case "$prompt" in *"Final decision after"*) if [ -f "$HOME/lens-final-critical" ]; then printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Review findings to address\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": false, \"evidence\": \"Critical lens finding remains\"}}], \"findings\": [{{\"severity\": \"critical\", \"description\": \"result.txt:1: the lens defect remains; apply the correction\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{"input_tokens": 100, "cached_input_tokens": 40, "output_tokens": 10}}}}'; exit 0; fi;; esac
+  if [ "$model" = review ]; then
+   lens=none
+   case "$prompt" in
+    *"Specialist review through the concurrency lens"*) lens=concurrency;;
+    *"Specialist review through the security lens"*) lens=security;;
+    *"Specialist review through the simplicity lens"*) lens=simplicity;;
+   esac
+   n=0; [ ! -f "$HOME/lens-count-$lens" ] || n=$(cat "$HOME/lens-count-$lens")
+   n=$((n + 1)); printf '%s' "$n" > "$HOME/lens-count-$lens"
+   printf '%s %s resumed=%s\n' "$lens" "$session" "$resumed_session" >> "$HOME/lens-log"
+   printf '%s' "$prompt" > "$HOME/lens-prompt-$lens-$n"
+   if [ -f "$HOME/lens-sleep-$lens" ]; then touch "$HOME/lens-started-$lens"; sleep 30; fi
+   left=0; [ ! -f "$HOME/lens-critical-$lens" ] || left=$(cat "$HOME/lens-critical-$lens")
+   if [ "$left" = always ] || [ "$left" -gt 0 ]; then
+    [ "$left" = always ] || printf '%s' $((left - 1)) > "$HOME/lens-critical-$lens"
+    printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"changes_requested\",\"summary\":\"'"$lens"' defect found\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":true,\"evidence\":\"Inspected result.txt\"}}],\"findings\":[{{\"severity\":\"critical\",\"description\":\"result.txt:1: the '"$lens"' defect is reachable; apply the smallest correction\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0
+   fi
+   if [ -f "$HOME/lens-minor-$lens" ]; then
+    printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"complete\",\"summary\":\"'"$lens"' has only a polish note\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":true,\"evidence\":\"Inspected result.txt\"}}],\"findings\":[{{\"severity\":\"minor\",\"description\":\"result.txt:1: optional '"$lens"' polish\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0
+   fi
+   printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"complete\",\"summary\":\"'"$lens"' review passed\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":true,\"evidence\":\"Inspected result.txt\"}}],\"findings\":[]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0
+  fi;;
  review-critical|review-minor|pause-tenth|review-nine|reuse-unchanged|reuse-changed)
   case "$prompt" in *"Final decision after"*) printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Review findings to address\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": false, \"evidence\": \"Critical boundary case remains unhandled\"}}], \"findings\": [{{\"severity\": \"critical\", \"description\": \"result.txt:1: missing boundary handling produces incorrect results; implement the boundary case\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{"input_tokens": 100, "cached_input_tokens": 40, "output_tokens": 10}}}}'; exit 0;; esac
   if [ "$model" = review ]; then
@@ -4581,7 +4611,7 @@ if [ '{mode}' = normal ] && {{ [ "$model" = review ] || [ "$model" = validation 
 fi
 if [ "$repair" = yes ]; then
  if [ '{mode}' = judge-noisy ]; then printf 'verified repair\n' >> result.txt
- elif [ '{mode}' = resolve-conflict ] || [ '{mode}' = resolve-conflict-pause ]; then printf 'remote\nverified\n' > result.txt; elif [ '{mode}' = reuse-changed ]; then printf 'verified after repair\n' > result.txt; else printf 'verified\n' > result.txt; fi
+ elif [ '{mode}' = resolve-conflict ] || [ '{mode}' = resolve-conflict-pause ]; then printf 'remote\nverified\n' > result.txt; elif [ '{mode}' = reuse-changed ] || [ '{mode}' = lens-flow ]; then printf 'verified after repair\n' > result.txt; else printf 'verified\n' > result.txt; fi
 elif [ "$model" = execution ]; then
  if [ '{mode}' = sequential-pr ]; then n=0; [ ! -f "$HOME/pr-executions" ] || n=$(cat "$HOME/pr-executions"); n=$((n+1)); printf '%s' "$n" > "$HOME/pr-executions"; printf 'verified %s\n' "$n" > result.txt; elif [ '{mode}' = attributes-checkpoint ]; then printf 'verified\n' > result.txt; printf '*.txt text=auto\n' > .gitattributes; else printf 'verified\n' > result.txt; fi
 fi

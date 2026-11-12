@@ -215,6 +215,7 @@ impl StoredWorkspace {
             }
             Action::Profiles => self.open_profiles()?,
             Action::Categories => self.open_categories()?,
+            Action::Lenses => self.open_lenses()?,
             Action::ProjectChecks => {
                 let checks = self.service.project_checks().map_err(|e| e.to_string())?;
                 let mut field = Field::choice(CHECK_TO_OPEN, &["Add new check"], "Add new check");
@@ -305,6 +306,9 @@ impl StoredWorkspace {
             }
             DialogKind::Categories(_) | DialogKind::Category { .. } => {
                 return self.save_category_form(screen, dialog);
+            }
+            DialogKind::Lenses(_) | DialogKind::Lens { .. } | DialogKind::LensDefaults(_) => {
+                return self.save_lens_form(screen, dialog);
             }
             DialogKind::Storage(preview) => {
                 let days: i64 = dialog

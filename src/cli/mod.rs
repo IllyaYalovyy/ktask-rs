@@ -2,6 +2,7 @@ mod args;
 mod category;
 mod evidence;
 mod execute;
+mod lens;
 mod output;
 mod profile;
 
@@ -247,6 +248,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             | Command::Defaults { .. }
             | Command::Profile { .. }
             | Command::Category { .. }
+            | Command::Lens { .. }
             | Command::Init { .. }
     );
     let mut service = if creates_project {
@@ -587,6 +589,7 @@ fn validate(cli: &Cli) -> Result<()> {
                 && changes.goal.is_none()
                 && changes.kind.is_none()
                 && changes.category.is_none()
+                && changes.lenses.selection().is_none()
                 && changes.criterion.is_empty()
                 && changes.approval.is_none()
                 && changes.settings.empty()
