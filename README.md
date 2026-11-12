@@ -152,8 +152,8 @@ In `--demo`, task/settings changes last only for the session. Import/export uses
 files**, not disk: `/demo/import.tsv` is valid and `/demo/invalid.tsv` exercises errors.
 An exported `/demo/*.tsv` file includes model/effort settings and limits and can be imported
 again during the same session. These are definition exports, not history backups.
-Normal import/export reads and writes **real files**. The `ktask-tasks-v2` escaped TSV format (v1 still imports)
-preserves all acceptance criteria, provider/model/effort, and limits. Imports preview and commit
+Normal import/export reads and writes **real files**. The `ktask-tasks-v3` escaped TSV format (v2 and v1 still import)
+preserves all acceptance criteria, work category, provider/model/effort, and limits. Imports preview and commit
 as one batch; exports replace files atomically after confirmation. These are definition exports,
 not history backups. Relative file paths use the invocation working directory. Files are limited to 4 MiB
 on import. Demo files are not interchangeable with this format.
@@ -278,7 +278,70 @@ bar; a checked-in change must still leave links, references and tables of conten
 Choose the kind in the task form (Kind: AI, Human, Docs) or with `--kind ai|human|docs` on
 `add` and `edit`. `list` and `show` print it, `list --kind docs` and the Queue/History filter
 (**f**) select it, other kinds are tagged in rows (`[Docs]`, `[Human]`), and TSV export/import
-keeps it. A queue of only Docs tasks does not need a configured project check.
+keeps it. A queue of only Docs tasks does not need a configured project check. The kind says who
+does the work; for AI-run work the [work category](#work-categories) says how: AI defaults to
+**code**, Docs to **documents**, and `--category art` (or any category of your own) changes the
+templates and whether checks apply.
+
+## Work categories
+
+A work category tells the AI turns how to do one kind of work. It is a name, a choice whether
+the project's checks apply, and one template each to **execute**, **review**, **validate** and
+**remediate** (the failure judge and the repair turns). ktask fills the task's title, goal,
+numbered criteria and the turn's runtime context into the template. Provider profiles stay
+separate: a profile says which model runs a role, a category says what that role is asked to do.
+
+Built in: **code** (project checks apply, review holds the Clean Code bar), **documents**
+(no checks; judged for accuracy, completeness, consistency and clarity) and **art** (no
+checks; judged on the delivered files and the visual evidence available, with no code checks
+required). The art templates describe asset work with the tools and files that exist in the
+environment; ktask supplies no image-generation tool and no template pretends it does. A task
+with no chosen category follows its kind: AI runs **code**, Docs runs **documents**, and Human
+work, which the owner does, has none. Existing tasks keep exactly that behavior.
+
+Placeholders, written `{{name}}` (see `ktask category placeholders`): `{{title}}`, `{{goal}}`,
+`{{criteria}}` (numbered from 1), `{{category}}` and `{{context}}`. Context is **runtime-only**:
+review scope, check results, evidence paths, earlier findings, repair plans and answers exist
+only while a turn runs, and a preview shows a labelled stand-in. Values are inserted as typed
+and never scanned again, so a goal that mentions `{{context}}` reaches the model literally. A
+placeholder only chooses where content goes: a task field or the context that a template leaves
+out is appended after it. Write `\{{` for a literal `{{`. Unknown or unclosed placeholders
+are reported when the category is saved.
+
+Supervisor rules are not part of a category. Around every template ktask adds its own fixed
+rules: read-only sandboxes for judges, evidence handling, no commits or branch changes,
+scratch only under `TMPDIR`, no questions about permissions, the follow-up callback, and the
+structured response with one evidence entry per criterion. Whether checks apply decides the
+check steps and which supervisor text a worker or judge receives, whatever the templates say.
+
+```sh
+ktask category list                                      # code, documents, art and your own
+ktask category save "Poster art" --scope user --no-checks \
+    --description "Print posters and banners" \
+    --execution 'Design the poster described below as a vector file. Use only tools that exist here; do not claim to have generated an image you cannot show. Task: {{title}}. Goal: {{goal}}. Criteria: {{criteria}}' \
+    --review    'Open the exported poster and judge it against {{criteria}}: layout, legibility, palette, dimensions. Context: {{context}}' \
+    --validation 'Validate {{criteria}} from the delivered files and any rendered images in the evidence; fail what you cannot see.' \
+    --remediation 'Fix each reported poster defect at its cause without changing approved assets.'
+ktask category save "Poster art" --scope project --review @review.txt   # this project's own override
+ktask category preview "Poster art" --role review        # the effective prompt, runtime parts labelled
+ktask add --title "Spring poster" --goal "A3 poster for the spring fair" \
+    --criterion "poster.svg exists at A3" --category "Poster art"
+ktask category preview --task 7                          # the task's content in its pinned templates
+```
+
+A name resolves through this project's override, then the user scope, then the built-in
+categories. `category save` creates a category or changes the fields given (`--if-version N`
+rejects a stale edit); a new name needs all four templates and `--checks` or `--no-checks`, and
+`--from NAME` copies another category first. A template value `@PATH` reads the file.
+`category delete --scope user|project` makes the name inherit again. TUI: Configuration →
+**w Work categories** lists, creates, edits, overrides per project, previews and deletes them
+(a template is one form line: `\n` is a line break); the task form's **Work category** field
+selects one, and the Kind default applies while it reads Default.
+
+A task revision pins the category, its checks choice and its templates when it is defined, so
+editing or deleting a category never changes a running or resumed attempt; the next revision
+(an edit, or one the judge writes) pins the then-current templates. An attempted task keeps its
+category: naming a different one is refused, so switch by copying the task to a new one.
 
 ## Run real work
 
@@ -450,7 +513,9 @@ cargo run --locked -- approve 1 --if-version 1
   `cache limits [--max-bytes N --max-files N --keep-generations N --grace-secs N
   --min-free-bytes N --if-version N]` shows or sets the finite bounds. All support `--json`.
 - Kinds: `add`/`edit --kind ai|human|docs`; `list --kind docs` filters; text `list` prints
-  `ID, version, state, kind, title`, and JSON carries `"kind"`.
+  `ID, version, state, kind, title`, and JSON carries `"kind"` and `"category"`.
+- Categories: `category list|show|save|delete|preview|placeholders`, and `add`/`edit --category NAME`
+  (see Work categories); `edit --kind` alone returns to that kind's default category.
 - Change: `add`, `edit ID`, `move ID --before ID`, `approve`, `reject --reason`, `stop`, `done`,
   `cancel`, `supersede --by`, `copy [--before ID]`. Each task's JSON lists its `state` and the
   `actions` it offers; a refused action exits 4 naming both.

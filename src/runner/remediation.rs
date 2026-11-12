@@ -63,6 +63,7 @@ mod tests {
             title: "Task".into(),
             goal: "Goal".into(),
             kind: Kind::Ai,
+            category: None,
             criteria: vec!["Check".into()],
             models: [
                 Some(model("execution", "high")),
@@ -106,6 +107,7 @@ mod tests {
             title: "Task".into(),
             goal: "Goal".into(),
             kind: Kind::Ai,
+            category: None,
             criteria: vec!["Proof".into()],
             models: [
                 Some(model("worker")),

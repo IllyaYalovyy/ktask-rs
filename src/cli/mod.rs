@@ -1,4 +1,5 @@
 mod args;
+mod category;
 mod evidence;
 mod execute;
 mod output;
@@ -245,6 +246,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             | Command::ModelDefault { .. }
             | Command::Defaults { .. }
             | Command::Profile { .. }
+            | Command::Category { .. }
             | Command::Init { .. }
     );
     let mut service = if creates_project {
@@ -367,8 +369,11 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         )?;
         let mut receipts = Vec::new();
         if *apply {
-            let definitions =
-                crate::runner::agent::breakdown_definitions(&proposal, service.defaults()?);
+            let definitions = crate::runner::agent::breakdown_definitions(
+                &proposal,
+                service.defaults()?,
+                &task.definition().definition,
+            );
             let ready = service.preferences(&paths.config)?.planner_approval
                 == application::preferences::PlannerApproval::Automatic;
             receipts = service.apply_breakdown(
@@ -581,6 +586,7 @@ fn validate(cli: &Cli) -> Result<()> {
             if changes.title.is_none()
                 && changes.goal.is_none()
                 && changes.kind.is_none()
+                && changes.category.is_none()
                 && changes.criterion.is_empty()
                 && changes.approval.is_none()
                 && changes.settings.empty()

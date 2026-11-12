@@ -769,7 +769,7 @@ fn docs_kind_is_added_edited_listed_shown_and_round_trips_through_tsv() -> Resul
     // Export and import keep the kind.
     json(root, &["export", "tasks.tsv"], 0)?;
     let exported = std::fs::read_to_string(root.join("tasks.tsv"))?;
-    assert!(exported.starts_with("ktask-tasks-v2\n"));
+    assert!(exported.starts_with("ktask-tasks-v3\n"));
     assert_eq!(
         exported.lines().filter(|l| l.starts_with("docs\t")).count(),
         2

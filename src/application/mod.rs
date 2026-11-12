@@ -60,6 +60,7 @@ mod model_validation;
 mod output_text;
 mod review_bundle;
 pub use evidence::{EvidenceCursor, EvidenceMatch, EvidenceSearch};
+pub mod categories;
 pub mod configuration;
 pub mod delivery;
 pub mod execution;
@@ -68,6 +69,7 @@ pub mod limits;
 pub mod preferences;
 pub mod profiles;
 pub mod progress;
+pub mod prompt;
 mod queries;
 pub mod retention;
 pub mod search;
@@ -115,10 +117,6 @@ impl Kind {
     /// Whether the supervisor runs this kind with AI workers, judges and validators.
     pub fn runs_ai(self) -> bool {
         self != Self::Human
-    }
-    /// Whether the project's checks gate this kind.
-    pub fn runs_checks(self) -> bool {
-        self == Self::Ai
     }
 }
 
@@ -214,6 +212,9 @@ pub struct Definition {
     pub title: String,
     pub goal: String,
     pub kind: Kind,
+    /// The work category by name; `None` takes the default of the kind. A stored revision
+    /// always names the category it pinned (none for Human work).
+    pub category: Option<String>,
     pub criteria: Vec<String>,
     pub models: [Option<ModelConfig>; 4],
     pub attempt_limit: Option<i64>,
@@ -253,6 +254,14 @@ pub struct Revision {
     pub lifecycle: String,
     pub definition: Definition,
     pub actor: Option<String>,
+    /// The category and templates this revision pinned; `None` for Human work.
+    pub category: Option<categories::Category>,
+}
+impl Revision {
+    /// Whether the project's checks gate this revision's work.
+    pub fn runs_checks(&self) -> bool {
+        self.category.as_ref().is_some_and(|c| c.checks)
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct Attempt {

@@ -31,10 +31,17 @@ fn insert_revision(
     actor: &Actor,
 ) -> Result<()> {
     definition.validate()?;
+    let project: i64 = tx.query_row("SELECT project_id FROM tasks WHERE id = ?1", [task], |r| {
+        r.get(0)
+    })?;
+    let category = categories::pin_for(tx, project, task, definition)?;
     tx.execute("INSERT INTO task_revisions(task_id, revision, lifecycle, kind, title, goal, created_by_kind, created_by, attempt_limit, attempt_timeout_ms, created_at_ms, decided_at_ms, decided_by_kind, decided_by, stage_timeout_ms)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![task, number, if ready { "ready" } else { "draft" }, definition.kind.as_str(), definition.title, definition.goal, actor.kind.as_str(), actor.name, definition.attempt_limit, definition.timeout_ms, now,
             ready.then_some(now), ready.then_some(actor.kind.as_str()), ready.then_some(&actor.name), definition.stage_timeout_ms])?;
+    if let Some(category) = &category {
+        categories::write_pin(tx, task, number, category)?;
+    }
     for (index, criterion) in definition.criteria.iter().enumerate() {
         tx.execute("INSERT INTO acceptance_criteria(task_id, revision, ordinal, description) VALUES (?1, ?2, ?3, ?4)", params![task, number, index as i64 + 1, criterion])?;
     }
@@ -389,14 +396,29 @@ impl Service {
             [target.id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
+        let attempted = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM attempts WHERE task_id=?1)",
+            [target.id],
+            |r| r.get::<_, bool>(0),
+        )?;
         require(
-            !tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM attempts WHERE task_id=?1)",
-                [target.id],
-                |r| r.get::<_, bool>(0),
-            )? || old_kind == definition.kind.as_str(),
+            !attempted || old_kind == definition.kind.as_str(),
             "Keep the kind of an attempted task",
         )?;
+        if attempted {
+            // Another category would change which checks gate the work already started.
+            let old = categories::pinned(
+                &tx,
+                target.id,
+                number - 1,
+                Kind::parse(&old_kind).unwrap_or(Kind::Human),
+            )?;
+            let new = categories::pin_for(&tx, self.project_id, target.id, definition)?;
+            require(
+                old.map(|c| c.name.to_lowercase()) == new.map(|c| c.name.to_lowercase()),
+                "Keep the category of an attempted task",
+            )?;
+        }
         let now = now_ms();
         insert_revision(&tx, target.id, number, definition, ready, now, actor)?;
         if let Some(reason) = reason {

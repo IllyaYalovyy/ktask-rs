@@ -929,10 +929,12 @@ pub(super) fn revisions(db: &Connection, task: i64) -> Result<Vec<Revision>> {
                 number: r.get(0)?,
                 lifecycle: r.get(1)?,
                 actor: r.get(7)?,
+                category: None,
                 definition: Definition {
                     title: r.get(2)?,
                     goal: r.get(3)?,
                     kind: Kind::parse(&r.get::<_, String>(4)?).unwrap_or(Kind::Human),
+                    category: None,
                     attempt_limit: r.get(5)?,
                     timeout_ms: r.get(6)?,
                     stage_timeout_ms: r.get(8)?,
@@ -943,6 +945,9 @@ pub(super) fn revisions(db: &Connection, task: i64) -> Result<Vec<Revision>> {
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for revision in &mut revisions {
+        let pin = categories::pinned(db, task, revision.number, revision.definition.kind)?;
+        revision.definition.category = pin.as_ref().map(|c| c.name.clone());
+        revision.category = pin;
         let mut criteria = db.prepare_cached("SELECT description FROM acceptance_criteria WHERE task_id = ?1 AND revision = ?2 ORDER BY ordinal")?;
         revision.definition.criteria = criteria
             .query_map(params![task, revision.number], |r| r.get(0))?

@@ -298,6 +298,7 @@ impl App {
             | Action::ProjectModels
             | Action::UserDefaults
             | Action::Profiles
+            | Action::Categories
             | Action::ProjectChecks
             | Action::Delivery
             | Action::Storage

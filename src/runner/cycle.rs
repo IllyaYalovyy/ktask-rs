@@ -91,7 +91,7 @@ pub(super) fn run(
             }
             Phase::Judge if progress.round == 0 => judge(service, run, ctx)?,
             Phase::Judge => judge_attempt(service, run, ctx, run.attempt)?,
-            Phase::Check if !run.definition.kind.runs_checks() => {
+            Phase::Check if !run.runs_checks() => {
                 let tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
                 let scope = review_scope(service, run, ctx, &tree)?;
                 progress.verified_tree = tree;
@@ -129,7 +129,7 @@ pub(super) fn run(
             )?,
             Phase::Complete => {
                 let minor = progress.evidence.matches("\nMinor: ").count();
-                let gates = if run.definition.kind.runs_checks() {
+                let gates = if run.runs_checks() {
                     "Checks, independent review"
                 } else {
                     "Independent review"

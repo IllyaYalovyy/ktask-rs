@@ -827,6 +827,8 @@ impl Backend for DemoWorkspace {
             | DialogKind::ApplyDefaults(_)
             | DialogKind::Profiles(_)
             | DialogKind::Profile { .. }
+            | DialogKind::Categories(_)
+            | DialogKind::Category { .. }
             | DialogKind::ProjectChecks(_)
             | DialogKind::ProjectCheck { .. }
             | DialogKind::Preferences(..)

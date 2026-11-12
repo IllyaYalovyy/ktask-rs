@@ -504,6 +504,7 @@ mod tests {
                 title: "Recover proof".into(),
                 goal: "Keep outside files unchanged".into(),
                 kind: Kind::Ai,
+                category: None,
                 criteria: vec!["Proof".into()],
                 models: std::array::from_fn(|_| {
                     Some(ModelConfig {
@@ -664,6 +665,7 @@ mod tests {
                 title: "Artifact limits".into(),
                 goal: "Keep evidence within the attempt budget".into(),
                 kind: Kind::Ai,
+                category: None,
                 criteria: vec!["Retain accepted files".into()],
                 models,
                 attempt_limit: Some(1),

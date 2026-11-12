@@ -505,6 +505,19 @@ pub enum Command {
         #[command(subcommand)]
         action: ProfileAction,
     },
+    /// Manage work categories: the templates that tell AI turns how to execute, review,
+    /// validate and remediate a kind of work.
+    ///
+    /// Built-in categories are code (project checks apply), documents and art (no checks).
+    /// Save your own in the user scope, override any of them per project, pick one with
+    /// `add --category NAME`, and see the effective prompt with `category preview`. A task
+    /// revision pins the templates it was defined with; later edits reach only tasks
+    /// defined afterwards. The supervisor's rules, evidence handling and response schema
+    /// are not part of a category.
+    Category {
+        #[command(subcommand)]
+        action: CategoryAction,
+    },
     /// List tasks in execution order (history: newest resolution first).
     List {
         /// Which tasks to list.
@@ -597,7 +610,7 @@ pub enum Command {
         #[arg(long)]
         apply: bool,
     },
-    /// Preview or atomically import a ktask-tasks-v2 (or v1) TSV file.
+    /// Preview or atomically import a ktask-tasks-v3 (or v2, v1) TSV file.
     Import {
         /// TSV file written by export.
         file: PathBuf,
@@ -658,6 +671,10 @@ pub struct Add {
     /// Who does the work.
     #[arg(long, value_enum, default_value = "ai")]
     pub kind: Kind,
+    /// Work category whose templates drive the AI turns (see `category list`); the default
+    /// follows the kind: code for ai, documents for docs.
+    #[arg(long, value_parser = nonempty)]
+    pub category: Option<String>,
     /// ready may run at once; draft waits for approve.
     #[arg(long, value_enum, default_value = "ready")]
     pub approval: Approval,
@@ -685,9 +702,12 @@ pub struct Changes {
     /// Replaces the full criterion list when supplied; repeat for multiple criteria.
     #[arg(long, value_parser = nonempty)]
     pub criterion: Vec<String>,
-    /// New kind.
+    /// New kind. Without --category the kind's default category applies again.
     #[arg(long, value_enum)]
     pub kind: Option<Kind>,
+    /// New work category, pinned with its current templates by the new revision.
+    #[arg(long, value_parser = nonempty)]
+    pub category: Option<String>,
     /// Store the revision as ready or draft; kept from the edited revision by default.
     #[arg(long, value_enum)]
     pub approval: Option<Approval>,
@@ -863,4 +883,117 @@ mod tests {
         walk(&command, "ktask", &mut missing);
         assert!(missing.is_empty(), "missing help: {missing:?}");
     }
+}
+
+/// A scope of work categories on the command line.
+#[derive(Clone, Copy, ValueEnum)]
+pub enum CategoryScope {
+    /// Every project of this instance.
+    User,
+    /// This project only; overrides the user scope and the built-in categories.
+    Project,
+    /// Compiled-in defaults (read only).
+    #[value(name = "built-in")]
+    BuiltIn,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum CategoryRole {
+    Execution,
+    Review,
+    Validation,
+    Remediation,
+}
+
+#[derive(Subcommand)]
+pub enum CategoryAction {
+    /// List the categories this project can choose, each from the scope that wins.
+    List,
+    /// Show a category: where it comes from, whether checks apply and every template.
+    Show {
+        /// Category name (case-insensitive).
+        #[arg(value_parser = nonempty)]
+        name: String,
+        /// Show one scope's definition instead of the effective one.
+        #[arg(long, value_enum)]
+        scope: Option<CategoryScope>,
+    },
+    /// Create or change a category in the user or project scope.
+    ///
+    /// The first save of a name in a scope starts from the category it would override
+    /// (project over user over built-in) or from --from, and a brand-new name must supply
+    /// all four templates and --checks or --no-checks. Later saves change only what is
+    /// given. Templates use {{title}}, {{goal}}, {{criteria}}, {{category}} and {{context}};
+    /// see `category placeholders`. Pass @PATH to read a template from a file. Placeholders
+    /// are checked on save. Only tasks defined afterwards use the change.
+    Save {
+        /// Category name: letters, digits, spaces, '-', '_' or '.', at most 64 characters.
+        #[arg(value_parser = nonempty)]
+        name: String,
+        /// Where to save it.
+        #[arg(long, value_enum, default_value = "user")]
+        scope: CategoryScope,
+        /// Start a new definition from this category.
+        #[arg(long, value_parser = nonempty)]
+        from: Option<String>,
+        /// One line saying what the category is for.
+        #[arg(long)]
+        description: Option<String>,
+        /// The project's checks gate this work.
+        #[arg(long, conflicts_with = "no_checks")]
+        checks: bool,
+        /// The project's checks do not apply to this work.
+        #[arg(long)]
+        no_checks: bool,
+        /// Template for the execution turn, or @PATH.
+        #[arg(long)]
+        execution: Option<String>,
+        /// Template for review turns, or @PATH.
+        #[arg(long)]
+        review: Option<String>,
+        /// Template for validation turns, or @PATH.
+        #[arg(long)]
+        validation: Option<String>,
+        /// Template for the failure judge and repair turns, or @PATH.
+        #[arg(long)]
+        remediation: Option<String>,
+        /// Reject a stale save; the version comes from show or list.
+        #[arg(long)]
+        if_version: Option<i64>,
+    },
+    /// Delete a user or project category so the name inherits again.
+    ///
+    /// Tasks that already pinned the category keep their copy.
+    Delete {
+        /// Category name.
+        #[arg(value_parser = nonempty)]
+        name: String,
+        /// The scope to delete from.
+        #[arg(long, value_enum, default_value = "user")]
+        scope: CategoryScope,
+        /// Reject a stale delete.
+        #[arg(long)]
+        if_version: Option<i64>,
+    },
+    /// Show the effective prompt a role would get, with runtime-only parts labelled.
+    ///
+    /// With --task, the task's title, goal and criteria are filled in; otherwise an example
+    /// task is used. The supervisor's rules are shown first because no category can edit
+    /// them. Context and the worker callback only exist while a turn runs.
+    Preview {
+        /// Category name; with --task, defaults to the category the task pinned.
+        #[arg(value_parser = nonempty, required_unless_present = "task")]
+        name: Option<String>,
+        /// Preview this task's content, and its pinned templates unless a name is given.
+        #[arg(long, value_parser = positive)]
+        task: Option<i64>,
+        /// One role only; default all four.
+        #[arg(long, value_enum)]
+        role: Option<CategoryRole>,
+        /// Preview one scope's definition instead of the effective one.
+        #[arg(long, value_enum, conflicts_with = "task")]
+        scope: Option<CategoryScope>,
+    },
+    /// List the placeholders templates may use.
+    Placeholders,
 }

@@ -189,7 +189,7 @@ pub(crate) fn inspect(
     );
     report.check(
         "Project checks",
-        if !definition.definition.kind.runs_checks() {
+        if !definition.runs_checks() {
             Ok(())
         } else {
             service

@@ -6,6 +6,7 @@ pub mod application;
 mod backend;
 pub mod build_cache;
 mod cache_ui;
+mod category_ui;
 mod cli;
 pub(crate) mod clock;
 mod configuration_ui;

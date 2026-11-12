@@ -42,6 +42,7 @@ fn definition() -> Definition {
         goal: "Wait for the provider".into(),
         criteria: vec!["Resumes".into()],
         kind: Kind::Ai,
+        category: None,
         models: std::array::from_fn(|role| {
             Some(ModelConfig {
                 provider: "codex".into(),

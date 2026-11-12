@@ -375,18 +375,19 @@ fn opening(
         // state. Inserted prerequisite tasks exist to repair, so they start at once.
         cycle::Opening::Fresh {
             verify: task.origin_task_id.is_none()
-                && task.definition().definition.kind.runs_checks()
+                && task.definition().runs_checks()
                 && service.check_before_task()?
                 && workspace.clean()?,
         }
     })
 }
 
-/// Docs work never runs project checks, so only a queue headed by other work needs them.
+/// Work whose category skips the project checks never runs them, so only a queue headed by
+/// other work needs them.
 pub(super) fn checks_required(service: &mut Service) -> Result<bool> {
     Ok(service
         .current_task()?
-        .is_none_or(|task| task.definition().definition.kind.runs_checks()))
+        .is_none_or(|task| task.definition().runs_checks()))
 }
 
 /// Whether the task can have uncommitted work of its own: it is paused, waiting for an

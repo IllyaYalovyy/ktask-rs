@@ -31,8 +31,21 @@ pub fn revision(revision: &Revision, escape: fn(&str) -> String) -> String {
         .map(|(role, model)| escape(&role_setting(role, model.as_ref())))
         .collect::<Vec<_>>()
         .join("\n");
+    // On the approval line: a row of its own would push the models out of a short pane.
+    let category = revision.category.as_ref().map_or(String::new(), |c| {
+        format!(
+            " · Category: {} ({}, {})",
+            escape(&c.name),
+            c.scope.label(),
+            if c.checks {
+                "checks apply"
+            } else {
+                "no checks"
+            }
+        )
+    });
     format!(
-        "Revision {} · {}\nApproval: {} · {}\nGoal: {}\nAcceptance: {}\n{models}\nAttempt limit: {} · Task limit: {} · Stage limit: {}",
+        "Revision {} · {}\nApproval: {} · {}{category}\nGoal: {}\nAcceptance: {}\n{models}\nAttempt limit: {} · Task limit: {} · Stage limit: {}",
         revision.number,
         escape(&definition.title),
         revision.lifecycle,
@@ -234,10 +247,12 @@ mod tests {
             number,
             lifecycle: lifecycle.into(),
             actor: Some("Human: owner".into()),
+            category: None,
             definition: Definition {
                 title: title.into(),
                 goal: format!("{title} goal"),
                 kind: Kind::Ai,
+                category: None,
                 criteria: vec!["First".into(), "Second".into()],
                 models: std::array::from_fn(|i| {
                     (i != 3).then(|| ModelConfig {

@@ -214,6 +214,7 @@ impl StoredWorkspace {
                 )
             }
             Action::Profiles => self.open_profiles()?,
+            Action::Categories => self.open_categories()?,
             Action::ProjectChecks => {
                 let checks = self.service.project_checks().map_err(|e| e.to_string())?;
                 let mut field = Field::choice(CHECK_TO_OPEN, &["Add new check"], "Add new check");
@@ -301,6 +302,9 @@ impl StoredWorkspace {
         match &dialog.kind {
             DialogKind::Profiles(_) | DialogKind::Profile { .. } => {
                 return self.save_profile_form(screen, dialog);
+            }
+            DialogKind::Categories(_) | DialogKind::Category { .. } => {
+                return self.save_category_form(screen, dialog);
             }
             DialogKind::Storage(preview) => {
                 let days: i64 = dialog

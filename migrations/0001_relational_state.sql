@@ -86,6 +86,28 @@ CREATE TABLE project_models (
     PRIMARY KEY (project_id, role)
 ) STRICT;
 
+-- Work categories: how to execute, review, validate and remediate a kind of work. A row with a
+-- NULL project_id is user scope (every project of the instance); a row with a project_id
+-- overrides the user scope and the built-in code, documents and art categories of that
+-- project by name. Resolved values are copied into revision_categories, never followed.
+CREATE TABLE work_categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER REFERENCES projects(id),
+    name TEXT NOT NULL COLLATE NOCASE CHECK (length(trim(name)) > 0 AND length(name) <= 64),
+    description TEXT NOT NULL DEFAULT '',
+    -- Whether the project's checks gate this work: a baseline check and a check step.
+    run_checks INTEGER NOT NULL CHECK (run_checks IN (0, 1)),
+    execution_template TEXT NOT NULL CHECK (length(trim(execution_template)) > 0),
+    review_template TEXT NOT NULL CHECK (length(trim(review_template)) > 0),
+    validation_template TEXT NOT NULL CHECK (length(trim(validation_template)) > 0),
+    remediation_template TEXT NOT NULL CHECK (length(trim(remediation_template)) > 0),
+    row_version INTEGER NOT NULL DEFAULT 1 CHECK (row_version > 0),
+    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+    updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0)
+) STRICT;
+CREATE UNIQUE INDEX ux_work_categories_user ON work_categories(name) WHERE project_id IS NULL;
+CREATE UNIQUE INDEX ux_work_categories_project ON work_categories(project_id, name) WHERE project_id IS NOT NULL;
+
 -- The user-wide model defaults, the lowest layer every project inherits.
 CREATE TABLE default_models (
     role TEXT PRIMARY KEY CHECK (role IN ('planning', 'execution', 'review', 'validation', 'remediation')),
@@ -206,6 +228,33 @@ CREATE TABLE revision_models (
     PRIMARY KEY (task_id, revision, role),
     FOREIGN KEY (task_id, revision) REFERENCES task_revisions(task_id, revision)
 ) STRICT;
+
+-- A category exactly as a revision pinned it: name, where it came from, whether checks gate the
+-- work and the four role templates. Revisions share a snapshot while the category is unchanged,
+-- so a long queue stores each distinct set of templates once. Snapshots are never changed.
+CREATE TABLE category_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    digest TEXT NOT NULL UNIQUE CHECK (length(digest) = 64),
+    name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+    scope TEXT NOT NULL CHECK (scope IN ('built_in', 'user', 'project')),
+    run_checks INTEGER NOT NULL CHECK (run_checks IN (0, 1)),
+    execution_template TEXT NOT NULL CHECK (length(trim(execution_template)) > 0),
+    review_template TEXT NOT NULL CHECK (length(trim(review_template)) > 0),
+    validation_template TEXT NOT NULL CHECK (length(trim(validation_template)) > 0),
+    remediation_template TEXT NOT NULL CHECK (length(trim(remediation_template)) > 0),
+    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0)
+) STRICT;
+
+-- The category snapshot a revision was defined with. Later edits of the category never reach the
+-- revision. A revision without a row (defined before categories existed, or Human work) runs the
+-- built-in category of its kind, or none.
+CREATE TABLE revision_categories (
+    task_id INTEGER NOT NULL,
+    revision INTEGER NOT NULL,
+    snapshot_id INTEGER NOT NULL REFERENCES category_snapshots(id),
+    PRIMARY KEY (task_id, revision),
+    FOREIGN KEY (task_id, revision) REFERENCES task_revisions(task_id, revision)
+) WITHOUT ROWID, STRICT;
 
 CREATE TABLE acceptance_criteria (
     task_id INTEGER NOT NULL,

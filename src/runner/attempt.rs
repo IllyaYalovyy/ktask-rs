@@ -239,12 +239,12 @@ fn drive(
 fn opening_notice(opening: cycle::Opening, run: &Run) -> &'static str {
     match opening {
         cycle::Opening::Repair => "Repair started with the configured remediation model",
-        cycle::Opening::Retry if !run.definition.kind.runs_checks() => {
+        cycle::Opening::Retry if !run.runs_checks() => {
             "Retry started from the kept work; review and validation follow"
         }
         cycle::Opening::Retry => "Retry started from the kept work; checks run first",
-        cycle::Opening::Fresh { .. } if !run.definition.kind.runs_checks() => {
-            "Docs execution started; no project checks, results require review and validation"
+        cycle::Opening::Fresh { .. } if !run.runs_checks() => {
+            "Execution started; no project checks for this category, results require review and validation"
         }
         cycle::Opening::Fresh { .. } => {
             "Execution started; results require checks, review and validation"
@@ -262,7 +262,7 @@ fn verify(
 ) -> Result<Outcome> {
     let result = service.checks().and_then(|checks| {
         require(
-            !checks.is_empty() || !run.definition.kind.runs_checks(),
+            !checks.is_empty() || !run.runs_checks(),
             "Configure at least one enabled project check",
         )?;
         cycle::run(service, run, ctx, &checks, opening)

@@ -215,6 +215,7 @@ fn apply(path: &Path, capability: &Capability) -> Result<i64> {
         title: request.title,
         goal: request.goal,
         kind: Kind::Ai,
+        category: None,
         criteria: request.criteria,
         models: service.defaults()?,
         attempt_limit: Some(3),

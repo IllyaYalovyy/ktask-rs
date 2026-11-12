@@ -42,6 +42,10 @@ pub enum DialogKind {
     Profile {
         expected: Option<Box<crate::application::profiles::Profile>>,
     },
+    Categories(Vec<crate::application::categories::Entry>),
+    Category {
+        expected: Option<Box<crate::application::categories::Entry>>,
+    },
     ProjectChecks(Vec<crate::application::configuration::ProjectCheck>),
     ProjectCheck {
         expected: Vec<crate::application::configuration::ProjectCheck>,
@@ -127,7 +131,7 @@ impl Field {
             }
         } else {
             match key.code {
-                KeyCode::Char(ch) if !ch.is_control() && chars.len() < 2000 => {
+                KeyCode::Char(ch) if !ch.is_control() && chars.len() < 8000 => {
                     chars.insert(self.cursor, ch);
                     self.cursor += 1;
                 }

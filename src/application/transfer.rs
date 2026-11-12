@@ -6,7 +6,9 @@ use std::{
     path::Path,
 };
 
-const HEADER: &str = "ktask-tasks-v2";
+const HEADER: &str = "ktask-tasks-v3";
+/// v2 rows have no category column (the category is the kind's default); they still import.
+const HEADER_V2: &str = "ktask-tasks-v2";
 /// v1 rows have no stage limit column; they still import.
 const HEADER_V1: &str = "ktask-tasks-v1";
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
@@ -17,6 +19,7 @@ pub fn encode(definitions: &[Definition]) -> Result<String> {
         d.validate()?;
         let mut fields = vec![
             d.kind.as_str().into(),
+            d.category.clone().unwrap_or_default(),
             d.title.clone(),
             d.goal.clone(),
             d.attempt_limit.map_or(String::new(), |n| n.to_string()),
@@ -47,18 +50,25 @@ pub fn encode(definitions: &[Definition]) -> Result<String> {
 }
 pub fn decode(text: &str) -> Result<Vec<Definition>> {
     let mut lines = text.lines();
-    let stage = match lines.next() {
-        Some(HEADER) => 1,
-        Some(HEADER_V1) => 0,
+    let (stage, with_category) = match lines.next() {
+        Some(HEADER) => (1, true),
+        Some(HEADER_V2) => (1, false),
+        Some(HEADER_V1) => (0, false),
         _ => {
             return Err(Error::Conflict(
-                "Expected a ktask-tasks-v2 TSV export".into(),
+                "Expected a ktask-tasks-v3 TSV export".into(),
             ));
         }
     };
     let mut result = Vec::new();
     for line in lines {
-        let f = line.split('\t').map(unescape).collect::<Result<Vec<_>>>()?;
+        let mut f = line.split('\t').map(unescape).collect::<Result<Vec<_>>>()?;
+        // The category follows the kind; the rest of the row is the v2 layout.
+        let category = if with_category && f.len() > 1 {
+            Some(f.remove(1)).filter(|name| !name.is_empty())
+        } else {
+            None
+        };
         require(f.len() >= 18 + stage, "Incomplete task definition")?;
         let kind = Kind::parse(&f[0]).ok_or_else(|| Error::Conflict("Unknown task kind".into()))?;
         let mut models = std::array::from_fn(|_| None);
@@ -76,6 +86,7 @@ pub fn decode(text: &str) -> Result<Vec<Definition>> {
             title: f[1].clone(),
             goal: f[2].clone(),
             kind,
+            category,
             criteria: f[17 + stage..].to_vec(),
             models,
             attempt_limit: number(&f[3])?,

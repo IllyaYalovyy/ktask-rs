@@ -66,7 +66,21 @@ pub struct Run {
     pub revision: i64,
     pub token: String,
     pub definition: Definition,
+    /// The category and templates pinned by the revision this attempt runs.
+    pub category: Option<super::categories::Category>,
     pub active_ms: i64,
+}
+impl Run {
+    pub fn runs_checks(&self) -> bool {
+        self.category.as_ref().is_some_and(|c| c.checks)
+    }
+    /// The pinned category; a run restored without one takes its kind's built-in category.
+    pub fn effective_category(&self) -> super::categories::Category {
+        self.category
+            .clone()
+            .or_else(|| super::categories::Category::for_kind(self.definition.kind))
+            .expect("only AI-run revisions are executed")
+    }
 }
 pub struct Step {
     pub id: i64,
@@ -507,19 +521,18 @@ impl Service {
             )?;
             (id, task.definition().number, token.to_owned(), 0)
         };
-        let definition = task
+        let pinned = task
             .revisions
             .iter()
             .find(|r| r.number == revision)
-            .expect("attempt FK")
-            .definition
-            .clone();
+            .expect("attempt FK");
         Ok(Run {
             attempt,
             task: task.id,
             revision,
             token,
-            definition,
+            definition: pinned.definition.clone(),
+            category: pinned.category.clone(),
             active_ms,
         })
     }

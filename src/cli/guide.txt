@@ -11,6 +11,10 @@ CONCEPTS
   Task       A title, a Goal and acceptance criteria (one --criterion each). State only the
              outcome and how to verify it; the agent owns design and implementation.
              Kind ai is run by agents. Kind human is owner work, confirmed with done.
+  Category   The work category of an AI task (code, documents, art or your own, see
+             category list) supplies its execution, review, validation and remediation
+             templates and says whether project checks apply. Placeholders: category
+             placeholders. A revision pins the templates it was defined with.
   Revision   Each edit appends a revision. Only a ready (approved) revision runs; a newer
              draft waits for approve or reject while the older ready one stays usable.
   Attempt    One execution: implement, project checks, independent review and validation,

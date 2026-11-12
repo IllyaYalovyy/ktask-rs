@@ -142,18 +142,16 @@ fn ai_turn(
         "{packet_context}\nRead/search without opening the database: '{}' evidence FILE --offset 0 --limit 4096 [--search TEXT]. Use next_offset until eof. This command works in the read-only sandbox.\n",
         ctx.paths.executable.display()
     );
-    let prompt = nudge.map_or_else(
-        || {
-            agent::prompt(
-                run,
-                role,
-                &packet_context,
-                &ctx.paths.executable,
-                &ctx.workspace.root,
-            )
-        },
-        |question| agent::nudge(role, question),
-    );
+    let prompt = match nudge {
+        Some(question) => agent::nudge(role, question),
+        None => agent::prompt(
+            run,
+            role,
+            &packet_context,
+            &ctx.paths.executable,
+            &ctx.workspace.root,
+        )?,
+    };
     let invocation = turn.invocation(service, run, ctx, &step, prompt)?;
     let mut stream = provider::Stream::new(turn.provider);
     if let Some(outcome) = provider_turn(
@@ -174,7 +172,7 @@ fn ai_turn(
             return Ok(Outcome::Failed("protocol", e.to_string()));
         }
     };
-    if role == "validation" && run.definition.kind.runs_checks() {
+    if role == "validation" && run.runs_checks() {
         add_check_regressions(service, run, &mut assessment)?;
     }
     if assessment.outcome == "blocked" {

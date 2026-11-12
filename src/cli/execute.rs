@@ -444,6 +444,7 @@ pub(super) fn command(
             defaults(service, config, &saved, changed, *apply)
         }
         Command::Profile { action } => super::profile::profile(service, action),
+        Command::Category { action } => super::category::category(service, action),
         Command::Run { .. }
         | Command::Storage { .. }
         | Command::Cache { .. }
@@ -631,6 +632,7 @@ pub(super) fn command(
                 title: add.title.clone(),
                 goal: add.goal.clone(),
                 kind: kind(add.kind),
+                category: add.category.clone(),
                 criteria: add.criterion.clone(),
                 models: service.defaults()?,
                 attempt_limit: Some(3),
@@ -776,6 +778,11 @@ fn edit(service: &mut Service, input: &Target, pending: bool, changes: &Changes)
     }
     if let Some(k) = changes.kind {
         d.kind = kind(k);
+        // The kind's own default applies again unless a category is named.
+        d.category = None;
+    }
+    if let Some(name) = &changes.category {
+        d.category = Some(name.clone());
     }
     if !changes.criterion.is_empty() {
         d.criteria.clone_from(&changes.criterion);

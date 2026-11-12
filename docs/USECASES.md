@@ -24,6 +24,8 @@
 | Human | The owner; confirmed with Mark done | Never | None; no AI run |
 | Docs | AI agents | Never: no baseline check, no check step, and the worker is told not to run tests or builds | The written result against the goal and criteria: accuracy, completeness, consistency with the code and existing docs, clarity; a checked-in change must leave links, references and tables of contents consistent |
 
+Every AI-run task also has a **work category** (default: code for AI, documents for Docs) that supplies the execution, review, validation and remediation templates and says whether project checks apply: code does, documents and art do not. The Docs row above is the documents category's behavior; art has the same lifecycle judged on the delivered files and the visual evidence available, with no code checks required and no image-generation tool assumed. Human tasks have no category.
+
 A Docs task has the AI lifecycle with the checks removed: implement → review → fix → validate within one attempt, up to ten repair rounds with the read-only failure judge, then commit and delivery. Run, Resume, Retry, Stop and every other action follow the same state machine as an AI task; Run from Pending starts at implementation and Retry continues at review. The kind is chosen in the task form (CLI `--kind ai|human|docs`), filtered in Queue and History (f), shown in rows, details, `list` and `show`, and kept by import/export.
 
 ## Task states
@@ -70,6 +72,7 @@ A Docs task has the AI lifecycle with the checks removed: implement → review �
 - Configure a task → choose execution, review, validation, and remediation model/effort → save a new revision; previous attempts retain their original settings.
 - Switch to another task → preserve useful changes, stop/reap processes, and clean owned temporary state before execution; a failed handoff blocks the start. Retrying the same task may keep its workspace and reuse its compatible chat session.
 - Complete current → move it to History and show the next pending task as current; when none remain, show queue complete.
+- Define how a kind of work is executed, reviewed, validated and remediated → Config w (or `ktask category save NAME --scope user|project`) creates or edits a category's templates in the user scope or overrides it for this project; saving reports unknown placeholders; Preview shows the effective prompt with the task's content and labels runtime-only context → choose the category in the task form (Work category) or with `--category`. A task revision pins the templates it was defined with: later edits, overrides and deletions affect only tasks and revisions defined afterwards, never a running or resumed attempt. The supervisor's rules, evidence handling and response schema are not editable.
 - Add a Docs task for documents, plans or other non-code files (task form Kind: Docs, or `ktask add --kind docs`) → it runs like an AI task, reviewed and validated against its goal and criteria, with no project checks.
 - Filter Queue or History by kind (f cycles All, AI, Human, Docs) → rows of other kinds are tagged `[Human]` or `[Docs]`; the filter keeps execution order.
 - Search or filter Queue → select a matching task → read its details; no matches offers clearing the search/filter.

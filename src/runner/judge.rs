@@ -84,7 +84,7 @@ fn judge_once(
         "{evidence}\nRead/search with '{}' evidence FILE --offset 0 --limit 4096 [--search TEXT]; follow next_offset.\n",
         ctx.paths.executable.display()
     );
-    let (prompt, schema) = request(run, &evidence, normal_cycle);
+    let (prompt, schema) = request(run, &evidence, normal_cycle)?;
     let launch = provider.launch(
         model,
         step.provider_session.as_deref(),
@@ -181,8 +181,8 @@ fn evidence(
 }
 
 /// The judge's prompt and response schema. During normal rounds the owner is not asked.
-fn request(run: &Run, evidence: &str, normal_cycle: bool) -> (String, serde_json::Value) {
-    let mut prompt = agent::judge_prompt(run, evidence);
+fn request(run: &Run, evidence: &str, normal_cycle: bool) -> Result<(String, serde_json::Value)> {
+    let mut prompt = agent::judge_prompt(run, evidence)?;
     let mut schema = agent::judge_schema();
     if normal_cycle {
         prompt.push_str("\nThis is a normal review/fix round within the same active task, not a failed task. Revalidate the current findings; preserve the goal and useful work. Plan fixes only for critical findings and drop minor ones. Cost to result matters most, then time: prefer repair while the worker is converging. You may revise the task or insert prerequisites only if needed, retaining the full goal and acceptance bar. The repair counter follows the original task across automatic revisions and prerequisite handoffs. Do not ask the owner during these rounds.");
@@ -191,7 +191,7 @@ fn request(run: &Run, evidence: &str, normal_cycle: bool) -> (String, serde_json
             .expect("judge alternatives")
             .retain(|choice| choice["properties"]["action"]["enum"][0] != "ask");
     }
-    (prompt, schema)
+    Ok((prompt, schema))
 }
 
 pub(super) fn describe(judgment: &agent::Judgment) -> String {
@@ -260,6 +260,7 @@ pub(super) fn apply_judgment(
                     title: t.title.clone(),
                     goal: t.goal.clone(),
                     kind: run.definition.kind,
+                    category: run.definition.category.clone(),
                     criteria: t.criteria.clone(),
                     models: defaults.clone(),
                     attempt_limit: Some(3),

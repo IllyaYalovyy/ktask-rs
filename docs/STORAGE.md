@@ -64,6 +64,15 @@ whatever its revision sets explicitly. Editing a profile, selecting another or c
 defaults therefore affects only tasks defined afterwards. A pending task changes only when the
 owner applies the current defaults, which writes a new revision. A profile selected by a
 project or by `user_defaults.default_profile_id` cannot be deleted and cannot drop a role.
+
+Work categories follow the same pinning rule. A category name resolves through the project's
+own `work_categories` row (`project_id` set), then the user-scope row (`project_id` NULL),
+then the built-in code, documents and art categories compiled into the binary. A new
+revision of AI-run work pins the resolved category, whether project checks apply and its
+four role templates as a `category_snapshots` row (shared by identical pins) referenced from
+`revision_categories`, so editing or deleting a
+category never changes a running or resumed attempt. A revision without a row (defined before
+categories existed) runs the built-in category of its kind. Human work has no category.
 Profiles map roles to models the existing provider adapters run; they never name a new
 provider or promise a model's availability.
 
@@ -168,6 +177,7 @@ erDiagram
     model_profiles ||--o{ projects : "profile_id"
     model_profiles ||--o{ user_defaults : "default_profile_id"
     projects ||--o{ project_checks : "project_id"
+    projects ||--o{ work_categories : "project_id"
     projects ||--o| project_delivery : "project_id"
     projects ||--o| project_retention : "project_id"
     projects ||--o| project_storage_limits : "project_id"
@@ -183,6 +193,8 @@ erDiagram
     tasks ||--o{ task_revisions : "task_id"
     tasks ||--o{ task_lifecycle_events : "task_id"
     task_revisions ||--o{ revision_models : "task_id, revision"
+    task_revisions ||--o| revision_categories : "task_id, revision"
+    category_snapshots ||--o{ revision_categories : "snapshot_id"
     task_revisions ||--o{ acceptance_criteria : "task_id, revision"
     tasks ||--o{ task_links : "related_task_id, project_id"
     tasks ||--o{ task_links : "task_id, project_id"
@@ -492,6 +504,26 @@ One execution against an exact revision; retry creates another row. This is the 
 - UQ `(id, task_id)`.
 - UQ `(task_id, number)`.
 - UQ `(execution_token)`.
+
+### category_snapshots
+
+A work category exactly as a revision pinned it: the resolved name, the layer it came from, whether project checks gate the work and the four role templates. Identical categories share one row (`digest` is the SHA-256 of those fields), so a long queue stores each distinct set of templates once. Rows are never updated or deleted.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `id` | INTEGER | no | Stable row ID. |
+| `digest` | TEXT | no | Unique 64-character hex SHA-256 of the name, scope, checks choice and templates. |
+| `name` | TEXT | no | Category name as resolved when the revision was defined. |
+| `scope` | TEXT | no | built_in, user or project: the layer the category came from. |
+| `run_checks` | INTEGER | no | 1 when the project's checks gate this work (baseline check and check step); 0 for work judged only on its deliverables. |
+| `execution_template` | TEXT | no | Nonblank execution template with its placeholders. |
+| `review_template` | TEXT | no | Nonblank review template. |
+| `validation_template` | TEXT | no | Nonblank validation template. |
+| `remediation_template` | TEXT | no | Nonblank template for the failure judge and repair turns. |
+| `created_at_ms` | INTEGER | no | Time of the first pin. |
+
+- PK `(id)`.
+- UQ `(digest)`.
 
 ### criterion_results
 
@@ -953,6 +985,20 @@ Effective model/effort per role for one exact revision. AI approval/start requir
 - PK `(task_id, revision, role)`.
 - FK `(task_id, revision)` → `task_revisions(task_id, revision)`.
 
+### revision_categories
+
+The category snapshot one exact revision was defined with. Written with the revision and never changed, so later edits of `work_categories` cannot alter a running or resumed attempt. Absent for Human revisions and for revisions defined before categories existed, which run the built-in category of their kind.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `task_id` | INTEGER | no | Owning task. |
+| `revision` | INTEGER | no | Exact task revision number. |
+| `snapshot_id` | INTEGER | no | The pinned category, shared by every revision defined while it was unchanged. |
+
+- PK `(task_id, revision)`.
+- FK `(snapshot_id)` → `category_snapshots(id)`.
+- FK `(task_id, revision)` → `task_revisions(task_id, revision)`.
+
 ### schema_migrations
 
 Immutable migration ledger. Exact applied SQL detects changed migration files; version is positive and name unique.
@@ -1084,6 +1130,30 @@ The one row of reusable settings a newly registered project starts with; row_ver
 
 - PK `(id)`.
 - FK `(default_profile_id)` → `model_profiles(id)`.
+
+### work_categories
+
+User-scope (`project_id` NULL) and project-scope work categories: how to execute, review, validate and remediate a kind of work. A project row overrides the user row, and both override the built-in code, documents and art categories, by name. Templates use `{{title}}`, `{{goal}}`, `{{criteria}}`, `{{category}}` and `{{context}}`; they are checked when saved. `row_version` guards concurrent edits. The supervisor's rules, evidence handling and response schema are not stored here.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `id` | INTEGER | no | Stable row ID. |
+| `project_id` | INTEGER | yes | Owning project for an override; NULL for the user scope. |
+| `name` | TEXT | no | Category name, 1 to 64 characters, unique per scope case-insensitively. |
+| `description` | TEXT | no | One line saying what the category is for; may be empty. |
+| `run_checks` | INTEGER | no | 1 when the project's checks gate this work; 0 when they do not apply. |
+| `execution_template` | TEXT | no | Nonblank execution template. |
+| `review_template` | TEXT | no | Nonblank review template. |
+| `validation_template` | TEXT | no | Nonblank validation template. |
+| `remediation_template` | TEXT | no | Nonblank template for the failure judge and repair turns. |
+| `row_version` | INTEGER | no | Positive optimistic guard, default 1. |
+| `created_at_ms` | INTEGER | no | Creation time. |
+| `updated_at_ms` | INTEGER | no | Last change time. |
+
+- PK `(id)`.
+- FK `(project_id)` → `projects(id)`.
+- Index `ux_work_categories_user`: `UNIQUE INDEX ux_work_categories_user ON work_categories(name) WHERE project_id IS NULL`.
+- Index `ux_work_categories_project`: `UNIQUE INDEX ux_work_categories_project ON work_categories(project_id, name) WHERE project_id IS NOT NULL`.
 
 ## Views
 

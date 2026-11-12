@@ -451,6 +451,23 @@ impl StoredWorkspace {
             &["Ready", "Needs review"],
             if ready { "Ready" } else { "Needs review" },
         ));
+        let current = stored.and_then(|t| t.definition().definition.category.clone());
+        let mut names = vec![forms::DEFAULT_CATEGORY.to_owned()];
+        names.extend(
+            self.service
+                .categories()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|entry| entry.category.name),
+        );
+        if let Some(name) = current.as_ref().filter(|n| !names.contains(n)) {
+            names.push(name.clone());
+        }
+        dialog.fields.push(Field::choice(
+            forms::CATEGORY,
+            &names.iter().map(String::as_str).collect::<Vec<_>>(),
+            current.as_deref().unwrap_or(forms::DEFAULT_CATEGORY),
+        ));
         dialog.expected = stored.map(versioned);
         dialog
     }
@@ -539,7 +556,13 @@ impl StoredWorkspace {
             .planner_approval
             == domain::preferences::PlannerApproval::Automatic;
         let defaults = self.service.defaults().map_err(|e| e.to_string())?;
-        let definitions = crate::runner::agent::breakdown_definitions(proposal, defaults);
+        let parent = &self
+            .stored
+            .get(&(target.id as usize))
+            .ok_or("Task no longer available")?
+            .definition()
+            .definition;
+        let definitions = crate::runner::agent::breakdown_definitions(proposal, defaults, parent);
         let ids = self
             .service
             .apply_breakdown(target, &definitions, &proposal.reason, ready)
@@ -615,6 +638,7 @@ impl StoredWorkspace {
                 title: String::new(),
                 goal: String::new(),
                 kind: domain::Kind::Ai,
+                category: None,
                 criteria: Vec::new(),
                 models: self.service.defaults().map_err(|e| e.to_string())?,
                 attempt_limit: Some(3),
@@ -628,11 +652,14 @@ impl StoredWorkspace {
         if definition.criteria.join("\n") != criteria {
             definition.criteria = criteria.lines().map(str::to_owned).collect();
         }
+        let previous = (definition.kind, definition.category.clone());
         definition.kind = match Kind::from_label(dialog.get(forms::KIND)) {
             Some(Kind::Human) => domain::Kind::Human,
             Some(Kind::Docs) => domain::Kind::Docs,
             _ => domain::Kind::Ai,
         };
+        definition.category =
+            chosen_category(dialog.get(forms::CATEGORY), &previous, definition.kind)?;
         let ready = dialog.get(APPROVAL) == "Ready";
         let selected = if let Some(id) = id {
             self.service
@@ -830,6 +857,8 @@ impl StoredWorkspace {
             | DialogKind::ApplyDefaults(_)
             | DialogKind::Profiles(_)
             | DialogKind::Profile { .. }
+            | DialogKind::Categories(_)
+            | DialogKind::Category { .. }
             | DialogKind::ProjectChecks(_)
             | DialogKind::ProjectCheck { .. }
             | DialogKind::Preferences(_)
@@ -1026,6 +1055,7 @@ impl Backend for StoredWorkspace {
             | Action::ProjectModels
             | Action::UserDefaults
             | Action::Profiles
+            | Action::Categories
             | Action::ProjectChecks
             | Action::Delivery
             | Action::Storage
@@ -1051,7 +1081,7 @@ impl Backend for StoredWorkspace {
             Action::Import => Some(Dialog::new(
                 DialogKind::Import,
                 "Import task definitions · disk",
-                "Read a ktask-tasks-v2 (or v1) TSV export. Preview before committing.\nImports create new tasks, not copied attempt/history records.",
+                "Read a ktask-tasks-v3 (or v2, v1) TSV export. Preview before committing.\nImports create new tasks, not copied attempt/history records.",
                 vec![Field::text(forms::SOURCE, "tasks.tsv")],
             )),
             Action::Export => Some(Dialog::new(
@@ -1079,6 +1109,8 @@ impl Backend for StoredWorkspace {
                 | DialogKind::ApplyDefaults(_)
                 | DialogKind::Profiles(_)
                 | DialogKind::Profile { .. }
+                | DialogKind::Categories(_)
+                | DialogKind::Category { .. }
                 | DialogKind::ProjectChecks(_)
                 | DialogKind::ProjectCheck { .. }
                 | DialogKind::Preferences(..)
@@ -1274,7 +1306,7 @@ impl Backend for StoredWorkspace {
         }
         let delivery = self.service.delivery_config().unwrap_or_default();
         format!(
-            "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup; b for build caches.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\nDelivery: {} via {}/{}\n\nDefaults apply to new tasks; existing revisions stay pinned.\nu User defaults: what new projects start with; preview and apply them here.\nf Profiles: named role models to reuse; select one here or as the new-project default.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
+            "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup; b for build caches.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\nDelivery: {} via {}/{}\n\nDefaults apply to new tasks; existing revisions stay pinned.\nu User defaults: what new projects start with; preview and apply them here.\nf Profiles: named role models to reuse; select one here or as the new-project default.\nw Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art; override per project.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
             screen.project_name,
             if screen.mouse_enabled {
                 "Enabled"
@@ -1302,6 +1334,7 @@ impl Backend for StoredWorkspace {
             ("m Defaults", Action::ProjectModels),
             ("u User defaults", Action::UserDefaults),
             ("f Profiles", Action::Profiles),
+            ("w Work categories", Action::Categories),
             ("c Checks", Action::ProjectChecks),
             ("g Git delivery", Action::Delivery),
             ("k Storage", Action::Storage),
@@ -1517,6 +1550,30 @@ fn set_new_task_execution_model(
     Ok(())
 }
 
+/// The category a saved task form names. Changing the kind while leaving the category
+/// alone returns to the new kind's default; Human work has none.
+fn chosen_category(
+    chosen: &str,
+    previous: &(domain::Kind, Option<String>),
+    kind: domain::Kind,
+) -> Result<Option<String>, String> {
+    let explicit = (chosen != forms::DEFAULT_CATEGORY).then(|| chosen.to_owned());
+    let unchanged = explicit.as_deref() == previous.1.as_deref();
+    if kind == domain::Kind::Human {
+        return match explicit {
+            Some(_) if !unchanged => {
+                Err("Human tasks are done by the owner and have no work category".into())
+            }
+            _ => Ok(None),
+        };
+    }
+    Ok(if unchanged && kind != previous.0 {
+        None
+    } else {
+        explicit
+    })
+}
+
 fn before_id(text: &str) -> Result<Option<i64>, String> {
     if text.is_empty() {
         Ok(None)
@@ -1546,6 +1603,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_saved_form_names_the_category_or_returns_to_the_kinds_default() {
+        use domain::Kind::{Ai, Docs, Human};
+        let named = |name: &str| Some(name.to_owned());
+        // A new task: Default follows the kind, a choice is kept.
+        assert_eq!(chosen_category("Default", &(Ai, None), Docs), Ok(None));
+        assert_eq!(chosen_category("art", &(Ai, None), Ai), Ok(named("art")));
+        // Editing: the kind changes while the category is left alone, so the new kind's
+        // default applies; changing the category too keeps the choice.
+        assert_eq!(
+            chosen_category("code", &(Ai, named("code")), Docs),
+            Ok(None)
+        );
+        assert_eq!(
+            chosen_category("art", &(Ai, named("code")), Docs),
+            Ok(named("art"))
+        );
+        assert_eq!(
+            chosen_category("code", &(Ai, named("code")), Ai),
+            Ok(named("code"))
+        );
+        // Human work has no category; choosing one is refused.
+        assert_eq!(
+            chosen_category("code", &(Ai, named("code")), Human),
+            Ok(None)
+        );
+        assert_eq!(
+            chosen_category("Default", &(Ai, named("code")), Human),
+            Ok(None)
+        );
+        assert!(chosen_category("art", &(Ai, named("code")), Human).is_err());
+    }
+
+    #[test]
     fn new_task_execution_override_keeps_other_role_defaults() {
         let default = Some(ModelConfig {
             provider: "codex".into(),
@@ -1556,6 +1646,7 @@ mod tests {
             title: "Dummy task".into(),
             goal: "Exercise model selection".into(),
             kind: domain::Kind::Ai,
+            category: None,
             criteria: vec!["Saved".into()],
             models: std::array::from_fn(|_| default.clone()),
             attempt_limit: Some(3),
@@ -1589,6 +1680,7 @@ mod tests {
             title: "Dummy task".into(),
             goal: "Use configured model".into(),
             kind: domain::Kind::Ai,
+            category: None,
             criteria: vec!["Saved".into()],
             models: std::array::from_fn(|_| default.clone()),
             attempt_limit: Some(3),

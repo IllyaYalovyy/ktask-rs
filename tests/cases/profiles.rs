@@ -49,6 +49,7 @@ fn task(service: &mut Service, title: &str) -> Result<i64> {
         goal: "Goal".into(),
         criteria: vec!["Check".into()],
         kind: Kind::Ai,
+        category: None,
         models: service.defaults()?,
         attempt_limit: Some(3),
         timeout_ms: None,

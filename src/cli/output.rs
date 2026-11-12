@@ -60,7 +60,7 @@ pub fn definition(d: &Definition) -> Value {
         .zip(&d.models)
         .map(|(role, model)| ((*role).into(), json!(model)))
         .collect();
-    json!({"title":d.title, "goal":d.goal, "kind":d.kind, "criteria":d.criteria, "models":models, "attempt_limit":d.attempt_limit, "timeout_ms":d.timeout_ms, "stage_timeout_ms":d.stage_timeout_ms})
+    json!({"title":d.title, "goal":d.goal, "kind":d.kind, "category":d.category, "criteria":d.criteria, "models":models, "attempt_limit":d.attempt_limit, "timeout_ms":d.timeout_ms, "stage_timeout_ms":d.stage_timeout_ms})
 }
 pub fn summary(task: &Task) -> Value {
     let selected = task.definition();
@@ -69,7 +69,7 @@ pub fn summary(task: &Task) -> Value {
     });
     let state = task.state();
     json!({"id":task.id,"version":task.version,"state":state,"actions":state.actions().iter().map(|a| a.label()).collect::<Vec<_>>(),"lifecycle":task.lifecycle,"status":task.status,"order_key":task.order_key,
-        "title":selected.definition.title,"kind":selected.definition.kind,"selected_revision":selected.number,"pending_revision":pending.map(|r| r.number), "attempts_used":task.attempts_used,
+        "title":selected.definition.title,"kind":selected.definition.kind,"category":selected.definition.category,"selected_revision":selected.number,"pending_revision":pending.map(|r| r.number), "attempts_used":task.attempts_used,
         "origin_task_id":task.origin_task_id,"origin_attempt_id":task.origin_attempt_id,"follow_ups":task.follow_ups.iter().map(|(id,title)| json!({"id":id,"title":title})).collect::<Vec<_>>()})
 }
 pub fn task_value(task: &Task) -> Value {

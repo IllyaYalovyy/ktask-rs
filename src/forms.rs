@@ -10,6 +10,9 @@ pub const TITLE: &str = "Title";
 pub const GOAL: &str = "Goal";
 pub const CHECK: &str = "Acceptance check";
 pub const KIND: &str = "Kind";
+pub const CATEGORY: &str = "Work category";
+/// The category choice that follows the task kind: code for AI, documents for Docs.
+pub const DEFAULT_CATEGORY: &str = "Default";
 /// The position field; dialogs that have it preview where the task lands.
 pub const BEFORE: &str = "Before task ID";
 pub const MODEL: &str = "Execution provider/model (blank = default)";
