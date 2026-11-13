@@ -79,6 +79,19 @@ pub fn stop(service: &mut Service, target: VersionedTask, reason: &str) -> Resul
     Ok(saved)
 }
 
+pub fn restart(service: &mut Service, target: VersionedTask, reason: &str) -> Result<Saved> {
+    service.require_restart(target)?;
+    stop(
+        service,
+        target,
+        if reason.trim().is_empty() {
+            "Restart requested"
+        } else {
+            reason
+        },
+    )
+}
+
 /// Mark done: the owner's judgment. A live attempt is stopped and its changes stashed first;
 /// commit them before marking done to keep them in the tree.
 pub fn mark_done(service: &mut Service, target: VersionedTask, reason: &str) -> Result<Saved> {

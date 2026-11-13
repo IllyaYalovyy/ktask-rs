@@ -264,9 +264,10 @@ pub(super) fn reconcile_resume(service: &mut Service, run: &Run, ctx: &Context<'
                 || subject != format!("ktask: task #{}, attempt #{}", run.task, run.attempt)
                 || (parent != saved && prior_parent.as_deref() != Some(parent.as_str()))
             {
-                return Err(Error::Conflict(
-                    "Checkpoint commit differs from saved intent; publishing stopped".into(),
-                ));
+                return Err(Error::Conflict(format!(
+                    "Checkpoint commit differs from saved intent: expected HEAD {saved}; current HEAD {actual}. Publishing stopped; run `ktask restart {}` to recover",
+                    run.task
+                )));
             }
             service.delivery_stage(run, Stage::Checkpointed, Some(&actual), None, None)?;
         }

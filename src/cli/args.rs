@@ -406,6 +406,12 @@ pub enum Command {
         #[arg(long, default_value = "")]
         reason: String,
     },
+    /// Stop and reap the current task's worker, stash unfinished changes, then run it
+    /// fresh from the current HEAD. A retained real checkpoint is rechecked before delivery.
+    Restart {
+        #[command(flatten)]
+        target: Target,
+    },
     /// Mark a task done, whatever its state, overriding the supervisor's verdict.
     ///
     /// A live attempt is stopped first and its uncommitted changes are stashed as for stop;

@@ -24,6 +24,7 @@ pub(super) fn controls(app: &App) -> Vec<(&'static str, Action)> {
         ("v Approve", Action::Approve),
         ("n Reject", Action::Reject),
         ("s Stop", Action::Stop),
+        ("T Restart", Action::Restart),
         ("D Mark done", Action::MarkDone),
         ("x Cancel", Action::CancelTask),
         ("R Supersede", Action::Supersede),

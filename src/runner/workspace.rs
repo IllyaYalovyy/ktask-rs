@@ -457,9 +457,10 @@ impl Workspace {
         allow_amend: bool,
     ) -> Result<String> {
         if self.head()? != expected_head {
-            return Err(Error::Conflict(
-                "HEAD changed after checkpoint intent; work retained".into(),
-            ));
+            return Err(Error::Conflict(format!(
+                "HEAD changed after checkpoint intent: expected HEAD {expected_head}; current HEAD {}. Work retained; run `ktask restart {task}` to recover",
+                self.head()?
+            )));
         }
         if allow_amend
             && git(&self.root, &["log", "-1", "--format=%s"])? == CHECKPOINT.format(task, attempt)

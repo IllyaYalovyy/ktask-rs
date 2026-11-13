@@ -9,6 +9,7 @@ pub enum DialogKind {
     },
     Move(usize),
     Stop(usize),
+    Restart(usize),
     MarkDone(usize),
     CancelTask(usize),
     Supersede(usize),

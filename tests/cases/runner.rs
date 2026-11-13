@@ -1111,9 +1111,11 @@ fn unread_guardian_output_cannot_suspend_scratch_monitoring() -> Result {
     let f = Fixture::new()?;
     let scratch_root = f.scratch.path().join("blocked-delivery-scratch");
     fs::create_dir(&scratch_root)?;
+    // Fill the unread output pipe while a separate producer keeps growing scratch.
+    // Sequential output can fit in the pipe and report the quota error normally.
     let spec = serde_json::json!({
         "executable": "/bin/sh",
-        "args": ["-c", "i=0; while [ \"$i\" -lt 2000 ]; do head -c 16384 /dev/zero >> \"$TMPDIR/flood.bin\"; head -c 4096 /dev/zero; i=$((i+1)); sleep 0.01; done; touch \"$HOME/scratch-natural-completion\""],
+        "args": ["-c", "(i=0; while [ \"$i\" -lt 2000 ]; do head -c 16384 /dev/zero >> \"$TMPDIR/flood.bin\"; i=$((i+1)); sleep 0.01; done; touch \"$HOME/scratch-natural-completion\") & head -c 16777216 /dev/zero; wait"],
         "env": [["HOME", f.scratch.path().to_string_lossy()]],
         "cwd": f.root,
         "prompt": "",
@@ -2420,7 +2422,7 @@ fn stop_running_task_in_real_pty_reaps_worker_stashes_changes_and_runs_fresh() -
         t.send("e")?;
         t.screen("edit refused while running", |s| {
             s.contains(
-                "#1: Edit is not available for a running task; it offers Pause, Stop, Mark done",
+                "#1: Edit is not available for a running task; it offers Pause, Stop, Restart, Mark done",
             )
         })?;
         let pending = stop_current(&mut t, mouse, "Running stop", "Wrong approach")?;

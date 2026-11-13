@@ -285,6 +285,27 @@ impl Service {
         tx.commit()?;
         Ok(())
     }
+    /// Shared guard for CLI and TUI Restart before Stop takes ownership of the worker.
+    pub fn require_restart(&mut self, target: VersionedTask) -> Result<()> {
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        allowed(&tx, self.project_id, target, Action::Restart)?;
+        let current: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM current_tasks WHERE project_id=?1",
+                [self.project_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        require(
+            current == Some(target.id),
+            "Only the current task can restart",
+        )?;
+        tx.execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,(SELECT latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2),?3,'task.restart_requested','info',?4)",params![self.project_id,target.id,now_ms(),format!("Restart requested by {} {}",self.actor.kind.as_str(),self.actor.name)])?;
+        tx.commit().map_err(Into::into)
+    }
     /// A provider-limit wait that the owner paused becomes Paused; Resume tries at once.
     pub fn pause_wait(&mut self, run: &Run, reason: &str) -> Result<()> {
         let now = now_ms();

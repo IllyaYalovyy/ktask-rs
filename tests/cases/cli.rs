@@ -1046,7 +1046,7 @@ fn cli_running_guards_and_marking_failed_done_keep_attempts_immutable() -> Resul
     json(root, &["move", "1"], 4)?;
     assert_eq!(
         json(root, &["cancel", "1"], 4)?["error"]["message"],
-        "Cancel is not available for a running task; it offers Pause, Stop, Mark done"
+        "Cancel is not available for a running task; it offers Pause, Stop, Restart, Mark done"
     );
     json(root, &["edit", "1", "--title", "Unsafe"], 4)?;
     json(
@@ -1081,7 +1081,7 @@ fn cli_running_guards_and_marking_failed_done_keep_attempts_immutable() -> Resul
     assert_eq!(failed["data"]["state"], "failed");
     assert_eq!(
         failed["data"]["actions"],
-        serde_json::json!(["Retry", "Edit", "Stop", "Mark done"])
+        serde_json::json!(["Retry", "Edit", "Stop", "Restart", "Mark done"])
     );
     let receipt = json(root, &["done", "1", "--reason", "Accepted evidence"], 0)?;
     assert!(receipt["data"]["stash"].is_null(), "{receipt}");

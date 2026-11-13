@@ -447,6 +447,7 @@ pub(super) fn command(
         Command::Category { action } => super::category::category(service, action),
         Command::Lens { action } => super::lens::lens(service, action),
         Command::Run { .. }
+        | Command::Restart { .. }
         | Command::Storage { .. }
         | Command::Cache { .. }
         | Command::Retention { .. } => {

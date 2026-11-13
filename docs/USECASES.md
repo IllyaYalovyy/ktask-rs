@@ -34,13 +34,14 @@ A Docs task has the AI lifecycle with the checks removed: implement → review �
 |---|---|
 | Needs approval | Approve → Pending; Reject → Pending (previous revision) or Cancelled (none); Edit, Move, Mark done |
 | Pending | Run, Edit, Move, Cancel, Supersede, Mark done |
-| Running (including a provider-limit wait) | Pause, Stop, Mark done; automatically → Paused (runner died), Needs input, Failed, Superseded (judge breakdown), Done |
-| Paused | Resume, Edit, Stop, Mark done |
-| Needs input | Answer, Edit, Stop, Mark done |
-| Failed | Retry, Edit, Stop, Mark done |
+| Running (including a provider-limit wait) | Pause, Stop, Restart, Mark done; automatically → Paused (runner died), Needs input, Failed, Superseded (judge breakdown), Done |
+| Paused | Resume, Edit, Stop, Restart, Mark done |
+| Needs input | Answer, Edit, Stop, Restart, Mark done |
+| Failed | Retry, Edit, Stop, Restart, Mark done |
 | Done, Cancelled, Superseded | Copy to queue |
 
 - Stop returns any live task to Pending: the worker stops, the attempt ends, and uncommitted changes are saved as a git stash named `ktask: task #N attempt #M`. Run from Pending is a full restart: checks first (Docs: none), round 0, full limits.
+- Restart (`T` or `ktask restart ID`) stops the current task and reaps its worker, saves uncommitted changes as a named stash, then runs it from current HEAD. An uncreated checkpoint intent is retired with a recovery event; a matching unpublished checkpoint commit is retained and rechecked. The old attempt, stash and event remain recoverable. Checks, independent review and validation run again before publication. A HEAD conflict reports expected and current commits and the restart command.
 - Retry keeps the code, continues from the checks (Docs: from review), and restarts the limits. Resume continues the same attempt; after an Edit it continues in a new attempt with the new revision.
 - Mark done is the owner's verdict from any unfinished state; a live attempt stops and stashes first. Only Pending can be cancelled or superseded; Supersede names at least one replacing task.
 - Remediation is automatic: the supervisor's judge repairs, revises, inserts prerequisites or breaks the task down. When it cannot, the task is Failed.
@@ -56,6 +57,7 @@ A Docs task has the AI lifecycle with the checks removed: implement → review �
 - Current failed and not worth more attempts → D Mark done records the owner's verdict, or s Stop returns it to Pending to edit; attempts and evidence stay.
 - Run current → continue the queue by default, with Run one available explicitly; see the mode, goal, current phase and next task; pause from any screen, or `ktask pause` → the runner stops gracefully and exits, with progress retained and no later task started; r Resume → continue the same attempt.
 - Stop a running, paused, needs-input or failed task from any screen (s, [s Stop], or `ktask stop ID`) → the worker stops and is reaped, the attempt ends with its output, usage and evidence, uncommitted changes are stashed, and the task is Pending and editable. A running task completes the Stop once its runner exits; the screen never blocks.
+- Restart the current live task (`T`, [T Restart], or `ktask restart ID`) → Stop preserves its attempt and stash, checkpoint recovery distinguishes an uncreated intent from a real commit, and a fresh run begins. Keyboard and mouse use the same confirmation and application guard.
 - Set up once per user and instance → Config u (or `ktask defaults`, `ktask model-default --new-projects`) saves the five role models and effort, agent network, baseline checks, check timeout, run mode, planner approval and delivery mode that new projects start with → a new project (`ktask init`) copies the settings, inherits the models live through its profile and the user defaults, applies its own overrides, detects a check where supported and lists the setup only it can supply: verification command, delivery destination, domain instructions. Check commands, directories, remotes and branches are never copied.
 - Apply user defaults to an existing project → Config u, Save with "Preview applying to this project" (or `ktask defaults`) shows each current and default value → choose Apply user defaults (or `ktask defaults --apply`); until then the project keeps its settings, and existing tasks and attempts keep their pinned inputs.
 - Name a model set once and reuse it → Config f (or `ktask profile create NAME --from-project`, `--model ROLE=PROVIDER/MODEL`) creates, inspects, edits or deletes a named profile such as Anthropic, OpenAI or Qwen; "New from this project's models" captures the project's current roles, for example Claude with high effort, without losing them. A profile maps roles to models the existing providers run and adds no provider; ktask checks shape and effort spelling, never availability. A profile cannot be deleted, or lose a role, while a project or the new-project default selects it.

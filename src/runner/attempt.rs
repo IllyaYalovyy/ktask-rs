@@ -130,11 +130,79 @@ fn pin_delivery(service: &mut Service, workspace: &Workspace, run: &Run) -> Resu
     } else {
         None
     };
+    recover_checkpoint_handoff(service, workspace, run.task)?;
     if service.claim_delivery_handoff(run, &config, branch.as_deref(), &destination)? {
         return Ok(());
     }
     service.ensure_attempt_delivery(run, &config, branch.as_deref(), &destination)?;
     Ok(())
+}
+
+/// Stop/Run and Restart both pass through this handoff. A checkpoint intent is not a
+/// commit: only a clean, matching task commit with the verified tree can be inherited.
+fn recover_checkpoint_handoff(
+    service: &mut Service,
+    workspace: &Workspace,
+    task: i64,
+) -> Result<()> {
+    let Some(intent) = service.checkpoint_handoff(task)? else {
+        return Ok(());
+    };
+    let actual = workspace.head()?;
+    let expected = &intent.expected_head;
+    let inherited = service.inherited_checkpoint(intent.attempt, expected)?;
+    let committed = if actual == *expected {
+        inherited
+            || workspace::git(&workspace.root, &["log", "-1", "--format=%s"])?
+                == format!("ktask: task #{}, attempt #{}", intent.task, intent.attempt)
+    } else {
+        let subject = workspace::git(&workspace.root, &["log", "-1", "--format=%s"])?;
+        if subject == format!("ktask: task #{}, attempt #{}", intent.task, intent.attempt) {
+            let tree = workspace::git(&workspace.root, &["rev-parse", "HEAD^{tree}"])?;
+            let parent = workspace::git(&workspace.root, &["rev-parse", "HEAD^"])?;
+            let previous_parent =
+                workspace::git(&workspace.root, &["rev-parse", &format!("{expected}^")]).ok();
+            require(
+                tree == intent.verified_tree
+                    && (parent == *expected || previous_parent.as_deref() == Some(&parent))
+                    && workspace.clean()?,
+                &format!(
+                    "Checkpoint recovery conflict: expected HEAD {expected}; current HEAD {actual}. The apparent checkpoint does not match its recorded proof; inspect it before `ktask restart {task}`"
+                ),
+            )?;
+            true
+        } else {
+            require(
+                !inherited,
+                &format!(
+                    "Checkpoint recovery conflict: expected inherited checkpoint HEAD {expected}; current HEAD {actual}. The checkpoint remains tracked; inspect newer commits before `ktask restart {task}`"
+                ),
+            )?;
+            let ancestor = workspace::git(&workspace.root, &["merge-base", expected, &actual]).map_err(|_| Error::Conflict(format!(
+                "Checkpoint recovery conflict: expected HEAD {expected}; current HEAD {actual}. Restore the intended branch, then run `ktask restart {task}`"
+            )))?;
+            require(
+                ancestor == *expected,
+                &format!(
+                    "Checkpoint recovery conflict: expected HEAD {expected}; current HEAD {actual}. Restore the intended branch, then run `ktask restart {task}`"
+                ),
+            )?;
+            let subjects = workspace::git(
+                &workspace.root,
+                &["log", &format!("{expected}..{actual}"), "--format=%s"],
+            )?;
+            require(
+                !subjects.lines().any(|line| {
+                    line == format!("ktask: task #{}, attempt #{}", intent.task, intent.attempt)
+                }),
+                &format!(
+                    "Checkpoint recovery conflict: expected HEAD {expected}; current HEAD {actual}. An unpublished checkpoint is below newer commits; inspect the history before `ktask restart {task}`"
+                ),
+            )?;
+            false
+        }
+    };
+    service.resolve_checkpoint_handoff(&intent, task, &actual, committed)
 }
 
 /// Drives the begun attempt to its outcome and settles it.

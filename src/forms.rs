@@ -138,6 +138,12 @@ pub fn control(action: Action, task: &Task) -> Option<Dialog> {
             "The worker stops and this attempt ends. Its uncommitted changes are saved as a git stash (git stash pop restores them).\nThe task returns to Pending; Run starts it fresh with full limits.",
             vec![reason()],
         ),
+        Action::Restart => (
+            DialogKind::Restart(task.id),
+            format!("Restart {name}"),
+            "The worker stops and this attempt ends. Uncommitted changes are saved as a named git stash. The task then starts fresh from the current HEAD with required checks, review and validation before delivery.",
+            vec![reason()],
+        ),
         Action::MarkDone => (
             DialogKind::MarkDone(task.id),
             format!("Mark done {name}"),
@@ -231,7 +237,7 @@ pub fn task_ids(text: &str) -> Result<Vec<usize>, String> {
 
 /// The `stop` hint and a control receipt agree on these words for Stop and Mark done.
 pub fn control_done(action: Action) -> &'static str {
-    if action == Action::Stop {
+    if matches!(action, Action::Stop | Action::Restart) {
         "stopped · back to Pending"
     } else {
         "marked done"

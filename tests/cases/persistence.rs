@@ -5863,7 +5863,7 @@ fn refused_keys_on_failed_current_name_the_offered_actions() -> Result {
         t.send(key)?;
         let refused = t.screen("refusal", |s| {
             s.contains(&format!(
-                "#1: {action} is not available for a failed task; it offers Retry, Edit, Stop, Mark done"
+                "#1: {action} is not available for a failed task; it offers Retry, Edit, Stop, Restart, Mark done"
             ))
         })?;
         println!("REFUSED {action}\n{refused}");

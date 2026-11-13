@@ -1,7 +1,7 @@
 use std::{
     io::{Read, Write},
     path::Path,
-    process::Stdio,
+    process::{Command, Stdio},
     sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
@@ -122,6 +122,47 @@ pub fn location(screen: &str, needle: &str) -> Result<(usize, usize)> {
                 .map(|byte| (line[..byte].chars().count(), row))
         })
         .ok_or_else(|| format!("missing {needle:?} in screen:\n{screen}").into())
+}
+
+/// Render the terminal parser's observed cells as a readable image for visual evidence.
+/// The source is a real PTY frame; no screen text is reconstructed by this renderer.
+pub fn screen_png(screen: &str, path: &Path) -> Result {
+    let mut child = Command::new("python3")
+        .args([
+            "-c",
+            r##"import subprocess, sys
+from PIL import Image, ImageDraw, ImageFont
+
+font_path = subprocess.check_output(
+    ["fc-match", "-f", "%{file}", "monospace"], text=True
+)
+font = ImageFont.truetype(font_path, 18)
+lines = sys.stdin.read().splitlines()
+cell = round(font.getlength("M"))
+width = max(1, max((len(line) for line in lines), default=0)) * cell + 32
+image = Image.new("RGB", (width, max(1, len(lines)) * 26 + 24), "#111827")
+draw = ImageDraw.Draw(image)
+for row, line in enumerate(lines):
+    draw.text((16, 12 + row * 26), line, font=font, fill="#e5e7eb")
+image.save(sys.argv[1], "PNG")
+"##,
+        ])
+        .arg(path)
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    child
+        .stdin
+        .take()
+        .ok_or("image renderer stdin")?
+        .write_all(screen.as_bytes())?;
+    let output = child.wait_with_output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
 }
 
 pub fn drag(t: &mut Terminal, from: (usize, usize), to: (usize, usize)) -> Result {

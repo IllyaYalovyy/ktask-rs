@@ -51,6 +51,7 @@ pub enum Action {
     Pause,
     /// Return the task to Pending; its attempt ends and its changes are stashed.
     Stop,
+    Restart,
     MarkDone,
     /// Cancel a pending task (Action::Cancel closes a dialog).
     CancelTask,
@@ -491,7 +492,7 @@ impl Screen {
     }
     /// The task an Edit, Models or control form opens on, as `action` selects it.
     pub(crate) fn target(&self, action: Action) -> Option<&Task> {
-        if action == Action::Stop {
+        if matches!(action, Action::Stop | Action::Restart) {
             self.stop_target()
         } else {
             self.selected_task()
@@ -592,6 +593,7 @@ impl App {
                 KeyCode::Char('m') => Some(Action::Configure),
                 KeyCode::Char('p') => Some(Action::Pause),
                 KeyCode::Char('s') => Some(Action::Stop),
+                KeyCode::Char('T') => Some(Action::Restart),
                 KeyCode::Char('D') => Some(Action::MarkDone),
                 KeyCode::Char('x') => Some(Action::CancelTask),
                 KeyCode::Char('R') => Some(Action::Supersede),
@@ -619,6 +621,7 @@ impl App {
                 KeyCode::Char('e') => Some(Action::Edit),
                 KeyCode::Char('x') if self.view == View::Queue => Some(Action::CancelTask),
                 KeyCode::Char('s') if self.view == View::Queue => Some(Action::Stop),
+                KeyCode::Char('T') if self.view == View::Queue => Some(Action::Restart),
                 KeyCode::Char('R') if self.view == View::Queue => Some(Action::Supersede),
                 KeyCode::Char('D') if self.view == View::Queue => Some(Action::MarkDone),
                 KeyCode::Char('m') => Some(Action::Move),

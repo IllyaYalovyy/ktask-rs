@@ -283,6 +283,7 @@ fn controls(app: &App) -> Vec<(&'static str, Action)> {
             ("n Reject", Action::Reject),
             ("c Models", Action::Models),
             ("s Stop", Action::Stop),
+            ("T Restart", Action::Restart),
             ("D Mark done", Action::MarkDone),
             ("x Cancel", Action::CancelTask),
             ("R Supersede", Action::Supersede),

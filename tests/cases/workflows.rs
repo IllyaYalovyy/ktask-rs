@@ -1005,7 +1005,7 @@ fn mouse_insertion_positions_paste_and_pending_breakdown() -> Result {
     refused(
         &mut t,
         "x",
-        "#1: Cancel is not available for a paused task; it offers Resume, Edit, Stop, Mark done",
+        "#1: Cancel is not available for a paused task; it offers Resume, Edit, Stop, Restart, Mark done",
     )?;
     refused(&mut t, "m", "#1: Move is not available for a paused task")?;
     quit(&mut t)

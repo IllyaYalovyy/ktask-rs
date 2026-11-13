@@ -289,6 +289,52 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
     {
         crate::runner::control::finish_pending(&mut service)?;
     }
+    if let Command::Restart { target } = command {
+        let current = service
+            .current_task()?
+            .ok_or_else(|| Failure::missing("Queue is empty"))?;
+        if current.id != target.id {
+            return Err(storage::Error::Conflict(format!(
+                "Task #{} is current; restart it before task #{}",
+                current.id, target.id
+            ))
+            .into());
+        }
+        if target
+            .if_version
+            .is_some_and(|version| version != current.version)
+        {
+            return Err(storage::Error::Conflict(format!(
+                "Task #{} is version {}; read it again before restarting",
+                current.id, current.version
+            ))
+            .into());
+        }
+        let saved = crate::runner::control::restart(
+            &mut service,
+            application::VersionedTask {
+                id: current.id,
+                version: current.version,
+            },
+            "",
+        )?;
+        let message = crate::runner::run(
+            &mut service,
+            &paths,
+            &crate::runner::Options {
+                queue: false,
+                notify: false,
+                continue_session: false,
+            },
+        )?;
+        return emit(
+            output::Reply {
+                data: json!({"action":"restarted","id":current.id,"stash":saved.stash,"message":message}),
+                text: format!("restarted: #{}\n{message}\n", current.id),
+            },
+            cli.json,
+        );
+    }
     if let Command::Run {
         queue,
         one,

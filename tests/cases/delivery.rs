@@ -1,6 +1,410 @@
 //! Real Git fixtures; only provider and gh responses are deterministic mocks.
 use super::*;
 
+/// A verified tree was ready, but Git moved HEAD before checkpoint could commit it.
+fn checkpoint_intent(f: &Fixture, advance: bool) -> Result<(String, String)> {
+    use ktask_rs_mk3::storage::execution::StartAttempt;
+    f.add("Recover stale checkpoint intent")?;
+    let expected = f.git(&["rev-parse", "HEAD"])?.trim().to_owned();
+    fs::write(f.root.join("result.txt"), "verified\n")?;
+    f.git(&["add", "result.txt"])?;
+    let verified = f.git(&["write-tree"])?.trim().to_owned();
+    f.git(&["restore", "--staged", "result.txt"])?;
+    let mut db = f.db()?;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64;
+    let attempt = db.start_attempt(StartAttempt {
+        task_id: 1,
+        expected_version: 1,
+        execution_token: "checkpoint-intent",
+        now_ms,
+    })?;
+    db.connection().execute(
+        "UPDATE attempts SET state='paused',base_commit=?2 WHERE id=?1",
+        rusqlite::params![attempt, expected],
+    )?;
+    db.connection().execute("INSERT INTO attempt_progress(attempt_id,repair_round,phase,context,evidence,verified_tree) VALUES (?1,0,'complete','Verified checks and judges','passed',?2)",rusqlite::params![attempt,verified])?;
+    db.connection().execute("INSERT INTO attempt_delivery(attempt_id,mode,remote,destination_url,base_branch,stage,checkpoint_head) VALUES (?1,'local','','','master','checkpointing',?2)",rusqlite::params![attempt,expected])?;
+    db.connection().execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) SELECT project_id,task_id,id,started_at_ms,'supervisor.released','info','Fixture handoff' FROM attempts WHERE id=?1",[attempt])?;
+    drop(db);
+    if advance {
+        fs::write(f.root.join("owner.txt"), "owner change\n")?;
+        f.git(&["add", "owner.txt"])?;
+        f.git(&["commit", "-qm", "owner advanced HEAD"])?;
+    }
+    Ok((expected, f.git(&["rev-parse", "HEAD"])?.trim().to_owned()))
+}
+
+#[test]
+fn stale_checkpoint_resume_stop_run_and_restart_recover_without_losing_stash() -> Result {
+    let f = Fixture::new()?;
+    let (expected, current) = checkpoint_intent(&f, true)?;
+    for _ in 0..2 {
+        let resumed = f.ok(&["run", "--one"])?;
+        assert!(resumed["message"].to_string().contains(&expected));
+        assert!(resumed["message"].to_string().contains(&current));
+        assert!(resumed["message"].to_string().contains("restart 1"));
+    }
+    f.ok(&["stop", "1"])?;
+    assert!(
+        f.git(&["stash", "list", "--format=%gs"])?
+            .contains("ktask: task #1 attempt #1")
+    );
+    f.ok(&["run", "--one"])?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    let db = f.db()?;
+    let (stage, head, target): (String, Option<String>, Option<i64>) = db.connection().query_row(
+        "SELECT stage,checkpoint_head,handoff_target FROM attempt_delivery WHERE attempt_id=1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    assert_eq!((stage.as_str(), head, target), ("work", None, None));
+    assert!(
+        f.git(&["stash", "list", "--format=%gs"])?
+            .contains("ktask: task #1 attempt #1")
+    );
+    Ok(())
+}
+
+#[test]
+fn restart_command_recovers_stale_checkpoint_in_private_project() -> Result {
+    let f = Fixture::new()?;
+    checkpoint_intent(&f, true)?;
+    let stale = f
+        .process()
+        .args(["--json", "restart", "1", "--if-version", "1"])
+        .output()?;
+    assert_eq!(stale.status.code(), Some(4));
+    f.add("Later task cannot restart first")?;
+    let later = f.process().args(["--json", "restart", "2"]).output()?;
+    assert_eq!(later.status.code(), Some(4));
+    let output = f
+        .process()
+        .args([
+            "--json",
+            "--actor-kind",
+            "ai",
+            "--actor",
+            "repair-bot",
+            "restart",
+            "1",
+            "--if-version",
+            "2",
+        ])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice::<Value>(&output.stdout)?["data"].clone();
+    assert_eq!(result["action"], "restarted");
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    let event: String = f.db()?.connection().query_row("SELECT message FROM events WHERE kind='task.restart_requested' AND task_id=1 ORDER BY id DESC LIMIT 1",[],|r|r.get(0))?;
+    assert_eq!(event, "Restart requested by ai repair-bot");
+    Ok(())
+}
+
+#[test]
+fn unpublished_checkpoint_below_owner_commit_blocks_automatic_retirement() -> Result {
+    let f = Fixture::new()?;
+    let (expected, _) = checkpoint_intent(&f, false)?;
+    f.git(&["add", "result.txt"])?;
+    f.git(&["commit", "-qm", "ktask: task #1, attempt #1"])?;
+    fs::write(f.root.join("owner.txt"), "new owner work\n")?;
+    f.git(&["add", "owner.txt"])?;
+    f.git(&["commit", "-qm", "owner work after checkpoint"])?;
+    let current = f.git(&["rev-parse", "HEAD"])?.trim().to_owned();
+    f.ok(&["stop", "1"])?;
+    let stopped = f.ok(&["run", "--one"])?;
+    let message = stopped["message"].to_string();
+    assert!(
+        message.contains(&expected) && message.contains(&current) && message.contains("restart 1"),
+        "{message}"
+    );
+    let stage: String = f.db()?.connection().query_row(
+        "SELECT stage FROM attempt_delivery WHERE attempt_id=1",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(stage, "checkpointing");
+    assert_eq!(f.git(&["rev-parse", "HEAD"])?.trim(), current);
+    Ok(())
+}
+
+#[test]
+fn created_but_unacknowledged_checkpoint_is_inherited_and_reverified() -> Result {
+    let f = Fixture::new()?;
+    checkpoint_intent(&f, false)?;
+    f.git(&["add", "result.txt"])?;
+    f.git(&["commit", "-qm", "ktask: task #1, attempt #1"])?;
+    let checkpoint = f.git(&["rev-parse", "HEAD"])?.trim().to_owned();
+    f.ok(&["stop", "1"])?;
+    f.ok(&["run", "--one"])?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    let stage: String = f.db()?.connection().query_row(
+        "SELECT stage FROM attempt_delivery WHERE attempt_id=1",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(stage, "checkpointed");
+    assert_eq!(f.git(&["rev-parse", "HEAD"])?.trim(), checkpoint);
+    Ok(())
+}
+
+/// An interrupted successor may point its new checkpoint intent at a commit made by
+/// its predecessor. The commit subject names that predecessor, not the successor.
+fn inherited_checkpoint(f: &Fixture) -> Result<String> {
+    use ktask_rs_mk3::storage::execution::StartAttempt;
+
+    let bare = remote(f)?;
+    f.ok(&["delivery", "--mode", "direct"])?;
+    f.add("Retain predecessor checkpoint")?;
+    let base = f.git(&["rev-parse", "HEAD"])?.trim().to_owned();
+    let mut db = f.db()?;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64;
+    let first = db.start_attempt(StartAttempt {
+        task_id: 1,
+        expected_version: 1,
+        execution_token: "first-checkpoint",
+        now_ms,
+    })?;
+    fs::write(f.root.join("result.txt"), "verified work\n")?;
+    f.git(&["add", "result.txt"])?;
+    f.git(&[
+        "commit",
+        "-qm",
+        &format!("ktask: task #1, attempt #{first}"),
+    ])?;
+    let checkpoint = f.git(&["rev-parse", "HEAD"])?.trim().to_owned();
+    let tree = f.git(&["rev-parse", "HEAD^{tree}"])?.trim().to_owned();
+    db.connection().execute(
+        "UPDATE attempts SET state='paused',base_commit=?2 WHERE id=?1",
+        rusqlite::params![first, base],
+    )?;
+    db.connection().execute(
+        "INSERT INTO attempt_progress(attempt_id,repair_round,phase,context,evidence,verified_tree) VALUES (?1,0,'complete','Verified checks and judges','passed',?2)",
+        rusqlite::params![first, tree],
+    )?;
+    db.connection().execute(
+        "INSERT INTO attempt_delivery(attempt_id,mode,remote,destination_url,base_branch,stage,checkpoint_head) VALUES (?1,'direct','origin',?2,'main','checkpointed',?3)",
+        rusqlite::params![first, bare.to_str().unwrap(), checkpoint],
+    )?;
+    db.connection().execute(
+        "INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) SELECT project_id,task_id,id,started_at_ms,'supervisor.released','info','Fixture handoff' FROM attempts WHERE id=?1",
+        [first],
+    )?;
+    drop(db);
+    f.ok(&["stop", "1"])?;
+    Ok(checkpoint)
+}
+
+fn interrupt_inherited_checkpoint(f: &Fixture, checkpoint: &str, marker: &str) -> Result {
+    use ktask_rs_mk3::application::delivery::Stage;
+    use ktask_rs_mk3::application::progress::Phase;
+
+    let mut service = Service::find(f.db()?, &f.root)?.expect("project");
+    let task = service.current_task()?.expect("current task");
+    let run = service.begin_run(
+        VersionedTask {
+            id: task.id,
+            version: task.version,
+        },
+        marker,
+        checkpoint,
+        true,
+    )?;
+    let config = service.delivery_config()?;
+    let destination = f.git(&["remote", "get-url", "--push", "origin"])?;
+    assert!(service.claim_delivery_handoff(&run, &config, None, destination.trim())?);
+    let mut progress = service.progress(&run)?.expect("inherited progress");
+    progress.phase = Phase::Complete;
+    progress.verified_tree = f.git(&["rev-parse", "HEAD^{tree}"])?.trim().to_owned();
+    service.save_progress(&run, &progress)?;
+    service.delivery_stage(&run, Stage::Checkpointing, Some(checkpoint), None, None)?;
+    let attempt = run.attempt;
+    drop(service);
+    let db = f.db()?;
+    db.connection()
+        .execute("UPDATE attempts SET state='paused' WHERE id=?1", [attempt])?;
+    db.connection().execute(
+        "INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) SELECT project_id,task_id,id,started_at_ms,'supervisor.released','info','Fixture handoff' FROM attempts WHERE id=?1",
+        [attempt],
+    )?;
+    drop(db);
+    fs::write(f.root.join(format!("{marker}.txt")), "unpublished work\n")?;
+    Ok(())
+}
+
+#[test]
+fn inherited_checkpoint_survives_stop_run_and_repeated_restart() -> Result {
+    for restart in [false, true] {
+        let f = Fixture::new()?;
+        let checkpoint = inherited_checkpoint(&f)?;
+        interrupt_inherited_checkpoint(&f, &checkpoint, "successor")?;
+        f.ok(&["stop", "1"])?;
+        if restart {
+            interrupt_inherited_checkpoint(&f, &checkpoint, "next-successor")?;
+            f.ok(&["restart", "1"])?;
+        } else {
+            f.ok(&["run", "--one"])?;
+        }
+        assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+        assert!(
+            f.git(&["ls-remote", "origin", "refs/heads/main"])?
+                .starts_with(&checkpoint),
+            "inherited commit must be published"
+        );
+        let db = f.db()?;
+        let attempts: i64 = db.connection().query_row(
+            "SELECT count(*) FROM attempts WHERE task_id=1",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(attempts, if restart { 4 } else { 3 });
+        let fresh_verification: i64 = db.connection().query_row(
+            "SELECT count(DISTINCT role) FROM attempt_steps WHERE attempt_id=(SELECT max(id) FROM attempts WHERE task_id=1) AND role IN ('check','review','validation') AND state='succeeded'",
+            [], |r| r.get(0),
+        )?;
+        assert_eq!(fresh_verification, 3);
+        assert!(
+            f.git(&["stash", "list", "--format=%gs"])?
+                .contains("ktask: task #1")
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn inherited_checkpoint_below_owner_commit_remains_tracked() -> Result {
+    let f = Fixture::new()?;
+    let checkpoint = inherited_checkpoint(&f)?;
+    interrupt_inherited_checkpoint(&f, &checkpoint, "successor")?;
+    fs::write(f.root.join("owner.txt"), "owner work\n")?;
+    f.git(&["add", "owner.txt"])?;
+    f.git(&["commit", "-qm", "owner work after inherited checkpoint"])?;
+    let owner_head = f.git(&["rev-parse", "HEAD"])?.trim().to_owned();
+    f.ok(&["stop", "1"])?;
+    let result = f.ok(&["run", "--one"])?;
+    let message = result["message"].to_string();
+    assert!(message.contains(&checkpoint) && message.contains(&owner_head));
+    assert!(message.contains("ktask restart 1"));
+    assert_eq!(f.git(&["rev-parse", "HEAD"])?.trim(), owner_head);
+    let stage: String = f.db()?.connection().query_row(
+        "SELECT stage FROM attempt_delivery WHERE attempt_id=2",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(stage, "checkpointing");
+    assert!(
+        f.git(&["stash", "list", "--format=%gs"])?
+            .contains("ktask: task #1")
+    );
+    Ok(())
+}
+
+#[test]
+fn amended_unacknowledged_checkpoint_is_preserved_and_reverified() -> Result {
+    let f = Fixture::new()?;
+    checkpoint_intent(&f, false)?;
+    f.git(&["add", "result.txt"])?;
+    f.git(&["commit", "-qm", "ktask: task #1, attempt #1"])?;
+    let first = f.git(&["rev-parse", "HEAD"])?.trim().to_owned();
+    f.db()?.connection().execute(
+        "UPDATE attempt_delivery SET checkpoint_head=?1 WHERE attempt_id=1",
+        [&first],
+    )?;
+    fs::write(f.root.join("result.txt"), "verified amended\n")?;
+    f.git(&["add", "result.txt"])?;
+    let verified = f.git(&["write-tree"])?.trim().to_owned();
+    f.db()?.connection().execute(
+        "UPDATE attempt_progress SET verified_tree=?1 WHERE attempt_id=1",
+        [&verified],
+    )?;
+    f.git(&["commit", "--amend", "--no-edit", "-q"])?;
+    let amended = f.git(&["rev-parse", "HEAD"])?.trim().to_owned();
+    assert_ne!(first, amended);
+    f.ok(&["stop", "1"])?;
+    f.ok(&["run", "--one"])?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    let head: String = f.db()?.connection().query_row(
+        "SELECT checkpoint_head FROM attempt_delivery WHERE attempt_id=1",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(head, amended);
+    Ok(())
+}
+
+#[test]
+fn recovery_record_survives_interruption_before_next_attempt() -> Result {
+    let f = Fixture::new()?;
+    let (_, current) = checkpoint_intent(&f, true)?;
+    f.ok(&["stop", "1"])?;
+    let mut service = Service::find(f.db()?, &f.root)?.expect("project");
+    let intent = service.checkpoint_handoff(1)?.expect("intent");
+    service.resolve_checkpoint_handoff(&intent, 1, &current, false)?;
+    assert!(
+        service
+            .resolve_checkpoint_handoff(&intent, 1, &current, false)
+            .is_err()
+    );
+    drop(service);
+    f.ok(&["run", "--one"])?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    Ok(())
+}
+
+#[test]
+fn real_tui_restart_recovers_stale_checkpoint_by_keyboard_and_mouse() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        checkpoint_intent(&f, true)?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 130, 36)?;
+        let before = t.screen("paused checkpoint and restart control", |s| {
+            s.contains("Current #1 · Paused") && s.contains("[T Restart]")
+        })?;
+        assert!(t.mouse_capture());
+        if mouse {
+            t.click("T Restart")?;
+        } else {
+            t.send("T")?;
+        }
+        let dialog = t.screen("restart confirmation", |s| {
+            s.contains("Restart #1 Recover stale checkpoint intent") && s.contains("[Apply]")
+        })?;
+        if mouse {
+            t.click("Apply")?;
+        } else {
+            t.send("\r")?;
+        }
+        let after = t.screen("restart completed", |s| s.contains("Queue complete."))?;
+        assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            let prefix = if mouse { "mouse" } else { "keyboard" };
+            let dir = PathBuf::from(dir);
+            for (phase, screen) in [
+                ("control", &before),
+                ("confirm", &dialog),
+                ("outcome", &after),
+            ] {
+                support::screen_png(screen, &dir.join(format!("restart-{prefix}-{phase}.png")))?;
+            }
+            fs::write(
+                dir.join(format!("restart-{prefix}-pty.txt")),
+                format!("BEFORE\n{before}\nDIALOG\n{dialog}\nAFTER\n{after}"),
+            )?;
+        }
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
 pub(super) fn mock_pr_destination(f: &Fixture, remote: &str) -> Result {
     support::write_executable(
         &f.scratch.path().join("bin/git"),

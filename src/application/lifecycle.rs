@@ -26,6 +26,7 @@ pub enum Action {
     Resume,
     Answer,
     Retry,
+    Restart,
     Pause,
     Stop,
     MarkDone,
@@ -79,10 +80,10 @@ impl State {
         match self {
             Self::NeedsApproval => &[Approve, Reject, Edit, Move, MarkDone],
             Self::Pending => &[Run, Edit, Move, Cancel, Supersede, MarkDone],
-            Self::Running => &[Pause, Stop, MarkDone],
-            Self::Paused => &[Resume, Edit, Stop, MarkDone],
-            Self::NeedsInput => &[Answer, Edit, Stop, MarkDone],
-            Self::Failed => &[Retry, Edit, Stop, MarkDone],
+            Self::Running => &[Pause, Stop, Restart, MarkDone],
+            Self::Paused => &[Resume, Edit, Stop, Restart, MarkDone],
+            Self::NeedsInput => &[Answer, Edit, Stop, Restart, MarkDone],
+            Self::Failed => &[Retry, Edit, Stop, Restart, MarkDone],
             Self::Done | Self::Cancelled | Self::Superseded => &[CopyToQueue],
         }
     }
@@ -128,6 +129,7 @@ impl Action {
             Self::Resume => "Resume",
             Self::Answer => "Answer",
             Self::Retry => "Retry",
+            Self::Restart => "Restart",
             Self::Pause => "Pause",
             Self::Stop => "Stop",
             Self::MarkDone => "Mark done",
@@ -197,7 +199,7 @@ mod tests {
         assert_eq!(State::of("succeeded_override", None), State::Done);
         assert_eq!(
             State::Running.refusal(Action::Cancel),
-            "Cancel is not available for a running task; it offers Pause, Stop, Mark done"
+            "Cancel is not available for a running task; it offers Pause, Stop, Restart, Mark done"
         );
     }
 }

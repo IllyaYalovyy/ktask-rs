@@ -246,7 +246,9 @@ impl StoredWorkspace {
         match result {
             Ok(notice) => {
                 self.committed(screen, &notice);
-                if action == Action::MarkDone {
+                if action == Action::Restart {
+                    self.run(screen);
+                } else if action == Action::MarkDone {
                     self.continue_queue(screen);
                     screen.message(notice);
                 }
@@ -600,6 +602,7 @@ impl StoredWorkspace {
 
     fn control(
         &mut self,
+        screen: &mut Screen,
         dialog: &Dialog,
         action: Action,
         id: usize,
@@ -612,10 +615,15 @@ impl StoredWorkspace {
             .is_some_and(|t| t.state() == domain::lifecycle::State::Running)
             && crate::runner::supervisor_alive(&self.service).map_err(|e| e.to_string())?;
         if running {
+            if action == Action::Restart {
+                self.service
+                    .require_restart(target)
+                    .map_err(|e| e.to_string())?;
+            }
             self.service
                 .request_control(
                     target,
-                    if action == Action::Stop {
+                    if matches!(action, Action::Stop | Action::Restart) {
                         "stop"
                     } else {
                         "done"
@@ -626,20 +634,27 @@ impl StoredWorkspace {
             self.pending_control = Some(PendingControl { action, id });
             self.saved_notice = Some(format!(
                 "#{id}: stopping the worker · {} completes when it exits",
-                if action == Action::Stop {
+                if matches!(action, Action::Stop | Action::Restart) {
                     "Stop"
                 } else {
                     "Mark done"
                 }
             ));
         } else {
-            let saved = if action == Action::Stop {
+            let saved = if action == Action::Restart {
+                crate::runner::control::restart(&mut self.service, target, &reason)
+            } else if action == Action::Stop {
                 crate::runner::control::stop(&mut self.service, target, &reason)
             } else {
                 crate::runner::control::mark_done(&mut self.service, target, &reason)
             }
             .map_err(|e| e.to_string())?;
             self.saved_notice = Some(control_notice(target.id, action, saved.stash));
+            if action == Action::Restart {
+                self.committed(screen, "Restart prepared · starting from current HEAD");
+                self.run(screen);
+                self.saved_notice = None;
+            }
         }
         Ok(())
     }
@@ -822,8 +837,14 @@ impl StoredWorkspace {
         let target = || expected.ok_or_else(|| "Missing task version; reopen the form".to_owned());
         match dialog.kind.clone() {
             DialogKind::BreakdownPending => return Ok(false),
-            DialogKind::Stop(id) => self.control(dialog, Action::Stop, id, target()?)?,
-            DialogKind::MarkDone(id) => self.control(dialog, Action::MarkDone, id, target()?)?,
+            DialogKind::Stop(id) | DialogKind::Restart(id) | DialogKind::MarkDone(id) => {
+                let action = match dialog.kind {
+                    DialogKind::Stop(_) => Action::Stop,
+                    DialogKind::Restart(_) => Action::Restart,
+                    _ => Action::MarkDone,
+                };
+                self.control(screen, dialog, action, id, target()?)?
+            }
             DialogKind::CancelTask(_) => self
                 .service
                 .cancel(target()?, dialog.get(forms::REASON))
@@ -1100,6 +1121,7 @@ impl Backend for StoredWorkspace {
             Action::Reject => target.map(|task| self.with_version(forms::reject(task.id), task.id)),
             Action::Models => target.map(|task| self.models_form(task)).transpose()?,
             Action::Stop
+            | Action::Restart
             | Action::MarkDone
             | Action::CancelTask
             | Action::Supersede
@@ -1108,7 +1130,7 @@ impl Backend for StoredWorkspace {
             }),
             Action::Answer => self.answer_form(screen)?,
             Action::Help => Some(forms::help(
-                "Changes save immediately. r runs the current task in a background supervisor; p pauses it.\nr on a paused task resumes the same attempt; on a failed task it retries, keeping the code and restarting the limits.\ns Stop returns any live task to Pending and stashes its uncommitted changes; the next Run starts fresh.\nD marks any unfinished task done. Pending tasks can be cancelled (x) or superseded (R); History offers C Copy to queue.\nChecks gate every result; review and validation judge it once the checks pass.",
+                "Changes save immediately. r runs the current task in a background supervisor; p pauses it.\nr on a paused task resumes the same attempt; on a failed task it retries, keeping the code and restarting the limits.\ns Stop returns any live task to Pending and stashes its uncommitted changes; the next Run starts fresh. T Restart also starts it again from current HEAD.\nD marks any unfinished task done. Pending tasks can be cancelled (x) or superseded (R); History offers C Copy to queue.\nChecks gate every result; review and validation judge it once the checks pass.",
             )),
             Action::Import => Some(Dialog::new(
                 DialogKind::Import,
@@ -1163,7 +1185,10 @@ impl Backend for StoredWorkspace {
             DialogKind::Export | DialogKind::FileOverwrite { .. }
         );
         let result = self.execute_form(screen, dialog)?;
-        if result && !readonly {
+        if result
+            && !readonly
+            && !(matches!(dialog.kind, DialogKind::Restart(_)) && self.pending_control.is_none())
+        {
             self.committed(
                 screen,
                 if exporting {

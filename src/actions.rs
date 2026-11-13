@@ -49,6 +49,13 @@ impl App {
                     })
             }
             Action::Stop => queue_or_current && allows(self.stop_target(), TaskAction::Stop),
+            Action::Restart => {
+                queue_or_current
+                    && self.stop_target().is_some_and(|task| {
+                        self.current().is_some_and(|current| current.id == task.id)
+                            && task.status().allows(TaskAction::Restart)
+                    })
+            }
             Action::MarkDone => queue_or_current && allows(selected, TaskAction::MarkDone),
             Action::CancelTask => queue_or_current && allows(selected, TaskAction::Cancel),
             Action::Supersede | Action::Breakdown => {
@@ -93,6 +100,7 @@ impl App {
             Action::Answer => TaskAction::Answer,
             Action::Pause => TaskAction::Pause,
             Action::Stop => TaskAction::Stop,
+            Action::Restart => TaskAction::Restart,
             Action::MarkDone => TaskAction::MarkDone,
             Action::CancelTask => TaskAction::Cancel,
             Action::Supersede | Action::Breakdown => TaskAction::Supersede,
@@ -104,7 +112,7 @@ impl App {
         };
         let target = match action {
             Action::Run | Action::Answer | Action::Pause => self.current(),
-            Action::Stop => self.stop_target(),
+            Action::Stop | Action::Restart => self.stop_target(),
             _ => self.selected_task(),
         };
         match target {
@@ -149,6 +157,7 @@ impl App {
                     | Action::Answer
                     | Action::Pause
                     | Action::Stop
+                    | Action::Restart
                     | Action::MarkDone
                     | Action::Run
                     | Action::Readiness
@@ -289,6 +298,7 @@ impl App {
             | Action::Models
             | Action::Reject
             | Action::Stop
+            | Action::Restart
             | Action::MarkDone
             | Action::CancelTask
             | Action::Supersede

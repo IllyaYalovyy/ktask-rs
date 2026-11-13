@@ -280,7 +280,7 @@ impl DemoWorkspace {
             }
         };
         match dialog.kind {
-            DialogKind::Stop(id) => {
+            DialogKind::Stop(id) | DialogKind::Restart(id) => {
                 let task = screen
                     .queue
                     .iter_mut()
@@ -712,6 +712,7 @@ impl Backend for DemoWorkspace {
             Action::Reject => target.map(|task| forms::reject(task.id)),
             Action::Models => target.map(Self::models_form),
             Action::Stop
+            | Action::Restart
             | Action::MarkDone
             | Action::CancelTask
             | Action::Supersede
@@ -758,10 +759,17 @@ impl Backend for DemoWorkspace {
         match dialog.kind.clone() {
             DialogKind::Task { id, insert } => self.save_task(screen, dialog, id, insert)?,
             DialogKind::Stop(_)
+            | DialogKind::Restart(_)
             | DialogKind::MarkDone(_)
             | DialogKind::CancelTask(_)
             | DialogKind::Supersede(_)
-            | DialogKind::CopyToQueue(_) => self.apply_control(screen, dialog)?,
+            | DialogKind::CopyToQueue(_) => {
+                let restart = matches!(dialog.kind, DialogKind::Restart(_));
+                self.apply_control(screen, dialog)?;
+                if restart {
+                    self.start_current(screen);
+                }
+            }
             DialogKind::Move(id) => {
                 let position = screen.insertion_position(dialog.get(forms::BEFORE), Some(id))?;
                 let old = screen

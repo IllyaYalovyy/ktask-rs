@@ -41,7 +41,74 @@ pub struct DeliveryAttempt {
     pub retargeted: bool,
 }
 
+/// A stopped attempt's checkpoint intent, before a successor can claim its delivery.
+pub struct CheckpointIntent {
+    pub attempt: i64,
+    pub task: i64,
+    pub expected_head: String,
+    pub verified_tree: String,
+}
+
 impl Service {
+    pub fn checkpoint_handoff(&self, task: i64) -> Result<Option<CheckpointIntent>> {
+        self.db.connection().query_row(
+            "SELECT d.attempt_id,a.task_id,d.checkpoint_head,p.verified_tree FROM attempt_delivery d JOIN attempts a ON a.id=d.attempt_id LEFT JOIN attempt_progress p ON p.attempt_id=a.id WHERE d.attempt_id=(SELECT d2.attempt_id FROM attempt_delivery d2 JOIN attempts a2 ON a2.id=d2.attempt_id WHERE a2.project_id=?1 AND d2.handoff_target=?2 AND d2.handoff_claimed_by IS NULL ORDER BY d2.attempt_id DESC LIMIT 1) AND d.stage=?3",
+            params![self.project_id,task,Stage::Checkpointing],
+            |r| Ok(CheckpointIntent { attempt:r.get(0)?,task:r.get(1)?,expected_head:r.get(2)?,verified_tree:r.get(3)? }),
+        ).optional().map_err(Into::into)
+    }
+
+    /// A successor can checkpoint the commit it inherited from an earlier attempt.
+    /// Follow only recorded handoff links carrying this exact head; a completed
+    /// checkpoint stage in that chain is durable proof that the commit already exists.
+    pub fn inherited_checkpoint(&self, attempt: i64, head: &str) -> Result<bool> {
+        Ok(self.db.connection().query_row(
+            "WITH RECURSIVE chain(id) AS (
+                SELECT attempt_id FROM attempt_delivery WHERE handoff_claimed_by=?1 AND checkpoint_head=?2
+                UNION ALL
+                SELECT d.attempt_id FROM attempt_delivery d JOIN chain c ON d.handoff_claimed_by=c.id
+                WHERE d.checkpoint_head=?2 AND d.attempt_id<c.id
+            )
+            SELECT EXISTS(SELECT 1 FROM attempt_delivery d JOIN chain c ON c.id=d.attempt_id
+                WHERE d.checkpoint_head=?2 AND d.stage IN (?3,?4,?5,?6,?7))",
+            params![attempt,head,Stage::Checkpointed,Stage::Integrating,Stage::Verified,Stage::Pushed,Stage::PrReady],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Retire an uncreated intent or acknowledge a verified commit. The old attempt and
+    /// its proof remain historical; only a real commit may carry delivery to a successor.
+    pub fn resolve_checkpoint_handoff(
+        &mut self,
+        intent: &CheckpointIntent,
+        target_task: i64,
+        head: &str,
+        committed: bool,
+    ) -> Result<()> {
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = if committed {
+            tx.execute("UPDATE attempt_delivery SET stage=?4,checkpoint_head=?3 WHERE attempt_id=?1 AND stage=?2 AND checkpoint_head=?5 AND handoff_target=?6 AND handoff_claimed_by IS NULL",params![intent.attempt,Stage::Checkpointing,head,Stage::Checkpointed,intent.expected_head,target_task])?
+        } else {
+            tx.execute("UPDATE attempt_delivery SET stage=?4,checkpoint_head=NULL,handoff_target=CASE WHEN ?5=?6 THEN NULL ELSE handoff_target END,restart_sync=CASE WHEN ?5=?6 THEN 0 ELSE 1 END WHERE attempt_id=?1 AND stage=?2 AND checkpoint_head=?3 AND handoff_target=?5 AND handoff_claimed_by IS NULL",params![intent.attempt,Stage::Checkpointing,intent.expected_head,Stage::Work,target_task,intent.task])?
+        };
+        require(changed == 1, "Checkpoint intent changed during recovery")?;
+        let message = if committed {
+            format!(
+                "Acknowledged checkpoint created before interruption: expected HEAD {}; current HEAD {head}. Successor must recheck before publication.",
+                intent.expected_head
+            )
+        } else {
+            format!(
+                "Retired uncreated checkpoint intent: expected HEAD {}; current HEAD {head}. Prior work remains in the historical attempt and any named stash; fresh execution requires checks, review and validation.",
+                intent.expected_head
+            )
+        };
+        tx.execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'checkpoint.recovered','warning',?5)",params![self.project_id,intent.task,intent.attempt,now_ms(),message])?;
+        tx.commit().map_err(Into::into)
+    }
     pub fn delivery_pr_description(&self, run: &Run) -> Result<(String, String)> {
         let rows = self.db.connection().prepare("SELECT DISTINCT t.id,r.title,r.goal FROM attempt_delivery d JOIN attempts a ON a.id=d.attempt_id JOIN tasks t ON t.id=a.task_id JOIN task_revisions r ON r.task_id=a.task_id AND r.revision=a.revision WHERE a.project_id=?1 AND d.branch=(SELECT branch FROM attempt_delivery WHERE attempt_id=?2) AND (a.state='succeeded' OR a.id=?2) ORDER BY t.id")?.query_map(params![self.project_id,run.attempt],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         let title = rows.first().map_or_else(

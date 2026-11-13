@@ -77,18 +77,20 @@ STATES ("state" in list, show and current; "actions" lists what each offers)
   pending         queued; run, edit, move, cancel, supersede --by IDS, done
   running         an attempt is executing, or waiting for a provider limit (attempt
                   wait_reason "rate_limit", resume_at_ms; it resumes by itself):
-                  pause, stop, done
-  paused          run resumes the same attempt; edit, stop, done
-  needs_input     the agent asked a question: answer ID --text '...'; edit, stop, done
+                  pause, stop, restart, done
+  paused          run resumes the same attempt; edit, stop, restart, done
+  needs_input     the agent asked a question: answer ID --text '...'; edit, stop, restart, done
   failed          the last attempt failed and automatic repair stopped (see below):
-                  run retries from the checks with restarted limits; edit, stop, done
+                  run retries from the checks with restarted limits; edit, stop, restart, done
   done  cancelled  superseded
                   final; listed with --scope history. copy ID [--before ID] queues a new
                   pending task with the same definition.
   stop returns a task to pending: its worker stops, the attempt ends, and uncommitted
   changes are saved as the stash "ktask: task #N attempt #M" (git stash list); the next run
-  starts fresh with full limits. done stops a live attempt the same way first. A refused
-  action exits 4 and names the state and the actions it offers. "status" keeps the stored
+  starts fresh with full limits. done stops a live attempt the same way first.
+  restart ID stops the current task, saves its work, and runs from current HEAD; a real
+  unpublished checkpoint is retained and rechecked before delivery. A refused action
+  exits 4 and names the state and the actions it offers. "status" keeps the stored
   value (new, ready, running, paused, waiting, failed, succeeded, succeeded_override,
   superseded, cancelled).
 
@@ -100,6 +102,7 @@ WHEN EXECUTION STOPS ON A FAILED TASK
     ktask run                                  retry from the checks; limits restart
     ktask edit ID --attempt-limit 6            or --task-limit off, --model ..., then run
     ktask stop ID                              back to pending; edit it, then run afresh
+    ktask restart ID                           recover checkpoint intent and run afresh
     ktask done ID --reason '...'               accept it as done; it goes to History
   Use edit ID --preview-project-defaults to inspect all four effective role settings;
   edit ID --apply-project-defaults copies them.

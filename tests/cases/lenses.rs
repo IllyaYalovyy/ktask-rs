@@ -833,6 +833,15 @@ fn paused_lens_review_resumes_without_repeating_finished_lenses_in_real_terminal
 
 /// Advances the choice under `anchor` through `labels` (starting at `from`) `times` steps,
 /// waiting for the screen to change after each, and checks where it ended.
+fn choice_line<'a>(screen: &'a str, anchor: &str) -> Option<&'a str> {
+    screen
+        .lines()
+        .zip(screen.lines().skip(1))
+        .find_map(|(label, choice)| {
+            (label.contains(anchor) && choice.contains("< ")).then_some(choice)
+        })
+}
+
 fn cycle(
     t: &mut Terminal,
     mouse: bool,
@@ -842,7 +851,6 @@ fn cycle(
     times: usize,
 ) -> Result {
     for step in 0..times {
-        let before = t.current_screen();
         if mouse {
             t.click_after(
                 anchor,
@@ -851,15 +859,14 @@ fn cycle(
         } else {
             t.send(" ")?;
         }
-        t.screen("choice advanced", |s| s != before)?;
+        let next = format!("< {} >", labels[(from + step + 1) % labels.len()]);
+        t.screen("choice advanced", |s| {
+            choice_line(s, anchor).is_some_and(|line| line.contains(&next))
+        })?;
     }
     let end = format!("< {} >", labels[(from + times) % labels.len()]);
     let screen = t.current_screen();
-    let line = screen
-        .lines()
-        .skip_while(|l| !l.contains(anchor))
-        .find(|l| l.contains("< "))
-        .unwrap_or_default();
+    let line = choice_line(&screen, anchor).unwrap_or_default();
     assert!(
         line.contains(&end),
         "{anchor}: expected {end} in {line:?}\n{screen}"
