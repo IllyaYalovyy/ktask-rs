@@ -483,6 +483,7 @@ fn bounded_reconciliation_remains_pausable_in_real_terminal() -> Result {
 /// launches; that scan must absorb the concurrent output instead of restarting.
 #[test]
 fn run_starts_while_another_project_streams_output_over_a_large_evidence_tree() -> Result {
+    const NEIGHBOUR_EMITS: Duration = Duration::from_secs(120);
     let f = Fixture::new()?;
     let chatty_root = f.second_project("chatty")?;
     let mut chatty = Service::open(f.db()?, &chatty_root, None)?;
@@ -527,7 +528,7 @@ fn run_starts_while_another_project_streams_output_over_a_large_evidence_tree() 
             let started = Instant::now();
             let mut rows = 0;
             while !stop.load(std::sync::atomic::Ordering::Relaxed)
-                && started.elapsed() < Duration::from_secs(60)
+                && started.elapsed() < NEIGHBOUR_EMITS
             {
                 chatty.output(&run, "stdout", "chatty output row")?;
                 rows += 1;
@@ -558,9 +559,10 @@ fn run_starts_while_another_project_streams_output_over_a_large_evidence_tree() 
         emitting >= elapsed && rows as u128 >= elapsed.as_millis() / 100,
         "the neighbour stopped emitting before the run finished"
     );
-    // Restarting the scan at every row would wait for the neighbour's full minute.
+    // Restarting the scan at every row would wait for the neighbour's whole emission. Alone
+    // the run takes about 10 s; the margin absorbs a loaded full suite (observed up to 46 s).
     assert!(
-        elapsed < Duration::from_secs(45),
+        elapsed < NEIGHBOUR_EMITS * 3 / 4,
         "run --one waited {elapsed:?} beside a chatty project"
     );
     f.no_scratch()?;
@@ -4366,6 +4368,9 @@ printf '%s\n' "$model" >> "$HOME/provider-invocations"
 if [ "$model" = execution ] && [ -f "$HOME/change-source-each-turn" ]; then
  printf 'repair\n' >> repair-progress.txt
 fi
+if [ '{mode}' = judge-ask ] && [ "$model" = execution ]; then
+ case "$prompt" in *"Human answer"*) printf 'answered\n' > answered.txt;; esac
+fi
 mkdir -p "$TMPDIR/generated/deep"
 printf debris > "$TMPDIR/generated/deep/file"
 case "$prompt" in *"Interactive Remediate action"*)
@@ -6744,7 +6749,106 @@ fn failure_judge_question_inside_the_ten_round_cycle_is_a_protocol_failure() -> 
             .query_row("SELECT count(*) FROM questions", [], |r| r.get::<_, i64>(0))?,
         0
     );
+    // Recovering these protocol failures is still inside the ten-round cycle.
+    let judge = fs::read_to_string(f.scratch.path().join("prompt-judge"))?;
+    assert!(judge.contains("Do not ask the owner during these rounds"));
+    assert!(!judge.contains("Automatic check repair is exhausted"));
     f.no_scratch()?;
+    Ok(())
+}
+/// The same owner action by mouse or by keyboard.
+fn press(t: &mut Terminal, mouse: bool, label: &str, keys: &str) -> Result {
+    if mouse { t.click(label) } else { t.send(keys) }
+}
+/// The ten check-repair rounds were spent once: the failed attempt and its recovery both
+/// stand at round ten, neither reset nor extended, with only the expected agent turns.
+fn assert_exhausted_budget(f: &Fixture, executions: i64, judges: i64) -> Result {
+    let db = f.db()?;
+    let count = |sql: &str| db.connection().query_row(sql, [], |r| r.get::<_, i64>(0));
+    let rounds = "SELECT group_concat(repair_round) FROM (SELECT repair_round FROM attempt_progress ORDER BY attempt_id)";
+    let rounds: String = db.connection().query_row(rounds, [], |r| r.get(0))?;
+    assert_eq!(rounds, "10,10");
+    // No protocol error or repeated provider failure: the judge asked exactly once.
+    assert_eq!(
+        count("SELECT count(*) FROM attempts WHERE failure_category<>'check'")?,
+        0
+    );
+    assert_eq!(count("SELECT count(*) FROM questions")?, 1);
+    assert_eq!(
+        count("SELECT count(*) FROM attempt_steps WHERE role='execution'")?,
+        executions
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM attempt_steps WHERE role='remediation'")?,
+        judges
+    );
+    Ok(())
+}
+#[test]
+fn failure_judge_may_ask_the_owner_after_exhausted_check_repair() -> Result {
+    const QUESTION: &str = "Keep or drop the legacy export?";
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("judge-ask")?;
+        // Each worker changes source, so the ten-round budget (not the unchanged-failure
+        // circuit breaker) ends check repair. Only a worker given the answer passes the check.
+        fs::write(f.scratch.path().join("change-source-each-turn"), "")?;
+        f.add("Exhaust check repair")?;
+        f.ok(&["check-set", "build", "--command", "test -f answered.txt"])?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+        t.screen("current", |s| s.contains("Exhaust check repair"))?;
+        press(&mut t, mouse, "r Run queue", "r")?;
+        let waiting = t.screen("judge question", |s| {
+            s.contains("Needs input · runner stopped") && s.contains("[r Answer]")
+        })?;
+        println!("EXHAUSTED CHECK REPAIR QUESTION (mouse={mouse})\n{waiting}");
+        assert!(waiting.contains(QUESTION), "{waiting}");
+        let task = f.ok(&["show", "1"])?;
+        assert_eq!(task["status"], "waiting");
+        let attempts = task["attempts"].as_array().unwrap();
+        assert_eq!(attempts.len(), 2, "{task}");
+        assert_eq!(attempts[0]["failure_category"], "check");
+        let outcome = attempts[0]["outcome"].as_str().unwrap();
+        assert!(outcome.starts_with("Checks still fail after 10 repair rounds"));
+        assert_eq!(attempts[1]["question"], QUESTION);
+        let recovery = attempts[1]["id"].clone();
+        assert_exhausted_budget(&f, 11, 1)?;
+        // The judge read the failed attempt's own evidence, not the empty recovery attempt.
+        let judge = fs::read_to_string(f.scratch.path().join("prompt-judge"))?;
+        for expected in [
+            "Attempt #1: failed",
+            "Checks still fail after 10 repair rounds",
+            "Automatic check repair is exhausted",
+            "tooling are never questions",
+        ] {
+            assert!(judge.contains(expected), "{expected}: {judge}");
+        }
+        assert!(!judge.contains("Do not ask the owner during these rounds"));
+        press(&mut t, mouse, "r Answer", "r")?;
+        let form = t.screen("answer form", |s| {
+            s.contains("Answer AI question") && s.contains(QUESTION)
+        })?;
+        println!("ANSWER JUDGE QUESTION (mouse={mouse})\n{form}");
+        t.send("Human answer: keep it")?;
+        t.screen("entered answer", |s| s.contains("Human answer: keep it"))?;
+        press(&mut t, mouse, "Apply", "\r")?;
+        let complete = t.screen("complete", |s| s.contains("Queue complete."))?;
+        println!("ANSWERED RECOVERY COMPLETE (mouse={mouse})\n{complete}");
+        let done = f.ok(&["show", "1"])?;
+        assert_eq!(done["status"], "succeeded", "{done}");
+        assert_eq!(done["attempts"].as_array().unwrap().len(), 2);
+        assert_eq!(done["attempts"][1]["id"], recovery);
+        // The answer resumed the same recovery: one judged repair turn, still round ten.
+        assert_exhausted_budget(&f, 12, 2)?;
+        let answered = format!("{QUESTION}\nHuman answer: keep it");
+        for prompt in ["prompt-judge", "prompt-repair-worker"] {
+            let text = fs::read_to_string(f.scratch.path().join(prompt))?;
+            assert!(text.contains(&answered), "{prompt}: {text}");
+        }
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
     Ok(())
 }
 #[test]

@@ -90,7 +90,14 @@ pub(super) fn run(
                 checks::run(service, run, ctx, checks, &tree)?
             }
             Phase::Judge if progress.round == 0 => judge(service, run, ctx)?,
-            Phase::Judge => judge_attempt(service, run, ctx, run.attempt)?,
+            // After exhausted check repair the judge recovers the failed attempt itself;
+            // otherwise it plans the live attempt's next fix round.
+            Phase::Judge => {
+                let judged = service
+                    .exhausted_check_recovery(run, &progress)?
+                    .unwrap_or(run.attempt);
+                judge_attempt(service, run, ctx, judged)?
+            }
             Phase::Check if !run.runs_checks() => {
                 let tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
                 let scope = review_scope(service, run, ctx, &tree)?;

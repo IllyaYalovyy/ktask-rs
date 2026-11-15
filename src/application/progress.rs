@@ -80,6 +80,36 @@ impl Service {
             .map_err(Into::into)
     }
 
+    /// The failed attempt that this attempt's opening failure judge recovers after automatic
+    /// check repair is exhausted: the task's previous attempt ended with checks still failing
+    /// after every repair round, and this attempt has run nothing but that judge. It is the
+    /// recovery of an actual failure, not a normal fix round, and keeps the repair count.
+    pub fn exhausted_check_recovery(&self, run: &Run, progress: &Progress) -> Result<Option<i64>> {
+        if progress.phase != Phase::Judge || progress.round != REPAIR_ROUNDS {
+            return Ok(None);
+        }
+        let connection = self.db.connection();
+        let previous = connection
+            .query_row(
+                "SELECT id,state,coalesce(outcome,'') FROM attempts WHERE task_id=?1 AND id<?2 ORDER BY id DESC LIMIT 1",
+                params![run.task, run.attempt],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
+            )
+            .optional()?;
+        let Some((failed, state, outcome)) = previous else {
+            return Ok(None);
+        };
+        if state != "failed" || !outcome.starts_with(super::stop::CHECKS_STILL_FAIL) {
+            return Ok(None);
+        }
+        let worked: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM attempt_steps WHERE attempt_id=?1 AND role<>'remediation')",
+            [run.attempt],
+            |r| r.get(0),
+        )?;
+        Ok((!worked).then_some(failed))
+    }
+
     /// Whether the task's latest attempt ended in a judge's replan, so its next attempt is
     /// the supervisor's repair and keeps the task's repair-round count.
     pub fn replan_pending(&self, task: i64) -> Result<bool> {
