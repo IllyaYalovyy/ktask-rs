@@ -1035,6 +1035,60 @@ impl Service {
             params![run.attempt,self.project_id,run.task,run.revision,check.id,check.name,check.command,check.directory,check.timeout_ms,tree,source.step,source.counts.map(|c|c.passed),source.counts.map(|c|c.failed),source.counts.map(|c|c.ignored),now_ms(),report],
         )? == 1, "Could not record reused check")
     }
+    /// Consecutive failures of the latest check on the same source and definition.
+    /// Persisted steps make this survive pause/resume. Passing checks break the streak;
+    /// other checks in a multi-check suite do not hide a repeatedly failing check.
+    /// A judgment counts only if followed by a worker and another failed check.
+    pub fn repeated_check_failure(&self, run: &Run) -> Result<(usize, bool)> {
+        let mut stmt = self.db.connection().prepare(
+            "SELECT id,state,source_tree,command,working_directory,timeout_ms,exit_code,report
+             FROM attempt_steps WHERE attempt_id=?1 AND role='check' AND state IN ('succeeded','failed')
+               AND project_check_id=(SELECT project_check_id FROM attempt_steps
+                 WHERE attempt_id=?1 AND role='check' ORDER BY id DESC LIMIT 1)
+             ORDER BY id DESC",
+        )?;
+        let rows = stmt
+            .query_map([run.attempt], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, Option<i64>>(6)?,
+                    r.get::<_, Option<String>>(7)?
+                        .map(|report| super::stop::check_failure_identity(&report)),
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let Some(latest) = rows.first().filter(|r| r.1 == "failed" && r.2.is_some()) else {
+            return Ok((0, false));
+        };
+        let streak: Vec<_> = rows
+            .iter()
+            .take_while(|r| {
+                r.1 == "failed"
+                    && r.2 == latest.2
+                    && r.3 == latest.3
+                    && r.4 == latest.4
+                    && r.5 == latest.5
+                    && r.6 == latest.6
+                    && r.7 == latest.7
+            })
+            .collect();
+        let oldest = streak.last().expect("latest failed check is in streak").0;
+        let judged = self.db.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM attempt_steps j JOIN attempt_steps w
+               ON w.attempt_id=j.attempt_id AND w.role='execution' AND w.state='succeeded'
+               AND w.id>j.id AND w.id<?3
+             WHERE j.attempt_id=?1 AND j.role='remediation' AND j.state='succeeded' AND j.id>?2)",
+            params![run.attempt, oldest, latest.0],
+            |r| r.get(0),
+        )?;
+        Ok((streak.len(), judged))
+    }
+
     pub fn record_check_tree(&self, step: &Step, tree: &str) -> Result<()> {
         require(self.db.connection().execute("UPDATE attempt_steps SET source_tree=?2 WHERE id=?1 AND role='check' AND state IN ('succeeded','failed')", params![step.id,tree])? == 1, "Check result changed before recording its source tree")
     }

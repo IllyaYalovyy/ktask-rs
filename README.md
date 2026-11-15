@@ -76,10 +76,15 @@ Validation judges the evidence: every configured check ran and exited zero, noth
 ignored, removed or weakened, and each criterion has proof. Both read; neither runs anything.
 
 Checks are mechanical and cost no tokens. Before a task's first agent turn the supervisor runs
-the project checks on its clean starting commit; a red start stops the task at once and shows
-the failing tests. A check that fails after work goes straight back to the worker with its
+the project checks on its clean starting commit. A red start goes to the worker to repair the
+cause and complete the original goal. A check that fails after work also goes to the worker with its
 failing test names, panic or assertion messages and compiler errors, read from the transcript
-without a model; the same summary is the failure's recorded reason. Review and validation block
+without a model; the same summary is the failure's recorded reason. Three failures of the same
+check with matching diagnostics on unchanged source trigger a remediation plan. If its repair leaves the same failure,
+automatic recovery stops with the evidence instead of spending more tokens on identical work.
+Changed source or a passing check breaks this streak; the ten-round repair limit still applies.
+Provider and process-launch failures retain bounded retries and the infrastructure failure limit.
+Review and validation block
 only on critical findings, judged by their impact on correctness, behavior, performance or
 maintainability; minor findings are recorded and never cost a fix round. `ktask stats` reports
 cost to result (time, new and cached tokens, repair rounds) per delivered task by execution
@@ -498,9 +503,10 @@ failed task's limits. Insertion does not
 reset the original coding budget; Models/limits can grant additional attempts while keeping all
 failure evidence. Startup failures show the runner's error directly in the TUI and CLI.
 A failed attempt is repaired automatically: the next attempt opens with the read-only failure
-judge, and the queue keeps going. Execution stops only when no repair can change the result:
+judge, and the queue keeps going. Automatic recovery stops when its limits are reached:
 the attempt budget or the task's time limit is used up, ten repair rounds left critical findings,
-the judge replanned ten times, or the provider/environment failed three attempts in a row
+the judge replanned ten times, a repeated unchanged check failure persists after a remediation
+plan and repair, or the provider/environment failed three attempts in a row
 (five failures of any kind when the budget is unlimited). Then Current shows a red
 **EXECUTION STOPPED** banner with the reason, why it was not resolved automatically, and what to
 do next. An unresolved failure never advances the queue. Human work/approval/questions stop

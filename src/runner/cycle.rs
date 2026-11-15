@@ -10,7 +10,7 @@ use crate::{
         delivery::Stage,
         execution::{Check, Run},
         progress::{Phase, Progress, REPAIR_ROUNDS},
-        stop::{BASELINE_RED, CHECKS_STILL_FAIL},
+        stop::{CHECKS_NO_PROGRESS, CHECKS_STILL_FAIL},
     },
     storage::{Error, Result},
 };
@@ -169,10 +169,14 @@ pub(super) fn run(
                     continue;
                 }
                 Outcome::Failed("check", report) | Outcome::Changes { report, .. } => {
-                    return Ok(Outcome::Failed(
-                        "environment",
-                        format!("{BASELINE_RED}\n{report}"),
-                    ));
+                    // A failing baseline is repairable project work, not evidence that
+                    // the provider or environment is unavailable. The worker receives
+                    // both the failure and the original goal; acceptance still requires
+                    // checks, review and validation of the combined change.
+                    fix_checks(service, run, &mut progress, &report)?;
+                    progress.context.push_str("\nThe starting checks failed before implementation. Repair their cause and complete the original task; baseline repair alone does not satisfy the goal.");
+                    service.save_progress(run, &progress)?;
+                    continue;
                 }
                 other => return Ok(other),
             }
@@ -265,7 +269,27 @@ pub(super) fn run(
                         ),
                     ));
                 }
-                fix_checks(service, run, &mut progress, &report)?;
+                let (repeated, judged) = service.repeated_check_failure(run)?;
+                if repeated >= 3 && judged {
+                    return Ok(Outcome::Failed(
+                        "check",
+                        format!(
+                            "{CHECKS_NO_PROGRESS}: the same check still fails on unchanged source after a remediation plan and repair. Work and evidence are retained.\n{report}"
+                        ),
+                    ));
+                }
+                if repeated >= 3 {
+                    request_fixes(
+                        service,
+                        run,
+                        &mut progress,
+                        &format!(
+                            "The same check failed {repeated} times on unchanged source. Diagnose why repairs made no progress, including external dependencies; do not repeat an ineffective fix.\n{report}"
+                        ),
+                    )?;
+                } else {
+                    fix_checks(service, run, &mut progress, &report)?;
+                }
             }
             other => return Ok(other),
         }

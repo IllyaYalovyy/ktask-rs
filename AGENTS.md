@@ -6,8 +6,9 @@
   merely because implementation details are unspecified. Preserve the full goal and acceptance bar.
 
 - ktask is measured by delivered results: cost to result first, then time to result.
-  A task's first attempt starts only after the project checks pass on its clean commit
-  (mechanical, no tokens); a red start stops with the failing tests shown.
+  Run project checks on the clean starting commit first. A red start enters bounded
+  automatic repair with the failing evidence and original task goal; it is not a hard stop.
+  Repeated unchanged check failures get a remediation plan before stopping for no progress.
 - The normal lifecycle is implement → check → review → fix → validate within one attempt. Use
   Sol for implementation and Astra for review, remediation (the failure judge) and validation in
   this project. Sol applies each fix in its resumed implementation session.

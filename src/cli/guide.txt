@@ -97,6 +97,7 @@ STATES ("state" in list, show and current; "actions" lists what each offers)
 WHEN EXECUTION STOPS ON A FAILED TASK
   Automatic repair stops only when the attempt budget or the task time limit is used up,
   critical findings remain after ten repair rounds, the failure judge replanned ten times,
+  a repeated unchanged check failure persists after a remediation plan and repair,
   the provider or environment failed three attempts in a row, or five attempts in a row
   failed. Then choose one:
     ktask run                                  retry from the checks; limits restart

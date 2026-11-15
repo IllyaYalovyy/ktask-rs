@@ -983,7 +983,7 @@ Registered checkout. Names and canonical native root paths are independently uni
 | `name` | TEXT | no | Nonblank name. |
 | `root_path` | BLOB | no | Canonical native absolute path bytes (not necessarily UTF-8). |
 | `created_at_ms` | INTEGER | no | Creation time. |
-| `check_before_task` | INTEGER | no | 1 (default) runs the project checks on a task's clean starting commit before its first agent turn; a red start stops the task without spending tokens. 0 skips that run. |
+| `check_before_task` | INTEGER | no | 1 (default) runs the project checks on a task's clean starting commit before its first agent turn; a red start enters bounded automatic repair with the original task goal. 0 skips that run. |
 | `agent_network` | INTEGER | no | 1 lets writable agent turns use the network; 0 (default) leaves Codex's sandbox without it. |
 | `initial_continuation` | TEXT | no | Run mode (single or queue) the project started with; applies until it saves its own preferences. |
 | `initial_planner_approval` | TEXT | no | Planner approval (automatic or review_required) the project started with; applies until it saves its own preferences. |

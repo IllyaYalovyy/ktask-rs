@@ -14,6 +14,8 @@ const FAILURE_STREAK: usize = 5;
 pub const BASELINE_RED: &str = "Checks fail before any work started";
 /// How an attempt whose worker could not make the checks pass is reported.
 pub const CHECKS_STILL_FAIL: &str = "Checks still fail";
+/// A persistent check failure survived both direct repair and a judged repair.
+pub const CHECKS_NO_PROGRESS: &str = "Automatic check repair made no progress";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stop {
@@ -47,11 +49,11 @@ pub fn unresolvable(task: &Task) -> Option<Stop> {
             .count()
     };
     let active_ms: i64 = attempts.iter().map(|a| a.active_ms).sum();
-    let (unresolved, next) = if outcome.starts_with(BASELINE_RED) {
+    let (unresolved, next) = if outcome.starts_with(CHECKS_NO_PROGRESS) {
         (
-            "The starting commit is already red, so no agent ran and no tokens were spent."
+            "Repeated checks on unchanged source still fail after direct repair and a remediation plan; automatic repair is stopped to avoid repeating ineffective work."
                 .to_owned(),
-            "Fix the failing checks, then r Retry",
+            "Read the check and remediation evidence; resolve the blocker or change the task, then r Retry",
         )
     } else if outcome.starts_with("Critical findings remain after") {
         (
@@ -123,4 +125,79 @@ pub fn unresolvable(task: &Task) -> Option<Stop> {
         unresolved,
         next,
     })
+}
+
+/// Compare diagnostics rather than per-run evidence locations. Keep failure messages,
+/// test identities and suite counts; only known volatile metadata is removed.
+pub(super) fn check_failure_identity(report: &str) -> String {
+    report
+        .lines()
+        .map(|line| {
+            if let Some(json) = line.strip_prefix("Suite results: ")
+                && let Ok(mut suites) = serde_json::from_str::<serde_json::Value>(json)
+            {
+                if let Some(entries) = suites["suites"].as_array_mut() {
+                    for entry in entries {
+                        if let Some(object) = entry.as_object_mut() {
+                            if object
+                                .get("evidence")
+                                .and_then(|v| v.as_str())
+                                .and_then(|s| s.strip_prefix("transcript line "))
+                                .is_some_and(|s| {
+                                    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+                                })
+                            {
+                                object.remove("evidence");
+                            }
+                            if object
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .is_some_and(|s| s.starts_with("framework summary at line "))
+                            {
+                                object.insert("name".into(), "framework summary".into());
+                            }
+                        }
+                    }
+                }
+                return format!("Suite results: {suites}");
+            }
+            if line.starts_with("thread '")
+                && let Some((thread, rest)) = line.split_once("' (")
+                && let Some((id, diagnostic)) = rest.split_once(") panicked at ")
+                && !id.is_empty()
+                && id.bytes().all(|b| b.is_ascii_digit())
+            {
+                return format!("{thread}' panicked at {diagnostic}");
+            }
+            line.to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_failure_identity;
+
+    #[test]
+    fn failure_identity_ignores_locations_but_preserves_diagnostics_and_counts() {
+        let report = |thread, line, message: &str, failed| {
+            format!(
+                "thread 'demo::adds' ({thread}) panicked at src/demo.rs:3:5: {message}\nSuite results: {{\"suites\":[{{\"name\":\"framework summary at line {line}\",\"status\":\"failed\",\"failed\":{failed},\"evidence\":\"transcript line {line}\"}}],\"errors\":[]}}"
+            )
+        };
+        let original = check_failure_identity(&report(123, 17, "expected 2, got 3", 1));
+        assert_eq!(
+            original,
+            check_failure_identity(&report(456, 29, "expected 2, got 3", 1))
+        );
+        assert_ne!(
+            original,
+            check_failure_identity(&report(456, 29, "expected 4, got 3", 1))
+        );
+        assert_ne!(
+            original,
+            check_failure_identity(&report(456, 29, "expected 2, got 3", 2))
+        );
+    }
 }

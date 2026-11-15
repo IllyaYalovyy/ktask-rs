@@ -526,7 +526,7 @@ fn fail(
     if let Err(error) = service.output(
         run,
         "system",
-        &format!("Attempt failed ({category}); starting a repair attempt automatically"),
+        &format!("Attempt failed ({category}); evaluating automatic recovery"),
     ) {
         let Some(reason) = resource_limit(&error) else {
             return Err(error);

@@ -283,7 +283,7 @@ impl StoredWorkspace {
                 Dialog::new(
                     DialogKind::Preferences(saved),
                     "Project preferences",
-                    "Saved per project in this instance. Keyboard stays available.\nThis policy controls new breakdown and repair tasks.\nRun mode applies to the next Run/resume/retry.\nAgent network applies to execution and repair workers. On permits network access with Codex, Claude Code and OpenCode. Off is enforced by Codex; Claude Code and OpenCode cannot enforce Off, so their writable turns are blocked.\nCheck before task runs the project checks on a task's clean starting commit; a red start stops it before any tokens are spent.",
+                    "Saved per project in this instance. Keyboard stays available.\nThis policy controls new breakdown and repair tasks.\nRun mode applies to the next Run/resume/retry.\nAgent network applies to execution and repair workers. On permits network access with Codex, Claude Code and OpenCode. Off is enforced by Codex; Claude Code and OpenCode cannot enforce Off, so their writable turns are blocked.\nCheck before task runs the project checks on a task's clean starting commit; a red start enters bounded automatic repair with the original task goal.",
                     fields,
                 )
             }
