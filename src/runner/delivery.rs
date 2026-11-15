@@ -259,8 +259,7 @@ pub(super) fn reconcile_resume(service: &mut Service, run: &Run, ctx: &Context<'
             let parent = git(&ctx.workspace.root, &["rev-parse", "HEAD^"])?;
             let prior_parent = git(&ctx.workspace.root, &["rev-parse", &format!("{saved}^")]).ok();
             let subject = git(&ctx.workspace.root, &["log", "-1", "--format=%s"])?;
-            if tree != verified
-                || !ctx.workspace.clean()?
+            if !ctx.workspace.clean()?
                 || subject != format!("ktask: task #{}, attempt #{}", run.task, run.attempt)
                 || (parent != saved && prior_parent.as_deref() != Some(parent.as_str()))
             {
@@ -269,7 +268,20 @@ pub(super) fn reconcile_resume(service: &mut Service, run: &Run, ctx: &Context<'
                     run.task
                 )));
             }
-            service.delivery_stage(run, Stage::Checkpointed, Some(&actual), None, None)?;
+            if tree == verified {
+                service.delivery_stage(run, Stage::Checkpointed, Some(&actual), None, None)?;
+            } else {
+                // The clean worktree holds what commit hooks added, so it can be verified.
+                reset_verification(
+                    service,
+                    run,
+                    &actual,
+                    &format!(
+                        "Commit hooks changed checkpoint {actual} before it was recorded; differing paths: {} · rerunning checks, review and validation before delivery; repair count retained",
+                        ctx.workspace.tree_difference(&verified, &tree)?
+                    ),
+                )?;
+            }
         }
     }
     if delivery.stage == Stage::Integrating {
@@ -811,7 +823,13 @@ fn remote_tip(
         Some(out) => Ok(Some(out.split_whitespace().next().unwrap_or("").into())),
     }
 }
-fn reset_verification(service: &mut Service, run: &Run, head: &str, reason: &str) -> Result<()> {
+/// Sends a delivery's new commit back through checks, review and validation.
+pub(super) fn reset_verification(
+    service: &mut Service,
+    run: &Run,
+    head: &str,
+    reason: &str,
+) -> Result<()> {
     service.output(run, "system", reason)?;
     service.reset_delivery_verification(run, head, reason)
 }

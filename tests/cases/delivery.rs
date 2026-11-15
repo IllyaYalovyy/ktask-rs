@@ -1441,3 +1441,198 @@ fi"#,
     assert_eq!(counts, vec![6, 1]);
     Ok(())
 }
+/// Commits whose pre-commit hook changes and stages content. `stamp` appends to stamp.txt
+/// on every run; `break` replaces the result with content the check rejects, once.
+fn mutating_hook(f: &Fixture, change: &str) -> Result {
+    let hooks = f.scratch.path().join("hooks");
+    fs::create_dir_all(&hooks)?;
+    let body = match change {
+        "stamp" => "printf 'stamp\\n' >> stamp.txt\ngit add stamp.txt",
+        _ => {
+            "[ -f \"$HOME/hook-broke\" ] && exit 0\ntouch \"$HOME/hook-broke\"\nprintf 'broken\\n' > result.txt\ngit add result.txt"
+        }
+    };
+    support::write_executable(
+        &hooks.join("pre-commit"),
+        format!("#!/bin/sh\nset -e\nprintf 'run\\n' >> \"$HOME/hook-runs\"\n{body}\n"),
+    )?;
+    f.git(&["config", "core.hooksPath", hooks.to_str().unwrap()])?;
+    Ok(())
+}
+fn step_states(f: &Fixture, role: &str) -> Result<Vec<String>> {
+    Ok(f.db()?
+        .connection()
+        .prepare("SELECT state FROM attempt_steps WHERE role=?1 ORDER BY id")?
+        .query_map([role], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<_>>()?)
+}
+#[test]
+fn content_changed_by_commit_hooks_is_verified_before_any_delivery() -> Result {
+    for mode in ["local", "direct", "pr"] {
+        for change in ["stamp", "break"] {
+            let f = Fixture::new()?;
+            let base = f.git(&["rev-parse", "HEAD"])?.trim().to_owned();
+            let bare = if mode == "local" {
+                None
+            } else {
+                Some(remote(&f)?)
+            };
+            if mode == "pr" {
+                mock_pr_destination(&f, "origin")?;
+                gh(&f, false)?;
+            }
+            f.ok(&["delivery", "--mode", mode])?;
+            f.ok(&[
+                "check-set",
+                "build",
+                "--command",
+                "test \"$(cat result.txt)\" = verified",
+            ])?;
+            mutating_hook(&f, change)?;
+            f.add("Verify what commit hooks committed")?;
+            f.ok(&["run", "--one"])?;
+            let case = format!("{mode}/{change}");
+            let task = f.ok(&["show", "1"])?;
+            assert_eq!(task["status"], "succeeded", "{case}: {task}");
+            assert!(
+                task.to_string().contains("Commit hooks changed checkpoint"),
+                "{case}: {task}"
+            );
+            one_attempt(&f)?;
+            let checks = step_states(&f, "check")?;
+            let reviews = step_states(&f, "review")?;
+            let validations = step_states(&f, "validation")?;
+            let runs = fs::read_to_string(f.scratch.path().join("hook-runs"))?;
+            if change == "stamp" {
+                // The hook's output is verified once; that proof needs no second commit.
+                assert_eq!(checks, ["succeeded", "succeeded"], "{case}");
+                assert_eq!(reviews, ["succeeded", "succeeded"], "{case}");
+                assert_eq!(validations, ["succeeded", "succeeded"], "{case}");
+                assert_eq!(runs.lines().count(), 1, "{case}");
+                assert_eq!(f.git(&["show", "HEAD:stamp.txt"])?, "stamp\n", "{case}");
+            } else {
+                // The failing check sends the hook's output to repair; the repaired tree is
+                // verified again and amended into the checkpoint before delivery.
+                assert_eq!(checks, ["succeeded", "failed", "succeeded"], "{case}");
+                assert_eq!(reviews.len(), 2, "{case}: {reviews:?}");
+                assert_eq!(validations.len(), 2, "{case}: {validations:?}");
+                assert_eq!(runs.lines().count(), 2, "{case}");
+            }
+            assert_eq!(f.git(&["show", "HEAD:result.txt"])?, "verified\n", "{case}");
+            assert_eq!(f.git(&["rev-parse", "HEAD^"])?.trim(), base, "{case}");
+            assert!(f.git(&["status", "--porcelain"])?.is_empty(), "{case}");
+            if let Some(bare) = bare {
+                let refs = Command::new("git")
+                    .arg("-C")
+                    .arg(&bare)
+                    .args(["for-each-ref", "--format=%(objectname) %(refname)"])
+                    .output()?;
+                let refs = String::from_utf8(refs.stdout)?;
+                let head = f.git(&["rev-parse", "HEAD"])?;
+                let published = if mode == "direct" {
+                    format!("{} refs/heads/main", head.trim())
+                } else {
+                    format!("{} refs/heads/", head.trim())
+                };
+                assert!(refs.contains(&published), "{case}: {refs}");
+                // Unverified hook output never reached the remote.
+                let broken = f.scratch.path().join("broken.txt");
+                fs::write(&broken, "broken\n")?;
+                let blob = f.git(&["hash-object", broken.to_str().unwrap()])?;
+                let present = Command::new("git")
+                    .arg("-C")
+                    .arg(&bare)
+                    .args(["cat-file", "-e", blob.trim()])
+                    .status()?;
+                assert!(
+                    !present.success(),
+                    "{case}: unverified content was published"
+                );
+            }
+            if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+                fs::write(
+                    PathBuf::from(dir).join(format!("hook-reverification-{mode}-{change}.txt")),
+                    format!(
+                        "case={case}\nchecks={checks:?}\nreviews={reviews:?}\nvalidations={validations:?}\nhook_runs={}\nhead={}\nlog:\n{}\n",
+                        runs.lines().count(),
+                        f.git(&["rev-parse", "HEAD"])?.trim(),
+                        f.git(&["log", "--format=%H %s", "-3"])?
+                    ),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+#[test]
+fn hook_changed_checkpoint_interrupted_before_it_is_recorded_is_verified_on_resume() -> Result {
+    let f = Fixture::new()?;
+    mutating_hook(&f, "stamp")?;
+    support::write_executable(
+        &f.scratch.path().join("hooks/post-commit"),
+        "#!/bin/sh\n[ -f \"$HOME/committed\" ] && exit 0\ntouch \"$HOME/committed\"\nsleep 30\n",
+    )?;
+    f.add("Recover a hook-changed checkpoint")?;
+    let mut runner = Running(f.process().args(["run", "--one"]).spawn()?);
+    support::eventually("hook-changed commit before it is recorded", || {
+        Ok(f.scratch.path().join("committed").exists().then_some(()))
+    })?;
+    let committed = f.git(&["rev-parse", "HEAD"])?;
+    let stage: String =
+        f.db()?
+            .connection()
+            .query_row("SELECT stage FROM attempt_delivery", [], |r| r.get(0))?;
+    assert_eq!(stage, "checkpointing");
+    runner.0.kill()?;
+    runner.0.wait()?;
+    f.guardian_finished()?;
+    f.ok(&["run", "--one"])?;
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "succeeded", "{task}");
+    assert!(
+        task.to_string().contains("Commit hooks changed checkpoint")
+            && task.to_string().contains("before it was recorded"),
+        "{task}"
+    );
+    one_attempt(&f)?;
+    assert_eq!(f.git(&["rev-parse", "HEAD"])?, committed);
+    assert_eq!(step_states(&f, "check")?, ["succeeded", "succeeded"]);
+    assert_eq!(
+        fs::read_to_string(f.scratch.path().join("hook-runs"))?
+            .lines()
+            .count(),
+        1
+    );
+    for mouse in [false, true] {
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 40)?;
+        t.screen("completed queue", |s| s.contains("3 History"))?;
+        if mouse {
+            t.click("3 History")?;
+        } else {
+            t.send("3")?;
+        }
+        t.screen("history", |s| {
+            s.contains("Recover a hook-changed checkpoint")
+        })?;
+        if mouse {
+            t.click("Enter Details")?;
+        } else {
+            t.send("\r")?;
+        }
+        let details = t.screen("reverification in details", |s| {
+            s.contains("Task details / attempts")
+                && s.contains("Commit hooks changed checkpoint")
+                && s.contains("paths: A stamp.txt")
+        })?;
+        println!("HOOK REVERIFICATION DETAILS mouse={mouse}\n{details}");
+        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            support::screen_png(
+                &details,
+                &PathBuf::from(dir).join(format!("hook-reverification-details-mouse-{mouse}.png")),
+            )?;
+        }
+        t.send("\x1b\x03")?;
+        t.finish()?;
+    }
+    Ok(())
+}

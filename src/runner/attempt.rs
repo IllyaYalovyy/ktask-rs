@@ -295,8 +295,9 @@ fn drive(
             return Ok(Outcome::Paused);
         }
         let head = match checkpoint(service, run, ctx)? {
-            Ok(head) => head,
-            Err(blocked) => return Ok(blocked),
+            Checkpointed::Verified(head) => head,
+            Checkpointed::Reverify => continue,
+            Checkpointed::Blocked(outcome) => return Ok(outcome),
         };
         if let Some(outcome) = deliver(service, run, ctx, &summary, &head, &mut delivery_retries)? {
             return Ok(outcome);
@@ -348,12 +349,18 @@ fn verify(
     }
 }
 
-/// Commits the verified tree. The new head, or the outcome when Git refuses.
-fn checkpoint(
-    service: &mut Service,
-    run: &Run,
-    ctx: &Context<'_>,
-) -> Result<std::result::Result<String, Outcome>> {
+/// Where committing the verified tree leaves the attempt.
+enum Checkpointed {
+    /// HEAD holds exactly the verified tree: deliver it.
+    Verified(String),
+    /// Commit hooks changed the content: the workflow verifies the kept commit first.
+    Reverify,
+    /// Git refused, or the hooks committed content no check can prove.
+    Blocked(Outcome),
+}
+
+/// Commits the verified tree and records the commit, whatever its hooks made of it.
+fn checkpoint(service: &mut Service, run: &Run, ctx: &Context<'_>) -> Result<Checkpointed> {
     let verified = service
         .progress(run)?
         .ok_or_else(|| Error::Conflict("Missing verified workflow state".into()))?
@@ -365,7 +372,7 @@ fn checkpoint(
             .ok_or_else(|| Error::Conflict("Attempt baseline missing".into()))?,
     );
     service.delivery_stage(run, Stage::Checkpointing, Some(&expected_head), None, None)?;
-    let head = match ctx.workspace.checkpoint(
+    match ctx.workspace.checkpoint(
         run.task,
         run.attempt,
         &expected_head,
@@ -379,11 +386,29 @@ fn checkpoint(
                 | Stage::PrReady
         ),
     ) {
-        Ok(head) => head,
-        Err(error) => return Ok(Err(Outcome::DeliveryBlocked(error.to_string()))),
-    };
-    service.delivery_stage(run, Stage::Checkpointed, Some(&head), None, None)?;
-    Ok(Ok(head))
+        Ok(workspace::Checkpoint::Verified(head)) => {
+            service.delivery_stage(run, Stage::Checkpointed, Some(&head), None, None)?;
+            Ok(Checkpointed::Verified(head))
+        }
+        Ok(workspace::Checkpoint::Changed { head, paths }) => {
+            delivery::reset_verification(
+                service,
+                run,
+                &head,
+                &format!(
+                    "Commit hooks changed checkpoint {head}; differing paths: {paths} · rerunning checks, review and validation before delivery; repair count retained"
+                ),
+            )?;
+            Ok(Checkpointed::Reverify)
+        }
+        Ok(workspace::Checkpoint::Diverged { head, reason }) => {
+            service.delivery_stage(run, Stage::Checkpointed, Some(&head), None, None)?;
+            Ok(Checkpointed::Blocked(Outcome::DeliveryBlocked(reason)))
+        }
+        Err(error) => Ok(Checkpointed::Blocked(Outcome::DeliveryBlocked(
+            error.to_string(),
+        ))),
+    }
 }
 
 /// Publishes the checkpoint. Some outcome ends the attempt; None sends the work back

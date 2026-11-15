@@ -33,6 +33,23 @@ impl Subject {
     }
 }
 
+/// A checkpoint commit, by whether it holds exactly the verified tree.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Checkpoint {
+    Verified(String),
+    /// Commit hooks changed and staged content. The commit and the worktree both hold it,
+    /// and it needs its own checks, review and validation before delivery.
+    Changed {
+        head: String,
+        paths: String,
+    },
+    /// Commit hooks committed content the worktree does not hold, so no check can prove it.
+    Diverged {
+        head: String,
+        reason: String,
+    },
+}
+
 /// What an independent review must cover: every change from `base` to the verified `tree`.
 pub struct ReviewScope {
     base: String,
@@ -393,6 +410,7 @@ impl Workspace {
             .trim()
             .to_owned())
     }
+    /// The paths two trees differ in, on one line for logs: `A new.txt, M changed.txt`.
     pub fn tree_difference(&self, expected: &str, observed: &str) -> Result<String> {
         let paths = git(
             &self.root,
@@ -401,7 +419,7 @@ impl Workspace {
         if paths.is_empty() {
             Ok("none (tree identities differ without a path diff)".into())
         } else {
-            Ok(paths)
+            Ok(paths.replace('\t', " ").replace('\n', ", "))
         }
     }
     /// The review of an attempt that started at `attempt_base` covers its own work and any
@@ -448,6 +466,8 @@ impl Workspace {
             truncated,
         })
     }
+    /// Commits the verified tree as the attempt's checkpoint, amending the attempt's own
+    /// checkpoint when allowed, and reports what the resulting commit holds.
     pub fn checkpoint(
         &self,
         task: i64,
@@ -455,7 +475,7 @@ impl Workspace {
         expected_head: &str,
         verified_tree: &str,
         allow_amend: bool,
-    ) -> Result<String> {
+    ) -> Result<Checkpoint> {
         if self.head()? != expected_head {
             return Err(Error::Conflict(format!(
                 "HEAD changed after checkpoint intent: expected HEAD {expected_head}; current HEAD {}. Work retained; run `ktask restart {task}` to recover",
@@ -471,17 +491,35 @@ impl Workspace {
                     "Worktree changed after validation; verification must run again".into(),
                 ));
             }
-            if staged == git(&self.root, &["rev-parse", "HEAD^{tree}"])? {
-                return self.head();
+            if staged != git(&self.root, &["rev-parse", "HEAD^{tree}"])? {
+                self.git_commit(&["commit", "--amend", "--no-edit", "--reset-author"])?;
             }
-            self.git_commit(&["commit", "--amend", "--no-edit", "--reset-author"])?;
-            return self.head();
+        } else {
+            self.commit(
+                expected_head,
+                &CHECKPOINT.format(task, attempt),
+                Some(verified_tree),
+            )?;
         }
-        self.commit(
-            expected_head,
-            &CHECKPOINT.format(task, attempt),
-            Some(verified_tree),
-        )
+        self.committed(verified_tree)
+    }
+    /// Commit hooks may change and stage content, so the checkpoint's own tree is compared
+    /// with the verified one. Changed content can be verified only when the worktree holds
+    /// exactly what was committed; otherwise checks would prove other content.
+    fn committed(&self, verified_tree: &str) -> Result<Checkpoint> {
+        let head = self.head()?;
+        let tree = git(&self.root, &["rev-parse", "HEAD^{tree}"])?;
+        if tree == verified_tree {
+            return Ok(Checkpoint::Verified(head));
+        }
+        let paths = self.tree_difference(verified_tree, &tree)?;
+        if self.stage_tree(None, None)? != tree {
+            let reason = format!(
+                "Commit hooks committed {head} with tree {tree}, which differs from both the verified tree {verified_tree} and the worktree; differing paths: {paths}. The commit is kept and nothing was published; make the hooks leave the worktree holding what they commit, then Resume"
+            );
+            return Ok(Checkpoint::Diverged { head, reason });
+        }
+        Ok(Checkpoint::Changed { head, paths })
     }
     pub fn preserve(&self, task: i64, attempt: i64, base: &str) -> Result<String> {
         self.commit(base, &PRESERVED.format(task, attempt), None)
@@ -532,6 +570,14 @@ impl Workspace {
 #[cfg(test)]
 mod fingerprint_tests {
     use super::*;
+
+    /// The head of a checkpoint that must hold exactly the verified tree.
+    fn verified(checkpoint: Checkpoint) -> String {
+        match checkpoint {
+            Checkpoint::Verified(head) => head,
+            other => panic!("checkpoint does not hold the verified tree: {other:?}"),
+        }
+    }
 
     fn fingerprint(workspace: &Workspace) -> Result<String> {
         let scratch_root = tempfile::tempdir()?;
@@ -634,7 +680,7 @@ mod fingerprint_tests {
         assert_ne!(first, baseline, "same-size edit must be hashed");
         assert_eq!(fingerprint(&workspace)?, first);
         assert_eq!(std::fs::read(root.join(".git/index"))?, real_index);
-        let committed = workspace.checkpoint(1, 1, &head, &first, false)?;
+        let committed = verified(workspace.checkpoint(1, 1, &head, &first, false)?);
         assert_eq!(workspace.head()?, committed);
         assert_eq!(git(root, &["rev-parse", "HEAD^{tree}"])?, first);
         assert_eq!(git(root, &["show", "HEAD:result.txt"])?, "verified 2");
@@ -664,7 +710,7 @@ mod fingerprint_tests {
         let index_before = std::fs::read(root.join(".git/index"))?;
         let tree = workspace.fingerprint(project.path())?;
         assert_eq!(std::fs::read(root.join(".git/index"))?, index_before);
-        let committed = workspace.checkpoint(1, 1, &base, &tree, false)?;
+        let committed = verified(workspace.checkpoint(1, 1, &base, &tree, false)?);
         assert_eq!(git(root, &["rev-parse", "HEAD^{tree}"])?, tree);
         let committed_blob = Command::new("git")
             .arg("-C")
@@ -682,7 +728,7 @@ mod fingerprint_tests {
         let index_before = std::fs::read(root.join(".git/index"))?;
         let amended_tree = workspace.fingerprint(project.path())?;
         assert_eq!(std::fs::read(root.join(".git/index"))?, index_before);
-        let amended = workspace.checkpoint(1, 1, &committed, &amended_tree, true)?;
+        let amended = verified(workspace.checkpoint(1, 1, &committed, &amended_tree, true)?);
         assert_ne!(amended, committed);
         assert_eq!(git(root, &["rev-parse", "HEAD^{tree}"])?, amended_tree);
         let amended_blob = Command::new("git")
@@ -694,11 +740,11 @@ mod fingerprint_tests {
         assert_eq!(amended_blob.stdout, b"original\r\n");
 
         assert_eq!(
-            workspace.checkpoint(1, 1, &amended, &amended_tree, true)?,
+            verified(workspace.checkpoint(1, 1, &amended, &amended_tree, true)?),
             amended
         );
         assert_eq!(
-            workspace.checkpoint(2, 1, &amended, &amended_tree, false)?,
+            verified(workspace.checkpoint(2, 1, &amended, &amended_tree, false)?),
             amended
         );
         std::fs::write(root.join("source.txt"), b"changed!\r\n")?;
@@ -788,14 +834,14 @@ mod fingerprint_tests {
             assert_ne!(tree, baseline);
             assert_eq!(workspace.fingerprint(project.path())?, tree);
             assert_eq!(std::fs::read(root.join(".git/index"))?, real_index);
-            let committed = workspace.checkpoint(1, 1, &base, &tree, false)?;
+            let committed = verified(workspace.checkpoint(1, 1, &base, &tree, false)?);
             assert_eq!(git(root, &["rev-parse", "HEAD^{tree}"])?, tree);
             assert_excluded_blobs(root)?;
 
             std::fs::write(root.join("kept/visible.txt"), "third\n")?;
             let amended_tree = workspace.fingerprint(project.path())?;
             assert_ne!(amended_tree, tree);
-            let amended = workspace.checkpoint(1, 1, &committed, &amended_tree, true)?;
+            let amended = verified(workspace.checkpoint(1, 1, &committed, &amended_tree, true)?);
             assert_ne!(amended, committed);
             assert_eq!(git(root, &["rev-parse", "HEAD^{tree}"])?, amended_tree);
             assert_excluded_blobs(root)?;
@@ -828,7 +874,7 @@ mod fingerprint_tests {
         assert!(error.to_string().contains("hook-rejected"));
         assert_eq!(workspace.head()?, base);
         std::fs::write(&hook, "#!/bin/sh\nexit 0\n")?;
-        let committed = workspace.checkpoint(1, 1, &base, &tree, false)?;
+        let committed = verified(workspace.checkpoint(1, 1, &base, &tree, false)?);
         std::fs::write(&hook, "#!/bin/sh\necho hook-rejected >&2\nexit 1\n")?;
         std::fs::write(root.join("tracked.txt"), "second\n")?;
         let tree = fingerprint(&workspace)?;
@@ -837,6 +883,98 @@ mod fingerprint_tests {
             .unwrap_err();
         assert!(error.to_string().contains("hook-rejected"));
         assert_eq!(workspace.head()?, committed);
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_reports_content_that_commit_hooks_change_for_new_and_amended_commits()
+    -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let project = tempfile::Builder::new()
+            .prefix("ktask-hook-change-test-")
+            .tempdir()?;
+        let root = project.path();
+        run(root, &["init", "-q"]);
+        run(root, &["config", "user.name", "Test"]);
+        run(root, &["config", "user.email", "test@example.com"]);
+        std::fs::write(root.join("tracked.txt"), "baseline\n")?;
+        run(root, &["add", "tracked.txt"]);
+        run(root, &["commit", "-qm", "baseline"]);
+        let hooks = root.join(".git/test-hooks");
+        std::fs::create_dir(&hooks)?;
+        run(root, &["config", "core.hooksPath", hooks.to_str().unwrap()]);
+        let hook = |body: &str| -> Result<()> {
+            let path = hooks.join("pre-commit");
+            std::fs::write(&path, format!("#!/bin/sh\nset -e\n{body}\n"))?;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+            Ok(())
+        };
+        let head_tree = || git(root, &["rev-parse", "HEAD^{tree}"]);
+        let workspace = Workspace::acquire(root)?;
+        let base = workspace.head()?;
+        hook("printf 'hooked\\n' >> hooked.txt\ngit add hooked.txt")?;
+
+        // A new checkpoint: the hook's staged change is reported, kept and matches the worktree.
+        std::fs::write(root.join("tracked.txt"), "first\n")?;
+        let tree = fingerprint(&workspace)?;
+        let Checkpoint::Changed { head, paths } =
+            workspace.checkpoint(1, 1, &base, &tree, false)?
+        else {
+            panic!("a mutating hook must not yield a verified checkpoint");
+        };
+        assert_eq!(paths, "A hooked.txt");
+        assert_eq!(head, workspace.head()?);
+        assert_ne!(head_tree()?, tree);
+        assert_eq!(fingerprint(&workspace)?, head_tree()?);
+        assert!(workspace.clean()?);
+        // Verifying the hook's output needs no new commit, so the hook does not run again.
+        let reverified = fingerprint(&workspace)?;
+        assert_eq!(
+            verified(workspace.checkpoint(1, 1, &head, &reverified, true)?),
+            head
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("hooked.txt"))?,
+            "hooked\n"
+        );
+
+        // An amendment: the hook changes content again and the amended commit is reported.
+        std::fs::write(root.join("tracked.txt"), "second\n")?;
+        let tree = fingerprint(&workspace)?;
+        let Checkpoint::Changed {
+            head: amended,
+            paths,
+        } = workspace.checkpoint(1, 1, &head, &tree, true)?
+        else {
+            panic!("a mutating hook must not yield a verified amendment");
+        };
+        assert_eq!(paths, "M hooked.txt");
+        assert_ne!(amended, head);
+        assert_eq!(git(root, &["rev-parse", "HEAD^"])?, base);
+        assert_eq!(fingerprint(&workspace)?, head_tree()?);
+
+        // A hook that runs without changing content leaves the checkpoint verified.
+        hook("touch .git/unchanged-hook-ran")?;
+        std::fs::write(root.join("tracked.txt"), "third\n")?;
+        let tree = fingerprint(&workspace)?;
+        let unchanged = verified(workspace.checkpoint(1, 1, &amended, &tree, true)?);
+        assert_ne!(unchanged, amended);
+        assert_eq!(head_tree()?, tree);
+        assert!(root.join(".git/unchanged-hook-ran").exists());
+
+        // A hook that commits content the worktree lacks cannot be verified by any check.
+        hook("printf 'staged only\\n' > diverged.txt\ngit add diverged.txt\nrm diverged.txt")?;
+        std::fs::write(root.join("tracked.txt"), "fourth\n")?;
+        let tree = fingerprint(&workspace)?;
+        let Checkpoint::Diverged { head, reason } =
+            workspace.checkpoint(1, 1, &unchanged, &tree, true)?
+        else {
+            panic!("content absent from the worktree must block the checkpoint");
+        };
+        assert_eq!(head, workspace.head()?);
+        assert!(reason.contains("A diverged.txt"), "{reason}");
+        assert_eq!(git(root, &["show", "HEAD:diverged.txt"])?, "staged only");
+        assert!(!root.join("diverged.txt").exists());
         Ok(())
     }
 
@@ -857,7 +995,7 @@ mod fingerprint_tests {
         let base = workspace.head()?;
         std::fs::write(root.join("tracked.txt"), "first version\n")?;
         let tree = workspace.fingerprint(private.path())?;
-        let first = workspace.checkpoint(1, 1, &base, &tree, false)?;
+        let first = verified(workspace.checkpoint(1, 1, &base, &tree, false)?);
         assert_eq!(
             git(&root, &["log", "-1", "--format=%an <%ae>|%cn <%ce>"])?,
             "First Author <first@example.com>|First Author <first@example.com>"
@@ -866,7 +1004,7 @@ mod fingerprint_tests {
         run(&root, &["config", "user.email", "current@example.com"]);
         std::fs::write(root.join("tracked.txt"), "verified amendment\n")?;
         let tree = workspace.fingerprint(private.path())?;
-        let amended = workspace.checkpoint(1, 1, &first, &tree, true)?;
+        let amended = verified(workspace.checkpoint(1, 1, &first, &tree, true)?);
         assert_ne!(amended, first);
         assert_eq!(
             git(&root, &["log", "-1", "--format=%an <%ae>|%cn <%ce>"])?,

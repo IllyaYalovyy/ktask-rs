@@ -210,6 +210,20 @@ fn tree_files(root: &Path) -> usize {
     total
 }
 
+/// A cleanup pass that ran. A process another test spawns inherits the lock of a pass
+/// that just ended until it executes, deferring the next pass as "another cleanup is
+/// running"; the runner retries at its next safe point, a test at once.
+fn clean(paths: &Paths, apply: bool) -> Result<build_cache::Cleanup> {
+    support::eventually("cleanup without an inherited lock", || {
+        let done = build_cache::clean(paths, apply)?;
+        let contended = done
+            .reports
+            .iter()
+            .any(|r| r.deferred.as_deref() == Some("another cleanup is running"));
+        Ok((!contended).then_some(done))
+    })
+}
+
 fn quick(paths: &Paths, keep: u64) -> Result<Policy> {
     let current = build_cache::policy(paths)?;
     Ok(build_cache::set_policy(
@@ -242,12 +256,12 @@ fn repeated_version_builds_stay_bounded_and_the_newest_generation_stays_warm() -
     for version in 1..=versions {
         build(&f.target, version, 40_000 - version * 100)?;
         if version % 4 == 0 {
-            let done = build_cache::clean(&f.paths, true)?;
+            let done = clean(&f.paths, true)?;
             assert!(done.reports.iter().all(|r| r.deferred.is_none()));
             bound = bound.max(tree_files(&f.target));
         }
     }
-    let after = build_cache::clean(&f.paths, true)?;
+    let after = clean(&f.paths, true)?;
     assert!(after.reports[0].after_files <= after.reports[0].before_files);
     let files = tree_files(&f.target);
     // The bound does not grow with versions: 40 generations are far above it.
@@ -327,7 +341,7 @@ fn symlinked_below_root_is_never_followed(link: &str, outside_part: &str) -> Res
     let before = snapshot(&outside);
     assert!(!before.is_empty());
     for apply in [false, true] {
-        let done = build_cache::clean(&f.paths, apply)?;
+        let done = clean(&f.paths, apply)?;
         let report = &done.reports[0];
         assert!(report.deferred.is_none());
         let expected = format!(
@@ -386,7 +400,7 @@ fn a_symlinked_entry_inside_a_managed_directory_is_skipped_and_its_target_kept()
     let link = incremental.join("ktask-0000000000000");
     std::os::unix::fs::symlink(outside.join("ktask-0000000000001"), &link)?;
     let before = snapshot(&outside);
-    let done = build_cache::clean(&f.paths, true)?;
+    let done = clean(&f.paths, true)?;
     let report = &done.reports[0];
     assert!(
         report
@@ -444,7 +458,7 @@ fn capacity_limit_evicts_oldest_but_never_the_last_warm_generation() -> Result {
             ..current
         },
     )?;
-    let preview = build_cache::clean(&f.paths, false)?;
+    let preview = clean(&f.paths, false)?;
     // The oldest generations whose removal brings the cache under its limit.
     let excess = preview.reports[0].before_bytes - limit;
     assert_eq!(
@@ -456,10 +470,12 @@ fn capacity_limit_evicts_oldest_but_never_the_last_warm_generation() -> Result {
         deps.join(format!("libbig-{:016x}.rlib", 1)).is_file(),
         "preview deletes nothing"
     );
-    let done = build_cache::clean(&f.paths, true)?;
+    let done = clean(&f.paths, true)?;
     let report = &done.reports[0];
     assert!(
-        !report.over_capacity && report.after_bytes <= limited.max_bytes,
+        report.deferred.is_none()
+            && !report.over_capacity
+            && report.after_bytes <= limited.max_bytes,
         "{report:?}"
     );
     assert!(
@@ -488,7 +504,7 @@ fn capacity_limit_evicts_oldest_but_never_the_last_warm_generation() -> Result {
         .write(true)
         .open(deps.join(format!("libbig-{:016x}.rlib", 5)))?
         .set_len(limit + generation_bytes)?;
-    let done = build_cache::clean(&f.paths, true)?;
+    let done = clean(&f.paths, true)?;
     assert!(done.reports[0].over_capacity);
     assert!(deps.join(format!("libbig-{:016x}.rlib", 5)).is_file());
     let inventory = build_cache::inventory(&f.paths, &f.project)?;
@@ -512,7 +528,7 @@ fn unowned_caches_are_inventoried_and_never_cleaned() -> Result {
     }
     quick(&f.paths, 1)?;
     let before = tree_files(&f.target);
-    let done = build_cache::clean(&f.paths, true)?;
+    let done = clean(&f.paths, true)?;
     assert!(done.reports.is_empty(), "nothing is owned");
     assert_eq!(tree_files(&f.target), before);
     let inventory = build_cache::inventory(&f.paths, &f.project)?;
@@ -703,10 +719,10 @@ fn live_builds_open_files_running_programs_and_fresh_output_are_kept() -> Result
         .write(true)
         .open(f.target.join("debug/.cargo-lock"))?;
     // Create the cleanup lock file first, so the tree size is stable while the build lock is held.
-    build_cache::clean(&f.paths, false)?;
+    clean(&f.paths, false)?;
     lock.lock()?;
     let before = tree_files(&f.target);
-    let done = build_cache::clean(&f.paths, true)?;
+    let done = clean(&f.paths, true)?;
     assert!(
         done.reports[0]
             .deferred
@@ -721,10 +737,13 @@ fn live_builds_open_files_running_programs_and_fresh_output_are_kept() -> Result
     // A running executable is not removed either: a copy of this test binary, so its
     // inode is its own, waits in deps/ until its stdin closes.
     let running = deps.join(format!("tui-{:016x}", 3));
+    // The copy keeps version 3's own timestamp: aged from a later clock reading, a slow copy
+    // of this large binary would make it newer than version 5.
+    let version_3 = fs::metadata(&running)?.modified()?;
     support::copy_executable(std::env::current_exe()?, &running)?;
-    age(&running, 50_000 - 3)?;
+    File::open(&running)?.set_modified(version_3)?;
     let child = RunningGeneration::start(&running, &f.root)?;
-    let done = build_cache::clean(&f.paths, true)?;
+    let done = clean(&f.paths, true)?;
     let in_use = [open_library, running.clone()];
     assert_eq!(done.reports[0].protected_generations, in_use.len() as u64);
     assert!(
@@ -740,7 +759,7 @@ fn live_builds_open_files_running_programs_and_fresh_output_are_kept() -> Result
     assert!(deps.join(format!("tui-{:016x}", 5)).is_file());
     child.finish()?;
     drop(open);
-    build_cache::clean(&f.paths, true)?;
+    clean(&f.paths, true)?;
     assert!(
         !running.exists(),
         "released generations retire at the next safe point"
@@ -763,7 +782,7 @@ fn live_builds_open_files_running_programs_and_fresh_output_are_kept() -> Result
     for version in 6..=9_u64 {
         build(&f.target, version, 5)?;
     }
-    build_cache::clean(&f.paths, true)?;
+    clean(&f.paths, true)?;
     for version in 6..=9_u64 {
         assert!(
             deps.join(format!("tui-{version:016x}")).is_file(),
@@ -784,7 +803,7 @@ fn final_outputs_are_never_removed_even_when_their_generation_is_old() -> Result
     let deps = f.target.join("debug/deps");
     let old = deps.join(format!("tui-{:016x}", 1));
     fs::hard_link(&old, f.target.join("debug/tui"))?;
-    build_cache::clean(&f.paths, true)?;
+    clean(&f.paths, true)?;
     assert!(old.is_file() && f.target.join("debug/tui").is_file());
     Ok(())
 }
@@ -822,7 +841,7 @@ fn concurrent_and_interrupted_cleanups_converge_without_losing_warm_files() -> R
         let done = result.as_ref().map_err(|e| e.clone())?;
         assert_eq!(done.reports.len(), 1);
     }
-    build_cache::clean(&f.paths, true)?;
+    clean(&f.paths, true)?;
     let leftovers: Vec<_> = fs::read_dir(&deps)?
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
@@ -852,7 +871,7 @@ fn abandoned_scratch_is_reclaimed_but_a_live_lease_is_kept() -> Result {
     fs::create_dir_all(&dead)?;
     fs::write(dead.join(".lease"), "")?;
     fs::write(dead.join("junk"), "x".repeat(4096))?;
-    let done = build_cache::clean(&f.paths, true)?;
+    let done = clean(&f.paths, true)?;
     assert_eq!(done.scratch_reclaimed, 1);
     assert!(!dead.exists());
     assert!(live.path().join("keep").is_file());
@@ -933,7 +952,7 @@ fn crates_named_with_a_lib_prefix_keep_their_dependency_info_and_fingerprint() -
         for version in 1..=4_u64 {
             lib_prefixed(&f.target, version, 50_000 - version, sources)?;
         }
-        let done = build_cache::clean(&f.paths, true)?;
+        let done = clean(&f.paths, true)?;
         assert!(done.reports[0].deferred.is_none());
         assert_eq!(
             lib_prefixed_survivors(&f.target, 4),
@@ -1047,7 +1066,7 @@ fn real_cargo_stays_warm_after_cleanup_of_lib_prefixed_crates() -> Result {
     );
     build_cache::adopt(&f.paths, &workspace, &target)?;
     quick(&f.paths, keep)?;
-    let done = build_cache::clean(&f.paths, true)?;
+    let done = clean(&f.paths, true)?;
     let report = &done.reports[0];
     assert!(
         report.deferred.is_none() && report.freed_bytes > 0,
@@ -1078,7 +1097,7 @@ fn real_cargo_stays_warm_after_cleanup_of_lib_prefixed_crates() -> Result {
         !transcript.contains("Compiling") && !transcript.contains("Checking"),
         "{transcript}"
     );
-    let second = build_cache::clean(&f.paths, true)?;
+    let second = clean(&f.paths, true)?;
     assert_eq!(second.reports[0].freed_bytes, 0, "cleanup is idempotent");
     Ok(())
 }
