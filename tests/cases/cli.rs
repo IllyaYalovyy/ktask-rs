@@ -1731,6 +1731,8 @@ fn save_defaults_for_new_projects(projects: &Projects, first: &str) -> Result {
     assert_eq!(before["defaults"]["check_timeout_ms"], 600000);
     assert_eq!(before["defaults"]["delivery_mode"], "local");
     assert_eq!(before["models"]["review"]["effort"], "high");
+    // Every changed model default advanced the version that guards the whole defaults.
+    assert_eq!(before["defaults"]["version"], 5);
     let saved = projects.ktask(
         first,
         &[
@@ -1748,22 +1750,70 @@ fn save_defaults_for_new_projects(projects: &Projects, first: &str) -> Result {
             "--delivery-mode",
             "pr",
             "--if-version",
-            "0",
+            "5",
         ],
         0,
     )?["data"]
         .clone();
-    assert_eq!(saved["defaults"]["version"], 1);
+    assert_eq!(saved["defaults"]["version"], 6);
+    // A second writer changes only an effort; the edit based on version 6 is now stale and
+    // neither the newer effort nor any setting changes.
+    let effort = projects.ktask(
+        first,
+        &[
+            "model-default",
+            "review",
+            "--provider",
+            "claude",
+            "--model",
+            "opus",
+            "--effort",
+            "medium",
+            "--new-projects",
+        ],
+        0,
+    )?;
+    assert_eq!(effort["data"]["effort"], "medium");
     let stale = projects.ktask(
         first,
-        &["defaults", "--delivery-mode", "direct", "--if-version", "0"],
+        &[
+            "defaults",
+            "--check-timeout-ms",
+            "1000",
+            "--if-version",
+            "6",
+        ],
         4,
     )?;
     assert!(
         stale["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("version 1")
+            .contains("version 7")
+    );
+    let after = projects.ktask(first, &["defaults"], 0)?["data"].clone();
+    assert_eq!(after["defaults"]["version"], 7);
+    assert_eq!(after["defaults"]["check_timeout_ms"], 45000);
+    assert_eq!(after["models"]["review"]["effort"], "medium");
+    // Saving the same model again is not a change and leaves an open edit current.
+    projects.ktask(
+        first,
+        &[
+            "model-default",
+            "review",
+            "--provider",
+            "claude",
+            "--model",
+            "opus",
+            "--effort",
+            "medium",
+            "--new-projects",
+        ],
+        0,
+    )?;
+    assert_eq!(
+        projects.ktask(first, &["defaults"], 0)?["data"]["defaults"]["version"],
+        7
     );
     // Previewing changes nothing in the registered project.
     let rows = saved["preview"].as_array().unwrap();

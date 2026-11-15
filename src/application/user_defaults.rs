@@ -1,10 +1,11 @@
 //! Reusable settings a new project starts with, kept once per user and instance.
 //!
-//! Models live in `default_models`; the rest is one versioned row, including the profile a
-//! new project selects. A new project copies the settings and inherits the models. An
-//! existing project changes only through [`Service::apply_user_defaults`], after
-//! [`Service::defaults_preview`] showed each effective value. Commands, directories,
-//! remotes and branches are never part of the defaults.
+//! Models live in `default_models`; the rest is one row, including the profile a new
+//! project selects. That row's version guards both: every models writer advances it. A new
+//! project copies the settings and inherits the models. An existing project changes only
+//! through [`Service::apply_user_defaults`], after [`Service::defaults_preview`] showed each
+//! effective value. Commands, directories, remotes and branches are never part of the
+//! defaults.
 use super::{
     configuration::{self, DeliveryConfig, MODEL_ROLES},
     preferences::{Continuation, PlannerApproval},
@@ -82,6 +83,46 @@ pub(super) fn read_user_defaults(db: &Connection) -> Result<UserDefaults> {
         .unwrap_or_default())
 }
 
+/// Advances the version under the caller's immediate transaction when another part of
+/// the defaults, such as the models, changed; a missing row starts from the defaults.
+pub(super) fn advance_version(tx: &Connection) -> Result<()> {
+    let current = read_user_defaults(tx)?;
+    write_user_defaults(tx, next_version(current.version)?, &current)
+}
+
+fn next_version(version: i64) -> Result<i64> {
+    version
+        .checked_add(1)
+        .ok_or_else(|| Error::Conflict("User defaults version exhausted".into()))
+}
+
+fn write_user_defaults(tx: &Connection, version: i64, value: &UserDefaults) -> Result<()> {
+    let profile: Option<i64> = match &value.default_profile {
+        Some(name) => Some(
+            tx.query_row("SELECT id FROM model_profiles WHERE name=?1", [name], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .ok_or_else(|| Error::Conflict(format!("Unknown profile {name}")))?,
+        ),
+        None => None,
+    };
+    tx.execute(
+        "INSERT INTO user_defaults(id,row_version,agent_network,check_before_task,check_timeout_ms,continuation,planner_approval,delivery_mode,default_profile_id) VALUES (1,?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET row_version=excluded.row_version,agent_network=excluded.agent_network,check_before_task=excluded.check_before_task,check_timeout_ms=excluded.check_timeout_ms,continuation=excluded.continuation,planner_approval=excluded.planner_approval,delivery_mode=excluded.delivery_mode,default_profile_id=excluded.default_profile_id",
+        params![
+            version,
+            value.agent_network,
+            value.check_before_task,
+            value.check_timeout_ms,
+            value.continuation.name(),
+            value.planner_approval.name(),
+            value.delivery_mode,
+            profile
+        ],
+    )?;
+    Ok(())
+}
+
 pub fn model_text(model: Option<&ModelConfig>) -> String {
     model.map_or_else(
         || "unconfigured".into(),
@@ -120,6 +161,27 @@ impl Service {
         expected: &UserDefaults,
         value: &UserDefaults,
     ) -> Result<UserDefaults> {
+        self.save_defaults(expected, value, None)
+    }
+
+    /// Saves the settings and the five role models in one transaction under the settings
+    /// version, which every models writer also advances: a form opened before any of
+    /// those writes is rejected and nothing changes.
+    pub fn save_new_project_setup(
+        &mut self,
+        expected: &UserDefaults,
+        value: &UserDefaults,
+        models: &configuration::Defaults,
+    ) -> Result<UserDefaults> {
+        self.save_defaults(expected, value, Some(models))
+    }
+
+    fn save_defaults(
+        &mut self,
+        expected: &UserDefaults,
+        value: &UserDefaults,
+        models: Option<&configuration::Defaults>,
+    ) -> Result<UserDefaults> {
         require(
             matches!(value.delivery_mode.as_str(), "local" | "direct" | "pr"),
             "Delivery mode must be local, direct or pr",
@@ -128,6 +190,11 @@ impl Service {
             value.check_timeout_ms > 0,
             "Check timeout must be a positive number of milliseconds",
         )?;
+        for (role, model) in MODEL_ROLES.iter().zip(models.into_iter().flatten()) {
+            if let Some(model) = model {
+                self.validate_model(role, model)?;
+            }
+        }
         let tx = self
             .db
             .connection_mut()
@@ -136,55 +203,16 @@ impl Service {
             read_user_defaults(&tx)? == *expected,
             "User defaults changed elsewhere; reopen the form",
         )?;
-        let profile: Option<i64> = match &value.default_profile {
-            Some(name) => Some(
-                tx.query_row("SELECT id FROM model_profiles WHERE name=?1", [name], |r| {
-                    r.get(0)
-                })
-                .optional()?
-                .ok_or_else(|| Error::Conflict(format!("Unknown profile {name}")))?,
-            ),
-            None => None,
-        };
-        let version = expected
-            .version
-            .checked_add(1)
-            .ok_or_else(|| Error::Conflict("User defaults version exhausted".into()))?;
-        tx.execute(
-            "INSERT INTO user_defaults(id,row_version,agent_network,check_before_task,check_timeout_ms,continuation,planner_approval,delivery_mode,default_profile_id) VALUES (1,?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET row_version=excluded.row_version,agent_network=excluded.agent_network,check_before_task=excluded.check_before_task,check_timeout_ms=excluded.check_timeout_ms,continuation=excluded.continuation,planner_approval=excluded.planner_approval,delivery_mode=excluded.delivery_mode,default_profile_id=excluded.default_profile_id",
-            params![
-                version,
-                value.agent_network,
-                value.check_before_task,
-                value.check_timeout_ms,
-                value.continuation.name(),
-                value.planner_approval.name(),
-                value.delivery_mode,
-                profile
-            ],
-        )?;
+        let version = next_version(expected.version)?;
+        write_user_defaults(&tx, version, value)?;
+        if let Some(models) = models {
+            configuration::replace_default_models(&tx, models)?;
+        }
         tx.commit()?;
         Ok(UserDefaults {
             version,
             ..value.clone()
         })
-    }
-
-    /// Saves the settings and the five role models together; models are checked first.
-    pub fn save_new_project_setup(
-        &mut self,
-        expected: &UserDefaults,
-        value: &UserDefaults,
-        models: &configuration::Defaults,
-    ) -> Result<UserDefaults> {
-        for (role, model) in MODEL_ROLES.iter().zip(models) {
-            if let Some(model) = model {
-                self.validate_model(role, model)?;
-            }
-        }
-        let saved = self.save_user_defaults(expected, value)?;
-        self.save_new_project_defaults(models)?;
-        Ok(saved)
     }
 
     /// This project's effective values beside what the user defaults would set.

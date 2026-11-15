@@ -461,10 +461,17 @@ impl Service {
             "Unknown model role",
         )?;
         self.validate_model(role, model)?;
-        let tx = self.db.connection_mut().transaction()?;
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute("INSERT INTO project_models(project_id,role,provider,model,effort) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(project_id,role) DO UPDATE SET provider=excluded.provider, model=excluded.model, effort=excluded.effort", params![self.project_id,role,model.provider,model.model,model.effort])?;
         if new_projects {
-            tx.execute("INSERT INTO default_models(role,provider,model,effort) VALUES (?1,?2,?3,?4) ON CONFLICT(role) DO UPDATE SET provider=excluded.provider, model=excluded.model, effort=excluded.effort", params![role,model.provider,model.model,model.effort])?;
+            let mut values: configuration::Defaults = Default::default();
+            if let Some(index) = configuration::MODEL_ROLES.iter().position(|r| *r == role) {
+                values[index] = Some(model.clone());
+            }
+            configuration::update_default_models(&tx, &values, true)?;
         }
         tx.commit()?;
         Ok(())

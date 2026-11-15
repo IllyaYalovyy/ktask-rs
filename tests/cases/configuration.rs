@@ -1092,3 +1092,220 @@ fn applying_user_defaults_is_atomic_current_and_refused_during_live_work() -> Re
     assert_eq!(own.delivery_config()?.mode, "local");
     Ok(())
 }
+
+/// An open User defaults form saves its settings and models together under one version;
+/// every other writer of the user-wide models makes it stale, and nothing it held is lost.
+#[test]
+fn stale_user_defaults_never_overwrite_newer_models_from_any_writer() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let mut form = open_project(root, "own")?;
+    let mut other = open_project(root, "own")?;
+    let models: Defaults = std::array::from_fn(|_| claude("opus"));
+    let start = form.user_defaults()?;
+    let saved = form.save_new_project_setup(&start, &user_values(&start), &models)?;
+    // A project override no writer below touches, and a task pinned before them all.
+    let mut overrides = form.project_overrides()?;
+    overrides[3] = claude("project-validation");
+    form.save_project_overrides(&form.project_overrides()?, &overrides)?;
+    let definition = ktask_rs_mk3::application::Definition {
+        title: "Pinned".into(),
+        goal: "Goal".into(),
+        criteria: vec!["Check".into()],
+        kind: ktask_rs_mk3::application::Kind::Ai,
+        category: Some("code".into()),
+        lenses: Some(Vec::new()),
+        models: form.defaults()?,
+        attempt_limit: Some(3),
+        timeout_ms: Some(1000),
+        stage_timeout_ms: None,
+    };
+    let id = form.create(std::slice::from_ref(&definition), None, true)?[0];
+
+    let effort = |role: usize, effort: &str| {
+        let mut values = models.clone();
+        values[role].as_mut().unwrap().effort = Some(effort.into());
+        values
+    };
+    type Writer = fn(&mut Service, &Defaults) -> ktask_rs_mk3::storage::Result<()>;
+    let writers: [(&str, Writer, Defaults); 4] = [
+        (
+            "model-default --new-projects",
+            |s, v| s.set_default("review", v[2].as_ref().unwrap(), true),
+            effort(2, "low"),
+        ),
+        (
+            "project models: start with these",
+            |s, v| s.merge_new_project_defaults(&[None, v[1].clone(), None, None, None]),
+            {
+                let mut values = effort(2, "low");
+                values[1] = claude("sonnet");
+                values
+            },
+        ),
+        (
+            "replace user models",
+            |s, v| s.save_new_project_defaults(v),
+            effort(4, "medium"),
+        ),
+        (
+            "another User defaults form",
+            |s, v| {
+                let current = s.user_defaults()?;
+                s.save_new_project_setup(&current, &current, v).map(drop)
+            },
+            effort(0, "xhigh"),
+        ),
+    ];
+    let mut open = saved;
+    for (writer, write, newer) in writers {
+        let held = form.new_project_defaults()?;
+        write(&mut other, &newer)?;
+        let after_other = (other.user_defaults()?, other.new_project_defaults()?);
+        assert_eq!(after_other.1, newer, "{writer}");
+        // The old form changed only the timeout, and its models are what it showed.
+        let timeout_only = UserDefaults {
+            check_timeout_ms: open.check_timeout_ms + 1,
+            ..open.clone()
+        };
+        let error = form
+            .save_new_project_setup(&open, &timeout_only, &held)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("changed elsewhere"), "{writer}: {error}");
+        assert_eq!(
+            (form.user_defaults()?, form.new_project_defaults()?),
+            after_other,
+            "{writer}"
+        );
+        // Reopened, the same edit saves with the newer models intact.
+        open = form.user_defaults()?;
+        let reopened = form.new_project_defaults()?;
+        let saved = form.save_new_project_setup(
+            &open,
+            &UserDefaults {
+                check_timeout_ms: open.check_timeout_ms + 1,
+                ..open.clone()
+            },
+            &reopened,
+        )?;
+        assert_eq!(saved.version, open.version + 1);
+        assert_eq!(form.new_project_defaults()?, newer, "{writer}");
+        open = saved;
+    }
+
+    // A failed save, before or inside the transaction, leaves settings and models alone.
+    let before = (form.user_defaults()?, form.new_project_defaults()?);
+    let bad_model = {
+        let mut values = before.1.clone();
+        values[0] = Some(ModelConfig {
+            provider: "claude".into(),
+            model: "opus".into(),
+            effort: Some("hight".into()),
+        });
+        values
+    };
+    let changed = UserDefaults {
+        agent_network: !open.agent_network,
+        ..open.clone()
+    };
+    assert!(
+        form.save_new_project_setup(&open, &changed, &bad_model)
+            .is_err()
+    );
+    let unknown = UserDefaults {
+        default_profile: Some("missing".into()),
+        ..changed.clone()
+    };
+    assert!(
+        form.save_new_project_setup(&open, &unknown, &models)
+            .is_err()
+    );
+    assert_eq!(
+        (form.user_defaults()?, form.new_project_defaults()?),
+        before
+    );
+    // A project-only model default does not touch the user defaults or their version.
+    other.set_default("planning", &claude("project-only").unwrap(), false)?;
+    assert_eq!(
+        (form.user_defaults()?, form.new_project_defaults()?),
+        before
+    );
+
+    assert_eq!(form.project_overrides()?[3], claude("project-validation"));
+    assert_eq!(form.task(id)?.unwrap().definition().definition, definition);
+    Ok(())
+}
+
+#[test]
+fn real_stale_user_defaults_form_keeps_a_newer_model_with_keyboard_and_mouse() -> Result {
+    for mouse in [false, true] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        let mut other = service(root)?;
+        let models: Defaults = std::array::from_fn(|_| claude("opus"));
+        let start = other.user_defaults()?;
+        other.save_new_project_setup(&start, &start, &models)?;
+        let mut t = Terminal::open_real(BIN, root, 100, 70)?;
+        screen(&t, "No current task")?;
+        open(&mut t, mouse, "4", "4 Config", "Storage: SQLite")?;
+        open(
+            &mut t,
+            mouse,
+            "u",
+            "u User defaults",
+            "User defaults for new projects",
+        )?;
+        // The CLI's model-default --new-projects path changes only an effort meanwhile.
+        let newer = Some(ModelConfig {
+            effort: Some("low".into()),
+            ..claude("opus").unwrap()
+        });
+        other.set_default("review", newer.as_ref().unwrap(), true)?;
+        let saved = other.user_defaults()?;
+        // The open form changes only its timeout.
+        let edit_timeout = |t: &mut Terminal, value: &str| -> Result {
+            if mouse {
+                t.click("Timeout (ms)")?;
+            } else {
+                t.send(&"\t".repeat(12))?;
+            }
+            t.send(&format!("\x01{value}"))?;
+            t.screen("timeout edited", |s| {
+                dfield(s, "Timeout (ms)").contains(value)
+            })?;
+            Ok(())
+        };
+        edit_timeout(&mut t, "77000")?;
+        activate(&mut t, mouse, "\x13", "Apply")?;
+        let stale = screen(&t, "User defaults changed elsewhere")?;
+        println!("STALE USER DEFAULTS mouse={mouse}\n{stale}");
+        assert_eq!(other.user_defaults()?, saved);
+        assert_eq!(other.new_project_defaults()?[2], newer);
+        activate(&mut t, mouse, "\x1b", "Cancel")?;
+        t.screen("form closed", |s| {
+            !s.contains("User defaults for new projects")
+        })?;
+        // Reopened, the form shows the newer effort and saves the timeout beside it.
+        open(
+            &mut t,
+            mouse,
+            "u",
+            "u User defaults",
+            "User defaults for new projects",
+        )?;
+        let reopened = t.current_screen();
+        println!("REOPENED USER DEFAULTS mouse={mouse}\n{reopened}");
+        assert!(
+            dfield(&reopened, "review effort (optional)").contains("low"),
+            "{reopened}"
+        );
+        edit_timeout(&mut t, "77000")?;
+        apply(&mut t, mouse)?;
+        assert_eq!(other.user_defaults()?.check_timeout_ms, 77_000);
+        assert_eq!(other.user_defaults()?.version, saved.version + 1);
+        assert_eq!(other.new_project_defaults()?[2], newer);
+        quit(&mut t)?;
+    }
+    Ok(())
+}

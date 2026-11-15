@@ -65,6 +65,48 @@ pub(super) fn defaults(db: &Connection, project: i64) -> Result<Defaults> {
         [project],
     )
 }
+/// Writes the user-wide models under the caller's immediate transaction; `merge` keeps the
+/// roles `values` leaves unset. A change advances the user defaults version, so every
+/// defaults form or preview opened before it is rejected as stale.
+pub(super) fn update_default_models(tx: &Connection, values: &Defaults, merge: bool) -> Result<()> {
+    let before = default_models(tx)?;
+    let mut after = values.clone();
+    if merge {
+        for (new, old) in after.iter_mut().zip(&before) {
+            if new.is_none() {
+                new.clone_from(old);
+            }
+        }
+    }
+    if after != before {
+        replace_default_models(tx, &after)?;
+        super::user_defaults::advance_version(tx)?;
+    }
+    Ok(())
+}
+
+/// Replaces every user-wide model; the caller owns the transaction and the version.
+pub(super) fn replace_default_models(tx: &Connection, values: &Defaults) -> Result<()> {
+    tx.execute("DELETE FROM default_models", [])?;
+    for (role, model) in MODEL_ROLES.iter().zip(values) {
+        if let Some(model) = model {
+            tx.execute(
+                "INSERT INTO default_models(role,provider,model,effort) VALUES (?1,?2,?3,?4)",
+                params![role, model.provider, model.model, model.effort],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn default_models(db: &Connection) -> Result<Defaults> {
+    models(
+        db,
+        "SELECT role,provider,model,effort FROM default_models",
+        [],
+    )
+}
+
 pub(super) fn models(
     db: &Connection,
     sql: &str,
@@ -174,45 +216,27 @@ impl Service {
     }
     /// The user-wide model defaults every project inherits below its profile.
     pub fn new_project_defaults(&self) -> Result<Defaults> {
-        models(
-            self.db.connection(),
-            "SELECT role,provider,model,effort FROM default_models",
-            [],
-        )
+        default_models(self.db.connection())
     }
     /// Replaces the user-wide defaults; a project's own overrides still win.
     pub fn save_new_project_defaults(&mut self, values: &Defaults) -> Result<()> {
-        for (role, model) in MODEL_ROLES.iter().zip(values) {
-            if let Some(model) = model {
-                self.validate_model(role, model)?;
-            }
-        }
-        let tx = self.db.connection_mut().transaction()?;
-        tx.execute("DELETE FROM default_models", [])?;
-        for (role, model) in MODEL_ROLES.iter().zip(values) {
-            if let Some(model) = model {
-                tx.execute(
-                    "INSERT INTO default_models(role,provider,model,effort) VALUES (?1,?2,?3,?4)",
-                    params![role, model.provider, model.model, model.effort],
-                )?;
-            }
-        }
-        tx.commit()?;
-        Ok(())
+        self.write_new_project_defaults(values, false)
     }
     /// Sets the user-wide default of every role `values` configures and leaves the others.
     pub fn merge_new_project_defaults(&mut self, values: &Defaults) -> Result<()> {
+        self.write_new_project_defaults(values, true)
+    }
+    fn write_new_project_defaults(&mut self, values: &Defaults, merge: bool) -> Result<()> {
         for (role, model) in MODEL_ROLES.iter().zip(values) {
             if let Some(model) = model {
                 self.validate_model(role, model)?;
             }
         }
-        let tx = self.db.connection_mut().transaction()?;
-        for (role, model) in MODEL_ROLES.iter().zip(values) {
-            if let Some(model) = model {
-                tx.execute("INSERT INTO default_models(role,provider,model,effort) VALUES (?1,?2,?3,?4) ON CONFLICT(role) DO UPDATE SET provider=excluded.provider,model=excluded.model,effort=excluded.effort", params![role, model.provider, model.model, model.effort])?;
-            }
-        }
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        update_default_models(&tx, values, merge)?;
         tx.commit()?;
         Ok(())
     }
