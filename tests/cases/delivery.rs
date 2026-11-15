@@ -1636,3 +1636,94 @@ fn hook_changed_checkpoint_interrupted_before_it_is_recorded_is_verified_on_resu
     }
     Ok(())
 }
+
+/// A repository pre-push hook that rejects until `$HOME/hook-open` exists, logging each run.
+fn rejecting_pre_push_hook(f: &Fixture) -> Result {
+    let hooks = f.scratch.path().join("hooks");
+    fs::create_dir_all(&hooks)?;
+    support::write_executable(
+        &hooks.join("pre-push"),
+        "#!/bin/sh\nprintf 'run\\n' >> \"$HOME/pre-push-runs\"\n[ -f \"$HOME/hook-open\" ] && exit 0\necho 'policy: push forbidden by hook' >&2\nexit 1\n",
+    )?;
+    f.git(&["config", "core.hooksPath", hooks.to_str().unwrap()])?;
+    Ok(())
+}
+
+fn remote_ref(bare: &Path, reference: &str) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .arg("--git-dir")
+        .arg(bare)
+        .args(["rev-parse", "--verify", "-q", reference])
+        .output()?;
+    Ok(output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned()))
+}
+
+fn assert_hook_rejection_then_retry(f: &Fixture, bare: &Path, reference: &str) -> Result {
+    let before = remote_ref(bare, reference)?;
+    f.ok(&["run", "--one"])?;
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "paused", "{task}");
+    assert!(
+        task.to_string().contains("push forbidden by hook"),
+        "{task}"
+    );
+    assert!(
+        fs::read_to_string(f.scratch.path().join("pre-push-runs"))?.contains("run"),
+        "pre-push hook never ran"
+    );
+    assert_eq!(remote_ref(bare, reference)?, before, "remote changed");
+    let checkpoint = f.git(&["rev-parse", "HEAD"])?;
+    assert_ne!(Some(checkpoint.trim().to_owned()), before);
+    assert!(f.root.join("result.txt").exists());
+
+    fs::write(f.scratch.path().join("hook-open"), "")?;
+    f.ok(&["run", "--one"])?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    assert_eq!(f.git(&["rev-parse", "HEAD"])?, checkpoint);
+    assert_eq!(remote_ref(bare, reference)?, Some(checkpoint.trim().into()));
+    one_attempt(f)
+}
+
+#[test]
+fn direct_push_honors_rejecting_pre_push_hook_and_resumes_after_fix() -> Result {
+    let f = Fixture::new()?;
+    let bare = remote(&f)?;
+    rejecting_pre_push_hook(&f)?;
+    f.ok(&["delivery", "--mode", "direct"])?;
+    f.add("Direct delivery behind a hook")?;
+    assert_hook_rejection_then_retry(&f, &bare, "refs/heads/main")
+}
+
+#[test]
+fn pr_push_honors_rejecting_pre_push_hook_and_resumes_after_fix() -> Result {
+    let f = pr_fixture()?;
+    let bare = f.scratch.path().join("remote.git");
+    rejecting_pre_push_hook(&f)?;
+    f.add("PR delivery behind a hook")?;
+    let branch = {
+        f.ok(&["run", "--one"])?;
+        f.git(&["branch", "--show-current"])?
+    };
+    let reference = format!("refs/heads/{}", branch.trim());
+    assert_eq!(remote_ref(&bare, &reference)?, None);
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "paused", "{task}");
+    assert!(
+        task.to_string().contains("push forbidden by hook"),
+        "{task}"
+    );
+    assert!(!f.scratch.path().join("pr-created").exists());
+    let checkpoint = f.git(&["rev-parse", "HEAD"])?;
+    fs::write(f.scratch.path().join("hook-open"), "")?;
+    f.ok(&["run", "--one"])?;
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    assert_eq!(
+        remote_ref(&bare, &reference)?,
+        Some(checkpoint.trim().into())
+    );
+    assert!(f.scratch.path().join("pr-created").exists());
+    one_attempt(&f)
+}

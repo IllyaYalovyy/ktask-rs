@@ -72,6 +72,8 @@ enum CommandResult {
     Paused,
 }
 
+/// Delivery commands run without hooks so that local branch plumbing never executes
+/// project code; only the publishing push keeps the configured hook path.
 fn command(
     service: &Service,
     run: &Run,
@@ -79,22 +81,38 @@ fn command(
     executable: &str,
     args: &[&str],
 ) -> DeliveryResult<CommandResult> {
+    run_command(service, run, ctx, executable, args, false)
+}
+
+fn run_command(
+    service: &Service,
+    run: &Run,
+    ctx: &Context<'_>,
+    executable: &str,
+    args: &[&str],
+    hooks: bool,
+) -> DeliveryResult<CommandResult> {
     let identity = super::workspace::git_identity(&ctx.workspace.root)?;
+    let mut config = vec![("commit.gpgsign", "false")];
+    if !hooks {
+        config.push(("core.hooksPath", "/dev/null"));
+    }
+    let mut env = vec![
+        ("GIT_TERMINAL_PROMPT".into(), "0".into()),
+        ("GCM_INTERACTIVE".into(), "never".into()),
+        ("GIT_EDITOR".into(), "true".into()),
+        ("GH_PROMPT_DISABLED".into(), "1".into()),
+        ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+        ("GIT_CONFIG_COUNT".into(), config.len().to_string()),
+        ("GIT_COMMITTER_NAME".into(), identity.name),
+        ("GIT_COMMITTER_EMAIL".into(), identity.email),
+    ];
+    for (index, (key, value)) in config.into_iter().enumerate() {
+        env.push((format!("GIT_CONFIG_KEY_{index}"), key.into()));
+        env.push((format!("GIT_CONFIG_VALUE_{index}"), value.into()));
+    }
     let invocation = Invocation {
-        env: vec![
-            ("GIT_TERMINAL_PROMPT".into(), "0".into()),
-            ("GCM_INTERACTIVE".into(), "never".into()),
-            ("GIT_EDITOR".into(), "true".into()),
-            ("GH_PROMPT_DISABLED".into(), "1".into()),
-            ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
-            ("GIT_CONFIG_COUNT".into(), "2".into()),
-            ("GIT_CONFIG_KEY_0".into(), "core.hooksPath".into()),
-            ("GIT_CONFIG_VALUE_0".into(), "/dev/null".into()),
-            ("GIT_CONFIG_KEY_1".into(), "commit.gpgsign".into()),
-            ("GIT_CONFIG_VALUE_1".into(), "false".into()),
-            ("GIT_COMMITTER_NAME".into(), identity.name),
-            ("GIT_COMMITTER_EMAIL".into(), identity.email),
-        ],
+        env,
         ..ctx.invocation(
             PathBuf::from(executable),
             args.iter().map(|s| (*s).to_owned()).collect(),
@@ -178,6 +196,15 @@ fn git_network(
     args: &[&str],
 ) -> DeliveryResult<CommandResult> {
     command(service, run, ctx, "git", args)
+}
+/// The publishing push honors the repository and user pre-push hooks.
+fn git_push(
+    service: &Service,
+    run: &Run,
+    ctx: &Context<'_>,
+    args: &[&str],
+) -> DeliveryResult<CommandResult> {
+    run_command(service, run, ctx, "git", args, true)
 }
 fn require_ok(result: CommandResult, label: &str) -> DeliveryResult<Option<String>> {
     match result {
@@ -758,7 +785,7 @@ pub(super) fn publish(
         }
         args.extend(["--", &delivery.remote, &refspec]);
         service.delivery_push_intent(run, &current, &remote_branch)?;
-        match git_network(service, run, ctx, &args)? {
+        match git_push(service, run, ctx, &args)? {
             CommandResult::Paused => return Ok(DeliveryOutcome::Paused),
             CommandResult::Exit(0, _, _) => {}
             CommandResult::Exit(_, _, err) => {
