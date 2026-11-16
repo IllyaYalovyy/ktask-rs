@@ -133,6 +133,9 @@ struct Limit {
 impl Limit {
     /// Why the worker must stop now, if it must.
     fn reached(&self, service: &Service, run: &Run, ctx: &Context<'_>) -> Result<Option<Outcome>> {
+        if let Some(reason) = service.pending_dependency(run.attempt)? {
+            return Ok(Some(Outcome::Dependency(reason)));
+        }
         if ctx.interrupted(service, run)? {
             return Ok(Some(Outcome::Paused));
         }

@@ -48,7 +48,11 @@ BEFORE THE FIRST RUN
         ktask init       registers it with the user defaults, detects a check, lists the
                          project-specific setup left, exits 4 listing anything missing
     --check-command CMD sets the check; --agent-network on lets agents that change the
-    project use the network, for example to install dependencies.
+    project use the network for its work. Missing local tools and SDK components are
+    requested through the live worker callback and wait for external installation.
+    Declare known prerequisites with require; after setup, dependency-recheck probes
+    them locally. Run probes again in its own environment before resuming the same attempt.
+    Recheck exits 0 when the probe completed; JSON passed=false means setup remains missing.
   - The provider CLI (codex, claude or opencode) is on PATH and logged in, and bubblewrap
     (bwrap) is installed: review, validation and judges run in a sandbox where the project
     and ktask's own records are read-only, whatever the provider allows.

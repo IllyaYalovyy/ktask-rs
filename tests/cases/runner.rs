@@ -17,6 +17,857 @@ use std::{
 const BIN: &str = env!("CARGO_BIN_EXE_ktask-dev");
 
 #[test]
+fn worker_dependency_callback_waits_and_recheck_resumes_same_attempt() -> Result {
+    let f = Fixture::new()?;
+    f.provider("dependency-request")?;
+    f.add("Resume after missing tool")?;
+    let first = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(String::from_utf8_lossy(&first.stdout).contains("Waiting for dependency"));
+    let waiting = f.ok(&["current"])?;
+    assert_eq!(waiting["state"], "needs_dependency");
+    assert_eq!(waiting["attempts"].as_array().unwrap().len(), 1);
+    let attempt = waiting["attempts"][0]["id"].as_i64().unwrap();
+    assert_eq!(waiting["attempts"][0]["wait_reason"], "dependency");
+    assert_eq!(waiting["attempts_used"], 0);
+    let mut stale = Service::find(f.db()?, &f.root)?.ok_or("fixture project missing")?;
+    assert!(!stale.settle_orphan()?);
+    assert_eq!(
+        stale.current_task()?.unwrap().state(),
+        ktask_rs_mk3::application::lifecycle::State::NeedsDependency
+    );
+    let replay = ktask_rs_mk3::application::dependency::Requirement {
+        kind: "executable".into(),
+        item: "missing-runtime-tool".into(),
+        version: Some("1.2.3".into()),
+        scope: "task".into(),
+        stage: "execution".into(),
+        reproduction: "fixture tool: command not found".into(),
+    };
+    assert!(
+        stale
+            .request_live_requirement(1, attempt, "wrong", &replay)
+            .is_err()
+    );
+    drop(stale);
+    assert!(f.root.join("partial.txt").exists());
+    assert!(
+        !f.scratch
+            .path()
+            .join("dependency-natural-completion")
+            .exists()
+    );
+    let calls_before = fs::read_to_string(f.scratch.path().join("provider-invocations"))?;
+    let restart = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        restart.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restart.stderr)
+    );
+    assert_eq!(f.ok(&["current"])?["attempts"][0]["id"], attempt);
+    assert_eq!(
+        fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+        calls_before
+    );
+    let tool = f.scratch.path().join("bin/missing-runtime-tool");
+    support::write_executable(&tool, b"#!/bin/sh\necho 'runtime-tool 1.2.3'\n")?;
+    assert_eq!(f.ok(&["dependency-recheck", "1"])?["passed"], true);
+    let resumed = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    let done = f.ok(&["show", "1"])?;
+    assert_eq!(done["status"], "succeeded");
+    assert_eq!(done["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(done["attempts"][0]["id"], attempt);
+    Ok(())
+}
+
+#[test]
+fn satisfied_requirements_allow_failed_rate_wait_and_answered_question_continuations() -> Result {
+    for continuation in ["failed", "rate_limit", "answered_question"] {
+        let f = Fixture::new()?;
+        f.provider("dependency-request")?;
+        f.add("Continue after verified prerequisite")?;
+        let first = f.process().args(["run", "--one"]).output()?;
+        assert!(
+            first.status.success(),
+            "{continuation}: {}",
+            String::from_utf8_lossy(&first.stderr)
+        );
+        let tool = f.scratch.path().join("bin/missing-runtime-tool");
+        support::write_executable(&tool, b"#!/bin/sh\necho 'runtime-tool 1.2.3'\n")?;
+        assert_eq!(f.ok(&["dependency-recheck", "1"])?["passed"], true);
+        let db = f.db()?;
+        match continuation {
+            "failed" => {
+                db.connection().execute("UPDATE attempts SET state='failed',finished_at_ms=started_at_ms,outcome='fixture failure',failure_category='protocol' WHERE task_id=1", [])?;
+            }
+            "rate_limit" => {
+                db.connection().execute("UPDATE attempts SET state='waiting',wait_reason='rate_limit',waiting_since_ms=started_at_ms,resume_at_ms=started_at_ms WHERE task_id=1", [])?;
+            }
+            _ => {
+                db.connection().execute("UPDATE attempts SET state='waiting',wait_reason='question',waiting_since_ms=started_at_ms WHERE task_id=1", [])?;
+            }
+        }
+        drop(db);
+        let resumed = f.process().args(["run", "--one"]).output()?;
+        assert!(
+            resumed.status.success(),
+            "{continuation}: {}",
+            String::from_utf8_lossy(&resumed.stderr)
+        );
+        let done = f.ok(&["show", "1"])?;
+        assert_eq!(done["status"], "succeeded", "{continuation}: {done}");
+        assert_eq!(
+            done["attempts"].as_array().unwrap().len(),
+            if continuation == "failed" { 2 } else { 1 },
+            "{continuation}: {done}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn launch_rechecks_a_previously_satisfied_path_before_the_first_attempt() -> Result {
+    let f = Fixture::new()?;
+    f.add("Use a declared local tool")?;
+    f.ok(&[
+        "require",
+        "1",
+        "--kind",
+        "executable",
+        "--item",
+        "admission-tool",
+        "--version",
+        "1.2.3",
+        "--scope",
+        "project",
+        "--stage",
+        "baseline",
+        "--reproduction",
+        "admission-tool --version unavailable",
+    ])?;
+    let tool = f.scratch.path().join("bin/admission-tool");
+    support::write_executable(&tool, b"#!/bin/sh\necho 'admission-tool 1.2.3'\n")?;
+    assert_eq!(f.ok(&["dependency-recheck", "1"])?["passed"], true);
+
+    let missing = f
+        .process()
+        .env("PATH", "/usr/bin:/bin")
+        .args(["run", "--one"])
+        .output()?;
+    assert!(
+        missing.status.success(),
+        "{}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+    let waiting = f.ok(&["current"])?;
+    assert_eq!(waiting["state"], "needs_dependency");
+    assert!(waiting["attempts"].as_array().unwrap().is_empty());
+    assert!(
+        waiting["dependencies"][0]["observed"]
+            .as_str()
+            .unwrap()
+            .starts_with("MISSING:")
+    );
+    assert!(!f.scratch.path().join("provider-invocations").exists());
+    f.process().args(["run", "--one"]).output()?;
+    assert_eq!(f.ok(&["current"])?["state"], "needs_dependency");
+    assert!(!f.scratch.path().join("provider-invocations").exists());
+
+    assert_eq!(f.ok(&["dependency-recheck", "1"])?["passed"], true);
+    let resumed = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    assert_eq!(
+        f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
+        1
+    );
+    Ok(())
+}
+
+#[test]
+fn launch_rechecks_the_sdk_root_used_by_the_new_process() -> Result {
+    let f = Fixture::new()?;
+    f.add("Use installed emulator")?;
+    f.ok(&[
+        "require",
+        "1",
+        "--kind",
+        "sdk_component",
+        "--item",
+        "emulator",
+        "--version",
+        "1.0",
+        "--scope",
+        "host",
+        "--stage",
+        "baseline",
+        "--reproduction",
+        "emulator absent",
+    ])?;
+    let good = f.scratch.path().join("sdk-good");
+    let empty = f.scratch.path().join("sdk-empty");
+    fs::create_dir_all(good.join("emulator"))?;
+    fs::create_dir_all(&empty)?;
+    fs::write(
+        good.join("emulator/source.properties"),
+        "Pkg.Revision=1.0\n",
+    )?;
+    let recheck = f
+        .process()
+        .env("ANDROID_SDK_ROOT", &good)
+        .args(["--json", "dependency-recheck", "1"])
+        .output()?;
+    assert!(
+        recheck.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recheck.stderr)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&recheck.stdout)?["data"]["passed"],
+        true
+    );
+
+    let changed = f
+        .process()
+        .env("ANDROID_SDK_ROOT", &empty)
+        .args(["run", "--one"])
+        .output()?;
+    assert!(
+        changed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&changed.stderr)
+    );
+    let waiting = f.ok(&["current"])?;
+    assert_eq!(waiting["state"], "needs_dependency");
+    assert!(waiting["attempts"].as_array().unwrap().is_empty());
+    assert!(!f.scratch.path().join("provider-invocations").exists());
+    let recheck = f
+        .process()
+        .env("ANDROID_SDK_ROOT", &good)
+        .args(["--json", "dependency-recheck", "1"])
+        .output()?;
+    assert!(
+        recheck.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recheck.stderr)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&recheck.stdout)?["data"]["passed"],
+        true
+    );
+    let run = f
+        .process()
+        .env("ANDROID_SDK_ROOT", &good)
+        .args(["run", "--one"])
+        .output()?;
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    Ok(())
+}
+
+#[test]
+fn launch_rechecks_a_replaced_version_before_resuming_the_same_attempt() -> Result {
+    let f = Fixture::new()?;
+    f.provider("dependency-request")?;
+    f.add("Resume after local tool replacement")?;
+    let first = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let attempt = f.ok(&["current"])?["attempts"][0]["id"].clone();
+    let tool = f.scratch.path().join("bin/missing-runtime-tool");
+    support::write_executable(&tool, b"#!/bin/sh\necho 'runtime-tool 1.2.3'\n")?;
+    assert_eq!(f.ok(&["dependency-recheck", "1"])?["passed"], true);
+    let calls_before = fs::read_to_string(f.scratch.path().join("provider-invocations"))?;
+
+    support::write_executable(&tool, b"#!/bin/sh\necho 'runtime-tool 9.9.9'\n")?;
+    let changed = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        changed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&changed.stderr)
+    );
+    let waiting = f.ok(&["current"])?;
+    assert_eq!(waiting["state"], "needs_dependency");
+    assert_eq!(waiting["attempts"][0]["id"], attempt);
+    assert_eq!(waiting["attempts_used"], 0);
+    assert!(
+        waiting["dependencies"][0]["observed"]
+            .as_str()
+            .unwrap()
+            .starts_with("WRONG_VERSION:")
+    );
+    assert_eq!(
+        fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+        calls_before
+    );
+    assert_eq!(f.ok(&["dependency-recheck", "1"])?["passed"], false);
+    support::write_executable(&tool, b"#!/bin/sh\necho 'runtime-tool 1.2.3'\n")?;
+    assert_eq!(f.ok(&["dependency-recheck", "1"])?["passed"], true);
+    let resumed = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    let done = f.ok(&["show", "1"])?;
+    assert_eq!(done["status"], "succeeded");
+    assert_eq!(done["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(done["attempts"][0]["id"], attempt);
+    Ok(())
+}
+
+#[test]
+fn failed_retry_waits_for_a_changed_tool_without_rewriting_the_failed_attempt() -> Result {
+    let f = Fixture::new()?;
+    f.provider("dependency-request")?;
+    f.add("Retry after a failed attempt")?;
+    let first = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let tool = f.scratch.path().join("bin/missing-runtime-tool");
+    support::write_executable(&tool, b"#!/bin/sh\necho 'runtime-tool 1.2.3'\n")?;
+    assert_eq!(f.ok(&["dependency-recheck", "1"])?["passed"], true);
+    f.db()?.connection().execute("UPDATE attempts SET state='failed',finished_at_ms=started_at_ms,outcome='fixture failure',failure_category='protocol' WHERE task_id=1", [])?;
+    support::write_executable(&tool, b"#!/bin/sh\necho 'runtime-tool 9.9.9'\n")?;
+    let calls_before = fs::read_to_string(f.scratch.path().join("provider-invocations"))?;
+    let retry = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        retry.status.success(),
+        "{}",
+        String::from_utf8_lossy(&retry.stderr)
+    );
+    let waiting = f.ok(&["current"])?;
+    assert_eq!(waiting["state"], "needs_dependency");
+    assert_eq!(waiting["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(waiting["attempts"][0]["state"], "failed");
+    assert_eq!(
+        fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+        calls_before
+    );
+    support::write_executable(&tool, b"#!/bin/sh\necho 'runtime-tool 1.2.3'\n")?;
+    assert_eq!(f.ok(&["dependency-recheck", "1"])?["passed"], true);
+    let resumed = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    let done = f.ok(&["show", "1"])?;
+    assert_eq!(done["status"], "succeeded");
+    assert_eq!(done["attempts"].as_array().unwrap().len(), 2);
+    assert_eq!(done["attempts"][0]["state"], "failed");
+    Ok(())
+}
+
+#[test]
+fn unknown_baseline_tool_discovery_waits_without_spending_repair_round() -> Result {
+    let f = Fixture::new()?;
+    f.provider("dependency-baseline")?;
+    f.add("Baseline needs ripgrep")?;
+    f.ok(&["check-set", "build", "--command", "rg --version"])?;
+    f.ok(&["init", "--check-before-task", "on"])?;
+    let run = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let current = f.ok(&["current"])?;
+    assert_eq!(current["state"], "needs_dependency");
+    assert_eq!(current["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(current["attempts"][0]["wait_reason"], "dependency");
+    assert_eq!(current["attempts_used"], 0);
+    let db = f.db()?;
+    let (round, context): (i64, String) = db.connection().query_row(
+        "SELECT repair_round,context FROM attempt_progress WHERE attempt_id=1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    assert_eq!(round, 0);
+    assert!(context.contains("rg: not found") || context.contains("rg: command not found"));
+    assert_eq!(current["dependencies"][0]["requirement"]["item"], "rg");
+    drop(db);
+    support::write_executable(
+        &f.scratch.path().join("bin/rg"),
+        b"#!/bin/sh\necho 'ripgrep 14.1.1'\n",
+    )?;
+    assert_eq!(f.ok(&["dependency-recheck", "1"])?["passed"], true);
+    let resumed = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    let done = f.ok(&["show", "1"])?;
+    assert_eq!(done["status"], "succeeded");
+    assert_eq!(done["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(done["attempts"][0]["id"], current["attempts"][0]["id"]);
+    Ok(())
+}
+
+#[test]
+fn duplicate_live_callback_and_supervisor_crash_restore_dependency_wait() -> Result {
+    use nix::{
+        sys::signal::{Signal, kill},
+        unistd::Pid,
+    };
+    let f = Fixture::new()?;
+    f.provider("dependency-crash")?;
+    f.add("Recover committed prerequisite request")?;
+    f.add("Later task must stay queued")?;
+    f.ok(&["check-set", "build", "--command", "rg --version"])?;
+    f.ok(&["init", "--check-before-task", "on"])?;
+    let mut supervisor = Running(
+        f.process()
+            .args(["run", "--one"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?,
+    );
+    support::eventually("dependency worker ready", || {
+        Ok(f.scratch
+            .path()
+            .join("dependency-worker-ready")
+            .exists()
+            .then_some(()))
+    })?;
+    let session = support::eventually("execution session recorded before crash", || {
+        let db = f.db()?;
+        let recorded: Option<i64> = db.connection().query_row(
+            "SELECT session_id FROM attempt_steps WHERE attempt_id=1 AND role='execution' ORDER BY ordinal DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(recorded)
+    })?;
+    kill(Pid::from_raw(supervisor.0.id() as i32), Signal::SIGSTOP)?;
+    fs::write(f.scratch.path().join("release-dependency-worker"), "go")?;
+    support::eventually("duplicate dependency callbacks committed", || {
+        Ok(f.scratch
+            .path()
+            .join("dependency-committed")
+            .exists()
+            .then_some(()))
+    })?;
+    assert_eq!(
+        fs::read_to_string(f.scratch.path().join("dependency-receipt"))?,
+        fs::read_to_string(f.scratch.path().join("dependency-duplicate-receipt"))?
+    );
+    kill(Pid::from_raw(supervisor.0.id() as i32), Signal::SIGKILL)?;
+    supervisor.0.wait()?;
+    support::eventually("orphan guardian reaped worker", || {
+        let lease = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(f.root.join(".git/ktask-worker.lock"))?;
+        Ok(lease.try_lock().ok().map(|_| ()))
+    })?;
+    let first_calls = fs::read_to_string(f.scratch.path().join("provider-invocations"))?;
+    let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 28)?;
+    let restored = terminal.screen("crash-restored dependency Current", |s| {
+        s.contains("Current #1 · Needs dependency") && s.contains("[r Recheck]")
+    })?;
+    if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+        let dir = PathBuf::from(dir);
+        fs::write(dir.join("dependency-crash-restored.txt"), &restored)?;
+        support::screen_png(&restored, &dir.join("dependency-crash-restored.png"))?;
+    }
+    terminal.send("q")?;
+    terminal.finish()?;
+    let recovery = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        recovery.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recovery.stderr)
+    );
+    let current = f.ok(&["current"])?;
+    assert_eq!(current["state"], "needs_dependency", "{current}");
+    assert_eq!(current["id"], 1);
+    assert!(
+        f.ok(&["show", "2"])?["attempts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(current["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(current["attempts"][0]["wait_reason"], "dependency");
+    assert_eq!(current["attempts_used"], 0);
+    let db = f.db()?;
+    assert_eq!(
+        db.connection().query_row(
+            "SELECT count(*) FROM task_requirements WHERE task_id=1",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        1
+    );
+    assert_eq!(
+        db.connection().query_row(
+            "SELECT requested_by_kind FROM task_requirements WHERE task_id=1",
+            [],
+            |r| r.get::<_, String>(0)
+        )?,
+        "ai"
+    );
+    assert_eq!(
+        db.connection().query_row(
+            "SELECT repair_round FROM attempt_progress WHERE attempt_id=1",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        0
+    );
+    assert_eq!(db.connection().query_row(
+        "SELECT session_id FROM attempt_steps WHERE attempt_id=1 AND role='execution' ORDER BY ordinal DESC LIMIT 1",
+        [],
+        |r| r.get::<_, Option<i64>>(0)
+    )?, Some(session));
+    drop(db);
+    let repeated = f.process().args(["run", "--one"]).output()?;
+    assert!(repeated.status.success());
+    assert_eq!(
+        fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+        first_calls
+    );
+    assert_eq!(
+        f.db()?.connection().query_row(
+            "SELECT count(*) FROM events WHERE task_id=1 AND kind='attempt.waiting'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        1
+    );
+    support::write_executable(
+        &f.scratch.path().join("bin/rg"),
+        b"#!/bin/sh\necho 'ripgrep 14.1.1'\n",
+    )?;
+    assert_eq!(f.ok(&["dependency-recheck", "1"])?["passed"], true);
+    let resumed = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    let done = f.ok(&["show", "1"])?;
+    assert_eq!(done["status"], "succeeded");
+    assert_eq!(done["attempts"].as_array().unwrap().len(), 1);
+    Ok(())
+}
+
+#[test]
+fn dependency_wait_rechecks_and_resumes_same_attempt_in_real_terminal() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("dependency-request")?;
+        f.add("Resume dependency in Current")?;
+        let run = f.process().args(["run", "--one"]).output()?;
+        assert!(
+            run.status.success(),
+            "{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        let waiting = f.ok(&["current"])?;
+        let attempt = waiting["attempts"][0]["id"].clone();
+        let calls_before = fs::read_to_string(f.scratch.path().join("provider-invocations"))?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 28)?;
+        let wait_screen = t.screen("dependency Current wait", |s| {
+            s.contains("Current #1 · Needs dependency") && s.contains("[r Recheck]")
+        })?;
+        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            let dir = PathBuf::from(dir);
+            fs::write(
+                dir.join(format!("dependency-live-wait-mouse-{mouse}.txt")),
+                &wait_screen,
+            )?;
+            support::screen_png(
+                &wait_screen,
+                &dir.join(format!("dependency-live-wait-mouse-{mouse}.png")),
+            )?;
+        }
+        let tool = f.scratch.path().join("bin/missing-runtime-tool");
+        support::write_executable(&tool, b"#!/bin/sh\necho 'runtime-tool 1.2.3'\n")?;
+        press(&mut t, mouse, "r Recheck", "r")?;
+        let paused = t.screen("dependency explicitly rechecked", |s| {
+            s.contains("Current #1 · Paused") && s.contains("[r Resume]")
+        })?;
+        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            fs::write(
+                PathBuf::from(dir).join(format!("dependency-live-paused-mouse-{mouse}.txt")),
+                &paused,
+            )?;
+        }
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+            calls_before
+        );
+        let unavailable = f.scratch.path().join("missing-runtime-tool-unavailable");
+        fs::rename(&tool, &unavailable)?;
+        press(&mut t, mouse, "r Resume", "r")?;
+        let admission_wait = t.screen("dependency changed before Resume", |s| {
+            s.contains("Current #1 · Needs dependency") && s.contains("[r Recheck]")
+        })?;
+        assert!(admission_wait.contains("Dependency still missing"));
+        assert!(!admission_wait.contains("Runner exited before startup"));
+        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            let dir = PathBuf::from(dir);
+            fs::write(
+                dir.join(format!("dependency-admission-wait-mouse-{mouse}.txt")),
+                &admission_wait,
+            )?;
+            support::screen_png(
+                &admission_wait,
+                &dir.join(format!("dependency-admission-wait-mouse-{mouse}.png")),
+            )?;
+        }
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+            calls_before
+        );
+        fs::rename(&unavailable, &tool)?;
+        press(&mut t, mouse, "r Recheck", "r")?;
+        t.screen("dependency rechecked after changed environment", |s| {
+            s.contains("Current #1 · Paused") && s.contains("[r Resume]")
+        })?;
+        press(&mut t, mouse, "r Resume", "r")?;
+        let complete = t.screen("dependency resumed completion", |s| {
+            s.contains("Queue complete")
+        })?;
+        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            fs::write(
+                PathBuf::from(dir).join(format!("dependency-live-complete-mouse-{mouse}.txt")),
+                &complete,
+            )?;
+        }
+        let done = f.ok(&["show", "1"])?;
+        assert_eq!(done["status"], "succeeded");
+        assert_eq!(done["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(done["attempts"][0]["id"], attempt);
+        t.send("q")?;
+        t.finish()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn live_dependency_wait_stops_and_stashes_by_mouse_and_keyboard() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("dependency-request")?;
+        f.add("Stop live dependency wait")?;
+        let run = f.process().args(["run", "--one"]).output()?;
+        assert!(
+            run.status.success(),
+            "{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert!(f.root.join("partial.txt").exists());
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 28)?;
+        t.screen("live dependency Stop offered", |s| {
+            s.contains("Needs dependency") && s.contains("[s Stop]")
+        })?;
+        press(&mut t, mouse, "s Stop", "s")?;
+        t.screen("live dependency Stop dialog", |s| {
+            s.contains("Stop #1 Stop live dependency wait") && s.contains("[Apply]")
+        })?;
+        press(&mut t, mouse, "Apply", "\x13")?;
+        let stopped = t.screen("live dependency stopped", |s| {
+            s.contains("Current #1 · Pending") && s.contains("[r Run")
+        })?;
+        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            fs::write(
+                PathBuf::from(dir).join(format!("dependency-live-stop-mouse-{mouse}.txt")),
+                &stopped,
+            )?;
+        }
+        assert!(!f.root.join("partial.txt").exists());
+        assert!(
+            f.git(&["stash", "list"])?
+                .contains("ktask: task #1 attempt #1")
+        );
+        t.send("q")?;
+        t.finish()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn stop_from_dependency_wait_stashes_partial_work_and_returns_pending() -> Result {
+    let f = Fixture::new()?;
+    f.provider("dependency-request")?;
+    f.add("Stop after dependency discovery")?;
+    let run = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(f.ok(&["current"])?["state"], "needs_dependency");
+    assert!(f.root.join("partial.txt").exists());
+    f.ok(&["stop", "1"])?;
+    assert_eq!(f.ok(&["current"])?["state"], "pending");
+    assert!(!f.root.join("partial.txt").exists());
+    assert!(
+        f.git(&["stash", "list"])?
+            .contains("ktask: task #1 attempt #1")
+    );
+    Ok(())
+}
+
+#[test]
+fn declared_rg_waits_before_any_attempt_and_blocks_queue() -> Result {
+    let f = Fixture::new()?;
+    f.add("Needs ripgrep")?;
+    f.add("Later work")?;
+    f.ok(&["init", "--check-before-task", "on"])?;
+    f.ok(&[
+        "require",
+        "1",
+        "--kind",
+        "executable",
+        "--item",
+        "rg",
+        "--version",
+        "14.1.1",
+        "--scope",
+        "project",
+        "--stage",
+        "baseline",
+        "--reproduction",
+        "baseline: rg: command not found",
+    ])?;
+    let first = f.process().args(["run", "--queue"]).output()?;
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(String::from_utf8_lossy(&first.stdout).contains("Waiting for dependency"));
+    let current = f.ok(&["current"])?;
+    assert_eq!(current["id"], 1);
+    assert_eq!(current["state"], "needs_dependency");
+    assert!(current["attempts"].as_array().unwrap().is_empty());
+    assert!(
+        f.ok(&["show", "2"])?["attempts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!f.scratch.path().join("provider-invocations").exists());
+    f.ok(&["init", "--check-before-task", "off"])?;
+    support::write_executable(
+        &f.scratch.path().join("bin/rg"),
+        b"#!/bin/sh\necho 'ripgrep 14.1.1'\n",
+    )?;
+    assert_eq!(f.ok(&["dependency-recheck", "1"])?["passed"], true);
+    assert_eq!(f.ok(&["current"])?["state"], "pending");
+    let resumed = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    assert!(
+        f.ok(&["show", "2"])?["attempts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[test]
+fn sdk_component_probe_waits_without_download_or_attempt() -> Result {
+    let f = Fixture::new()?;
+    f.add("Needs Android emulator")?;
+    f.ok(&[
+        "require",
+        "1",
+        "--kind",
+        "sdk_component",
+        "--item",
+        "system-images;android-36;google_apis;x86_64",
+        "--version",
+        "1.0",
+        "--scope",
+        "host",
+        "--stage",
+        "baseline",
+        "--reproduction",
+        "emulator system image android-36 is absent",
+    ])?;
+    let sdk = f.scratch.path().join("android-sdk");
+    fs::create_dir(&sdk)?;
+    let run = f
+        .process()
+        .env("ANDROID_SDK_ROOT", &sdk)
+        .args(["run", "--one"])
+        .output()?;
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(String::from_utf8_lossy(&run.stdout).contains("Waiting for dependency"));
+    assert!(
+        f.ok(&["current"])?["attempts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let component = sdk.join("system-images/android-36/google_apis/x86_64");
+    fs::create_dir_all(&component)?;
+    fs::write(component.join("source.properties"), "Pkg.Revision=2.0\n")?;
+    let wrong = f
+        .process()
+        .env("ANDROID_SDK_ROOT", &sdk)
+        .args(["--json", "dependency-recheck", "1"])
+        .output()?;
+    assert!(wrong.status.success());
+    let wrong: Value = serde_json::from_slice(&wrong.stdout)?;
+    assert_eq!(wrong["data"]["passed"], false);
+    assert!(
+        wrong["data"]["dependencies"][0]["observed"]
+            .as_str()
+            .unwrap()
+            .starts_with("WRONG_VERSION:")
+    );
+    fs::write(component.join("source.properties"), "Pkg.Revision=1.0\n")?;
+    let ready = f
+        .process()
+        .env("ANDROID_SDK_ROOT", &sdk)
+        .args(["--json", "dependency-recheck", "1"])
+        .output()?;
+    assert!(ready.status.success());
+    let ready: Value = serde_json::from_slice(&ready.stdout)?;
+    assert_eq!(ready["data"]["passed"], true);
+    Ok(())
+}
+
+#[test]
 fn storage_capacity_waits_before_launch_and_resumes_after_policy_change() -> Result {
     let f = Fixture::new()?;
     f.add("Keep work until capacity is available")?;
@@ -4480,6 +5331,28 @@ case '{mode}' in
    cat "$artifact" > "$HOME/repair-capture-read" || exit 23
    if (printf tamper >> "$artifact") 2>/dev/null; then exit 24; fi
   fi;;
+ dependency-request|dependency-baseline|dependency-crash)
+  if [ "$model" = execution ] && [ ! -f "$HOME/dependency-requested" ]; then
+   if [ '{mode}' = dependency-crash ]; then
+    touch "$HOME/dependency-worker-ready"
+    until [ -f "$HOME/release-dependency-worker" ]; do sleep 0.01; done
+   fi
+   printf 'kept useful work\n' > partial.txt
+   callback=$(printf '%s\n' "$prompt" | sed -n 's/.*request it once: \(.*\) --kind executable.*/\1/p')
+   [ -n "$callback" ] || exit 31
+   touch "$HOME/dependency-requested"
+   item=missing-runtime-tool
+   version=1.2.3
+   stage=execution
+   if [ '{mode}' = dependency-baseline ] || [ '{mode}' = dependency-crash ]; then item=rg; version=14.1.1; stage=baseline; fi
+   eval "$callback --kind executable --item $item --version $version --scope task --stage $stage --reproduction 'fixture tool: command not found'" > "$HOME/dependency-receipt" || exit 32
+   if [ '{mode}' = dependency-crash ]; then
+    eval "$callback --kind executable --item $item --version $version --scope task --stage $stage --reproduction 'fixture tool: command not found'" > "$HOME/dependency-duplicate-receipt" || exit 33
+    touch "$HOME/dependency-committed"
+   fi
+   sleep 10
+   touch "$HOME/dependency-natural-completion"
+  fi;;
  follow-up)
   if [ "$model" = execution ] && [ ! -f "$HOME/follow-up-created" ]; then
    export XDG_STATE_HOME="$TMPDIR/no-supervisor-state"
@@ -6819,7 +7692,8 @@ fn failure_judge_may_ask_the_owner_after_exhausted_check_repair() -> Result {
             "Attempt #1: failed",
             "Checks still fail after 10 repair rounds",
             "Automatic check repair is exhausted",
-            "tooling are never questions",
+            "Permissions and sandbox limits are never questions",
+            "A missing local prerequisite uses the dependency wait and explicit recheck",
         ] {
             assert!(judge.contains(expected), "{expected}: {judge}");
         }
@@ -11682,7 +12556,7 @@ fn pinned_templates_survive_edits_and_no_template_can_drop_supervisor_rules() ->
         for needed in [
             extra,
             "Return the required structured response",
-            "Never ask the owner",
+            "Do not ask for permission",
             "Task: Pinned work",
             "1. result.txt contains verified",
         ] {

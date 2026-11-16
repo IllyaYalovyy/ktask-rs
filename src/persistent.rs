@@ -134,7 +134,7 @@ impl StoredWorkspace {
 
     pub(crate) fn reload(&mut self, screen: &mut Screen) -> Result<(), String> {
         let service = &mut self.service;
-        // A running attempt without a live runner was orphaned: settle it to Paused.
+        // Recover an orphan to Paused or its committed dependency wait before rendering.
         if !crate::runner::supervisor_alive(service).map_err(|e| e.to_string())? {
             crate::runner::control::settle(service).map_err(|e| e.to_string())?;
             crate::runner::control::finish_pending(service).map_err(|e| e.to_string())?;
@@ -388,6 +388,38 @@ impl StoredWorkspace {
     }
 
     fn run(&mut self, screen: &mut Screen) {
+        if screen
+            .current()
+            .is_some_and(|task| task.status() == Status::NeedsDependency)
+        {
+            let result = screen
+                .instance
+                .paths()
+                .map_err(|e| e.to_string())
+                .and_then(|paths| {
+                    let id = screen.current().expect("current dependency").id;
+                    let target = self.target(id)?;
+                    self.service
+                        .recheck_dependencies(
+                            target,
+                            &paths.cache.join("workers"),
+                            &paths.executable,
+                        )
+                        .map_err(|e| e.to_string())
+                });
+            match result {
+                Ok(true) => self.committed(
+                    screen,
+                    "Dependencies verified · r Resume continues the task",
+                ),
+                Ok(false) => self.committed(
+                    screen,
+                    "Dependency still missing · u Readiness shows the observed result",
+                ),
+                Err(error) => screen.message(error),
+            }
+            return;
+        }
         if screen.current().is_some_and(Task::awaits_answer) {
             match self.open(screen, Action::Answer) {
                 Ok(dialog) => screen.dialog = dialog,
@@ -417,6 +449,21 @@ impl StoredWorkspace {
         let current = screen.current().map(|task| task.id as i64);
         match result {
             Ok(()) => {
+                if self
+                    .service
+                    .current_task()
+                    .ok()
+                    .flatten()
+                    .is_some_and(|task| {
+                        task.state() == crate::application::lifecycle::State::NeedsDependency
+                    })
+                {
+                    self.committed(
+                        screen,
+                        "Dependency still missing · u Readiness shows the observed result",
+                    );
+                    return;
+                }
                 if let Some(id) = current {
                     let _ = self.service.record_launch_result(id, "");
                 }
@@ -1366,7 +1413,7 @@ impl Backend for StoredWorkspace {
         }
         let delivery = self.service.delivery_config().unwrap_or_default();
         format!(
-            "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup; b for build caches.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\nDelivery: {} via {}/{}\n\nDefaults apply to new tasks; existing revisions stay pinned.\nu User defaults: what new projects start with; preview and apply them here.\nf Profiles: named role models to reuse; select one here or as the new-project default.\nw Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art; override per project.\nL Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default selection.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
+            "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup; b for build caches.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\nDelivery: {} via {}/{}\nDependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing. CLI require declares prerequisites before a task starts.\n\nDefaults apply to new tasks; existing revisions stay pinned.\nu User defaults: what new projects start with; preview and apply them here.\nf Profiles: named role models to reuse; select one here or as the new-project default.\nw Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art; override per project.\nL Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default selection.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
             screen.project_name,
             if screen.mouse_enabled {
                 "Enabled"
@@ -1391,6 +1438,7 @@ impl Backend for StoredWorkspace {
 
     fn config_controls(&self) -> Vec<(&'static str, Action)> {
         vec![
+            ("r Recheck current", Action::Run),
             ("m Defaults", Action::ProjectModels),
             ("u User defaults", Action::UserDefaults),
             ("f Profiles", Action::Profiles),

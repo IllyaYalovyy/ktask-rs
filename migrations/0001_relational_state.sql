@@ -318,6 +318,32 @@ CREATE TABLE task_links (
     CHECK (task_id <> related_task_id)
 ) STRICT;
 
+-- Local prerequisites are requested by a human or a live worker capability. A successful
+-- probe, not an assertion, is the only way to clear a wait. This is independent of attempts
+-- so a preflight wait does not spend an attempt or lose its place in the queue.
+CREATE TABLE task_requirements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    task_id INTEGER NOT NULL,
+    attempt_id INTEGER,
+    kind TEXT NOT NULL CHECK (kind IN ('executable', 'sdk_component', 'capability')),
+    item TEXT NOT NULL CHECK (length(trim(item)) BETWEEN 1 AND 160),
+    required_version TEXT CHECK (length(trim(required_version)) BETWEEN 1 AND 80),
+    scope TEXT NOT NULL CHECK (scope IN ('task', 'project', 'host')),
+    stage TEXT NOT NULL CHECK (stage IN ('baseline', 'execution', 'check', 'review', 'validation')),
+    reproduction TEXT NOT NULL CHECK (length(trim(reproduction)) BETWEEN 1 AND 1024),
+    requested_by_kind TEXT NOT NULL CHECK (requested_by_kind IN ('human', 'ai', 'system')),
+    requested_by TEXT NOT NULL CHECK (length(trim(requested_by)) > 0),
+    state TEXT NOT NULL CHECK (state IN ('unverified', 'waiting', 'satisfied')),
+    observed TEXT,
+    checked_at_ms INTEGER,
+    created_at_ms INTEGER NOT NULL,
+    FOREIGN KEY (task_id, project_id) REFERENCES tasks(id, project_id),
+    FOREIGN KEY (attempt_id, task_id) REFERENCES attempts(id, task_id)
+) STRICT;
+CREATE UNIQUE INDEX ux_task_requirement_identity ON task_requirements(task_id, kind, item, coalesce(required_version,''), scope, stage);
+CREATE INDEX ix_task_requirements_pending ON task_requirements(task_id, state);
+
 CREATE TABLE attempts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL,
@@ -330,7 +356,7 @@ CREATE TABLE attempts (
     finished_at_ms INTEGER CHECK (finished_at_ms >= started_at_ms),
     active_ms INTEGER NOT NULL DEFAULT 0 CHECK (active_ms >= 0),
     rate_waits INTEGER NOT NULL DEFAULT 0 CHECK (rate_waits BETWEEN 0 AND 3),
-    wait_reason TEXT CHECK (wait_reason IN ('question', 'rate_limit', 'provider_unavailable')),
+    wait_reason TEXT CHECK (wait_reason IN ('question', 'rate_limit', 'provider_unavailable', 'dependency')),
     waiting_since_ms INTEGER CHECK (waiting_since_ms >= started_at_ms),
     resume_at_ms INTEGER CHECK (resume_at_ms >= waiting_since_ms),
     outcome TEXT,
@@ -785,6 +811,7 @@ SELECT t.*, r.revision, r.lifecycle AS revision_lifecycle,
     -- The task state machine (docs/USECASES.md): live attempt, then approval, then failure.
     CASE WHEN t.lifecycle NOT IN ('new', 'ready') THEN t.lifecycle
          WHEN a.state IN ('running', 'paused', 'waiting') THEN a.state
+         WHEN EXISTS(SELECT 1 FROM task_requirements req WHERE req.task_id=t.id AND req.state='waiting') THEN 'dependency_wait'
          WHEN r.revision IS NULL OR draft.revision IS NOT NULL THEN 'new'
          WHEN a.state = 'failed' AND t.reset_pending = 0 THEN 'failed'
          ELSE 'ready' END AS status,

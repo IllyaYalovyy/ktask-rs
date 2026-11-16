@@ -211,6 +211,19 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             cli.json,
         );
     }
+    if let Command::DependencyRequest { requirement } = command {
+        let id = crate::runner::callback::dependency(
+            cli.worker_token.as_deref().unwrap_or_default(),
+            &requirement.requirement(),
+        )?;
+        return emit(
+            output::Reply {
+                data: json!({"action":"dependency_requested","id":id}),
+                text: format!("dependency requested: #{id}\n"),
+            },
+            cli.json,
+        );
+    }
     if let Command::Cache { action } = command {
         let paths = instance.paths()?;
         return emit(execute::cache(&paths, &root, action.as_ref())?, cli.json);
@@ -541,7 +554,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             cli.json,
         );
     }
-    let mut reply = execute::command(&mut service, &paths.config, command)?;
+    let mut reply = execute::command(&mut service, &paths.config, &paths.cache, command)?;
     if matches!(
         command,
         Command::Answer { .. } | Command::Approve { .. } | Command::Done { .. }
@@ -561,13 +574,23 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
 
 fn validate(cli: &Cli) -> Result<()> {
     if std::env::var_os("KTASK_WORKER_CALLBACK").is_some()
-        && !matches!(cli.command, Some(Command::FollowUp { .. }))
+        && !matches!(
+            cli.command,
+            Some(Command::FollowUp { .. } | Command::DependencyRequest { .. })
+        )
     {
-        return Err(Failure::usage("Workers may only file follow-up drafts"));
-    }
-    if cli.worker_token.is_some() != matches!(cli.command, Some(Command::FollowUp { .. })) {
         return Err(Failure::usage(
-            "Worker callbacks may only file follow-up drafts; follow-up requires --worker-token",
+            "Workers may only request follow-up drafts or missing dependencies",
+        ));
+    }
+    if cli.worker_token.is_some()
+        != matches!(
+            cli.command,
+            Some(Command::FollowUp { .. } | Command::DependencyRequest { .. })
+        )
+    {
+        return Err(Failure::usage(
+            "Follow-up and dependency-request callbacks require --worker-token and a live worker",
         ));
     }
     if cli.worker_token.is_some()

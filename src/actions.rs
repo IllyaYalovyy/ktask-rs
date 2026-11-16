@@ -28,7 +28,9 @@ impl App {
         let queue_or_current = self.view != View::History;
         match action {
             Action::Run => {
-                matches!(self.view, View::Current | View::Queue)
+                (matches!(self.view, View::Current | View::Queue)
+                    || self.view == View::Config
+                        && current.is_some_and(|t| t.status() == Status::NeedsDependency))
                     && self.supervisor_alive != Some(true)
                     && current.is_some_and(|t| {
                         t.definition().kind.runs_ai()

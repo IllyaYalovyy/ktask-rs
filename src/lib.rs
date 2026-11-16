@@ -84,6 +84,23 @@ pub fn launch(instance: instance::Instance) -> std::process::ExitCode {
             }
         };
     }
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|a| a == "__dependency_probe")
+    {
+        let mut args = std::env::args().skip(2);
+        let (Some(kind), Some(item)) = (args.next(), args.next()) else {
+            return std::process::ExitCode::FAILURE;
+        };
+        if kind == "executable" {
+            return application::dependency::probe_executable(&item);
+        }
+        println!(
+            "{}",
+            application::dependency::probe_local_file(&kind, &item, args.next().as_deref())
+        );
+        return std::process::ExitCode::SUCCESS;
+    }
     cli::launch(instance)
 }
 

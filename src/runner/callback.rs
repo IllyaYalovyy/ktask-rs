@@ -1,7 +1,7 @@
 //! Restricted worker requests cross the workspace sandbox through owned TMPDIR files.
-//! The guardian, outside the Codex sandbox, applies only the follow-up command.
+//! The guardian, outside the Codex sandbox, applies follow-up and dependency requests.
 use crate::{
-    application::{Definition, Kind, Service},
+    application::{Actor, ActorKind, Definition, Kind, Service, dependency::Requirement},
     storage::{Database, Error, Result},
 };
 use serde::{Deserialize, Serialize};
@@ -32,12 +32,18 @@ pub struct Capability {
 }
 
 #[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Request {
-    token: String,
-    title: String,
-    goal: String,
-    criteria: Vec<String>,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum Request {
+    FollowUp {
+        token: String,
+        title: String,
+        goal: String,
+        criteria: Vec<String>,
+    },
+    Dependency {
+        token: String,
+        requirement: Requirement,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -48,6 +54,22 @@ struct Response {
 
 /// The CLI writes only beneath the worker's sandbox-owned TMPDIR, never SQLite.
 pub fn file(token: &str, title: &str, goal: &str, criteria: &[String]) -> Result<i64> {
+    send(Request::FollowUp {
+        token: token.into(),
+        title: title.into(),
+        goal: goal.into(),
+        criteria: criteria.to_vec(),
+    })
+}
+
+pub fn dependency(token: &str, requirement: &Requirement) -> Result<i64> {
+    send(Request::Dependency {
+        token: token.into(),
+        requirement: requirement.clone(),
+    })
+}
+
+fn send(request: Request) -> Result<i64> {
     let root = std::env::var_os("KTASK_CALLBACK_DIR")
         .map(PathBuf::from)
         .ok_or_else(|| Error::Conflict("No active worker callback endpoint".into()))?;
@@ -59,12 +81,6 @@ pub fn file(token: &str, title: &str, goal: &str, criteria: &[String]) -> Result
     let temporary = root.join(format!("{name}.tmp"));
     let ready = root.join(format!("{name}.ready"));
     let response = root.join(format!("{name}.response"));
-    let request = Request {
-        token: token.into(),
-        title: title.into(),
-        goal: goal.into(),
-        criteria: criteria.to_vec(),
-    };
     let bytes = serde_json::to_vec(&request).map_err(std::io::Error::other)?;
     if bytes.len() as u64 > MAX_REQUEST {
         return Err(Error::Conflict("Worker callback exceeds 64 KiB".into()));
@@ -203,7 +219,10 @@ fn apply(path: &Path, capability: &Capability) -> Result<i64> {
     }
     let request: Request = serde_json::from_slice(&bytes)
         .map_err(|error| Error::Conflict(format!("Invalid worker callback: {error}")))?;
-    if request.token != capability.token {
+    let token = match &request {
+        Request::FollowUp { token, .. } | Request::Dependency { token, .. } => token,
+    };
+    if *token != capability.token {
         return Err(Error::Conflict(
             "Worker callback token does not match this attempt".into(),
         ));
@@ -211,24 +230,38 @@ fn apply(path: &Path, capability: &Capability) -> Result<i64> {
     let db = Database::open_in(&capability.state)?;
     let mut service = Service::find(db, &capability.project)?
         .ok_or_else(|| Error::Conflict("Worker callback project is not registered".into()))?;
-    let definition = Definition {
-        title: request.title,
-        goal: request.goal,
-        kind: Kind::Ai,
-        category: None,
-        lenses: None,
-        criteria: request.criteria,
-        models: service.defaults()?,
-        attempt_limit: Some(3),
-        timeout_ms: None,
-        stage_timeout_ms: None,
-    };
-    service.file_follow_up(
-        &request.token,
-        capability.task,
-        capability.attempt,
-        &definition,
-    )
+    service.set_actor(Actor {
+        kind: ActorKind::Ai,
+        name: "execution worker".into(),
+    })?;
+    match request {
+        Request::FollowUp {
+            token,
+            title,
+            goal,
+            criteria,
+        } => {
+            let definition = Definition {
+                title,
+                goal,
+                kind: Kind::Ai,
+                category: None,
+                lenses: None,
+                criteria,
+                models: service.defaults()?,
+                attempt_limit: Some(3),
+                timeout_ms: None,
+                stage_timeout_ms: None,
+            };
+            service.file_follow_up(&token, capability.task, capability.attempt, &definition)
+        }
+        Request::Dependency { token, requirement } => service.request_live_requirement(
+            capability.task,
+            capability.attempt,
+            &token,
+            &requirement,
+        ),
+    }
 }
 
 #[cfg(test)]

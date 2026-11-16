@@ -86,6 +86,7 @@ fn session_end(
     Ok(match current {
         None => ("completed", message),
         Some(_) if message.starts_with("Storage capacity reserve reached:") => ("waiting", message),
+        Some(task) if task.state() == State::NeedsDependency => ("waiting", message),
         Some(task) if task.status == "paused" => ("paused", message),
         Some(task) if session.mode == "one" && task.status != "waiting" => {
             ("stopped", "Run one completed the current task".into())
@@ -144,6 +145,22 @@ fn run_inner(
         }
         retire_build_generations(paths, workspace);
         let (task, revised) = adopt_revision(service, task)?;
+        if !service.admit_dependencies_for_run(
+            VersionedTask {
+                id: task.id,
+                version: task.version,
+            },
+            &paths.cache.join("workers"),
+            &paths.executable,
+        )? {
+            return Ok(format!(
+                "Waiting for dependency on task #{}; use dependency recheck after setup",
+                task.id
+            ));
+        }
+        let task = service
+            .current_task()?
+            .ok_or_else(|| Error::Conflict("Current task disappeared".into()))?;
         let opening = opening(
             service,
             workspace,
@@ -305,6 +322,12 @@ fn admit(service: &Service, task: &Task, notified: bool) -> Result<Option<String
         "A Human task is done when you mark it done; there is nothing to run",
     )?;
     let state = task.state();
+    if state == State::NeedsDependency {
+        return Ok(Some(format!(
+            "Task #{} needs a dependency; recheck after external setup",
+            task.id
+        )));
+    }
     if state == State::NeedsApproval {
         return Ok(Some(format!("Stopped: task #{} needs approval", task.id)));
     }

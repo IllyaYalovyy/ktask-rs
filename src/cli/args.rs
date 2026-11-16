@@ -460,6 +460,18 @@ pub enum Command {
         #[arg(long, value_parser=nonempty)]
         text: String,
     },
+    /// Declare a local prerequisite on the pending Current Task before its baseline.
+    Require {
+        #[command(flatten)]
+        target: Target,
+        #[command(flatten)]
+        requirement: RequirementArgs,
+    },
+    /// Probe unmet prerequisites locally. A successful result enables an explicit Run.
+    DependencyRecheck {
+        #[command(flatten)]
+        target: Target,
+    },
     /// Add or update a project check: a shell command run from the project root.
     ///
     /// Every attempt must pass all enabled checks, for example: check-set build --command
@@ -583,6 +595,11 @@ pub enum Command {
         #[arg(long, required = true, value_parser = nonempty)]
         criterion: Vec<String>,
     },
+    /// Request a missing prerequisite from inside a live execution attempt (worker callback only).
+    DependencyRequest {
+        #[command(flatten)]
+        requirement: RequirementArgs,
+    },
     /// Change a task by appending a revision; unspecified fields are kept.
     ///
     /// The approval state is kept unless --approval is given. Running and finished tasks
@@ -674,6 +691,41 @@ pub struct Target {
     /// Reject if the task changed since the version returned by show/list.
     #[arg(long, value_parser = positive)]
     pub if_version: Option<i64>,
+}
+
+#[derive(Args)]
+pub struct RequirementArgs {
+    /// executable, sdk_component or capability.
+    #[arg(long, value_parser = ["executable", "sdk_component", "capability"])]
+    pub kind: String,
+    /// Executable name/path, SDK semicolon component, or absolute capability path.
+    #[arg(long, value_parser = nonempty)]
+    pub item: String,
+    /// Exact version token required from an executable's --version output.
+    #[arg(long)]
+    pub version: Option<String>,
+    /// Where this prerequisite is needed: task, project or host.
+    #[arg(long, value_parser = ["task", "project", "host"])]
+    pub scope: String,
+    /// Workflow stage affected by the missing prerequisite.
+    #[arg(long, value_parser = ["baseline", "execution", "check", "review", "validation"])]
+    pub stage: String,
+    /// A bounded, concrete reproduction of the missing prerequisite.
+    #[arg(long, value_parser = nonempty)]
+    pub reproduction: String,
+}
+
+impl RequirementArgs {
+    pub fn requirement(&self) -> crate::application::dependency::Requirement {
+        crate::application::dependency::Requirement {
+            kind: self.kind.clone(),
+            item: self.item.clone(),
+            version: self.version.clone(),
+            scope: self.scope.clone(),
+            stage: self.stage.clone(),
+            reproduction: self.reproduction.clone(),
+        }
+    }
 }
 
 #[derive(Args)]

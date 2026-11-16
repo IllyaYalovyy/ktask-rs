@@ -367,6 +367,9 @@ mod tests {
     #[test]
     fn every_stage_name_round_trips_and_is_allowed_by_the_schema() {
         let allowed = include_str!("../../migrations/0001_relational_state.sql")
+            .split_once("CREATE TABLE attempt_delivery (")
+            .expect("attempt_delivery table")
+            .1
             .lines()
             .find(|line| line.contains("stage TEXT NOT NULL CHECK"))
             .expect("stage constraint");

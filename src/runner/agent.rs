@@ -351,7 +351,7 @@ pub fn nudge(role: &str, question: &str) -> String {
     let rule = if matches!(role, "review" | "validation") {
         "Your sandbox is read-only by design; nobody will change it or grant permission, and that is not a reason to return blocked. Decide now from the supplied transcripts, screens and repository: pass the criteria the evidence supports and fail the rest, naming the missing evidence."
     } else {
-        "Permissions, sandbox limits, environment and tooling are never questions for the owner: work within them, and name a limitation in the summary only when it left part of the goal undone. Return blocked again only if this is a product decision that only the owner can make, restating that question; otherwise continue and finish autonomously."
+        "Permissions and sandbox limits are never questions for the owner. For a concrete missing local tool, use the supplied dependency-request callback once with the observed failure and stop. Do not install a toolchain in TMPDIR. Otherwise finish autonomously; return blocked only for a product decision."
     };
     format!(
         "You returned blocked with the question: {question}

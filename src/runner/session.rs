@@ -195,9 +195,15 @@ pub fn background(
             let _ = tx.send(Ok(()));
         }
         let _ = std::io::copy(&mut reader, &mut std::io::sink());
-        let _ = child.wait();
+        let status = child.wait();
         let _ = logger.wait();
         if !ready {
+            // A declared prerequisite can stop a run before its first attempt and
+            // before the usual startup notification. That is a completed handoff.
+            if status.is_ok_and(|status| status.success()) {
+                let _ = tx.send(Ok(()));
+                return;
+            }
             // Stderr stays attached to a file so a detached runner survives its
             // launching CLI. Read bytes appended since startup, never old errors.
             let error = log::tail_since(&log_path, log_start).unwrap_or_default();

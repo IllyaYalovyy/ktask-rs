@@ -94,10 +94,11 @@ decision on the revision. Mark done, Cancel and Supersede close the task without
 attempts; Copy to queue creates a new task linked by `derived_from`. Changing role models creates a new revision with the new role settings.
 An active execution worker may use the supervisor's absolute executable and its attempt token
 to file a follow-up draft at the end of the queue, preserving the order of existing work.
-The CLI sends the request through a
-guardian-owned endpoint in the worker's TMPDIR; only the guardian opens SQLite and applies this
-command. The draft records both origin IDs and AI creator attribution. The worker sandbox cannot
-write the supervisor's state root, and the endpoint accepts no other mutation.
+The CLI sends the request through a guardian-owned endpoint in the worker's TMPDIR; only the
+guardian opens SQLite and applies it. The draft records both origin IDs and AI creator attribution.
+The same endpoint accepts a bounded missing-dependency request scoped to the live attempt; it
+cannot install or satisfy a prerequisite. The worker sandbox cannot write the supervisor's state
+root, and the endpoint accepts no other mutation.
 
 ## Waiting and limits
 
@@ -123,10 +124,18 @@ the runner compares Git state and remote refs with this intent before repeating 
 published attempt still requires checks, read-only review and validation tied to its final
 tree; a rebase clears earlier proof and regenerates it. Delivery pauses retain the same attempt.
 
-attempts.wait_reason distinguishes question, rate_limit, and provider_unavailable. A wait
+attempts.wait_reason distinguishes question, dependency, rate_limit, and provider_unavailable. A wait
 records waiting_since_ms and optional resume_at_ms (earliest UTC resume time). A rate limit
 normally suspends the same attempt; it is not a failed coding attempt. Question waits require
 answers before resumption. Wait events retain the history after the current wait fields clear.
+`task_requirements` stores bounded local prerequisites and their latest probe result independently
+of attempts, so missing prerequisites before the first baseline do not open an attempt. A live
+worker request carries its attempt and authenticated guardian token; only an explicit successful
+local recheck clears a dependency wait. Probes run from the project root under the managed worker
+guardian. Every Run/Resume probes declared requirements again in its launching environment;
+a changed path, SDK or version returns to the wait before baseline checks or AI. A committed worker request recovered after supervisor death settles to the same wait
+without an AI turn or a provisional baseline repair charge. Stop leaves the requirement
+unverified for the next Run.
 CLI `show` exposes `waiting_ms` on each attempt and `provider_elapsed_ms` on each role usage
 record. Open wait and provider intervals advance on fresh reads; completed intervals stay fixed.
 Recovery caps an open interval at the attempt's recorded finish time. Current Task refreshes
@@ -214,6 +223,8 @@ erDiagram
     task_revisions ||--o{ acceptance_criteria : "task_id, revision"
     tasks ||--o{ task_links : "related_task_id, project_id"
     tasks ||--o{ task_links : "task_id, project_id"
+    tasks ||--o{ task_requirements : "task_id, project_id"
+    attempts o|--o{ task_requirements : "attempt_id, task_id"
     schema_migrations {
         INTEGER version PK
     }
@@ -503,7 +514,7 @@ One execution against an exact revision; retry creates another row. This is the 
 | `finished_at_ms` | INTEGER | yes | Finish time; NULL while active. |
 | `active_ms` | INTEGER | no | Accumulated active duration, nonnegative; default 0. |
 | `rate_waits` | INTEGER | no | Rate-limit waits since the last completed provider turn, capped at three; sets the backoff. |
-| `wait_reason` | TEXT | yes | question, rate_limit, provider_unavailable; required only while waiting. |
+| `wait_reason` | TEXT | yes | question, dependency, rate_limit, provider_unavailable; required only while waiting. |
 | `waiting_since_ms` | INTEGER | yes | Start of the current wait; required only while waiting. |
 | `resume_at_ms` | INTEGER | yes | Earliest resume time for a timed wait; NULL means no scheduled time. |
 | `outcome` | TEXT | yes | Nonblank terminal attempt outcome. |
@@ -1155,6 +1166,36 @@ Directed relationships between ordinary tasks in the same project. Self-links ar
 - FK `(related_task_id, project_id)` → `tasks(id, project_id)`.
 - FK `(task_id, project_id)` → `tasks(id, project_id)`.
 - Index `ix_task_links_related`: `INDEX ix_task_links_related ON task_links(related_task_id, project_id)`.
+
+### task_requirements
+
+Bounded local prerequisites and their latest deterministic probe result. A task can have at most
+16 distinct requirements; a live worker can request one only through its guardian capability.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `id` | INTEGER | no | Stable requirement ID. |
+| `project_id` | INTEGER | no | Owning project. |
+| `task_id` | INTEGER | no | Current task needing this prerequisite. |
+| `attempt_id` | INTEGER | yes | Discovering live attempt, if any. |
+| `kind` | TEXT | no | executable, sdk_component, or capability. |
+| `item` | TEXT | no | Executable name or path, SDK component, or local capability path. |
+| `required_version` | TEXT | yes | Exact version token or SDK Pkg.Revision. |
+| `scope` | TEXT | no | task, project, or host. |
+| `stage` | TEXT | no | baseline, execution, check, review, or validation. |
+| `reproduction` | TEXT | no | Bounded observed failure and reproduction. |
+| `requested_by_kind` | TEXT | no | human, ai, or system. |
+| `requested_by` | TEXT | no | Explicit requesting actor. |
+| `state` | TEXT | no | unverified, waiting, or satisfied. |
+| `observed` | TEXT | yes | Latest bounded local probe result. |
+| `checked_at_ms` | INTEGER | yes | Latest probe time. |
+| `created_at_ms` | INTEGER | no | Request time. |
+
+- PK `(id)`.
+- FK `(attempt_id, task_id)` → `attempts(id, task_id)`.
+- FK `(task_id, project_id)` → `tasks(id, project_id)`.
+- Index `ux_task_requirement_identity`: `UNIQUE INDEX ux_task_requirement_identity ON task_requirements(task_id, kind, item, coalesce(required_version,''), scope, stage)`.
+- Index `ix_task_requirements_pending`: `INDEX ix_task_requirements_pending ON task_requirements(task_id, state)`.
 
 ### task_revisions
 

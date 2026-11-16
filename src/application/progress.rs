@@ -2,6 +2,7 @@
 use super::{execution::Run, *};
 
 pub const REPAIR_ROUNDS: i64 = 10;
+pub(crate) const BASELINE_FAILURE_NOTE: &str = "The starting checks failed before implementation. Repair their cause and complete the original task; baseline repair alone does not satisfy the goal.";
 
 stored_names! {
     /// Where an attempt stands in its workflow (`attempt_progress.phase`).

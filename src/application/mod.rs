@@ -63,6 +63,7 @@ pub use evidence::{EvidenceCursor, EvidenceMatch, EvidenceSearch};
 pub mod categories;
 pub mod configuration;
 pub mod delivery;
+pub mod dependency;
 pub mod execution;
 pub mod lenses;
 pub mod lifecycle;
@@ -419,7 +420,7 @@ pub enum ActorKind {
     Ai,
 }
 impl ActorKind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Human => "human",
             Self::Ai => "ai",

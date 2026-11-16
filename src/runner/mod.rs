@@ -59,6 +59,7 @@ enum Outcome {
     Paused,
     DeliveryBlocked(String),
     Question(String),
+    Dependency(String),
     /// Provider rate or usage limit, with its own reset time when it names one.
     RateLimit(Option<i64>),
     /// The failure judge changed the plan (task revised or work inserted);

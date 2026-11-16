@@ -14,6 +14,7 @@ pub fn badge(status: Status) -> &'static str {
         Status::Running => "RUNNING",
         Status::Paused => "PAUSED",
         Status::NeedsInput => "INPUT?",
+        Status::NeedsDependency => "DEPENDENCY?",
         Status::Failed => "FAILED",
         Status::Done => "DONE",
         Status::Cancelled => "CANCELLED",

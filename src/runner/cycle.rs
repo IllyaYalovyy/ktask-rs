@@ -181,7 +181,10 @@ pub(super) fn run(
                     // both the failure and the original goal; acceptance still requires
                     // checks, review and validation of the combined change.
                     fix_checks(service, run, &mut progress, &report)?;
-                    progress.context.push_str("\nThe starting checks failed before implementation. Repair their cause and complete the original task; baseline repair alone does not satisfy the goal.");
+                    progress.context.push('\n');
+                    progress
+                        .context
+                        .push_str(crate::application::progress::BASELINE_FAILURE_NOTE);
                     service.save_progress(run, &progress)?;
                     continue;
                 }

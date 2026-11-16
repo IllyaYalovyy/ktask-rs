@@ -407,7 +407,7 @@ pub(super) fn provider_turn(
     role: &str,
 ) -> Result<Option<Outcome>> {
     let timeout = run.definition.stage_timeout_ms;
-    let outcome = match execute(
+    let finish = execute(
         service,
         run,
         step,
@@ -415,7 +415,12 @@ pub(super) fn provider_turn(
         spec,
         timeout,
         Some((&mut *stream, role)),
-    )? {
+    )?;
+    if let Some(reason) = service.pending_dependency(run.attempt)? {
+        service.finish_step(step, false, &reason)?;
+        return Ok(Some(Outcome::Dependency(reason)));
+    }
+    let outcome = match finish {
         Finish::Exited(_) if stream.rate_limited => Outcome::RateLimit(stream.reset_at_ms),
         Finish::Exited(0) if stream.configuration_error.is_none() => return Ok(None),
         Finish::Exited(code) => exit_failure(run, stream, role, code),

@@ -640,6 +640,7 @@ impl App {
             },
             View::Config => {
                 let action = match code {
+                    KeyCode::Char('r') => Action::Run,
                     KeyCode::Char('m') => Action::ProjectModels,
                     KeyCode::Char('u') => Action::UserDefaults,
                     KeyCode::Char('f') => Action::Profiles,

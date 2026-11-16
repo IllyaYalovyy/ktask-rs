@@ -9,6 +9,431 @@ const DEV: &str = env!("CARGO_BIN_EXE_ktask-dev");
 const PROD: &str = env!("CARGO_BIN_EXE_ktask");
 
 #[test]
+fn dependency_recheck_requires_observed_version_and_stop_restores_pending() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    support::empty_repository(root)?;
+    json(
+        root,
+        &[
+            "add",
+            "--title",
+            "Requires a tool",
+            "--goal",
+            "Use it",
+            "--criterion",
+            "Version is present",
+        ],
+        0,
+    )?;
+    let executable = root.join("fixture-tool");
+    let item = executable.to_str().ok_or("fixture path is not UTF-8")?;
+    json(
+        root,
+        &[
+            "require",
+            "1",
+            "--kind",
+            "executable",
+            "--item",
+            item,
+            "--version",
+            "1.2.3",
+            "--scope",
+            "task",
+            "--stage",
+            "baseline",
+            "--reproduction",
+            "fixture-tool --version: command not found",
+        ],
+        0,
+    )?;
+    let repeated = json(
+        root,
+        &[
+            "require",
+            "1",
+            "--kind",
+            "executable",
+            "--item",
+            item,
+            "--version",
+            "1.2.3",
+            "--scope",
+            "task",
+            "--stage",
+            "baseline",
+            "--reproduction",
+            "fixture-tool --version: command not found",
+        ],
+        0,
+    )?;
+    assert_eq!(
+        repeated["data"]["dependencies"].as_array().unwrap().len(),
+        1
+    );
+    let malformed = json(
+        root,
+        &[
+            "require",
+            "1",
+            "--kind",
+            "capability",
+            "--item",
+            "relative-license",
+            "--scope",
+            "host",
+            "--stage",
+            "baseline",
+            "--reproduction",
+            "license missing",
+        ],
+        4,
+    )?;
+    assert!(
+        malformed["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("absolute local path")
+    );
+    assert_eq!(
+        json(root, &["current"], 0)?["data"]["dependencies"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let first = json(root, &["dependency-recheck", "1"], 0)?;
+    assert_eq!(first["data"]["passed"], false);
+    assert!(
+        first["data"]["dependencies"][0]["observed"]
+            .as_str()
+            .unwrap()
+            .starts_with("MISSING:")
+    );
+    assert_eq!(
+        json(root, &["current"], 0)?["data"]["state"],
+        "needs_dependency"
+    );
+    json(root, &["answer", "1", "--text", "installed"], 4)?;
+    assert_eq!(
+        json(root, &["current"], 0)?["data"]["state"],
+        "needs_dependency"
+    );
+    support::write_executable(&executable, b"#!/bin/sh\necho 'fixture-tool 2.0.0'\n")?;
+    let version = json(root, &["current"], 0)?["data"]["version"]
+        .as_i64()
+        .unwrap()
+        .to_string();
+    let wrong = json(
+        root,
+        &["dependency-recheck", "1", "--if-version", &version],
+        0,
+    )?;
+    assert_eq!(wrong["data"]["passed"], false);
+    assert!(
+        wrong["data"]["dependencies"][0]["observed"]
+            .as_str()
+            .unwrap()
+            .starts_with("WRONG_VERSION:")
+    );
+    json(
+        root,
+        &["dependency-recheck", "1", "--if-version", &version],
+        4,
+    )?;
+    json(root, &["stop", "1"], 0)?;
+    assert_eq!(json(root, &["current"], 0)?["data"]["state"], "pending");
+    support::write_executable(&executable, b"#!/bin/sh\necho 'fixture-tool 1.2.3'\n")?;
+    let ready = json(root, &["dependency-recheck", "1"], 0)?;
+    assert_eq!(ready["data"]["passed"], true);
+    assert_eq!(json(root, &["current"], 0)?["data"]["state"], "pending");
+    Ok(())
+}
+
+#[test]
+fn dependency_recheck_uses_project_cwd_relative_path_and_symlink_invocation_name() -> Result {
+    use std::os::unix::fs::symlink;
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let project = root.join("project");
+    let outside = root.join("outside");
+    std::fs::create_dir_all(project.join("bin"))?;
+    std::fs::create_dir_all(&outside)?;
+    support::empty_repository(&project)?;
+    let executable = project.join("bin/toolchain");
+    support::write_executable(&executable, b"#!/bin/sh\ncase \"$0\" in */dispatcher) echo 'dispatcher 1.2.3';; *) echo 'toolchain 9.9.9';; esac\n")?;
+    symlink(&executable, project.join("bin/dispatcher"))?;
+    let invoke = |args: &[&str]| -> Result<Value> {
+        let output = process(DEV, root)
+            .current_dir(&outside)
+            .env("PATH", "./bin:/usr/bin:/bin")
+            .arg("--project")
+            .arg(&project)
+            .arg("--json")
+            .args(args)
+            .output()?;
+        json_result(output, 0)
+    };
+    invoke(&[
+        "add",
+        "--title",
+        "Project toolchain",
+        "--goal",
+        "Use selected tool",
+        "--criterion",
+        "Tool is ready",
+    ])?;
+    invoke(&[
+        "require",
+        "1",
+        "--kind",
+        "executable",
+        "--item",
+        "dispatcher",
+        "--version",
+        "1.2.3",
+        "--scope",
+        "project",
+        "--stage",
+        "execution",
+        "--reproduction",
+        "dispatcher --version unavailable",
+    ])?;
+    let rechecked = invoke(&["dependency-recheck", "1"])?;
+    assert_eq!(rechecked["data"]["passed"], true, "{rechecked}");
+    assert!(
+        rechecked["data"]["dependencies"][0]["observed"]
+            .as_str()
+            .unwrap()
+            .contains("dispatcher 1.2.3")
+    );
+    Ok(())
+}
+
+#[test]
+fn dependency_probes_bound_fifo_sdk_metadata_and_detached_version_descendants() -> Result {
+    use nix::{sys::stat::Mode, unistd::mkfifo};
+    use std::time::{Duration, Instant};
+    for fixture in [
+        "capability_fifo",
+        "sdk_fifo",
+        "sdk_oversize",
+        "detached_version",
+        "timeout_version",
+        "denied_version",
+        "denied_launch",
+    ] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        support::empty_repository(root)?;
+        add(root, "Bound local probe")?;
+        let item = match fixture {
+            "capability_fifo" => {
+                let fifo = root.join("capability.fifo");
+                mkfifo(&fifo, Mode::S_IRUSR | Mode::S_IWUSR)?;
+                fifo.to_string_lossy().into_owned()
+            }
+            "sdk_fifo" | "sdk_oversize" => {
+                let component = root.join("android-sdk/emulator");
+                std::fs::create_dir_all(&component)?;
+                let properties = component.join("source.properties");
+                if fixture == "sdk_fifo" {
+                    mkfifo(&properties, Mode::S_IRUSR | Mode::S_IWUSR)?;
+                } else {
+                    std::fs::write(&properties, vec![b'x'; 5000])?;
+                }
+                "emulator".into()
+            }
+            "timeout_version" => {
+                let tool = root.join("timeout-tool");
+                support::write_executable(&tool, b"#!/bin/sh\nsleep 30\n")?;
+                tool.to_string_lossy().into_owned()
+            }
+            "denied_version" => {
+                use std::os::unix::fs::PermissionsExt;
+                let tool = root.join("denied-tool");
+                support::write_executable(&tool, b"#!/bin/sh\necho 'denied-tool 1.2.3'\n")?;
+                std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o600))?;
+                tool.to_string_lossy().into_owned()
+            }
+            "denied_launch" => {
+                use std::os::unix::fs::PermissionsExt;
+                let tool = root.join("denied-launch");
+                std::fs::copy("/usr/bin/true", &tool)?;
+                std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o001))?;
+                tool.to_string_lossy().into_owned()
+            }
+            _ => {
+                let tool = root.join("detached-tool");
+                support::write_executable(&tool, b"#!/bin/sh\nsetsid sh -c 'echo $$ > \"$HOME/descendant.pid\"; sleep 30' &\nwhile [ ! -f \"$HOME/descendant.pid\" ]; do sleep 0.01; done\necho 'detached-tool 1.2.3'\n")?;
+                tool.to_string_lossy().into_owned()
+            }
+        };
+        let kind = if fixture.starts_with("sdk_") {
+            "sdk_component"
+        } else if fixture == "capability_fifo" {
+            "capability"
+        } else {
+            "executable"
+        };
+        let mut args = vec![
+            "require",
+            "1",
+            "--kind",
+            kind,
+            "--item",
+            &item,
+            "--scope",
+            "task",
+            "--stage",
+            "execution",
+            "--reproduction",
+            "fixture probe",
+        ];
+        if kind != "capability" {
+            args.extend([
+                "--version",
+                if kind == "sdk_component" {
+                    "1.0"
+                } else {
+                    "1.2.3"
+                },
+            ]);
+        }
+        json(root, &args, 0)?;
+        let started = Instant::now();
+        let output = process(DEV, root)
+            .env("ANDROID_SDK_ROOT", root.join("android-sdk"))
+            .arg("--json")
+            .args(["dependency-recheck", "1"])
+            .output()?;
+        let reply = json_result(output, 0)?;
+        assert!(
+            started.elapsed() < Duration::from_secs(6),
+            "{fixture} took too long"
+        );
+        let observed = reply["data"]["dependencies"][0]["observed"]
+            .as_str()
+            .unwrap();
+        if fixture == "denied_launch" {
+            assert!(observed.starts_with("DENIED:"), "{observed}");
+        }
+        if fixture == "detached_version" {
+            assert_eq!(reply["data"]["passed"], true, "{observed}");
+            let pid = std::fs::read_to_string(root.join("descendant.pid"))?;
+            assert!(
+                !std::path::Path::new(&format!("/proc/{}", pid.trim())).exists(),
+                "detached probe child survived cleanup: {pid}"
+            );
+        } else {
+            assert_eq!(reply["data"]["passed"], false, "{observed}");
+            assert!(
+                observed.starts_with("FAILED:")
+                    || observed.starts_with("TRANSIENT:")
+                    || (fixture == "denied_version" && observed.starts_with("DENIED:"))
+                    || (fixture == "denied_launch" && observed.starts_with("DENIED:")),
+                "{fixture}: {observed}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn executable_lookup_is_inside_the_guardian_deadline() -> Result {
+    use std::time::{Duration, Instant};
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    support::empty_repository(root)?;
+    add(root, "Bound executable lookup")?;
+    let tool = root.join("lookup-stall");
+    support::write_executable(&tool, b"#!/bin/sh\necho 'lookup-stall 1.2.3'\n")?;
+    let source = root.join("lookup-shim.c");
+    std::fs::write(
+        &source,
+        r#"
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <errno.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+static int block(const char *path) {
+    if (path && strstr(path, "lookup-stall")) { sleep(30); errno = ENOENT; return 1; }
+    return 0;
+}
+int stat(const char *path, struct stat *buf) {
+    if (block(path)) return -1;
+    int (*real_stat)(const char *, struct stat *) = dlsym(RTLD_NEXT, "stat");
+    return real_stat(path, buf);
+}
+int statx(int dirfd, const char *path, int flags, unsigned int mask, struct statx *buf) {
+    if (block(path)) return -1;
+    int (*real_statx)(int, const char *, int, unsigned int, struct statx *) = dlsym(RTLD_NEXT, "statx");
+    return real_statx(dirfd, path, flags, mask, buf);
+}
+int fstatat(int dirfd, const char *path, struct stat *buf, int flags) {
+    if (block(path)) return -1;
+    int (*real_fstatat)(int, const char *, struct stat *, int) = dlsym(RTLD_NEXT, "fstatat");
+    return real_fstatat(dirfd, path, buf, flags);
+}
+"#,
+    )?;
+    let library = root.join("lookup-shim.so");
+    let compiled = Command::new("cc")
+        .args(["-shared", "-fPIC", "-o"])
+        .arg(&library)
+        .arg(&source)
+        .arg("-ldl")
+        .output()?;
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    json(
+        root,
+        &[
+            "require",
+            "1",
+            "--kind",
+            "executable",
+            "--item",
+            tool.to_str().unwrap(),
+            "--version",
+            "1.2.3",
+            "--scope",
+            "task",
+            "--stage",
+            "execution",
+            "--reproduction",
+            "metadata lookup stalled",
+        ],
+        0,
+    )?;
+    let started = Instant::now();
+    let reply = json_result(
+        process(DEV, root)
+            .env("LD_PRELOAD", &library)
+            .arg("--json")
+            .args(["dependency-recheck", "1"])
+            .output()?,
+        0,
+    )?;
+    assert!(
+        started.elapsed() < Duration::from_secs(6),
+        "lookup escaped guardian deadline"
+    );
+    let observed = reply["data"]["dependencies"][0]["observed"]
+        .as_str()
+        .unwrap();
+    assert!(observed.contains("timed out after 3 seconds"), "{observed}");
+    assert_eq!(reply["data"]["passed"], false);
+    Ok(())
+}
+
+#[test]
 fn cli_rejects_hight_on_add_edit_defaults_and_import_without_writes() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();

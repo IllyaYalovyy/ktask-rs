@@ -441,6 +441,10 @@ fn situation(app: &App, task: &Task) -> (String, Color) {
     }
     let human = task.definition().kind == Kind::Human;
     match task.status() {
+        Status::NeedsDependency => (
+            "Dependency setup needed · r Recheck after setup · u Readiness · s Stop".into(),
+            WARN,
+        ),
         Status::NeedsInput if task.awaits_answer() => (
             "The worker needs your answer · r Answer · s Stop returns it to Pending".into(),
             WARN,

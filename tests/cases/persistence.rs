@@ -9,6 +9,222 @@ use ktask_rs_mk3::{
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[test]
+fn dependency_wait_rechecks_by_keyboard_and_mouse_with_large_queue_and_history() -> Result {
+    use ktask_rs_mk3::application::dependency::Requirement;
+    for mouse in [false, true] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        let mut service = service(root)?;
+        let tasks: Vec<_> = (1..=220)
+            .map(|n| definition(&format!("Dependency fixture {n}")))
+            .collect();
+        let ids = service.create(&tasks, None, true)?;
+        for id in &ids[..110] {
+            service.mark_done(
+                VersionedTask {
+                    id: *id,
+                    version: 1,
+                },
+                "fixture history",
+            )?;
+        }
+        let executable = root.join("fixture-rg");
+        let requirement = Requirement {
+            kind: "executable".into(),
+            item: executable.to_string_lossy().into_owned(),
+            version: Some("14.1.1".into()),
+            scope: "project".into(),
+            stage: "baseline".into(),
+            reproduction: "rg: command not found".into(),
+        };
+        service.declare_requirement(
+            VersionedTask {
+                id: ids[110],
+                version: 1,
+            },
+            &requirement,
+        )?;
+        let current_target = target(&mut service, ids[110])?;
+        assert!(!service.recheck_dependencies(
+            current_target,
+            &root.join("cache/workers"),
+            Path::new(env!("CARGO_BIN_EXE_ktask-dev"))
+        )?);
+        drop(service);
+        let mut t = terminal_at(root, 100, 28)?;
+        let current = t.screen("dependency current", |s| {
+            s.contains("Current #111 · Needs dependency") && s.contains("r Recheck")
+        })?;
+        println!("DEPENDENCY CURRENT mouse={mouse}\n{current}");
+        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            let dir = PathBuf::from(dir);
+            fs::write(
+                dir.join(format!("dependency-current-mouse-{mouse}.txt")),
+                &current,
+            )?;
+            support::screen_png(
+                &current,
+                &dir.join(format!("dependency-current-mouse-{mouse}.png")),
+            )?;
+        }
+        if mouse {
+            t.click("u Readiness")?;
+        } else {
+            t.send("u")?;
+        }
+        let readiness = t.screen("dependency readiness", |s| {
+            s.contains("rg: command not found") && s.contains("install/configure externally")
+        })?;
+        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            fs::write(
+                PathBuf::from(dir).join(format!("dependency-readiness-mouse-{mouse}.txt")),
+                &readiness,
+            )?;
+        }
+        t.send("\x1b")?;
+        t.screen("readiness closed", |s| {
+            s.contains("r Recheck") && !s.contains("install/configure externally")
+        })?;
+        if mouse {
+            t.click("4 Config")?;
+        } else {
+            t.send("4")?;
+        }
+        let configuration = t.screen("dependency configuration", |s| {
+            s.contains("r Recheck current") && s.contains("Dependencies: manual external setup")
+        })?;
+        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            fs::write(
+                PathBuf::from(dir).join(format!("dependency-config-mouse-{mouse}.txt")),
+                &configuration,
+            )?;
+        }
+        if mouse {
+            t.click("r Recheck current")?;
+        } else {
+            t.send("r")?;
+        }
+        t.screen("configuration recheck still missing", |s| {
+            s.contains("Dependency still missing")
+        })?;
+        t.send("\x1b")?;
+        t.screen("return from configuration", |s| {
+            s.contains("#111 Dependency fixture 111") && s.contains("r Recheck after setup")
+        })?;
+        if mouse {
+            t.click("2 Queue")?;
+        } else {
+            t.send("2")?;
+        }
+        let queue = t.screen("dependency queue", |s| {
+            s.contains("Queue ·") && s.contains("Dependency fixture 111")
+        })?;
+        println!("DEPENDENCY QUEUE mouse={mouse}\n{queue}");
+        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            fs::write(
+                PathBuf::from(dir).join(format!("dependency-queue-mouse-{mouse}.txt")),
+                &queue,
+            )?;
+        }
+        if mouse {
+            t.click("3 History")?;
+        } else {
+            t.send("3")?;
+        }
+        let history = t.screen("dependency history", |s| {
+            s.contains("History ·") && s.contains("Dependency fixture 110")
+        })?;
+        println!("DEPENDENCY HISTORY mouse={mouse}\n{history}");
+        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            fs::write(
+                PathBuf::from(dir).join(format!("dependency-history-mouse-{mouse}.txt")),
+                &history,
+            )?;
+        }
+        if mouse {
+            t.click("1 Current")?;
+        } else {
+            t.send("1")?;
+        }
+        t.screen("return to dependency current", |s| {
+            s.contains("Current #111 · Needs dependency") && s.contains("r Recheck")
+        })?;
+        support::write_executable(&executable, b"#!/bin/sh\necho 'ripgrep 14.1.1'\n")?;
+        if mouse {
+            t.click("r Recheck")?;
+        } else {
+            t.send("r")?;
+        }
+        t.screen("dependency rechecked", |s| {
+            s.contains("Dependencies verified") && s.contains("Current #111 · Pending")
+        })?;
+        t.send("q")?;
+        t.finish()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn dependency_wait_stops_by_keyboard_and_mouse() -> Result {
+    use ktask_rs_mk3::application::dependency::Requirement;
+    for mouse in [false, true] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        support::empty_repository(&project(root))?;
+        let mut service = service(root)?;
+        let id = service.create(&[definition("Stop missing dependency")], None, true)?[0];
+        let declaration_target = target(&mut service, id)?;
+        service.declare_requirement(
+            declaration_target,
+            &Requirement {
+                kind: "executable".into(),
+                item: root.join("missing-tool").to_string_lossy().into_owned(),
+                version: None,
+                scope: "task".into(),
+                stage: "execution".into(),
+                reproduction: "missing-tool: command not found".into(),
+            },
+        )?;
+        let target = target(&mut service, id)?;
+        assert!(!service.recheck_dependencies(
+            target,
+            &root.join("cache/workers"),
+            Path::new(env!("CARGO_BIN_EXE_ktask-dev"))
+        )?);
+        drop(service);
+        let mut t = terminal_at(root, 100, 28)?;
+        t.screen("dependency before Stop", |s| {
+            s.contains("Needs dependency") && s.contains("s Stop")
+        })?;
+        if mouse {
+            t.click("s Stop")?;
+        } else {
+            t.send("s")?;
+        }
+        t.screen("dependency Stop dialog", |s| {
+            s.contains("Stop #1 Stop missing dependency") && s.contains("[Apply]")
+        })?;
+        if mouse {
+            t.click("[Apply]")?;
+        } else {
+            t.send("\x13")?;
+        }
+        let stopped = t.screen("dependency after Stop", |s| {
+            s.contains("Current #1 · Pending") && s.contains("r Run")
+        })?;
+        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            fs::write(
+                PathBuf::from(dir).join(format!("dependency-stop-mouse-{mouse}.txt")),
+                &stopped,
+            )?;
+        }
+        t.send("q")?;
+        t.finish()?;
+    }
+    Ok(())
+}
+
 #[path = "retention_remediation.rs"]
 mod retention_remediation;
 

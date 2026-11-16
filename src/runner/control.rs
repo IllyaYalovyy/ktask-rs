@@ -33,8 +33,8 @@ pub fn pause(service: &mut Service) -> Result<Option<Option<i64>>> {
     Ok(Some(paused))
 }
 
-/// Settle an attempt whose runner died: it becomes Paused with its work kept. False when
-/// nothing needed settling or a runner still holds the workspace.
+/// Settle an attempt whose runner died: it becomes Paused, or waits for a committed
+/// dependency request, with its work kept. False while a runner still owns the workspace.
 pub fn settle(service: &mut Service) -> Result<bool> {
     // Only a running attempt can be orphaned. Taking the lease otherwise would make a runner
     // that starts at this moment fail on a lease it could have had.
@@ -187,7 +187,7 @@ fn halt(service: &mut Service, target: VersionedTask) -> Result<(VersionedTask, 
     )?;
     let owns_changes = matches!(
         task.state(),
-        State::Running | State::Paused | State::NeedsInput | State::Failed
+        State::Running | State::Paused | State::NeedsInput | State::NeedsDependency | State::Failed
     );
     if !owns_changes {
         return Ok((target, Saved { stash: None }));
@@ -205,7 +205,9 @@ fn halt(service: &mut Service, target: VersionedTask) -> Result<(VersionedTask, 
         .ok_or_else(|| Error::Conflict("Task disappeared while stopping".into()))?;
     let attempt = task.attempts.len();
     // Starting or resuming another attempt transfers checkout ownership; queue edits do not.
-    let stash = if service.workspace_owner_attempt()? == task.attempts.last().map(|a| a.id) {
+    let stash = if task.attempts.last().is_some()
+        && service.workspace_owner_attempt()? == task.attempts.last().map(|a| a.id)
+    {
         save_changes(&workspace, task.id, attempt)?
     } else {
         None

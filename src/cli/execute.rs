@@ -8,6 +8,29 @@ use crate::application::{
 };
 use serde_json::json;
 
+fn task_with_dependencies(service: &mut Service, id: i64) -> Result<Reply> {
+    let mut reply = Reply::task(&task(service, id)?);
+    let dependencies = service.dependencies(id)?;
+    reply.data["dependencies"] = json!(dependencies);
+    for dependency in dependencies {
+        reply.text.push_str(&format!(
+            "Dependency #{}: {} {}{} · {} · {} · {}\n",
+            dependency.id,
+            dependency.requirement.kind,
+            dependency.requirement.item,
+            dependency
+                .requirement
+                .version
+                .as_ref()
+                .map_or(String::new(), |v| format!(" {v}")),
+            dependency.state,
+            dependency.observed.as_deref().unwrap_or("not checked"),
+            dependency.requirement.reproduction
+        ));
+    }
+    Ok(reply)
+}
+
 impl Settings {
     pub(super) fn empty(&self) -> bool {
         self.model.is_empty()
@@ -345,6 +368,7 @@ fn defaults(
 pub(super) fn command(
     service: &mut Service,
     config: &std::path::Path,
+    cache: &std::path::Path,
     command: &Command,
 ) -> Result<Reply> {
     match command {
@@ -531,6 +555,34 @@ pub(super) fn command(
             service.answer(target, text)?;
             Ok(receipt("answered", target))
         }
+        Command::Require {
+            target: input,
+            requirement,
+        } => {
+            let (_, target) = target(service, input)?;
+            let id = service.declare_requirement(target, &requirement.requirement())?;
+            Ok(Reply {
+                data: json!({"action":"required","id":id,"dependencies":service.dependencies(target.id)?}),
+                text: format!("requirement #{id} declared\n"),
+            })
+        }
+        Command::DependencyRecheck { target: input } => {
+            let (_, target) = target(service, input)?;
+            let scratch = cache.join("workers");
+            let passed =
+                service.recheck_dependencies(target, &scratch, &std::env::current_exe()?)?;
+            Ok(Reply {
+                data: json!({"action":"dependency_rechecked","passed":passed,"dependencies":service.dependencies(target.id)?}),
+                text: format!(
+                    "dependency recheck: {}\n",
+                    if passed {
+                        "ready to resume"
+                    } else {
+                        "still missing"
+                    }
+                ),
+            })
+        }
         Command::CheckSet {
             name,
             command,
@@ -614,7 +666,7 @@ pub(super) fn command(
             });
             Ok(Reply::list(&rows))
         }
-        Command::Show { id } => Ok(Reply::task(&task(service, *id)?)),
+        Command::Show { id } => task_with_dependencies(service, *id),
         Command::Artifact { id } => {
             let (artifact, content) = service.open_text_artifact(*id)?;
             Ok(Reply {
@@ -623,7 +675,7 @@ pub(super) fn command(
             })
         }
         Command::Current => match service.snapshot_brief()?.queue.first() {
-            Some(current) => Ok(Reply::task(&task(service, current.id)?)),
+            Some(current) => task_with_dependencies(service, current.id),
             None => Ok(Reply {
                 data: json!(null),
                 text: "No current task.\n".into(),
@@ -650,7 +702,9 @@ pub(super) fn command(
             )?))
         }
         Command::Evidence { .. } => unreachable!("read-only evidence dispatch"),
-        Command::FollowUp { .. } => unreachable!("worker callback dispatch"),
+        Command::FollowUp { .. } | Command::DependencyRequest { .. } => {
+            unreachable!("worker callback dispatch")
+        }
         Command::Edit {
             target: input,
             pending,

@@ -110,6 +110,7 @@ impl Database {
                AND (waiting_since_ms IS NULL OR waiting_since_ms <= ?4)
                AND (resume_at_ms IS NULL OR resume_at_ms <= ?4)
                AND NOT EXISTS (SELECT 1 FROM questions WHERE attempt_id = attempts.id AND state = 'open')
+               AND NOT EXISTS (SELECT 1 FROM task_requirements WHERE task_id = attempts.task_id AND state <> 'satisfied')
                AND id IN (SELECT latest_attempt_id FROM current_tasks WHERE id = ?1 AND row_version = ?2)
                AND EXISTS (SELECT 1 FROM task_revisions r WHERE r.task_id = attempts.task_id
                    AND r.revision = attempts.revision

@@ -33,7 +33,9 @@ fn status_color(status: Status) -> Color {
         Status::Running => ACCENT,
         Status::Done => OK,
         Status::Failed | Status::Cancelled => BAD,
-        Status::NeedsInput | Status::NeedsApproval | Status::Paused => WARN,
+        Status::NeedsInput | Status::NeedsDependency | Status::NeedsApproval | Status::Paused => {
+            WARN
+        }
         Status::Pending | Status::Superseded => MUTED,
     }
 }
@@ -323,6 +325,7 @@ fn run_label(app: &App) -> &'static str {
         .map(|task| (task.status(), task.awaits_answer()))
     {
         Some((Status::NeedsInput, true)) => "r Answer",
+        Some((Status::NeedsDependency, _)) => "r Recheck",
         Some((Status::Paused | Status::NeedsInput, _)) => "r Resume",
         Some((Status::Failed, _)) => "r Retry",
         _ if app.auto_advance => "r Run queue",

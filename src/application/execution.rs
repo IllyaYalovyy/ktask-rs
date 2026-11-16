@@ -222,8 +222,9 @@ impl Service {
         Ok(())
     }
     /// A supervisor that died leaves its attempt marked running. Once the caller holds the
-    /// workspace lease (so no supervisor or worker owns it), that attempt becomes Paused:
-    /// Resume continues it from its recorded phase. False when nothing needed settling.
+    /// workspace lease (so no supervisor or worker owns it), it becomes Paused unless
+    /// its worker had already requested a dependency. That request settles to a durable
+    /// wait without probing or resuming AI. False when nothing needed settling.
     pub fn settle_orphan(&mut self) -> Result<bool> {
         let tx = self
             .db
@@ -232,7 +233,7 @@ impl Service {
         let orphan: Option<(i64, i64)> = tx
             .query_row(
                 "SELECT a.id, a.task_id FROM attempts a WHERE a.project_id=?1
-                 AND (a.state='running' OR (a.state='waiting' AND a.wait_reason<>'question'))",
+                 AND (a.state='running' OR (a.state='waiting' AND a.wait_reason NOT IN ('question','dependency')))",
                 [self.project_id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
@@ -241,6 +242,20 @@ impl Service {
             return Ok(false);
         };
         let now = now_ms();
+        if let Some(reason) = super::dependency::orphan_dependency_reason(&tx, attempt)? {
+            close_unfinished(&tx, attempt, now, &reason, "interrupted")?;
+            super::dependency::settle_dependency_wait(
+                &tx,
+                self.project_id,
+                attempt,
+                task,
+                now,
+                &reason,
+            )?;
+            tx.execute("UPDATE execution_sessions SET state='waiting',reason=?2,updated_at_ms=?3 WHERE project_id=?1 AND state IN ('running','waiting','resume_requested')",params![self.project_id,reason,now])?;
+            tx.commit()?;
+            return Ok(true);
+        }
         let report = "The supervisor stopped unexpectedly; Resume continues this attempt";
         tx.execute("UPDATE attempts SET state='paused',report=?2,wait_reason=NULL,waiting_since_ms=NULL,resume_at_ms=NULL WHERE id=?1", params![attempt,report])?;
         close_unfinished(&tx, attempt, now, report, "interrupted")?;
@@ -267,6 +282,10 @@ impl Service {
         let now = now_ms();
         let reason = labelled(reason, "Stopped", &self.actor);
         end_attempt(&tx, self.project_id, target.id, attempt, now, &reason)?;
+        tx.execute(
+            "UPDATE task_requirements SET state='unverified' WHERE task_id=?1 AND state='waiting'",
+            [target.id],
+        )?;
         tx.execute("UPDATE ai_sessions SET state='closed' WHERE project_id=?1 AND task_id=?2 AND state='open'", params![self.project_id,target.id])?;
         tx.execute(
             "UPDATE tasks SET reset_pending=1, reset_worktree=NULL WHERE id=?1",

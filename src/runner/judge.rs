@@ -218,7 +218,7 @@ fn restrict(prompt: &mut String, schema: &mut serde_json::Value, judging: Judgin
                 .expect("judge alternatives")
                 .retain(|choice| choice["properties"]["action"]["enum"][0] != "ask");
         }
-        Judging::ExhaustedChecks => prompt.push_str(&format!("\nAutomatic check repair is exhausted: the judged attempt failed because the supervisor checks still failed after all {REPAIR_ROUNDS} repair rounds. This is recovery of an actual failure. The repair count stays at {REPAIR_ROUNDS}; it is neither reset nor extended, and a repair plan gets one worker turn before the checks decide again. Choose repair, revise or insert when the cause is within reach. Ask the owner only when a genuine product decision blocks progress; permissions, sandbox limits, environment and tooling are never questions.")),
+        Judging::ExhaustedChecks => prompt.push_str(&format!("\nAutomatic check repair is exhausted: the judged attempt failed because the supervisor checks still failed after all {REPAIR_ROUNDS} repair rounds. This is recovery of an actual failure. The repair count stays at {REPAIR_ROUNDS}; it is neither reset nor extended, and a repair plan gets one worker turn before the checks decide again. Choose repair, revise or insert when the cause is within reach. Ask the owner only when a genuine product decision blocks progress; permissions and sandbox limits are never questions, and missing local prerequisites use the dependency wait.")),
         Judging::Failure => {}
     }
 }
@@ -339,7 +339,7 @@ mod tests {
         )));
         assert!(
             prompt.contains(
-                "permissions, sandbox limits, environment and tooling are never questions"
+                "permissions and sandbox limits are never questions, and missing local prerequisites use the dependency wait"
             )
         );
         let (prompt, failure) = actions(Judging::Failure);

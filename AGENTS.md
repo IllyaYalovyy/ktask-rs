@@ -56,12 +56,16 @@
   drafts separately. Store execution state only on attempts; derive the displayed task status.
   Keep per-role model/optional effort and attempt/time limits on each revision. Rate-limit
   waits resume the same attempt; infrastructure failures do not consume the coding budget.
+- Missing local tools and SDK components pause for external setup after a bounded probe and
+  explicit recheck. Workers request a dependency through the live guardian callback; they do
+  not install toolchains in task TMPDIR. Sandbox permissions are still not owner questions.
 - Judges never run anything: review holds the Clean Code bar on the diff, validation checks the
   evidence is complete. A review or validation fix opens with a read-only judge; during normal
   rounds apply its repair, revise or insert decision before a worker, and carry the
   original task’s ten-round count across replans. Owner questions wait until critical findings
   remain after ten rounds. Automatic recovery from actual failures retains all four judge
-  decisions. Permission, sandbox and tooling limits are never questions for the owner.
+  decisions. Permission and sandbox limits are never questions for the owner; missing local
+  prerequisites use the dependency wait.
 - Normalize input_tokens to uncached input for every provider; cache read/write are disjoint.
 - Before switching tasks, preserve useful work, stop/reap workers, and clean owned scratch.
   Same-task retries may keep their workspace and reuse a compatible AI session. Never discard

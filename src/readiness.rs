@@ -176,6 +176,34 @@ pub(crate) fn inspect(
         return report;
     };
     let definition = task.definition();
+    if let Ok(dependencies) = service.dependencies(task.id) {
+        for dependency in dependencies {
+            let name = format!(
+                "{} {}{} · {}",
+                dependency.requirement.kind,
+                dependency.requirement.item,
+                dependency
+                    .requirement
+                    .version
+                    .as_ref()
+                    .map_or(String::new(), |v| format!(" {v}")),
+                dependency.requirement.stage
+            );
+            if dependency.state == "satisfied" {
+                report.check(&name, Ok(()), "");
+            } else {
+                report.check(
+                    &name,
+                    Err(format!(
+                        "{} · {}",
+                        dependency.observed.as_deref().unwrap_or("Not checked"),
+                        dependency.requirement.reproduction
+                    )),
+                    "install/configure externally, then r Recheck",
+                );
+            }
+        }
+    }
     let root = service.project_root();
     report.check(
         "Execution state",

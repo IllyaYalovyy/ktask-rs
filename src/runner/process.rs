@@ -126,6 +126,57 @@ pub fn capture_readonly(
         }
     }
 }
+
+/// A local prerequisite probe under the same guardian and descendant cleanup as workers.
+/// The deadline covers the command, its descendants and output collection.
+pub fn capture_probe(
+    supervisor: &std::path::Path,
+    spec: &Invocation,
+) -> Result<(i32, Vec<u8>, Vec<u8>)> {
+    const LIMIT: usize = 4096;
+    let mut worker = Worker::spawn(supervisor, spec)?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    loop {
+        if Instant::now() >= deadline {
+            worker.join()?;
+            return Err(Error::Conflict(
+                "Dependency probe timed out after 3 seconds".into(),
+            ));
+        }
+        match worker.receive(Duration::from_millis(20))? {
+            Received::Idle => {}
+            Received::Output { stream, bytes } => {
+                let output = if stream == "stdout" {
+                    &mut stdout
+                } else {
+                    &mut stderr
+                };
+                if output.len().saturating_add(bytes.len()) > LIMIT {
+                    worker.join()?;
+                    return Err(Error::Conflict(
+                        "Dependency probe output exceeds 4 KiB".into(),
+                    ));
+                }
+                output.extend(bytes);
+            }
+            Received::Exited(code) => return Ok((code, stdout, stderr)),
+            Received::Artifact => {
+                worker.join()?;
+                return Err(Error::Conflict(
+                    "Unexpected dependency probe artifact".into(),
+                ));
+            }
+            Received::Failed(error) => return Err(worker.failure(error)),
+            Received::Disconnected => {
+                return Err(Error::Conflict(
+                    "Dependency probe guardian disconnected".into(),
+                ));
+            }
+        }
+    }
+}
 #[derive(Serialize, Deserialize)]
 pub enum Message {
     Output { stream: String, bytes: Vec<u8> },

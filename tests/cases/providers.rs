@@ -21,6 +21,13 @@ fi
 printf '%s|%s|%s\n' "$model" "$session" "$args" >> "$HOME/claude-calls"
 [ -n "$session" ] || session="claude-$model-$$"
 printf '{"type":"system","subtype":"init","session_id":"%s"}\n' "$session"
+if [ "$mode" = dependency ] && [ "$model" = execution ] && [ ! -f "$HOME/dependency-requested" ]; then
+ callback=$(printf '%s\n' "$prompt" | sed -n 's/.*request it once: \(.*\) --kind executable.*/\1/p')
+ [ -n "$callback" ] || exit 31
+ touch "$HOME/dependency-requested"
+ eval "$callback --kind executable --item missing-runtime-tool --version 1.2.3 --scope task --stage execution --reproduction 'tool: command not found'" > "$HOME/dependency-receipt" || exit 32
+ sleep 10
+fi
 case "$mode" in
  rate) printf '%s\n' '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":4102444800}}' '{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"You have hit your limit"}'; exit 1;;
  fail) echo 'API Error: 500 upstream' >&2; exit 1;;
@@ -75,6 +82,13 @@ case "$mode" in rate)
 esac
 case "$prompt" in *"JSON Schema"*) :;; *) echo 'schema missing from prompt' >&2; exit 3;; esac
 ev step_start '{}'
+if [ "$mode" = dependency ] && [ "$model" = execution ] && [ ! -f "$HOME/dependency-requested" ]; then
+ callback=$(printf '%s\n' "$prompt" | sed -n 's/.*request it once: \(.*\) --kind executable.*/\1/p')
+ [ -n "$callback" ] || exit 31
+ touch "$HOME/dependency-requested"
+ eval "$callback --kind executable --item missing-runtime-tool --version 1.2.3 --scope task --stage execution --reproduction 'tool: command not found'" > "$HOME/dependency-receipt" || exit 32
+ sleep 10
+fi
 case "$model" in review|validation) printf tampered > result.txt 2>/dev/null; echo "$?" >> "$HOME/judge-writes";; esac
 case "$model" in execution|remediation)
  ev tool_use '{"tool":"bash","state":{"status":"completed","input":{"command":"printf verified > result.txt"},"output":"wrote result.txt"}}'
@@ -145,6 +159,31 @@ impl Fixture {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
+}
+
+#[test]
+fn claude_and_opencode_dependency_callbacks_resume_the_same_attempt() -> Result {
+    for (provider, script) in [("claude", CLAUDE), ("opencode", OPENCODE)] {
+        let f = Fixture::new()?;
+        f.agent(provider, script, "dependency")?;
+        f.add("Provider dependency wait")?;
+        f.ok(&["run", "--one"])?;
+        let wait = f.ok(&["current"])?;
+        assert_eq!(wait["state"], "needs_dependency", "{provider}: {wait}");
+        let attempt = wait["attempts"][0]["id"].as_i64().unwrap();
+        assert_eq!(wait["attempts"][0]["wait_reason"], "dependency");
+        support::write_executable(
+            &f.scratch.path().join("bin/missing-runtime-tool"),
+            b"#!/bin/sh\necho 'runtime-tool 1.2.3'\n",
+        )?;
+        assert_eq!(f.ok(&["dependency-recheck", "1"])?["passed"], true);
+        f.ok(&["run", "--one"])?;
+        let done = f.ok(&["show", "1"])?;
+        assert_eq!(done["status"], "succeeded", "{provider}: {done}");
+        assert_eq!(done["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(done["attempts"][0]["id"], attempt);
+    }
+    Ok(())
 }
 
 impl Fixture {

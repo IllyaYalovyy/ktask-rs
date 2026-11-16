@@ -473,6 +473,11 @@ fn settle(
             release(service, run, "waiting", &question)?;
             Ok(Then::Return(format!("Waiting for answer: {question}")))
         }
+        Outcome::Dependency(reason) => {
+            service.wait_for_dependency(run.attempt, &run.token, &reason)?;
+            service.release_supervisor(run)?;
+            Ok(Then::Return(format!("Waiting for dependency: {reason}")))
+        }
         Outcome::Replanned(judgment) => replan(service, launch, run, judgment),
         Outcome::Failed(category, message) => fail(service, launch, run, category, &message),
         Outcome::Passed(_) | Outcome::Changes { .. } => unreachable!(),
