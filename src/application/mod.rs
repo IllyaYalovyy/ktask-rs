@@ -81,6 +81,7 @@ pub mod stop;
 pub mod usage_report;
 pub mod user_defaults;
 pub use queries::{Event, WaitingResume};
+pub mod tools;
 pub mod transfer;
 
 use crate::storage::{Database, Error, Result};

@@ -29,6 +29,7 @@ fn fixture() -> Result<Fixture> {
         config: root.join("config/ktask-dev"),
         state: root.join("state/ktask-dev"),
         cache: root.join("cache/ktask-dev"),
+        data: root.join("data/ktask-dev"),
         runtime: root.join("runtime/ktask-dev"),
         executable: std::env::current_exe()?,
     };
@@ -630,6 +631,7 @@ fn clone_paths(p: &Paths) -> Paths {
         config: p.config.clone(),
         state: p.state.clone(),
         cache: p.cache.clone(),
+        data: p.data.clone(),
         runtime: p.runtime.clone(),
         executable: p.executable.clone(),
     }

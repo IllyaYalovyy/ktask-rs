@@ -38,6 +38,16 @@ const SAVE_PREVIEW: &str = "Preview applying to this project";
 const PROJECT_SETTINGS: &str = "Project settings";
 const KEEP_SETTINGS: &str = "Keep project settings";
 const APPLY_SETTINGS: &str = "Apply user defaults";
+const TOOL_ACTION: &str = "Tool action";
+const TOOL_NAME: &str = "Tool name";
+const TOOL_VERSION: &str = "Tool version";
+const TOOL_PLATFORM: &str = "Platform";
+const TOOL_ARCH: &str = "Architecture";
+const TOOL_PATH: &str = "Installation path";
+const TOOL_COMPONENTS: &str = "Components (; in one component, comma between components)";
+const TOOL_OWNERSHIP: &str = "Ownership";
+const TOOL_GENERATION: &str = "Generation ID";
+const TOOL_ROW_VERSION: &str = "Expected version (binding or generation)";
 
 fn model_label(role: &str) -> String {
     format!("{role} provider/model")
@@ -70,6 +80,58 @@ impl StoredWorkspace {
             return self.open_build_cache(screen);
         }
         Ok(match action {
+            Action::Tools => {
+                let tools = self.service.tools().map_err(|e| e.to_string())?;
+                let body: String = if tools.is_empty() {
+                    "No registered tool generations. Register an existing installation, then bind its generation to this project.".into()
+                } else {
+                    tools
+                        .iter()
+                        .map(|t| {
+                            format!(
+                                "#{} v{} · {} {} · {} {} · {} · {} · {}{} · components: {}\n",
+                                t.id,
+                                t.row_version,
+                                t.name,
+                                t.version,
+                                t.platform,
+                                t.architecture,
+                                t.path.display(),
+                                t.provenance,
+                                if t.ready {
+                                    "ready"
+                                } else {
+                                    "changed or missing"
+                                },
+                                t.binding_version
+                                    .map_or(String::new(), |v| format!(" · bound v{v}")),
+                                t.components.join(", ")
+                            )
+                        })
+                        .collect()
+                };
+                Dialog::new(
+                    DialogKind::Tools,
+                    "Project tools",
+                    &body,
+                    vec![
+                        Field::choice(
+                            TOOL_ACTION,
+                            &["Register", "Bind", "Unbind", "Refresh external"],
+                            "Register",
+                        ),
+                        Field::text(TOOL_NAME, ""),
+                        Field::text(TOOL_VERSION, ""),
+                        Field::text(TOOL_PLATFORM, std::env::consts::OS),
+                        Field::text(TOOL_ARCH, std::env::consts::ARCH),
+                        Field::text(TOOL_PATH, ""),
+                        Field::text(TOOL_COMPONENTS, ""),
+                        Field::choice(TOOL_OWNERSHIP, &["External", "Managed"], "External"),
+                        Field::text(TOOL_GENERATION, ""),
+                        Field::text(TOOL_ROW_VERSION, "0"),
+                    ],
+                )
+            }
             Action::Storage => {
                 let preview = self.service.storage_preview().map_err(|e| e.to_string())?;
                 let mut body = format!(
@@ -301,6 +363,77 @@ impl StoredWorkspace {
             return self.save_build_cache(screen, dialog);
         }
         match &dialog.kind {
+            DialogKind::Tools => {
+                let paths = screen.instance.paths().map_err(|e| e.to_string())?;
+                let components: Vec<String> = dialog
+                    .get(TOOL_COMPONENTS)
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                let result = match dialog.get(TOOL_ACTION) {
+                    "Register" => self
+                        .service
+                        .register_tool(
+                            &paths,
+                            &crate::application::tools::Registration {
+                                name: dialog.get(TOOL_NAME),
+                                version: dialog.get(TOOL_VERSION),
+                                platform: dialog.get(TOOL_PLATFORM),
+                                architecture: dialog.get(TOOL_ARCH),
+                                components: &components,
+                                path: std::path::Path::new(dialog.get(TOOL_PATH)),
+                                managed: dialog.get(TOOL_OWNERSHIP) == "Managed",
+                            },
+                        )
+                        .map(|id| format!("Registered tool generation #{id}")),
+                    "Bind" => {
+                        let id: i64 = dialog
+                            .get(TOOL_GENERATION)
+                            .parse()
+                            .map_err(|_| "Generation ID must be a number")?;
+                        let version: i64 = dialog
+                            .get(TOOL_ROW_VERSION)
+                            .parse()
+                            .map_err(|_| "Expected version must be a number")?;
+                        self.service
+                            .bind_tool(dialog.get(TOOL_NAME), id, Some(version))
+                            .map(|v| format!("Bound {} to #{id} v{v}", dialog.get(TOOL_NAME)))
+                    }
+                    "Unbind" => {
+                        let version: i64 = dialog
+                            .get(TOOL_ROW_VERSION)
+                            .parse()
+                            .map_err(|_| "Expected version must be a number")?;
+                        self.service
+                            .unbind_tool(dialog.get(TOOL_NAME), version)
+                            .map(|()| format!("Unbound {}", dialog.get(TOOL_NAME)))
+                    }
+                    _ => {
+                        let id: i64 = dialog
+                            .get(TOOL_GENERATION)
+                            .parse()
+                            .map_err(|_| "Generation ID must be a number")?;
+                        let version: i64 = dialog
+                            .get(TOOL_ROW_VERSION)
+                            .parse()
+                            .map_err(|_| "Expected version must be a number")?;
+                        self.service
+                            .refresh_external_tool(
+                                &paths,
+                                id,
+                                version,
+                                dialog.get(TOOL_VERSION),
+                                &components,
+                            )
+                            .map(|v| format!("Refreshed generation #{id} v{v}"))
+                    }
+                }
+                .map_err(|e| e.to_string())?;
+                screen.message(result);
+                return Ok(true);
+            }
             DialogKind::Profiles(_) | DialogKind::Profile { .. } => {
                 return self.save_profile_form(screen, dialog);
             }

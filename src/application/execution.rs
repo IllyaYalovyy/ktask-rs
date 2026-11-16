@@ -997,15 +997,20 @@ impl Service {
         self.db.connection().execute("UPDATE model_calls SET input_tokens=?2,cache_read_tokens=?3,cache_write_tokens=?4,output_tokens=?5,cost_microusd=coalesce(?6,cost_microusd) WHERE step_id=?1", params![step.id,usage.input_tokens,usage.cache_read_tokens,usage.cache_write_tokens,usage.output_tokens,cost_microusd])?;
         Ok(())
     }
-    pub fn start_check(&self, run: &Run, check: &Check) -> Result<Step> {
-        self.db.connection().execute("INSERT INTO attempt_steps(attempt_id,project_id,task_id,revision,ordinal,role,state,project_check_id,check_name,command,working_directory,timeout_ms,started_at_ms) SELECT ?1,?2,?3,?4,coalesce(max(ordinal),0)+1,'check','running',?5,?6,?7,?8,?9,?10 FROM attempt_steps WHERE attempt_id=?1", params![run.attempt,self.project_id,run.task,run.revision,check.id,check.name,check.command,check.directory,check.timeout_ms,now_ms()])?;
+    pub fn start_check(&self, run: &Run, check: &Check, environment: &str) -> Result<Step> {
+        self.db.connection().execute("INSERT INTO attempt_steps(attempt_id,project_id,task_id,revision,ordinal,role,state,project_check_id,check_name,command,working_directory,timeout_ms,environment_fingerprint,started_at_ms) SELECT ?1,?2,?3,?4,coalesce(max(ordinal),0)+1,'check','running',?5,?6,?7,?8,?9,?10,?11 FROM attempt_steps WHERE attempt_id=?1", params![run.attempt,self.project_id,run.task,run.revision,check.id,check.name,check.command,check.directory,check.timeout_ms,environment,now_ms()])?;
         Ok(Step {
             id: self.db.connection().last_insert_rowid(),
             session: None,
             provider_session: None,
         })
     }
-    pub fn reusable_check(&self, check: &Check, tree: &str) -> Result<Option<ReusableCheck>> {
+    pub fn reusable_check(
+        &self,
+        check: &Check,
+        tree: &str,
+        environment: &str,
+    ) -> Result<Option<ReusableCheck>> {
         self.db.connection().query_row(
             "SELECT s.id,s.attempt_id,a.relative_path,s.passed_count,s.failed_count,s.ignored_count,s.state,s.exit_code
              FROM attempt_steps s LEFT JOIN artifacts a ON a.attempt_id=s.attempt_id
@@ -1013,9 +1018,9 @@ impl Service {
                AND a.pruned_at_ms IS NULL AND a.pruning_requested_at_ms IS NULL
              WHERE s.project_id=?1 AND s.role='check' AND s.reused_from_step_id IS NULL
                AND s.project_check_id=?2 AND s.check_name=?3 AND s.command=?4
-               AND s.working_directory=?5 AND s.timeout_ms=?6 AND s.source_tree=?7
+               AND s.working_directory=?5 AND s.timeout_ms=?6 AND s.source_tree=?7 AND s.environment_fingerprint=?8
                AND s.state IN ('succeeded','failed') ORDER BY s.id DESC LIMIT 1",
-            params![self.project_id,check.id,check.name,check.command,check.directory,check.timeout_ms,tree],
+            params![self.project_id,check.id,check.name,check.command,check.directory,check.timeout_ms,tree,environment],
             |r| {
                 let state: String = r.get(6)?;
                 let exit: Option<i32> = r.get(7)?;
@@ -1046,6 +1051,7 @@ impl Service {
         run: &Run,
         check: &Check,
         tree: &str,
+        environment: &str,
         source: &ReusableCheck,
         transcript: &std::path::Path,
     ) -> Result<()> {
@@ -1056,9 +1062,9 @@ impl Service {
             transcript.display()
         );
         require(self.db.connection().execute(
-            "INSERT INTO attempt_steps(attempt_id,project_id,task_id,revision,ordinal,role,state,project_check_id,check_name,command,working_directory,timeout_ms,source_tree,reused_from_step_id,exit_code,passed_count,failed_count,ignored_count,started_at_ms,finished_at_ms,report)
-             SELECT ?1,?2,?3,?4,coalesce(max(ordinal),0)+1,'check','succeeded',?5,?6,?7,?8,?9,?10,?11,0,?12,?13,?14,?15,?15,?16 FROM attempt_steps WHERE attempt_id=?1",
-            params![run.attempt,self.project_id,run.task,run.revision,check.id,check.name,check.command,check.directory,check.timeout_ms,tree,source.step,source.counts.map(|c|c.passed),source.counts.map(|c|c.failed),source.counts.map(|c|c.ignored),now_ms(),report],
+            "INSERT INTO attempt_steps(attempt_id,project_id,task_id,revision,ordinal,role,state,project_check_id,check_name,command,working_directory,timeout_ms,source_tree,environment_fingerprint,reused_from_step_id,exit_code,passed_count,failed_count,ignored_count,started_at_ms,finished_at_ms,report)
+             SELECT ?1,?2,?3,?4,coalesce(max(ordinal),0)+1,'check','succeeded',?5,?6,?7,?8,?9,?10,?11,?12,0,?13,?14,?15,?16,?16,?17 FROM attempt_steps WHERE attempt_id=?1",
+            params![run.attempt,self.project_id,run.task,run.revision,check.id,check.name,check.command,check.directory,check.timeout_ms,tree,environment,source.step,source.counts.map(|c|c.passed),source.counts.map(|c|c.failed),source.counts.map(|c|c.ignored),now_ms(),report],
         )? == 1, "Could not record reused check")
     }
     /// Consecutive failures of the latest check on the same source and definition.
@@ -1067,7 +1073,7 @@ impl Service {
     /// A judgment counts only if followed by a worker and another failed check.
     pub fn repeated_check_failure(&self, run: &Run) -> Result<(usize, bool)> {
         let mut stmt = self.db.connection().prepare(
-            "SELECT id,state,source_tree,command,working_directory,timeout_ms,exit_code,report
+            "SELECT id,state,source_tree,command,working_directory,timeout_ms,exit_code,report,environment_fingerprint
              FROM attempt_steps WHERE attempt_id=?1 AND role='check' AND state IN ('succeeded','failed')
                AND project_check_id=(SELECT project_check_id FROM attempt_steps
                  WHERE attempt_id=?1 AND role='check' ORDER BY id DESC LIMIT 1)
@@ -1085,6 +1091,7 @@ impl Service {
                     r.get::<_, Option<i64>>(6)?,
                     r.get::<_, Option<String>>(7)?
                         .map(|report| super::stop::check_failure_identity(&report)),
+                    r.get::<_, Option<String>>(8)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1101,6 +1108,7 @@ impl Service {
                     && r.5 == latest.5
                     && r.6 == latest.6
                     && r.7 == latest.7
+                    && r.8 == latest.8
             })
             .collect();
         let oldest = streak.last().expect("latest failed check is in streak").0;

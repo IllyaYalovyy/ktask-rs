@@ -120,9 +120,14 @@ pub(crate) fn launch_tui(
         app::App::persistent(instance, service).map_err(io::Error::other)?
     };
     let scratch = scratch::Scratch::new_in_background(&paths.cache.join("scratch"))?;
+    let workers = paths.cache.join("workers");
+    let worker_reclaim = std::thread::spawn(move || scratch::Scratch::reclaim(&workers));
     let result = terminal_session(app);
-    let cleanup = scratch.close();
-    result.and(cleanup)
+    let worker_cleanup = worker_reclaim
+        .join()
+        .map_err(|_| io::Error::other("worker scratch reclamation panicked"))?;
+    let scratch_cleanup = scratch.close();
+    result.and(worker_cleanup).and(scratch_cleanup)
 }
 
 fn terminal_session(app: app::App) -> io::Result<()> {

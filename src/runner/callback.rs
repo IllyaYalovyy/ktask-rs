@@ -29,6 +29,8 @@ pub struct Capability {
     pub task: i64,
     pub attempt: i64,
     pub token: String,
+    pub environment_fingerprint: String,
+    pub environment_path: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -260,6 +262,8 @@ fn apply(path: &Path, capability: &Capability) -> Result<i64> {
             capability.attempt,
             &token,
             &requirement,
+            &capability.environment_fingerprint,
+            &capability.environment_path,
         ),
     }
 }
@@ -282,6 +286,8 @@ mod tests {
                 task: 1,
                 attempt: 1,
                 token: "unused".into(),
+                environment_fingerprint: "unbound".into(),
+                environment_path: std::env::var("PATH").unwrap_or_default(),
             },
         )?;
         let replacement = root.path().join("outside");

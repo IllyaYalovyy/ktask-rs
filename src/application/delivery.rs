@@ -311,7 +311,7 @@ impl Service {
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         require(tx.execute("UPDATE attempt_delivery SET stage=?4,checkpoint_head=?3 WHERE attempt_id=?1 AND EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND execution_token=?2 AND state='running')",params![run.attempt,run.token,head,Stage::Checkpointed])? == 1,"Delivery ownership lost")?;
-        require(tx.execute("UPDATE attempt_progress SET phase=?3,verified_tree='',evidence=context || char(10) || ?2 WHERE attempt_id=?1",params![run.attempt,reason,Phase::Check])? == 1,"Delivery proof missing")?;
+        require(tx.execute("UPDATE attempt_progress SET phase=?3,verified_tree='',verified_environment='',evidence=context || char(10) || ?2 WHERE attempt_id=?1",params![run.attempt,reason,Phase::Check])? == 1,"Delivery proof missing")?;
         tx.commit().map_err(Into::into)
     }
     pub fn delivery_push_intent(&self, run: &Run, head: &str, expected: &str) -> Result<()> {

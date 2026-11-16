@@ -8,6 +8,12 @@ CONCEPTS
              has its own queue and supervisor; several projects run at the same time.
   Instance   ktask and ktask-dev keep separate databases; --paths prints them. The working
              directory never selects the instance.
+  Tools      tool register records an existing external or instance-owned installation;
+             tool bind NAME ID --if-version 0 selects it for this project. tool list shows
+             generations and readiness. tool refresh ID VERSION --if-version N acknowledges
+             a changed external installation. Managed generations live under XDG data/tools;
+             tool unbind NAME --if-version N removes a project binding.
+             task scratch and package caches live under XDG cache.
   Task       A title, a Goal and acceptance criteria (one --criterion each). State only the
              outcome and how to verify it; the agent owns design and implementation.
              Kind ai is run by agents. Kind human is owner work, confirmed with done.

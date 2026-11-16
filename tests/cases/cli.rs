@@ -9,6 +9,758 @@ const DEV: &str = env!("CARGO_BIN_EXE_ktask-dev");
 const PROD: &str = env!("CARGO_BIN_EXE_ktask");
 
 #[test]
+fn candidate_sdk_probe_uses_bound_java_and_protects_external_and_managed_installations() -> Result {
+    for managed in [false, true] {
+        candidate_sdk_probe_case(managed)?;
+    }
+    Ok(())
+}
+
+fn candidate_sdk_probe_case(managed: bool) -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    support::empty_repository(root)?;
+    add(root, "SDK needs bound Java")?;
+
+    let java = root.join("java-install");
+    std::fs::create_dir_all(java.join("bin"))?;
+    support::write_executable(&java.join("bin/java"), b"#!/bin/sh\necho 'java 99.0'\n")?;
+    let java_id = json(
+        root,
+        &[
+            "tool",
+            "register",
+            "java",
+            "99.0",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            java.to_str().ok_or("Java path")?,
+        ],
+        0,
+    )?["data"]["id"]
+        .as_i64()
+        .ok_or("Java ID")?;
+    json(
+        root,
+        &[
+            "tool",
+            "bind",
+            "java",
+            &java_id.to_string(),
+            "--if-version",
+            "0",
+        ],
+        0,
+    )?;
+
+    let bad = if managed {
+        root.join(".local/share/ktask-dev/tools/sdk-write")
+    } else {
+        root.join("sdk-write")
+    };
+    let bad_binary = bad.join("cmdline-tools/latest/bin/sdkmanager");
+    std::fs::create_dir_all(bad_binary.parent().ok_or("SDK binary parent")?)?;
+    support::write_executable(&bad_binary, format!(
+        "#!/bin/sh\nset -e\n[ \"$(java --version)\" = 'java 99.0' ]\n[ \"$ANDROID_SDK_ROOT\" = '{}' ]\nprintf started > \"$ANDROID_USER_HOME/candidate-started\"\nif (printf modified > \"$ANDROID_SDK_ROOT/unwanted\") 2>/dev/null; then\n  printf allowed > \"$ANDROID_USER_HOME/candidate-write\"\n  echo 'sdkmanager 2.0'\nelse\n  printf denied > \"$ANDROID_USER_HOME/candidate-write\"\n  exit 1\nfi\n",
+        bad.display(),
+    ).as_bytes())?;
+    let mut register = vec![
+        "tool",
+        "register",
+        "android-sdk",
+        "36",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        bad.to_str().ok_or("SDK path")?,
+        "--component",
+        "cmdline-tools;latest",
+    ];
+    if managed {
+        register.push("--managed");
+    }
+    let bad_id = json(root, &register, 0)?["data"]["id"]
+        .as_i64()
+        .ok_or("SDK ID")?;
+    json(
+        root,
+        &[
+            "require",
+            "1",
+            "--kind",
+            "executable",
+            "--item",
+            "sdkmanager",
+            "--version",
+            "2.0",
+            "--scope",
+            "project",
+            "--stage",
+            "baseline",
+            "--reproduction",
+            "SDK needs project-bound Java",
+        ],
+        0,
+    )?;
+    assert_eq!(
+        json(root, &["dependency-recheck", "1"], 0)?["data"]["passed"],
+        false
+    );
+    let runtime = root.join("cache/ktask-dev/project-runtime/1/android");
+    assert_eq!(
+        std::fs::read_to_string(runtime.join("candidate-started"))?,
+        "started"
+    );
+    assert_eq!(
+        std::fs::read_to_string(runtime.join("candidate-write"))?,
+        "denied"
+    );
+    assert!(!bad.join("unwanted").exists());
+    assert!(
+        json(root, &["tool", "list"], 0)?["data"]["tools"]
+            .as_array()
+            .ok_or("tools")?
+            .iter()
+            .any(|tool| tool["id"] == bad_id && !tool["bound"].as_bool().unwrap())
+    );
+
+    let good = root.join("sdk-protected");
+    let good_binary = good.join("cmdline-tools/latest/bin/sdkmanager");
+    std::fs::create_dir_all(good_binary.parent().ok_or("SDK binary parent")?)?;
+    support::write_executable(&good_binary, format!(
+        "#!/bin/sh\nset -e\n[ \"$(java --version)\" = 'java 99.0' ]\n[ \"$ANDROID_SDK_ROOT\" = '{}' ]\nprintf probe > \"$ANDROID_USER_HOME/startup\"\necho 'sdkmanager 2.0'\n",
+        good.display(),
+    ).as_bytes())?;
+    let good_id = json(
+        root,
+        &[
+            "tool",
+            "register",
+            "android-sdk",
+            "36",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            good.to_str().ok_or("SDK path")?,
+            "--component",
+            "cmdline-tools;latest",
+        ],
+        0,
+    )?["data"]["id"]
+        .as_i64()
+        .ok_or("good SDK ID")?;
+    assert_eq!(
+        json(root, &["dependency-recheck", "1"], 0)?["data"]["passed"],
+        true
+    );
+    assert!(
+        json(root, &["tool", "list"], 0)?["data"]["tools"]
+            .as_array()
+            .ok_or("tools")?
+            .iter()
+            .any(|tool| tool["id"] == good_id && tool["bound"] == true)
+    );
+    assert_eq!(std::fs::read_to_string(runtime.join("startup"))?, "probe");
+    Ok(())
+}
+
+#[test]
+fn automatic_android_selection_checks_component_and_binary_versions() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    support::empty_repository(root)?;
+    json(
+        root,
+        &[
+            "add",
+            "--title",
+            "Android versions",
+            "--goal",
+            "Use matching SDK",
+            "--criterion",
+            "All versions match",
+        ],
+        0,
+    )?;
+    let component = "system-images;android-36;google_apis;x86_64";
+    let mut ids = Vec::new();
+    for (label, component_version, binary_version) in [
+        ("old-binaries", "2.0", "1.0"),
+        ("old-component", "1.0", "2.0"),
+        ("compatible", "2.0", "2.0"),
+    ] {
+        let sdk = root.join(format!("sdk-{label}"));
+        for (relative, binary) in [
+            ("platform-tools/adb", "adb"),
+            ("emulator/emulator", "emulator"),
+            ("cmdline-tools/latest/bin/sdkmanager", "sdkmanager"),
+        ] {
+            let file = sdk.join(relative);
+            std::fs::create_dir_all(file.parent().ok_or("binary parent")?)?;
+            support::write_executable(
+                &file,
+                format!("#!/bin/sh\necho '{binary} {binary_version}'\n").as_bytes(),
+            )?;
+        }
+        let image = sdk.join(component.replace(';', "/"));
+        std::fs::create_dir_all(&image)?;
+        std::fs::write(
+            image.join("source.properties"),
+            format!("Pkg.Revision={component_version}\n"),
+        )?;
+        std::fs::write(image.join("system.img"), b"fake system image")?;
+        let registered = json(
+            root,
+            &[
+                "tool",
+                "register",
+                "android-sdk",
+                "36",
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                sdk.to_str().ok_or("SDK path")?,
+                "--component",
+                component,
+                "--component",
+                "platform-tools",
+                "--component",
+                "emulator",
+                "--component",
+                "cmdline-tools;latest",
+            ],
+            0,
+        )?;
+        ids.push(registered["data"]["id"].as_i64().ok_or("generation id")?);
+    }
+    for (kind, item) in [
+        ("executable", "sdkmanager"),
+        ("sdk_component", component),
+        ("executable", "emulator"),
+        ("executable", "adb"),
+    ] {
+        json(
+            root,
+            &[
+                "require",
+                "1",
+                "--kind",
+                kind,
+                "--item",
+                item,
+                "--version",
+                "2.0",
+                "--scope",
+                "project",
+                "--stage",
+                "baseline",
+                "--reproduction",
+                "wrong version",
+            ],
+            0,
+        )?;
+    }
+    assert_eq!(
+        json(root, &["dependency-recheck", "1"], 0)?["data"]["passed"],
+        true
+    );
+    let tools = json(root, &["tool", "list"], 0)?;
+    assert_eq!(tools["data"]["tools"][2]["id"], ids[2]);
+    assert_eq!(tools["data"]["tools"][2]["binding_version"], 1);
+    assert!(tools["data"]["tools"][0]["binding_version"].is_null());
+    assert!(tools["data"]["tools"][1]["binding_version"].is_null());
+    Ok(())
+}
+
+#[test]
+fn standalone_android_executables_and_mixed_sdk_bindings_resolve() -> Result {
+    for binary in ["adb", "emulator", "sdkmanager"] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        support::empty_repository(root)?;
+        json(
+            root,
+            &[
+                "add",
+                "--title",
+                "Standalone Android tool",
+                "--goal",
+                "Use registered tool",
+                "--criterion",
+                "Tool works",
+            ],
+            0,
+        )?;
+        let install = root.join(format!("standalone-{binary}"));
+        std::fs::create_dir_all(install.join("bin"))?;
+        support::write_executable(
+            &install.join("bin").join(binary),
+            format!("#!/bin/sh\necho '{binary} 2.0'\n").as_bytes(),
+        )?;
+        json(
+            root,
+            &[
+                "tool",
+                "register",
+                binary,
+                "2.0",
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                install.to_str().ok_or("tool path")?,
+            ],
+            0,
+        )?;
+        json(
+            root,
+            &[
+                "require",
+                "1",
+                "--kind",
+                "executable",
+                "--item",
+                binary,
+                "--version",
+                "2.0",
+                "--scope",
+                "project",
+                "--stage",
+                "baseline",
+                "--reproduction",
+                "not on inherited PATH",
+            ],
+            0,
+        )?;
+        assert_eq!(
+            json(root, &["dependency-recheck", "1"], 0)?["data"]["passed"],
+            true
+        );
+        assert_eq!(
+            json(root, &["tool", "list"], 0)?["data"]["tools"][0]["binding_version"],
+            1
+        );
+    }
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    support::empty_repository(root)?;
+    json(
+        root,
+        &[
+            "add",
+            "--title",
+            "Mixed Android tools",
+            "--goal",
+            "Use component and standalone adb",
+            "--criterion",
+            "Both work",
+        ],
+        0,
+    )?;
+    let sdk = root.join("sdk");
+    let component = "system-images;android-36;google_apis;x86_64";
+    let image = sdk.join(component.replace(';', "/"));
+    std::fs::create_dir_all(&image)?;
+    std::fs::write(image.join("source.properties"), b"Pkg.Revision=2.0\n")?;
+    std::fs::write(image.join("system.img"), b"fake system image")?;
+    std::fs::create_dir_all(sdk.join("platform-tools"))?;
+    support::write_executable(
+        &sdk.join("platform-tools/adb"),
+        b"#!/bin/sh\necho 'adb 1.0'\n",
+    )?;
+    json(
+        root,
+        &[
+            "tool",
+            "register",
+            "android-sdk",
+            "36",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            sdk.to_str().ok_or("SDK path")?,
+            "--component",
+            component,
+            "--component",
+            "platform-tools",
+        ],
+        0,
+    )?;
+    let standalone = root.join("adb");
+    std::fs::create_dir_all(standalone.join("bin"))?;
+    support::write_executable(&standalone.join("bin/adb"), b"#!/bin/sh\necho 'adb 2.0'\n")?;
+    json(
+        root,
+        &[
+            "tool",
+            "register",
+            "adb",
+            "2.0",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            standalone.to_str().ok_or("adb path")?,
+        ],
+        0,
+    )?;
+    for (kind, item) in [("sdk_component", component), ("executable", "adb")] {
+        json(
+            root,
+            &[
+                "require",
+                "1",
+                "--kind",
+                kind,
+                "--item",
+                item,
+                "--version",
+                "2.0",
+                "--scope",
+                "project",
+                "--stage",
+                "baseline",
+                "--reproduction",
+                "missing",
+            ],
+            0,
+        )?;
+    }
+    assert_eq!(
+        json(root, &["dependency-recheck", "1"], 0)?["data"]["passed"],
+        true
+    );
+    let list = json(root, &["tool", "list"], 0)?;
+    assert!(
+        list["data"]["tools"]
+            .as_array()
+            .ok_or("tools")?
+            .iter()
+            .all(|tool| tool["binding_version"].is_number()),
+        "{list}"
+    );
+    Ok(())
+}
+
+#[test]
+fn registered_android_sdk_satisfies_project_dependency_without_installing() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    support::empty_repository(root)?;
+    json(
+        root,
+        &[
+            "add",
+            "--title",
+            "Android fixture",
+            "--goal",
+            "Use existing SDK",
+            "--criterion",
+            "Component available",
+        ],
+        0,
+    )?;
+    let component = "system-images;android-36;google_apis;x86_64";
+    let sdk = root.join("Android/Sdk");
+    let installed = sdk.join(component.replace(';', "/"));
+    std::fs::create_dir_all(&installed)?;
+    std::fs::write(installed.join("source.properties"), b"Pkg.Revision=1.0\n")?;
+    std::fs::write(installed.join("system.img"), b"fake system image")?;
+    json(
+        root,
+        &[
+            "require",
+            "1",
+            "--kind",
+            "sdk_component",
+            "--item",
+            component,
+            "--version",
+            "1.0",
+            "--scope",
+            "project",
+            "--stage",
+            "baseline",
+            "--reproduction",
+            "SDK component unavailable",
+        ],
+        0,
+    )?;
+    let registered = json(
+        root,
+        &[
+            "tool",
+            "register",
+            "android-sdk",
+            "36",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            sdk.to_str().ok_or("non-UTF8 fixture")?,
+            "--component",
+            component,
+        ],
+        0,
+    )?;
+    assert_eq!(registered["data"]["id"], 1);
+    let checked = json(root, &["dependency-recheck", "1"], 0)?;
+    assert_eq!(checked["data"]["passed"], true);
+    let listed = json(root, &["tool", "list"], 0)?;
+    assert_eq!(listed["data"]["tools"][0]["binding_version"], 1);
+    assert!(installed.join("source.properties").exists());
+    Ok(())
+}
+
+#[test]
+fn registered_tool_is_visible_in_real_config_by_keyboard_and_mouse() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    support::empty_repository(root)?;
+    json(
+        root,
+        &[
+            "add",
+            "--title",
+            "Inspect tools",
+            "--goal",
+            "Show registered tools",
+            "--criterion",
+            "Tools visible",
+        ],
+        0,
+    )?;
+    let install = root.join("external-rg");
+    std::fs::create_dir_all(install.join("bin"))?;
+    support::write_executable(&install.join("bin/rg"), b"#!/bin/sh\necho 'rg 14.1'\n")?;
+    let registered = json(
+        root,
+        &[
+            "tool",
+            "register",
+            "rg",
+            "14.1",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            install.to_str().ok_or("non-UTF8 fixture")?,
+        ],
+        0,
+    )?;
+    let id = registered["data"]["id"].as_i64().ok_or("generation id")?;
+    let mut terminal = Terminal::open_real(DEV, root, 110, 32)?;
+    terminal.send("4")?;
+    terminal.screen("Config tools keyboard entry", |s| s.contains("t Tools"))?;
+    terminal.send("t")?;
+    terminal.screen("Unbound tool registry", |s| {
+        s.contains("Project tools") && s.contains("rg 14.1")
+    })?;
+    terminal.send(" ")?;
+    terminal.screen("Keyboard Bind choice", |s| s.contains("< Bind >"))?;
+    terminal.send("\trg")?;
+    terminal.send("\t\t\t\t\t\t\t")?;
+    terminal.send(&id.to_string())?;
+    terminal.send("\x13")?;
+    terminal.screen("Keyboard tool binding saved", |s| s.contains("Bound rg"))?;
+    let listed = json(root, &["tool", "list"], 0)?;
+    assert_eq!(listed["data"]["tools"][0]["ready"], true);
+    assert_eq!(listed["data"]["tools"][0]["binding_version"], 1);
+    terminal.send("t")?;
+    let keyboard = terminal.screen("Tool registry keyboard", |s| {
+        s.contains("Project tools") && s.contains("rg 14.1") && s.contains("bound v1")
+    })?;
+    println!("TOOL REGISTRY KEYBOARD SCREEN\n{keyboard}");
+    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+        support::screen_png(
+            &keyboard,
+            &std::path::PathBuf::from(directory).join("tool-registry-keyboard.png"),
+        )?;
+    }
+    terminal.send("\x1b")?;
+    terminal.screen("Tool dialog closed", |s| {
+        s.contains("t Tools") && !s.contains("Project tools")
+    })?;
+    terminal.click("t Tools")?;
+    let mouse = terminal.screen("Tool registry mouse", |s| {
+        s.contains("Project tools") && s.contains("rg 14.1")
+    })?;
+    println!("TOOL REGISTRY MOUSE SCREEN\n{mouse}");
+    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+        support::screen_png(
+            &mouse,
+            &std::path::PathBuf::from(directory).join("tool-registry-mouse.png"),
+        )?;
+    }
+    terminal.click_after("Tool action", "Register")?;
+    terminal.screen("Mouse Bind choice", |s| s.contains("< Bind >"))?;
+    terminal.click_after("Tool action", "Bind")?;
+    terminal.screen("Mouse Unbind choice", |s| s.contains("< Unbind >"))?;
+    terminal.click("Tool name")?;
+    terminal.send("rg")?;
+    terminal.click("Expected version (binding or generation)")?;
+    terminal.send("\x011")?;
+    terminal.click("[Apply]")?;
+    terminal.screen("Mouse tool unbinding saved", |s| s.contains("Unbound rg"))?;
+    assert!(json(root, &["tool", "list"], 0)?["data"]["tools"][0]["binding_version"].is_null());
+    terminal.send("q")?;
+    terminal.finish()?;
+    Ok(())
+}
+
+#[test]
+fn real_tool_dialog_runs_every_mutation_by_keyboard_and_mouse() -> Result {
+    for mouse in [false, true] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        support::empty_repository(root)?;
+        let install = root.join("external-rg");
+        std::fs::create_dir_all(install.join("bin"))?;
+        support::write_executable(&install.join("bin/rg"), b"#!/bin/sh\necho 'rg 14.1'\n")?;
+        let mut terminal = Terminal::open_real(DEV, root, 110, 32)?;
+        terminal.send("4")?;
+        terminal.screen("Config", |s| s.contains("t Tools"))?;
+        let open = |t: &mut Terminal| -> Result {
+            if mouse {
+                t.click("t Tools")?;
+            } else {
+                t.send("t")?;
+            }
+            t.screen("Tool dialog opened", |s| s.contains("Tool action"))?;
+            Ok(())
+        };
+        let apply = |t: &mut Terminal| -> Result {
+            if mouse {
+                t.click("[Apply]")
+            } else {
+                t.send("\x13")
+            }
+        };
+        let save_screen = |name: &str, screen: &str| -> Result {
+            println!("{name}\n{screen}");
+            if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+                support::screen_png(
+                    screen,
+                    &std::path::PathBuf::from(directory)
+                        .join(format!("tool-{name}-mouse-{mouse}.png")),
+                )?;
+            }
+            Ok(())
+        };
+        let inspect = |t: &mut Terminal, name: &str, expected: &str| -> Result {
+            open(t)?;
+            let screen = t.screen("Tool registry state", |s| {
+                s.contains(expected) && s.contains("ktask-test-scratch")
+            })?;
+            save_screen(name, &screen)?;
+            t.send("\x1b")?;
+            t.screen("Tool registry closed", |s| !s.contains("Tool action"))?;
+            Ok(())
+        };
+        open(&mut terminal)?;
+        terminal.screen("Empty tool registry", |s| {
+            s.contains("No registered tool generations")
+        })?;
+        if mouse {
+            terminal.click("Tool name")?;
+            terminal.send("rg")?;
+            terminal.click("Tool version")?;
+            terminal.send("14.1")?;
+            terminal.click("Installation path")?;
+            terminal.send(install.to_str().ok_or("installation path")?)?;
+        } else {
+            terminal.send("\trg\t14.1\t\t\t")?;
+            terminal.send(install.to_str().ok_or("installation path")?)?;
+        }
+        apply(&mut terminal)?;
+        let screen = terminal.screen("Tool registered", |s| {
+            s.contains("Registered tool generation #1")
+        })?;
+        save_screen("registered", &screen)?;
+        inspect(&mut terminal, "registered-state", "rg 14.1")?;
+        let id = json(root, &["tool", "list"], 0)?["data"]["tools"][0]["id"]
+            .as_i64()
+            .ok_or("generation id")?;
+
+        open(&mut terminal)?;
+        if mouse {
+            terminal.click_after("Tool action", "Register")?;
+            terminal.screen("Mouse Bind action", |s| s.contains("< Bind >"))?;
+            terminal.click("Tool name")?;
+            terminal.send("rg")?;
+            terminal.click("Generation ID")?;
+            terminal.send(&id.to_string())?;
+        } else {
+            terminal.send(" ")?;
+            terminal.send("\trg")?;
+            terminal.send(&"\t".repeat(7))?;
+            terminal.send(&id.to_string())?;
+        }
+        apply(&mut terminal)?;
+        let screen = terminal.screen("Tool bound", |s| s.contains("Bound rg"))?;
+        save_screen("bound", &screen)?;
+        inspect(&mut terminal, "bound-state", "bound v1")?;
+        assert_eq!(
+            json(root, &["tool", "list"], 0)?["data"]["tools"][0]["binding_version"],
+            1
+        );
+
+        support::write_executable(&install.join("bin/rg"), b"#!/bin/sh\necho 'rg 14.2'\n")?;
+        open(&mut terminal)?;
+        let changed = terminal.screen("External tool changed", |s| {
+            s.contains("changed or missing")
+        })?;
+        save_screen("changed", &changed)?;
+        if mouse {
+            for (choice, next) in [
+                ("Register", "Bind"),
+                ("Bind", "Unbind"),
+                ("Unbind", "Refresh external"),
+            ] {
+                terminal.click_after("Tool action", choice)?;
+                terminal.screen("Mouse tool action", |s| s.contains(&format!("< {next} >")))?;
+            }
+            terminal.click("Tool version")?;
+            terminal.send("14.2")?;
+            terminal.click("Generation ID")?;
+            terminal.send(&id.to_string())?;
+            terminal.click("Expected version (binding or generation)")?;
+            terminal.send("\x011")?;
+        } else {
+            terminal.send("   ")?;
+            terminal.send("\t\t14.2")?;
+            terminal.send(&"\t".repeat(6))?;
+            terminal.send(&id.to_string())?;
+            terminal.send("\t\x011")?;
+        }
+        apply(&mut terminal)?;
+        let screen = terminal.screen("Tool refreshed", |s| s.contains("Refreshed"))?;
+        save_screen("refreshed", &screen)?;
+        inspect(&mut terminal, "refreshed-state", "rg 14.2")?;
+        assert_eq!(
+            json(root, &["tool", "list"], 0)?["data"]["tools"][0]["ready"],
+            true
+        );
+
+        open(&mut terminal)?;
+        terminal.screen("Refreshed tool ready", |s| {
+            s.contains("rg 14.2") && s.contains("ready")
+        })?;
+        if mouse {
+            terminal.click_after("Tool action", "Register")?;
+            terminal.screen("Mouse Bind action", |s| s.contains("< Bind >"))?;
+            terminal.click_after("Tool action", "Bind")?;
+            terminal.screen("Mouse Unbind action", |s| s.contains("< Unbind >"))?;
+            terminal.click("Tool name")?;
+            terminal.send("rg")?;
+            terminal.click("Expected version (binding or generation)")?;
+            terminal.send("\x011")?;
+        } else {
+            terminal.send("  ")?;
+            terminal.send("\trg")?;
+            terminal.send(&"\t".repeat(8))?;
+            terminal.send("\x011")?;
+        }
+        apply(&mut terminal)?;
+        let screen = terminal.screen("Tool unbound", |s| s.contains("Unbound rg"))?;
+        save_screen("unbound", &screen)?;
+        inspect(&mut terminal, "unbound-state", "external · ready")?;
+        assert!(json(root, &["tool", "list"], 0)?["data"]["tools"][0]["binding_version"].is_null());
+        terminal.send("q")?;
+        terminal.finish()?;
+    }
+    Ok(())
+}
+
+#[test]
 fn dependency_recheck_requires_observed_version_and_stop_restores_pending() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();

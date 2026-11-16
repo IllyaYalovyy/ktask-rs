@@ -123,6 +123,9 @@ fn ai_turn(
     nudge: Option<&str>,
     lens: Option<&LensTurn<'_>>,
 ) -> Result<Outcome> {
+    if let Some(wait) = ctx.environment_wait(service, run, "before the provider turn")? {
+        return Ok(wait);
+    }
     let configured = agent::model_role(role);
     let model = role_model(run, configured).expect("preflight models");
     let turn = Turn {
@@ -130,7 +133,11 @@ fn ai_turn(
         model,
         provider: Provider::of(model)?,
     };
-    let scope = turn.provider.auth_scope()?;
+    let scope = format!(
+        "{}|environment:{}",
+        turn.provider.auth_scope()?,
+        ctx.tools.fingerprint
+    );
     // A lens review starts its own session; its nudge continues that same session.
     let step = match lens.filter(|_| nudge.is_none()) {
         Some(_) => service.start_independent_step(run, configured, model, &scope)?,
@@ -207,7 +214,9 @@ fn answered_turn(
         evidence,
     )?;
     let packet_context = format!(
-        "{packet_context}\nRead/search without opening the database: '{}' evidence FILE --offset 0 --limit 4096 [--search TEXT]. Use next_offset until eof. This command works in the read-only sandbox.\n",
+        "{packet_context}\nResolved project tools: {}. Environment fingerprint: {}.\nRead/search without opening the database: '{}' evidence FILE --offset 0 --limit 4096 [--search TEXT]. Use next_offset until eof. This command works in the read-only sandbox.\n",
+        ctx.tools.description,
+        ctx.tools.fingerprint,
         ctx.paths.executable.display()
     );
     let prompt = match (nudge, lens) {
@@ -287,10 +296,16 @@ impl Turn<'_> {
     ) -> Result<Invocation> {
         let access = Access::for_role(self.role);
         let network = access == Access::Write && service.agent_network()?;
+        let policy = sandbox::WorkspaceWrite::new(
+            &ctx.workspace.root,
+            &ctx.tools.writable_roots,
+            &ctx.tools.installations,
+            network,
+        );
         if access == Access::Write {
             self.provider.writable_network(network)?;
         }
-        let launch = self.provider.launch(
+        let mut launch = self.provider.launch(
             self.model,
             step.provider_session.as_deref(),
             access,
@@ -298,6 +313,26 @@ impl Turn<'_> {
             &agent::schema(),
             prompt,
         );
+        if access == Access::Write
+            && self.provider == Provider::Codex
+            && !policy.codex_roots().is_empty()
+        {
+            let position = launch
+                .args
+                .iter()
+                .position(|arg| arg == "resume")
+                .unwrap_or(launch.args.len() - 1);
+            launch.args.splice(
+                position..position,
+                [
+                    "-c".into(),
+                    format!(
+                        "sandbox_workspace_write.writable_roots={}",
+                        serde_json::to_string(policy.codex_roots()).expect("root JSON")
+                    ),
+                ],
+            );
+        }
         let mut invocation = provider_invocation(
             self.provider,
             launch,
@@ -307,12 +342,32 @@ impl Turn<'_> {
             ctx.scratch_root(),
             ctx.workspace.worker_lock.clone(),
         )?;
+        if access == Access::Write {
+            invocation.env.extend(ctx.tools.env.clone());
+            if !ctx.tools.installations.is_empty() {
+                invocation.sandbox = Some(policy.provider_mount()?);
+            }
+        } else if let Some(sandbox) = invocation.sandbox.as_mut() {
+            for path in &ctx.tools.installations {
+                sandbox.protect(path)?;
+            }
+        }
         invocation.callback = (access == Access::Write).then(|| callback::Capability {
             project: ctx.workspace.root.clone(),
             state: ctx.paths.state.clone(),
             task: run.task,
             attempt: run.attempt,
             token: run.token.clone(),
+            environment_fingerprint: ctx.tools.fingerprint.clone(),
+            environment_path: ctx
+                .tools
+                .env
+                .iter()
+                .find(|(key, _)| key == "PATH")
+                .map_or_else(
+                    || std::env::var("PATH").unwrap_or_default(),
+                    |(_, value)| value.clone(),
+                ),
         });
         Ok(invocation)
     }

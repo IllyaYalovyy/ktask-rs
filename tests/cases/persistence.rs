@@ -49,7 +49,8 @@ fn dependency_wait_rechecks_by_keyboard_and_mouse_with_large_queue_and_history()
         assert!(!service.recheck_dependencies(
             current_target,
             &root.join("cache/workers"),
-            Path::new(env!("CARGO_BIN_EXE_ktask-dev"))
+            Path::new(env!("CARGO_BIN_EXE_ktask-dev")),
+            &private_paths(root)?
         )?);
         drop(service);
         let mut t = terminal_at(root, 100, 28)?;
@@ -190,7 +191,8 @@ fn dependency_wait_stops_by_keyboard_and_mouse() -> Result {
         assert!(!service.recheck_dependencies(
             target,
             &root.join("cache/workers"),
-            Path::new(env!("CARGO_BIN_EXE_ktask-dev"))
+            Path::new(env!("CARGO_BIN_EXE_ktask-dev")),
+            &private_paths(root)?
         )?);
         drop(service);
         let mut t = terminal_at(root, 100, 28)?;
@@ -255,6 +257,16 @@ fn service(root: &Path) -> Result<Service> {
         &project(root),
         None,
     )?)
+}
+fn private_paths(root: &Path) -> Result<ktask_rs_mk3::instance::Paths> {
+    Ok(ktask_rs_mk3::instance::Paths {
+        config: root.join("config/ktask-dev"),
+        state: root.join("state/ktask-dev"),
+        cache: root.join("cache/ktask-dev"),
+        data: root.join("data/ktask-dev"),
+        runtime: root.join("runtime/ktask-dev"),
+        executable: std::env::current_exe()?,
+    })
 }
 /// Each word of a rendered row with the terminal column it starts at.
 fn words_at(row: &str) -> Vec<(usize, &str)> {

@@ -162,6 +162,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
                 &paths.state,
                 &paths.config,
                 &paths.cache,
+                &paths.data,
                 &paths.runtime,
             ] {
                 if path.to_str().is_none() {
@@ -172,7 +173,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             }
             return emit(
                 output::Reply {
-                    data: json!({"instance":instance.name(),"executable":paths.executable,"state":paths.state,"config":paths.config,"cache":paths.cache,"runtime":paths.runtime}),
+                    data: json!({"instance":instance.name(),"executable":paths.executable,"state":paths.state,"config":paths.config,"cache":paths.cache,"data":paths.data,"runtime":paths.runtime}),
                     text: String::new(),
                 },
                 true,
@@ -263,6 +264,9 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             | Command::Category { .. }
             | Command::Lens { .. }
             | Command::Init { .. }
+            | Command::Tool {
+                action: args::ToolAction::Register { .. }
+            }
     );
     let mut service = if creates_project {
         // Validate the source before registering a project for an import that cannot succeed.
@@ -295,6 +299,103 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         },
         name: cli.actor.clone().unwrap_or_else(|| "owner".into()),
     })?;
+    if let Command::Tool { action } = command {
+        use args::ToolAction;
+        let reply = match action {
+            ToolAction::List => {
+                let tools = service.tools()?;
+                output::Reply {
+                    data: json!({"tools":tools}),
+                    text: tools
+                        .iter()
+                        .map(|t| {
+                            format!(
+                                "#{} v{} {} {} {} {} {} {} {} {}\n",
+                                t.id,
+                                t.row_version,
+                                t.name,
+                                t.version,
+                                t.platform,
+                                t.architecture,
+                                t.path.display(),
+                                t.provenance,
+                                if t.ready {
+                                    "ready"
+                                } else {
+                                    "changed or missing"
+                                },
+                                t.binding_version
+                                    .map_or(String::new(), |v| format!("bound v{v}"))
+                            )
+                        })
+                        .collect(),
+                }
+            }
+            ToolAction::Register {
+                name,
+                version,
+                platform,
+                architecture,
+                path,
+                components,
+                managed,
+            } => {
+                let id = service.register_tool(
+                    &paths,
+                    &application::tools::Registration {
+                        name,
+                        version,
+                        platform,
+                        architecture,
+                        components,
+                        path,
+                        managed: *managed,
+                    },
+                )?;
+                output::Reply {
+                    data: json!({"action":"registered","id":id}),
+                    text: format!("registered generation #{id}\n"),
+                }
+            }
+            ToolAction::Bind {
+                name,
+                generation,
+                if_version,
+            } => {
+                let version = service.bind_tool(name, *generation, *if_version)?;
+                output::Reply {
+                    data: json!({"action":"bound","name":name,"generation":generation,"version":version}),
+                    text: format!("bound {name} to #{generation} v{version}\n"),
+                }
+            }
+            ToolAction::Unbind { name, if_version } => {
+                service.unbind_tool(name, *if_version)?;
+                output::Reply {
+                    data: json!({"action":"unbound","name":name}),
+                    text: format!("unbound {name}\n"),
+                }
+            }
+            ToolAction::Refresh {
+                generation,
+                version,
+                components,
+                if_version,
+            } => {
+                let row_version = service.refresh_external_tool(
+                    &paths,
+                    *generation,
+                    *if_version,
+                    version,
+                    components,
+                )?;
+                output::Reply {
+                    data: json!({"action":"refreshed","id":generation,"version":row_version}),
+                    text: format!("refreshed generation #{generation} v{row_version}\n"),
+                }
+            }
+        };
+        return emit(reply, cli.json);
+    }
     if service
         .pending_control()?
         .is_some_and(|control| !control.completed)
@@ -554,7 +655,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             cli.json,
         );
     }
-    let mut reply = execute::command(&mut service, &paths.config, &paths.cache, command)?;
+    let mut reply = execute::command(&mut service, &paths.config, &paths.cache, &paths, command)?;
     if matches!(
         command,
         Command::Answer { .. } | Command::Approve { .. } | Command::Done { .. }

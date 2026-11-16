@@ -35,6 +35,7 @@ impl Instance {
         Ok(Paths {
             config: base("XDG_CONFIG_HOME", ".config")?.join(self.name()),
             cache: base("XDG_CACHE_HOME", ".cache")?.join(self.name()),
+            data: base("XDG_DATA_HOME", ".local/share")?.join(self.name()),
             runtime: absolute_env("XDG_RUNTIME_DIR")?
                 .map_or_else(|| state.join("run"), |dir| dir.join(self.name())),
             state,
@@ -48,6 +49,7 @@ pub struct Paths {
     pub config: PathBuf,
     pub state: PathBuf,
     pub cache: PathBuf,
+    pub data: PathBuf,
     pub runtime: PathBuf,
     pub executable: PathBuf,
 }
@@ -61,6 +63,7 @@ impl Paths {
             ("config", &self.config),
             ("state", &self.state),
             ("cache", &self.cache),
+            ("data", &self.data),
             ("runtime", &self.runtime),
         ] {
             writeln!(out, "{label}\t{}", path.display())?;

@@ -63,6 +63,7 @@ pub enum DialogKind {
     StorageConfirm(crate::application::retention::Preview),
     BuildCache(crate::build_cache::Policy),
     BuildCacheConfirm(BuildCachePlan),
+    Tools,
     Config,
     ResetConfig,
     Help,

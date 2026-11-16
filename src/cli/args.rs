@@ -86,6 +86,62 @@ pub enum CacheAction {
 }
 
 #[derive(Subcommand)]
+pub enum ToolAction {
+    /// Show this instance's registered generations and this project's bindings.
+    List,
+    /// Register an existing installation. External trees stay user owned and read only.
+    Register {
+        /// Normalized tool name, such as rg or android-sdk.
+        name: String,
+        /// Concrete installed version.
+        version: String,
+        /// Target platform, such as linux.
+        platform: String,
+        /// Target architecture, such as x86_64.
+        architecture: String,
+        /// Existing installation directory.
+        path: PathBuf,
+        /// Installed component identifier; repeat for each component.
+        #[arg(long = "component")]
+        components: Vec<String>,
+        /// The existing directory is below this instance's XDG data/tools root.
+        #[arg(long)]
+        managed: bool,
+    },
+    /// Explicitly accept a changed external installation after checking its version.
+    Refresh {
+        /// Registered generation ID from tool list.
+        generation: i64,
+        /// Concrete version now installed at the registered path.
+        version: String,
+        /// Installed component identifier; repeat for each component.
+        #[arg(long = "component")]
+        components: Vec<String>,
+        /// Current generation version from tool list.
+        #[arg(long)]
+        if_version: i64,
+    },
+    /// Select one registered generation for this project.
+    Bind {
+        /// Tool name recorded on the generation.
+        name: String,
+        /// Registered generation ID from tool list.
+        generation: i64,
+        /// Binding version, or 0 if it has no binding yet.
+        #[arg(long)]
+        if_version: Option<i64>,
+    },
+    /// Remove this project's binding, guarded by its current version.
+    Unbind {
+        /// Bound tool name from tool list.
+        name: String,
+        /// Current binding version from tool list.
+        #[arg(long)]
+        if_version: i64,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum ProfileAction {
     /// List profiles with what selects them.
     List,
@@ -235,6 +291,11 @@ pub enum Switch {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Inspect, register and bind reusable tools in this explicit instance.
+    Tool {
+        #[command(subcommand)]
+        action: ToolAction,
+    },
     /// Page or search an evidence file without opening the database (safe in judge sandboxes).
     Evidence {
         /// Regular evidence file to inspect.

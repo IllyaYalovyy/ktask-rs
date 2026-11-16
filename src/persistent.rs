@@ -373,8 +373,16 @@ impl StoredWorkspace {
                 }) {
                     // Nothing stored changed, so only the supervisor can have started or
                     // stopped; redraw anyway so timers and countdowns advance.
-                    let unchanged = crate::runner::supervisor_alive(&self.service)
-                        .is_ok_and(|alive| Some(alive) == screen.supervisor_alive);
+                    // The guardian can still hold the worker lease when the supervisor
+                    // first disappears. Retry orphan settlement after it releases the
+                    // lease even though liveness itself stays unchanged.
+                    let running = screen
+                        .current()
+                        .is_some_and(|task| task.status() == Status::Running);
+                    let unchanged =
+                        crate::runner::supervisor_alive(&self.service).is_ok_and(|alive| {
+                            Some(alive) == screen.supervisor_alive && (alive || !running)
+                        });
                     if !unchanged && let Err(error) = self.reload(screen) {
                         screen.message(error);
                     }
@@ -404,6 +412,7 @@ impl StoredWorkspace {
                             target,
                             &paths.cache.join("workers"),
                             &paths.executable,
+                            &paths,
                         )
                         .map_err(|e| e.to_string())
                 });
@@ -965,7 +974,8 @@ impl StoredWorkspace {
             | DialogKind::Storage(_)
             | DialogKind::StorageConfirm(_)
             | DialogKind::BuildCache(_)
-            | DialogKind::BuildCacheConfirm(_) => {
+            | DialogKind::BuildCacheConfirm(_)
+            | DialogKind::Tools => {
                 return Err("Simulation is available only with --demo".into());
             }
         }
@@ -1159,7 +1169,8 @@ impl Backend for StoredWorkspace {
             | Action::ProjectChecks
             | Action::Delivery
             | Action::Storage
-            | Action::BuildCache => Some(self.open_project_config(screen, action)?),
+            | Action::BuildCache
+            | Action::Tools => Some(self.open_project_config(screen, action)?),
             Action::Breakdown => Some(self.propose_breakdown(screen)?),
             Action::Add | Action::Insert | Action::Edit => Some(self.task_form(screen, action)),
             Action::Move => {
@@ -1223,6 +1234,7 @@ impl Backend for StoredWorkspace {
                 | DialogKind::StorageConfirm(_)
                 | DialogKind::BuildCache(_)
                 | DialogKind::BuildCacheConfirm(_)
+                | DialogKind::Tools
         ) {
             return self.save_project_config(screen, dialog);
         }
@@ -1448,6 +1460,7 @@ impl Backend for StoredWorkspace {
             ("g Git delivery", Action::Delivery),
             ("k Storage", Action::Storage),
             ("b Build cache", Action::BuildCache),
+            ("t Tools", Action::Tools),
             ("e Preferences", Action::Configure),
             ("Esc Back", Action::Back),
         ]

@@ -316,6 +316,7 @@ impl App {
             | Action::Delivery
             | Action::Storage
             | Action::BuildCache
+            | Action::Tools
             | Action::Import
             | Action::Export => match self.backend.open(&mut self.screen, action) {
                 Ok(Some(dialog)) => self.dialog = Some(dialog),

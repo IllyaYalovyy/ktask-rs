@@ -28,6 +28,7 @@ pub struct Progress {
     pub context: String,
     pub evidence: String,
     pub verified_tree: String,
+    pub verified_environment: String,
     /// Why the current fix round runs, in one line the owner can read.
     pub why: String,
 }
@@ -60,7 +61,7 @@ impl Progress {
 impl Service {
     pub fn progress(&self, run: &Run) -> Result<Option<Progress>> {
         self.db.connection().query_row(
-            "SELECT repair_round,phase,context,evidence,verified_tree,why FROM attempt_progress WHERE attempt_id=?1",
+            "SELECT repair_round,phase,context,evidence,verified_tree,verified_environment,why FROM attempt_progress WHERE attempt_id=?1",
             [run.attempt],
             read_progress,
         ).optional().map_err(Into::into)
@@ -70,7 +71,7 @@ impl Service {
         self.db
             .connection()
             .query_row(
-                "SELECT p.repair_round,p.phase,p.context,p.evidence,p.verified_tree,p.why
+                "SELECT p.repair_round,p.phase,p.context,p.evidence,p.verified_tree,p.verified_environment,p.why
              FROM attempt_progress p JOIN attempts a ON a.id=p.attempt_id
              LEFT JOIN attempt_delivery d ON d.attempt_id=a.id
              WHERE (a.task_id=?1 OR d.repair_origin_task=?1) AND a.id<?2 ORDER BY a.id DESC LIMIT 1",
@@ -142,11 +143,11 @@ impl Service {
             params![run.attempt,run.token,label],
         )? == 1, "Attempt ownership lost")?;
         tx.execute(
-            "INSERT INTO attempt_progress(attempt_id,repair_round,phase,context,evidence,verified_tree,why)
-             VALUES (?1,?2,?3,?4,?5,?6,?7)
+            "INSERT INTO attempt_progress(attempt_id,repair_round,phase,context,evidence,verified_tree,verified_environment,why)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
              ON CONFLICT(attempt_id) DO UPDATE SET repair_round=excluded.repair_round,
                  phase=excluded.phase,context=excluded.context,evidence=excluded.evidence,
-                 verified_tree=excluded.verified_tree,why=excluded.why",
+                 verified_tree=excluded.verified_tree,verified_environment=excluded.verified_environment,why=excluded.why",
             params![
                 run.attempt,
                 progress.round,
@@ -154,6 +155,7 @@ impl Service {
                 progress.context,
                 progress.evidence,
                 progress.verified_tree,
+                progress.verified_environment,
                 progress.why
             ],
         )?;
@@ -174,7 +176,8 @@ fn read_progress(r: &rusqlite::Row<'_>) -> rusqlite::Result<Progress> {
         context: r.get(2)?,
         evidence: r.get(3)?,
         verified_tree: r.get(4)?,
-        why: r.get(5)?,
+        verified_environment: r.get(5)?,
+        why: r.get(6)?,
     })
 }
 

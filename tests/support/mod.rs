@@ -346,6 +346,7 @@ impl Terminal {
         command.env("XDG_CONFIG_HOME", sandbox.join("config"));
         command.env("XDG_STATE_HOME", sandbox.join("state"));
         command.env("XDG_CACHE_HOME", sandbox.join("cache"));
+        command.env("XDG_DATA_HOME", sandbox.join("data"));
         command.env("XDG_RUNTIME_DIR", sandbox.join("runtime"));
         command.env("TMPDIR", sandbox);
         command.env(

@@ -14,13 +14,104 @@ use std::{
 const UNAVAILABLE: &str =
     "Read-only review needs bubblewrap (bwrap) with unprivileged user namespaces";
 
+/// One execution policy supplies Codex's writable-root setting and the matching
+/// deterministic probe mounts. The outer provider mount only protects tools;
+/// Codex itself enforces workspace-write for its child commands.
+pub struct WorkspaceWrite<'a> {
+    project: &'a Path,
+    extra_roots: &'a [PathBuf],
+    installations: &'a [PathBuf],
+    network: bool,
+}
+
+impl<'a> WorkspaceWrite<'a> {
+    pub fn new(
+        project: &'a Path,
+        extra_roots: &'a [PathBuf],
+        installations: &'a [PathBuf],
+        network: bool,
+    ) -> Self {
+        Self {
+            project,
+            extra_roots,
+            installations,
+            network,
+        }
+    }
+
+    pub fn codex_roots(&self) -> &[PathBuf] {
+        self.extra_roots
+    }
+
+    pub fn provider_mount(&self) -> Result<Sandbox> {
+        Sandbox::for_installations(self.installations)
+    }
+
+    pub fn probe_mount(&self) -> Result<Sandbox> {
+        Sandbox::for_worker_probe(
+            self.project,
+            self.extra_roots,
+            self.installations,
+            self.network,
+        )
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Sandbox {
     bwrap: PathBuf,
     read_only: Vec<PathBuf>,
+    writable: Vec<PathBuf>,
+    read_only_root: bool,
+    network: bool,
 }
 
 impl Sandbox {
+    /// Writable turns keep their project and caches writable while registered
+    /// installations are mounted read-only, even when they are inside the checkout.
+    pub fn for_installations(installations: &[PathBuf]) -> Result<Self> {
+        let mut sandbox = Self {
+            bwrap: bwrap()?,
+            read_only: Vec::new(),
+            writable: Vec::new(),
+            read_only_root: false,
+            network: true,
+        };
+        for installation in installations {
+            sandbox.protect(installation)?;
+        }
+        Ok(sandbox)
+    }
+
+    /// Probe with the writable roots granted to an execution worker: its project,
+    /// explicit package/runtime caches and owned scratch. The installation mounts
+    /// are applied last, so a registered tree inside the project stays immutable.
+    pub fn for_worker_probe(
+        project: &Path,
+        writable_roots: &[PathBuf],
+        installations: &[PathBuf],
+        network: bool,
+    ) -> Result<Self> {
+        let mut sandbox = Self {
+            bwrap: bwrap()?,
+            read_only: Vec::new(),
+            writable: vec![project.canonicalize()?],
+            read_only_root: true,
+            network,
+        };
+        for root in writable_roots {
+            sandbox.writable.push(root.canonicalize()?);
+        }
+        for installation in installations {
+            sandbox.protect(installation)?;
+        }
+        Ok(sandbox)
+    }
+
+    pub fn protect(&mut self, path: &Path) -> Result<()> {
+        self.read_only.push(path.canonicalize()?);
+        Ok(())
+    }
     pub fn for_project(project: &Path, paths: &Paths) -> Result<Self> {
         // A protected directory must exist, or the turn could create it.
         for directory in [&paths.state, &paths.config] {
@@ -50,6 +141,9 @@ impl Sandbox {
         Ok(Self {
             bwrap: bwrap()?,
             read_only,
+            writable: Vec::new(),
+            read_only_root: false,
+            network: true,
         })
     }
 
@@ -57,11 +151,21 @@ impl Sandbox {
     /// stays writable even when it lies inside a protected path.
     pub fn command(&self, program: &Path, scratch: &Path) -> Command {
         let mut command = Command::new(&self.bwrap);
-        command.args(["--dev-bind", "/", "/"]);
+        if self.read_only_root {
+            command.args(["--ro-bind", "/", "/"]);
+            for path in &self.writable {
+                command.arg("--bind").arg(path).arg(path);
+            }
+        } else {
+            command.args(["--dev-bind", "/", "/"]);
+        }
         for path in &self.read_only {
             command.arg("--ro-bind").arg(path).arg(path);
         }
         command.arg("--bind").arg(scratch).arg(scratch);
+        if !self.network {
+            command.arg("--unshare-net");
+        }
         command.args(["--die-with-parent", "--"]).arg(program);
         command
     }
@@ -92,6 +196,93 @@ mod tests {
     use std::{fs, os::unix::fs::PermissionsExt, process::Output};
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
+    #[test]
+    fn writable_turn_sandbox_protects_installs_inside_project_but_allows_cache() -> TestResult {
+        let root = tempfile::tempdir_in(std::env::temp_dir())?;
+        let install = root.path().join("project/tools/rg");
+        let cache = root.path().join("cache");
+        let scratch = root.path().join("scratch");
+        fs::create_dir_all(&install)?;
+        fs::create_dir_all(&cache)?;
+        fs::create_dir_all(&scratch)?;
+        let payload = install.join("payload");
+        fs::write(&payload, b"original")?;
+        let sandbox = Sandbox::for_installations(&[install])?;
+        let denied = sandbox
+            .command(Path::new("/bin/sh"), &scratch)
+            .arg("-c")
+            .arg(format!("printf changed > '{}'", payload.display()))
+            .output()?;
+        assert!(
+            !denied.status.success(),
+            "installation write unexpectedly succeeded"
+        );
+        assert_eq!(fs::read(&payload)?, b"original");
+        let output = cache.join("download");
+        let allowed = sandbox
+            .command(Path::new("/bin/sh"), &scratch)
+            .arg("-c")
+            .arg(format!("printf cached > '{}'", output.display()))
+            .output()?;
+        assert!(
+            allowed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&allowed.stderr)
+        );
+        assert_eq!(fs::read(&output)?, b"cached");
+        Ok(())
+    }
+
+    #[test]
+    fn worker_probe_restricts_writes_to_project_cache_and_scratch() -> TestResult {
+        let root = tempfile::tempdir_in(std::env::temp_dir())?;
+        let project = root.path().join("project");
+        let install = project.join("tools/rg");
+        let cache = root.path().join("cache");
+        let outside = root.path().join("outside");
+        let scratch = root.path().join("scratch");
+        for path in [&install, &cache, &outside, &scratch] {
+            fs::create_dir_all(path)?;
+        }
+        let sandbox = Sandbox::for_worker_probe(
+            &project,
+            std::slice::from_ref(&cache),
+            std::slice::from_ref(&install),
+            false,
+        )?;
+        for path in [&outside, &install] {
+            let output = sandbox
+                .command(Path::new("/bin/sh"), &scratch)
+                .arg("-c")
+                .arg(format!(
+                    "printf changed > '{}'",
+                    path.join("write").display()
+                ))
+                .output()?;
+            assert!(
+                !output.status.success(),
+                "unexpected write in {}",
+                path.display()
+            );
+        }
+        for path in [&project, &cache, &scratch] {
+            let output = sandbox
+                .command(Path::new("/bin/sh"), &scratch)
+                .arg("-c")
+                .arg(format!(
+                    "printf allowed > '{}'",
+                    path.join("write").display()
+                ))
+                .output()?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(())
+    }
 
     fn git(project: &Path, args: &[&str]) -> Output {
         let output = Command::new("git")
@@ -182,6 +373,7 @@ mod tests {
             config: scratch.join("config"),
             executable: std::env::current_exe()?,
             cache: scratch.join("cache"),
+            data: scratch.join("data"),
             runtime: scratch.join("runtime"),
         };
         let sandbox = Sandbox::for_project(project, &paths)?;
@@ -264,6 +456,7 @@ mod tests {
             config: scratch.join("config"),
             executable: std::env::current_exe()?,
             cache: scratch.join("cache"),
+            data: scratch.join("data"),
             runtime: scratch.join("runtime"),
         };
         let sandbox = Sandbox::for_project(&project, &paths)?;
@@ -331,6 +524,7 @@ mod tests {
             config: scratch.join("config"),
             executable: std::env::current_exe()?,
             cache: scratch.join("cache"),
+            data: scratch.join("data"),
             runtime: scratch.join("runtime"),
         };
         let sandbox = Sandbox::for_project(&project, &paths)?;

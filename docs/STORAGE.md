@@ -13,6 +13,31 @@ previous binary or a backup. No conversion migrations are maintained.
 
 ## Lifecycle and current task
 
+`tool_generations` records a canonical installation path, normalized name, concrete version,
+platform, architecture, component set, ownership and targeted metadata/payload signature. `project_tools`
+binds one generation per tool name with a monotonic row version that survives unbind/rebind.
+`project_tool_epochs` advances on every bind or unbind, including a return to the unbound
+environment, so older successful checks cannot be reused after a binding change. The
+explicit instance's XDG data `tools/` directory holds managed generations and lease locks.
+External registrations refer to user owned
+trees without adopting them. A changed external signature makes a generation unready until an
+explicit version guarded refresh. Live attempts hold shared leases; refresh needs an exclusive
+lease. The check step's `environment_fingerprint` includes generation, binding and signature,
+and is part of check reuse. No full installation scan is performed for a task.
+An unready bound generation creates a system prerequisite wait. Recheck verifies the
+registered generation before releasing that wait; active attempts keep their phase and work.
+Admission and Recheck mount every bound installation read-only while probing executable
+requirements; a failed mount blocks the probe rather than running it without protection.
+If a worker reports that a host-present executable or SDK component is inaccessible in its
+provider context, a local recheck repeats a bounded probe under the worker's project, cache,
+runtime, scratch and installation mount restrictions. Repairing an authorized runtime directory
+can therefore clear the wait without changing a tool binding. A failed probe retains the
+provider-denial marker across later rechecks.
+
+Task scratch and build caches are independent of tool generations. Shared package downloads
+live in the instance cache; project runtime data and lockfile dependent build outputs remain
+project scoped. Cleanup of one does not claim ownership of the others.
+
 | Record | States | Meaning |
 | --- | --- | --- |
 | Task | new, ready, blocked, succeeded, succeeded_override, failed_skipped, superseded, cancelled, deleted | Readiness and final resolution, NOT live execution state |
@@ -195,6 +220,9 @@ erDiagram
         INTEGER id PK
     }
     projects ||--o{ project_models : "project_id"
+    projects ||--o{ project_tools : "project_id"
+    projects ||--o| project_tool_epochs : "project_id"
+    tool_generations ||--o{ project_tools : "generation_id"
     model_profiles ||--o{ model_profile_roles : "profile_id"
     model_profiles ||--o{ projects : "profile_id"
     model_profiles ||--o{ user_defaults : "default_profile_id"
@@ -434,7 +462,7 @@ including retention cleanup and empty output rows.
 
 ### attempt_progress
 
-Durable phase within one attempt. Initial implementation is round zero; at most ten repair rounds follow. Pause, rate waits and resume retain this row and the current evidence. Automatic revision/prerequisite handoffs carry the original task’s round count; only a successfully applied replan authorizes the successor worker. Source fingerprints invalidate stale proof before checks/review/validation or checkpointing. Findings do not close the attempt or consume another coding attempt. After every fix, current check/review/validation evidence is regenerated. Minor findings may be accepted only with all required criteria and checks satisfied; unresolved critical findings wait for a decision after round ten.
+Durable phase within one attempt. Initial implementation is round zero; at most ten repair rounds follow. Pause, rate waits and resume retain this row and the current evidence. Automatic revision/prerequisite handoffs carry the original task’s round count; only a successfully applied replan authorizes the successor worker. Source and tool environment fingerprints invalidate stale proof before review/validation or checkpointing. Findings do not close the attempt or consume another coding attempt. After every fix, current check/review/validation evidence is regenerated. Minor findings may be accepted only with all required criteria and checks satisfied; unresolved critical findings wait for a decision after round ten.
 
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
@@ -444,6 +472,7 @@ Durable phase within one attempt. Initial implementation is round zero; at most 
 | `context` | TEXT | no | Current findings and authorized repair plan. |
 | `evidence` | TEXT | no | Current round's assessments and durable transcript references. |
 | `verified_tree` | TEXT | no | Git tree fingerprint binding the retained proof to source content. |
+| `verified_environment` | TEXT | no | Tool environment fingerprint binding retained proof to the verified generation set. |
 | `reset_fresh` | INTEGER | no | Unused; always 0. Kept because V1 reconciliation cannot drop columns. |
 | `why` | TEXT | no | One readable line on why the current fix round runs: the failing check and its first error, the reviewer's summary, or the judge's reason. Empty outside a fix round. |
 
@@ -454,7 +483,7 @@ Durable phase within one attempt. Initial implementation is round zero; at most 
 
 Ordered phases inside an attempt. A completed assessment requesting fixes has state changes_requested; its provider call succeeded. Unmet criterion evidence uses needs_work, not a failed task. AI phases record session/provider/model and optional effort; tool checks record command context. Terminal steps require finish time. The two composite parent keys enforce exact revision/project references in criterion_results and model_calls; attempt_id/ordinal enforces phase order.
 
-Check counts sum completed Rust test-harness summaries in an actual check's retained transcript. All three counts are NULL when no supported summary was reported. A reused check step copies the passing source step's counts and exit code, records its source step in `reused_from_step_id`, and names the source attempt, step and retained transcript in its report. Reuse requires the same `source_tree`, `check_name`, command, working directory and timeout; a changed tree or check reruns, and a failed result never supplies a passing reuse. Review and validation see the current step's counts and the latest successful check from the checkpoint matching the attempt's base commit. Validation requests a repair when passed tests drop, ignored tests rise, or a previously counted check stops reporting counts.
+Check counts sum completed Rust test-harness summaries in an actual check's retained transcript. All three counts are NULL when no supported summary was reported. A reused check step copies the passing source step's counts and exit code, records its source step in `reused_from_step_id`, and names the source attempt, step and retained transcript in its report. Reuse requires the same `source_tree`, `environment_fingerprint`, `check_name`, command, working directory and timeout; a changed tree, tool environment or check reruns, and a failed result never supplies a passing reuse. Review and validation see the current step's counts and the latest successful check from the checkpoint matching the attempt's base commit. Validation requests a repair when passed tests drop, ignored tests rise, or a previously counted check stops reporting counts.
 
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
@@ -477,6 +506,7 @@ Check counts sum completed Rust test-harness summaries in an actual check's reta
 | `working_directory` | TEXT | yes | Working directory relative to the project root; validated by runner. |
 | `timeout_ms` | INTEGER | yes | Positive execution timeout. |
 | `source_tree` | TEXT | yes | Git tree fingerprint of the source verified by a stable check; NULL when no stable result was recorded. |
+| `environment_fingerprint` | TEXT | yes | Bound tool and project environment identity recorded for check reuse; NULL on older or non-check steps. |
 | `reused_from_step_id` | INTEGER | yes | Source check step whose passing result was reused; NULL for actual runs and AI phases. |
 | `exit_code` | INTEGER | yes | Tool exit status; NULL if no exit was observed. |
 | `passed_count` | INTEGER | yes | Nonnegative passed test count parsed from the check transcript; NULL when no supported summary was found. |
@@ -906,6 +936,56 @@ Configured tool commands (tests, Clippy, etc.), distinct from AI review and goal
 - FK `(project_id)` → `projects(id)`.
 - UQ `(id, project_id)`.
 - UQ `(project_id, name)`.
+
+### tool_generations
+
+Instance-scoped installation records. Managed paths are under this instance's XDG data
+`tools/` root; external paths remain user owned. A targeted signature detects drift.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `id` | INTEGER | no | Stable generation ID. |
+| `name` | TEXT | no | Normalized tool name. |
+| `version` | TEXT | no | Concrete registered version. |
+| `platform` | TEXT | no | Target operating system. |
+| `architecture` | TEXT | no | Target architecture. |
+| `components_json` | TEXT | no | Normalized component set as JSON. |
+| `path` | BLOB | no | Canonical installation path bytes. |
+| `provenance` | TEXT | no | external or managed. |
+| `observed_signature` | TEXT | no | Targeted installation metadata signature at registration or refresh. |
+| `row_version` | INTEGER | no | Positive optimistic refresh guard. |
+| `created_at_ms` | INTEGER | no | Registration time. |
+
+- PK `(id)`.
+- UQ `(path)`.
+
+### project_tools
+
+One selected generation per tool name and project. Binding changes advance both its row
+version and the project's tool epoch.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `project_id` | INTEGER | no | Project using the generation. |
+| `name` | TEXT | no | Normalized tool name. |
+| `generation_id` | INTEGER | no | Selected registered generation. |
+| `row_version` | INTEGER | no | Positive optimistic binding guard. |
+
+- PK `(project_id, name)`.
+- FK `(project_id)` → `projects(id)`.
+- FK `(generation_id)` → `tool_generations(id)`.
+
+### project_tool_epochs
+
+Monotonic project environment revision, including transitions back to no bindings.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `project_id` | INTEGER | no | Project whose tool environment changed. |
+| `epoch` | INTEGER | no | Positive binding revision. |
+
+- PK `(project_id)`.
+- FK `(project_id)` → `projects(id)`.
 
 ### project_delivery
 

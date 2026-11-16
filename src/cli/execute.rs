@@ -369,6 +369,7 @@ pub(super) fn command(
     service: &mut Service,
     config: &std::path::Path,
     cache: &std::path::Path,
+    paths: &crate::instance::Paths,
     command: &Command,
 ) -> Result<Reply> {
     match command {
@@ -570,7 +571,7 @@ pub(super) fn command(
             let (_, target) = target(service, input)?;
             let scratch = cache.join("workers");
             let passed =
-                service.recheck_dependencies(target, &scratch, &std::env::current_exe()?)?;
+                service.recheck_dependencies(target, &scratch, &std::env::current_exe()?, paths)?;
             Ok(Reply {
                 data: json!({"action":"dependency_rechecked","passed":passed,"dependencies":service.dependencies(target.id)?}),
                 text: format!(
@@ -789,6 +790,7 @@ pub(super) fn command(
         }
         Command::Stats => stats(service),
         Command::Breakdown { .. } => Err(Failure::usage("proposal command was not dispatched")),
+        Command::Tool { .. } => Err(Failure::usage("tool command was not dispatched")),
     }
 }
 

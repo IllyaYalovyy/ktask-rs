@@ -213,6 +213,18 @@ pub(super) fn run(service: &mut Service, launch: &Launch<'_>, begun: Begun) -> R
         cursor,
         delivery,
     } = begun;
+    let tools = match service.resolve_tools(launch.paths) {
+        Ok(tools) => tools,
+        Err(error) => {
+            let reason = format!(
+                "Bound tool installation is unavailable: {error}; refresh or rebind it, then Recheck"
+            );
+            service.request_tool_environment_wait(&run, &reason)?;
+            service.wait_for_dependency(run.attempt, &run.token, &reason)?;
+            service.release_supervisor(&run)?;
+            return Ok(Then::Return(format!("Waiting for dependency: {reason}")));
+        }
+    };
     let mut context = Context {
         paths: launch.paths,
         workspace: launch.workspace,
@@ -221,6 +233,7 @@ pub(super) fn run(service: &mut Service, launch: &Launch<'_>, begun: Begun) -> R
         started: Instant::now(),
         prior_ms: run.active_ms,
         earlier_task_ms: service.earlier_task_active_ms(&run)?,
+        tools,
     };
     let result = drive(service, &run, &mut context, opening, delivery);
     // A transport error during a provider wait belongs to the same outage.
@@ -361,6 +374,9 @@ enum Checkpointed {
 
 /// Commits the verified tree and records the commit, whatever its hooks made of it.
 fn checkpoint(service: &mut Service, run: &Run, ctx: &Context<'_>) -> Result<Checkpointed> {
+    if let Some(wait) = ctx.environment_wait(service, run, "before checkpoint")? {
+        return Ok(Checkpointed::Blocked(wait));
+    }
     let verified = service
         .progress(run)?
         .ok_or_else(|| Error::Conflict("Missing verified workflow state".into()))?

@@ -1,5 +1,6 @@
 //! Durable local prerequisites. Only bounded probes clear a dependency wait.
-use super::{Service, VersionedTask, lifecycle, now_ms, require};
+use super::{Service, VersionedTask, execution::Run, lifecycle, now_ms, require};
+use crate::instance::Paths;
 use crate::storage::{Error, Result};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -101,6 +102,18 @@ impl Requirement {
 }
 
 impl Service {
+    /// Record a live environment loss before the runner settles into dependency wait.
+    /// The guardian has already reaped any subprocess before that settlement.
+    pub fn request_tool_environment_wait(&mut self, run: &Run, reason: &str) -> Result<()> {
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require(tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND task_id=?2 AND project_id=?3 AND execution_token=?4 AND state='running')",params![run.attempt,run.task,self.project_id,run.token],|r|r.get::<_,bool>(0))?,"Tool environment wait lost its attempt")?;
+        tx.execute("INSERT INTO task_requirements(project_id,task_id,attempt_id,kind,item,scope,stage,reproduction,requested_by_kind,requested_by,state,observed,created_at_ms) VALUES (?1,?2,?3,'registered_tool','environment','project','execution',?4,'system','ktask','waiting',?4,?5) ON CONFLICT DO UPDATE SET attempt_id=excluded.attempt_id,reproduction=excluded.reproduction,state='waiting',observed=excluded.observed,checked_at_ms=NULL",params![self.project_id,run.task,run.attempt,reason,now_ms()])?;
+        tx.commit()?;
+        Ok(())
+    }
     pub fn dependencies(&self, task: i64) -> Result<Vec<Dependency>> {
         let mut statement = self.db.connection().prepare("SELECT id,kind,item,required_version,scope,stage,reproduction,state,observed FROM task_requirements WHERE project_id=?1 AND task_id=?2 ORDER BY id")?;
         let rows = statement.query_map(params![self.project_id, task], |r| {
@@ -134,7 +147,7 @@ impl Service {
                 && task.state() == lifecycle::State::Pending,
             "Declare prerequisites on the pending current task before execution",
         )?;
-        self.insert_requirement(task.id, None, None, Some(target.version), req)
+        self.insert_requirement(task.id, None, None, Some(target.version), req, None)
     }
 
     pub fn request_live_requirement(
@@ -143,6 +156,8 @@ impl Service {
         attempt: i64,
         token: &str,
         req: &Requirement,
+        environment: &str,
+        effective_path: &str,
     ) -> Result<i64> {
         req.validate()?;
         require(
@@ -162,7 +177,49 @@ impl Service {
         )?;
         let owns: bool = self.db.connection().query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND task_id=?2 AND project_id=?3 AND execution_token=?4 AND state='running')",params![attempt,task,self.project_id,token],|r|r.get(0))?;
         require(owns, "Worker requirement capability is stale")?;
-        self.insert_requirement(task, Some(attempt), Some(token), None, req)
+        let lower = req.reproduction.to_ascii_lowercase();
+        let denied = lower.contains("permission denied")
+            || lower.contains("operation not permitted")
+            || lower.contains("read-only file system")
+            || lower.contains("command not found");
+        let bound = if denied { self.tools()? } else { Vec::new() };
+        let host_present = if req.kind == "executable" {
+            executable_on_path_in(
+                &req.item,
+                &self.project_root()?,
+                std::ffi::OsStr::new(effective_path),
+            )
+            .is_ok()
+        } else if req.kind == "sdk_component" {
+            std::env::var_os("ANDROID_SDK_ROOT")
+                .or_else(|| std::env::var_os("ANDROID_HOME"))
+                .is_some_and(|root| {
+                    PathBuf::from(root)
+                        .join(req.item.replace(';', "/"))
+                        .exists()
+                })
+                || bound.iter().any(|tool| {
+                    tool.bound
+                        && tool.ready
+                        && tool.name == "android-sdk"
+                        && tool.components.contains(&req.item)
+                })
+        } else {
+            false
+        };
+        let observed = (denied && host_present).then(|| {
+            format!(
+                "PROVIDER_DENIED|{environment}|Host tool is present but inaccessible to the worker"
+            )
+        });
+        self.insert_requirement(
+            task,
+            Some(attempt),
+            Some(token),
+            None,
+            req,
+            observed.as_deref(),
+        )
     }
 
     fn insert_requirement(
@@ -172,6 +229,7 @@ impl Service {
         token: Option<&str>,
         expected_version: Option<i64>,
         req: &Requirement,
+        observed: Option<&str>,
     ) -> Result<i64> {
         let tx = self
             .db
@@ -193,7 +251,7 @@ impl Service {
             existing.is_some() || count < 16,
             "Task already has 16 requirements",
         )?;
-        let changed = tx.execute("INSERT INTO task_requirements(project_id,task_id,attempt_id,kind,item,required_version,scope,stage,reproduction,requested_by_kind,requested_by,state,created_at_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'unverified',?12) ON CONFLICT DO UPDATE SET attempt_id=excluded.attempt_id,reproduction=excluded.reproduction,requested_by_kind=excluded.requested_by_kind,requested_by=excluded.requested_by,created_at_ms=excluded.created_at_ms,state='unverified',observed=NULL,checked_at_ms=NULL WHERE task_requirements.state='satisfied'",params![self.project_id,task,attempt,req.kind,req.item,req.version,req.scope,req.stage,req.reproduction,self.actor.kind.as_str(),self.actor.name,now_ms()])?;
+        let changed = tx.execute("INSERT INTO task_requirements(project_id,task_id,attempt_id,kind,item,required_version,scope,stage,reproduction,requested_by_kind,requested_by,state,observed,created_at_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'unverified',?13,?12) ON CONFLICT DO UPDATE SET attempt_id=excluded.attempt_id,reproduction=excluded.reproduction,requested_by_kind=excluded.requested_by_kind,requested_by=excluded.requested_by,created_at_ms=excluded.created_at_ms,state='unverified',observed=excluded.observed,checked_at_ms=NULL WHERE task_requirements.state='satisfied'",params![self.project_id,task,attempt,req.kind,req.item,req.version,req.scope,req.stage,req.reproduction,self.actor.kind.as_str(),self.actor.name,now_ms(),observed])?;
         let id: i64 = tx.query_row("SELECT id FROM task_requirements WHERE task_id=?1 AND kind=?2 AND item=?3 AND coalesce(required_version,'')=coalesce(?4,'') AND scope=?5 AND stage=?6",params![task,req.kind,req.item,req.version,req.scope,req.stage],|r|r.get(0))?;
         if changed > 0 {
             tx.execute(
@@ -217,6 +275,7 @@ impl Service {
         target: VersionedTask,
         scratch_root: &Path,
         supervisor: &Path,
+        paths: &Paths,
     ) -> Result<bool> {
         let current = self
             .current_task()?
@@ -226,9 +285,6 @@ impl Service {
             "Current task changed before prerequisite admission",
         )?;
         let dependencies = self.dependencies(target.id)?;
-        if dependencies.is_empty() {
-            return Ok(true);
-        }
         if current.state() == lifecycle::State::NeedsDependency
             || dependencies.iter().any(|d| d.state == "waiting")
         {
@@ -245,7 +301,21 @@ impl Service {
             ),
             "Prerequisite admission needs a runnable current task",
         )?;
-        self.probe_dependencies(target, scratch_root, supervisor, ProbePurpose::Admission)
+        self.ensure_requirement_bindings(target.id, scratch_root, supervisor, paths)?;
+        if let Some((name, id)) = self.unready_bound_tool()? {
+            self.wait_for_registered_tool(target,&name,&format!("Bound tool {name} generation #{id} is missing or changed; refresh or rebind it, then Recheck"))?;
+            return Ok(false);
+        }
+        if dependencies.is_empty() {
+            return Ok(true);
+        }
+        self.probe_dependencies(
+            target,
+            scratch_root,
+            supervisor,
+            paths,
+            ProbePurpose::Admission,
+        )
     }
 
     /// Called only after the guardian has stopped and reaped the worker. This freezes the
@@ -273,6 +343,7 @@ impl Service {
         target: VersionedTask,
         scratch_root: &Path,
         supervisor: &Path,
+        paths: &Paths,
     ) -> Result<bool> {
         let current = self
             .current_task()?
@@ -294,10 +365,12 @@ impl Service {
             !self.dependencies(target.id)?.is_empty(),
             "No requirements to recheck",
         )?;
+        self.ensure_requirement_bindings(target.id, scratch_root, supervisor, paths)?;
         self.probe_dependencies(
             target,
             scratch_root,
             supervisor,
+            paths,
             ProbePurpose::ExplicitRecheck,
         )
     }
@@ -307,23 +380,62 @@ impl Service {
         target: VersionedTask,
         scratch_root: &Path,
         supervisor: &Path,
+        paths: &Paths,
         purpose: ProbePurpose,
     ) -> Result<bool> {
         let dependencies = self.dependencies(target.id)?;
         let scratch = crate::scratch::Scratch::new(scratch_root)?;
         let project = self.project_root()?;
+        let resolved = self.resolve_tools(paths);
+        let worker_network = self.agent_network()?;
         let mut all_pass = true;
         let mut results = Vec::new();
         for dependency in dependencies {
-            let result: String = probe(
-                &dependency.requirement,
-                scratch.path(),
-                &project,
-                supervisor,
-            )
-            .chars()
-            .take(1024)
-            .collect();
+            let result: String = if dependency.requirement.kind == "registered_tool" {
+                resolved.as_ref().map_or_else(
+                    |error| format!("MISSING: {error}"),
+                    |_| "OK: bound tool generation verified".into(),
+                )
+            } else if let Ok(tools) = &resolved {
+                let provider_denial = dependency
+                    .observed
+                    .as_deref()
+                    .and_then(|value| value.strip_prefix("PROVIDER_DENIED|"))
+                    .and_then(|value| value.split_once('|'))
+                    .is_some();
+                probe(
+                    &dependency.requirement,
+                    scratch.path(),
+                    &project,
+                    supervisor,
+                    &tools.env,
+                    if provider_denial {
+                        Some(ProbePolicy::Restricted {
+                            writable_roots: &tools.writable_roots,
+                            installations: &tools.installations,
+                            network: worker_network,
+                        })
+                    } else if tools.installations.is_empty() {
+                        None
+                    } else {
+                        Some(ProbePolicy::Protected(&tools.installations))
+                    },
+                )
+            } else {
+                format!(
+                    "MISSING: {}",
+                    resolved.as_ref().err().expect("tool resolution failed")
+                )
+            };
+            let result = preserve_provider_denial(
+                result,
+                dependency.observed.as_deref(),
+                resolved
+                    .as_ref()
+                    .ok()
+                    .map(|tools| tools.fingerprint.as_str()),
+            );
+            let result: String = result.chars().take(1024).collect();
             let passed = result.starts_with("OK:");
             all_pass &= passed;
             results.push((dependency.id, result, passed));
@@ -355,6 +467,48 @@ impl Service {
         tx.execute("INSERT INTO events(project_id,task_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,'dependency.rechecked',?4,?5)",params![self.project_id,target.id,now,if all_pass {"info"} else {"warning"},if all_pass {"All prerequisites verified; Run resumes the task"} else {"Prerequisites still missing; inspect Current readiness"}])?;
         tx.commit()?;
         Ok(all_pass)
+    }
+
+    fn wait_for_registered_tool(
+        &mut self,
+        target: VersionedTask,
+        name: &str,
+        reason: &str,
+    ) -> Result<()> {
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = now_ms();
+        require(tx.execute("UPDATE tasks SET row_version=row_version+1,updated_at_ms=?3 WHERE id=?1 AND row_version=?2",params![target.id,target.version,now])?==1,"Current task changed before tool wait")?;
+        tx.execute("INSERT INTO task_requirements(project_id,task_id,kind,item,scope,stage,reproduction,requested_by_kind,requested_by,state,observed,checked_at_ms,created_at_ms) VALUES (?1,?2,'registered_tool',?3,'project','baseline',?4,'system','ktask','waiting',?4,?5,?5) ON CONFLICT DO UPDATE SET state='waiting',observed=excluded.observed,checked_at_ms=excluded.checked_at_ms,reproduction=excluded.reproduction",params![self.project_id,target.id,name,reason,now])?;
+        tx.execute("UPDATE attempts SET state='waiting',wait_reason='dependency',waiting_since_ms=?2,resume_at_ms=NULL,report=?3 WHERE task_id=?1 AND (state='paused' OR (state='waiting' AND wait_reason IN ('rate_limit','provider_unavailable')))",params![target.id,now,reason])?;
+        tx.execute("UPDATE execution_sessions SET state='waiting',reason=?2,updated_at_ms=?3 WHERE project_id=?1 AND state IN ('running','waiting','resume_requested')",params![self.project_id,reason,now])?;
+        tx.execute("INSERT INTO events(project_id,task_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,'dependency.requested','warning',?4)",params![self.project_id,target.id,now,reason])?;
+        tx.commit()?;
+        Ok(())
+    }
+}
+
+fn preserve_provider_denial(
+    result: String,
+    observed: Option<&str>,
+    environment: Option<&str>,
+) -> String {
+    let denied_environment = observed
+        .and_then(|value| value.strip_prefix("PROVIDER_DENIED|"))
+        .and_then(|value| value.split_once('|'))
+        .map(|(fingerprint, _)| fingerprint);
+    match (denied_environment, environment) {
+        (Some(_), Some(_)) if result.starts_with("OK:") => result,
+        (Some(_), Some(current)) => format!(
+            "PROVIDER_DENIED|{current}|{}",
+            "Worker access is still denied; repair the tool or its permitted runtime directory, then Recheck"
+        ),
+        (Some(previous), None) => format!(
+            "PROVIDER_DENIED|{previous}|Tool environment is unavailable; repair or rebind it, then Recheck"
+        ),
+        _ => result,
     }
 }
 
@@ -405,7 +559,23 @@ pub(super) fn orphan_dependency_reason(
     pending_reason(tx, attempt)
 }
 
-fn probe(req: &Requirement, scratch: &Path, project: &Path, supervisor: &Path) -> String {
+pub(super) enum ProbePolicy<'a> {
+    Protected(&'a [PathBuf]),
+    Restricted {
+        writable_roots: &'a [PathBuf],
+        installations: &'a [PathBuf],
+        network: bool,
+    },
+}
+
+pub(super) fn probe(
+    req: &Requirement,
+    scratch: &Path,
+    project: &Path,
+    supervisor: &Path,
+    env: &[(String, String)],
+    policy: Option<ProbePolicy<'_>>,
+) -> String {
     let mut args = vec![
         "__dependency_probe".into(),
         req.kind.clone(),
@@ -414,13 +584,39 @@ fn probe(req: &Requirement, scratch: &Path, project: &Path, supervisor: &Path) -
     if let Some(version) = &req.version {
         args.push(version.clone());
     }
-    let spec = crate::runner::process::Invocation::new(
+    let mut spec = crate::runner::process::Invocation::new(
         supervisor.to_owned(),
         args,
         project.to_owned(),
         scratch.join("guardian"),
         scratch.join("worker.lock"),
     );
+    spec.env.extend(env.iter().cloned());
+    let sandbox = match policy {
+        None => None,
+        Some(ProbePolicy::Protected(installations)) => Some(
+            crate::runner::sandbox::Sandbox::for_installations(installations),
+        ),
+        Some(ProbePolicy::Restricted {
+            writable_roots,
+            installations,
+            network,
+        }) => Some(
+            crate::runner::sandbox::WorkspaceWrite::new(
+                project,
+                writable_roots,
+                installations,
+                network,
+            )
+            .probe_mount(),
+        ),
+    };
+    if let Some(sandbox) = sandbox {
+        spec.sandbox = match sandbox {
+            Ok(sandbox) => Some(sandbox),
+            Err(error) => return format!("DENIED: provider context unavailable: {error}"),
+        };
+    }
     let (code, stdout, stderr) = match crate::runner::process::capture_probe(supervisor, &spec) {
         Ok(result) => result,
         Err(error) => return format!("TRANSIENT: {error}"),
@@ -512,10 +708,17 @@ fn executable_candidate(path: PathBuf) -> std::result::Result<PathBuf, String> {
 }
 
 fn executable_on_path(name: &str, project: &Path) -> std::result::Result<PathBuf, String> {
+    let path = std::env::var_os("PATH").unwrap_or_else(|| "/usr/local/bin:/usr/bin:/bin".into());
+    executable_on_path_in(name, project, &path)
+}
+
+fn executable_on_path_in(
+    name: &str,
+    project: &Path,
+    path: &std::ffi::OsStr,
+) -> std::result::Result<PathBuf, String> {
     let mut denied = false;
-    for directory in std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_else(|| "/usr/local/bin:/usr/bin:/bin".into()),
-    ) {
+    for directory in std::env::split_paths(path) {
         let directory = if directory.is_absolute() {
             directory
         } else {
@@ -550,7 +753,11 @@ fn probe_sdk_component(item: &str, version: Option<&str>) -> String {
     let Some(root) = root else {
         return "MISSING: set ANDROID_SDK_ROOT or ANDROID_HOME to an installed SDK".into();
     };
-    let path = PathBuf::from(root).join(item.replace(';', "/"));
+    probe_sdk_component_at(&PathBuf::from(root), item, version)
+}
+
+pub(super) fn probe_sdk_component_at(root: &Path, item: &str, version: Option<&str>) -> String {
+    let path = root.join(item.replace(';', "/"));
     match fs::metadata(&path) {
         Ok(metadata) if metadata.is_dir() => {}
         Ok(_) => return format!("MISSING: {} is not an SDK directory", path.display()),
@@ -656,6 +863,27 @@ fn capability_error(item: &str, error: std::io::Error) -> String {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn provider_denial_requires_a_successful_restricted_recheck() {
+        let denied = "PROVIDER_DENIED|old|Host tool is present but inaccessible to the worker";
+        assert_eq!(
+            preserve_provider_denial("OK: rg found".into(), Some(denied), Some("old")),
+            "OK: rg found"
+        );
+        assert_eq!(
+            preserve_provider_denial("OK: rg found".into(), Some(denied), Some("new")),
+            "OK: rg found"
+        );
+        assert!(
+            preserve_provider_denial("MISSING: rg".into(), Some(denied), Some("new"))
+                .starts_with("PROVIDER_DENIED|new|")
+        );
+        assert!(
+            preserve_provider_denial("MISSING: rg".into(), Some(denied), None)
+                .starts_with("PROVIDER_DENIED|old|")
+        );
+    }
 
     #[test]
     fn local_probes_distinguish_denied_license_hardware_and_failed_command() {

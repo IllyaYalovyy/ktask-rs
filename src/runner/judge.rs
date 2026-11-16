@@ -81,7 +81,9 @@ fn judge_once(
     let evidence =
         service.review_bundle(failed, &ctx.paths.state, packet.path(), &tree, &evidence)?;
     let evidence = format!(
-        "{evidence}\nRead/search with '{}' evidence FILE --offset 0 --limit 4096 [--search TEXT]; follow next_offset.\n",
+        "{evidence}\nResolved project tools: {}. Environment fingerprint: {}.\nRead/search with '{}' evidence FILE --offset 0 --limit 4096 [--search TEXT]; follow next_offset.\n",
+        ctx.tools.description,
+        ctx.tools.fingerprint,
         ctx.paths.executable.display()
     );
     let (prompt, schema) = request(run, &evidence, judging)?;
@@ -93,7 +95,7 @@ fn judge_once(
         &schema,
         prompt,
     );
-    let invocation = provider_invocation(
+    let mut invocation = provider_invocation(
         provider,
         launch,
         Access::ReadOnly,
@@ -102,6 +104,11 @@ fn judge_once(
         ctx.scratch_root(),
         ctx.workspace.worker_lock.clone(),
     )?;
+    if let Some(sandbox) = invocation.sandbox.as_mut() {
+        for path in &ctx.tools.installations {
+            sandbox.protect(path)?;
+        }
+    }
     let mut stream = provider::Stream::new(provider);
     if let Some(outcome) = provider_turn(
         service,

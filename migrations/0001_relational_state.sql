@@ -38,6 +38,36 @@ CREATE TABLE projects (
     profile_id INTEGER REFERENCES model_profiles(id)
 ) STRICT;
 
+-- Tools are shared within one explicit application instance. External paths remain
+-- user owned; managed paths live under the instance data root and are never pruned
+-- with task scratch or build caches.
+CREATE TABLE tool_generations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+    version TEXT NOT NULL CHECK (length(trim(version)) > 0),
+    platform TEXT NOT NULL CHECK (length(trim(platform)) > 0),
+    architecture TEXT NOT NULL CHECK (length(trim(architecture)) > 0),
+    components_json TEXT NOT NULL CHECK (json_valid(components_json)),
+    path BLOB NOT NULL UNIQUE CHECK (length(path) > 0),
+    provenance TEXT NOT NULL CHECK (provenance IN ('external', 'managed')),
+    observed_signature TEXT NOT NULL,
+    row_version INTEGER NOT NULL DEFAULT 1 CHECK (row_version > 0),
+    created_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE project_tools (
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    name TEXT NOT NULL,
+    generation_id INTEGER NOT NULL REFERENCES tool_generations(id),
+    row_version INTEGER NOT NULL DEFAULT 1 CHECK (row_version > 0),
+    PRIMARY KEY(project_id, name)
+) STRICT;
+
+CREATE TABLE project_tool_epochs (
+    project_id INTEGER PRIMARY KEY REFERENCES projects(id),
+    epoch INTEGER NOT NULL CHECK (epoch > 0)
+) STRICT;
+
 -- Project delivery is guarded independently of task and preference versions.
 CREATE TABLE project_delivery (
     project_id INTEGER PRIMARY KEY REFERENCES projects(id),
@@ -326,7 +356,7 @@ CREATE TABLE task_requirements (
     project_id INTEGER NOT NULL,
     task_id INTEGER NOT NULL,
     attempt_id INTEGER,
-    kind TEXT NOT NULL CHECK (kind IN ('executable', 'sdk_component', 'capability')),
+    kind TEXT NOT NULL CHECK (kind IN ('executable', 'sdk_component', 'capability', 'registered_tool')),
     item TEXT NOT NULL CHECK (length(trim(item)) BETWEEN 1 AND 160),
     required_version TEXT CHECK (length(trim(required_version)) BETWEEN 1 AND 80),
     scope TEXT NOT NULL CHECK (scope IN ('task', 'project', 'host')),
@@ -409,6 +439,7 @@ CREATE TABLE attempt_progress (
     context TEXT NOT NULL DEFAULT '',
     evidence TEXT NOT NULL DEFAULT '',
     verified_tree TEXT NOT NULL DEFAULT '',
+    verified_environment TEXT NOT NULL DEFAULT '',
     reset_fresh INTEGER NOT NULL DEFAULT 0 CHECK (reset_fresh IN (0,1)),
     -- One readable line: why the current fix round runs (failing check or judge's reason).
     why TEXT NOT NULL DEFAULT ''
@@ -481,6 +512,7 @@ CREATE TABLE attempt_steps (
     working_directory TEXT,
     timeout_ms INTEGER CHECK (timeout_ms > 0),
     source_tree TEXT CHECK (source_tree IS NULL OR length(source_tree) IN (40,64)),
+    environment_fingerprint TEXT,
     reused_from_step_id INTEGER REFERENCES attempt_steps(id),
     exit_code INTEGER,
     passed_count INTEGER CHECK (passed_count >= 0),

@@ -70,7 +70,7 @@ impl Service {
         }
         artifacts.flush()?;
         let mut steps = BufWriter::new(File::create(folder.join("steps.jsonl"))?);
-        let mut statement = db.prepare("SELECT s.id,s.attempt_id,s.role,s.state,s.check_name,s.command,s.exit_code,s.source_tree,s.reused_from_step_id,s.report,s.passed_count,s.failed_count,s.ignored_count FROM attempt_steps s JOIN attempts a ON a.id=s.attempt_id WHERE a.project_id=?1 AND a.task_id=?2 ORDER BY s.id")?;
+        let mut statement = db.prepare("SELECT s.id,s.attempt_id,s.role,s.state,s.check_name,s.command,s.exit_code,s.source_tree,s.reused_from_step_id,s.report,s.passed_count,s.failed_count,s.ignored_count,s.environment_fingerprint FROM attempt_steps s JOIN attempts a ON a.id=s.attempt_id WHERE a.project_id=?1 AND a.task_id=?2 ORDER BY s.id")?;
         let mut latest = BTreeMap::new();
         let mut step_count = 0;
         for row in statement.query_map(params![self.project_id, task], |r| {
@@ -88,6 +88,7 @@ impl Service {
                 r.get::<_, Option<i64>>(10)?,
                 r.get::<_, Option<i64>>(11)?,
                 r.get::<_, Option<i64>>(12)?,
+                r.get::<_, Option<String>>(13)?,
             ))
         })? {
             let (
@@ -104,13 +105,14 @@ impl Service {
                 passed,
                 failed,
                 ignored,
+                environment,
             ) = row?;
             let path = folder.join(format!("step-{id}.txt"));
             if let Some(report) = &report {
                 std::fs::write(&path, report)?;
             }
             let item = json!({"step":id,"attempt":origin,"role":role,"state":state,"check":name,
-                "command":command,"exit_code":exit,"source_tree":source,"matches_current_tree":source.as_deref()==Some(tree),
+                "command":command,"exit_code":exit,"source_tree":source,"matches_current_tree":source.as_deref()==Some(tree),"environment_fingerprint":environment,
                 "reused_from_step":reused,"counts":{"passed":passed,"failed":failed,"ignored":ignored},
                 "report":report.as_ref().map(|_|&path),
                 "authority":if role=="execution"{"executor claim, not independent proof"}else if role=="check"{"supervisor result; counts may cover only recognized suites"}else{"independent assessment of its recorded scope; recheck after changes"}});

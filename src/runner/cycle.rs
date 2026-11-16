@@ -42,25 +42,36 @@ pub(super) fn run(
         if ctx.interrupted(service, run)? {
             return Ok(Outcome::Paused);
         }
+        if let Some(wait) = ctx.environment_wait(service, run, "during the attempt")? {
+            return Ok(wait);
+        }
         if matches!(
             progress.phase,
             Phase::Review | Phase::Validate | Phase::Decide | Phase::Complete
         ) {
             let observed = ctx.workspace.fingerprint(&ctx.scratch_root())?;
-            if observed != progress.verified_tree {
+            if observed != progress.verified_tree
+                || ctx.tools.fingerprint != progress.verified_environment
+            {
                 let paths = if progress.verified_tree.is_empty() {
                     "unavailable (no verified tree recorded)".into()
                 } else {
                     ctx.workspace
                         .tree_difference(&progress.verified_tree, &observed)?
                 };
+                let cause = if observed != progress.verified_tree {
+                    "Worktree changed since verification"
+                } else {
+                    "Tool environment changed since verification"
+                };
                 let change = format!(
-                    "Worktree changed since verification · expected tree {}; observed tree {observed}; differing paths: {paths} · rerunning checks, review and validation; repair count retained",
-                    progress.verified_tree
+                    "{cause} · expected tree {}; observed tree {observed}; differing paths: {paths}; expected environment {}; observed environment {} · rerunning checks, review and validation; repair count retained",
+                    progress.verified_tree, progress.verified_environment, ctx.tools.fingerprint
                 );
                 progress.phase = Phase::Check;
                 progress.evidence = format!("{}\n{change}", progress.context);
                 progress.verified_tree.clear();
+                progress.verified_environment.clear();
                 service.output(run, "system", &change)?;
                 service.save_progress(run, &progress)?;
             }
@@ -102,6 +113,7 @@ pub(super) fn run(
                 let tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
                 let scope = review_scope(service, run, ctx, &tree)?;
                 progress.verified_tree = tree;
+                progress.verified_environment = ctx.tools.fingerprint.clone();
                 Outcome::Passed(scope)
             }
             Phase::Check => {
@@ -116,6 +128,7 @@ pub(super) fn run(
                         } else {
                             let scope = review_scope(service, run, ctx, &after)?;
                             progress.verified_tree = after;
+                            progress.verified_environment = ctx.tools.fingerprint.clone();
                             Outcome::Passed(format!("{evidence}{scope}"))
                         }
                     }
@@ -199,6 +212,7 @@ pub(super) fn run(
                         progress.context
                     );
                     progress.verified_tree.clear();
+                    progress.verified_environment.clear();
                     progress.phase = if service
                         .attempt_delivery(run)
                         .is_ok_and(|d| d.stage == Stage::Integrating)
@@ -211,6 +225,7 @@ pub(super) fn run(
                 Phase::Integrate => {
                     progress.phase = Phase::Check;
                     progress.verified_tree.clear();
+                    progress.verified_environment.clear();
                 }
                 Phase::Judge => {
                     let (reason, plan) = report.split_once('\n').unwrap_or((&report, ""));
@@ -428,6 +443,7 @@ fn opening_progress(
         context: String::new(),
         evidence: String::new(),
         verified_tree: String::new(),
+        verified_environment: String::new(),
         why: String::new(),
     };
     let task = service

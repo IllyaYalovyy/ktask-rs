@@ -2,6 +2,7 @@
 //! attempt's active clock and deadline, and the one rule for Pause and Stop.
 use super::{Outcome, Workspace, process::Invocation};
 use crate::{
+    application::tools::ResolvedTools,
     application::{Service, execution::Run},
     instance::Paths,
     storage::Result,
@@ -24,9 +25,33 @@ pub(super) struct Context<'a> {
     pub(super) started: Instant,
     pub(super) prior_ms: i64,
     pub(super) earlier_task_ms: i64,
+    pub(super) tools: ResolvedTools,
 }
 
 impl Context<'_> {
+    pub(super) fn environment_wait(
+        &self,
+        service: &mut Service,
+        run: &Run,
+        when: &str,
+    ) -> Result<Option<Outcome>> {
+        let current = service.resolve_tools(self.paths);
+        if current
+            .as_ref()
+            .is_ok_and(|tools| tools.fingerprint == self.tools.fingerprint)
+        {
+            return Ok(None);
+        }
+        let reason = format!(
+            "Tool environment changed {when}; refresh or rebind the installation, then Recheck. {}",
+            current
+                .err()
+                .map_or_else(String::new, |error| error.to_string())
+        );
+        service.request_tool_environment_wait(run, &reason)?;
+        Ok(Some(Outcome::Dependency(reason)))
+    }
+
     pub(super) fn active_ms(&self) -> i64 {
         self.prior_ms
             .saturating_add(self.started.elapsed().as_millis().min(i64::MAX as u128) as i64)
@@ -63,13 +88,15 @@ impl Context<'_> {
         args: Vec<String>,
         cwd: PathBuf,
     ) -> Invocation {
-        Invocation::new(
+        let mut invocation = Invocation::new(
             executable,
             args,
             cwd,
             self.scratch_root(),
             self.workspace.worker_lock.clone(),
-        )
+        );
+        invocation.env.extend(self.tools.env.clone());
+        invocation
     }
 }
 

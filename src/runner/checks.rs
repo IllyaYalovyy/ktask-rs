@@ -23,6 +23,11 @@ pub(super) fn run(
 ) -> Result<Outcome> {
     let mut evidence = String::new();
     for (index, check) in checks.iter().enumerate() {
+        if let Some(wait) =
+            ctx.environment_wait(service, run, &format!("before check {}", check.name))?
+        {
+            return Ok(wait);
+        }
         let observed = ctx.workspace.fingerprint(&ctx.scratch_root())?;
         if observed != tree {
             let paths = ctx.workspace.tree_difference(tree, &observed)?;
@@ -39,10 +44,17 @@ pub(super) fn run(
                 critical: true,
             });
         }
-        if let Some(source) = service.reusable_check(check, tree)? {
+        if let Some(source) = service.reusable_check(check, tree, &ctx.tools.fingerprint)? {
             let transcript = ctx.paths.state.join(&source.transcript);
             if !source.transcript.is_empty() && transcript.is_file() {
-                service.reuse_check(run, check, tree, &source, &transcript)?;
+                service.reuse_check(
+                    run,
+                    check,
+                    tree,
+                    &ctx.tools.fingerprint,
+                    &source,
+                    &transcript,
+                )?;
                 service.output(
                 run,
                 "system",
@@ -55,6 +67,7 @@ pub(super) fn run(
                     "\nSupervisor check evidence: {}",
                     serde_json::json!({
                         "name": check.name, "command": check.command, "exit_code": 0,
+                        "environment_fingerprint": ctx.tools.fingerprint,
                         "transcript": transcript, "reused_from_attempt": source.attempt,
                         "reused_from_step": source.step, "current_counts": source.counts,
                         "previous_checkpoint_counts": service.previous_check_counts(run, check.id)?,
@@ -96,6 +109,7 @@ fn run_recorded(
             "\nSupervisor check evidence: {}",
             serde_json::json!({
                 "name": check.name, "command": check.command, "exit_code": 0,
+                "environment_fingerprint": ctx.tools.fingerprint,
                 "transcript": path, "current_counts": counts,
                 "previous_checkpoint_counts": service.previous_check_counts(run, check.id)?,
             })
@@ -119,7 +133,7 @@ fn run_one(
     check: &Check,
     tree: &str,
 ) -> Result<(Outcome, PathBuf, Option<CheckCounts>)> {
-    let step = service.start_check(run, check)?;
+    let step = service.start_check(run, check, &ctx.tools.fingerprint)?;
     let cwd = ctx.workspace.root.join(&check.directory).canonicalize()?;
     require(
         cwd.starts_with(&ctx.workspace.root),
@@ -130,11 +144,16 @@ fn run_one(
         "system",
         &format!("Check {}: {}", check.name, check.command),
     )?;
-    let invocation = ctx.invocation(
+    let mut invocation = ctx.invocation(
         PathBuf::from("/bin/sh"),
         vec!["-c".into(), check.command.clone()],
         cwd,
     );
+    if !ctx.tools.installations.is_empty() {
+        invocation.sandbox = Some(super::sandbox::Sandbox::for_installations(
+            &ctx.tools.installations,
+        )?);
+    }
     let cursor = service.output_cursor(run)?;
     let finish = execute(
         service,
@@ -153,6 +172,9 @@ fn run_one(
     transcript.flush()?;
     transcript.sync_all()?;
     let transcript_tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
+    let environment_changed = service
+        .resolve_tools(ctx.paths)
+        .map_or(true, |current| current.fingerprint != ctx.tools.fingerprint);
     service.publish_artifact(
         run.attempt,
         &run.token,
@@ -206,6 +228,15 @@ fn run_one(
         }
         Finish::Stopped(outcome) => (outcome, None, None),
     };
+    if environment_changed && matches!(outcome, Outcome::Passed(_) | Outcome::Failed(_, _)) {
+        let report = format!(
+            "Tool environment changed during check {}; its result cannot be reused",
+            check.name
+        );
+        service.finish_check(&step, false, &report, exit, counts)?;
+        service.request_tool_environment_wait(run, &report)?;
+        return Ok((Outcome::Dependency(report), path, counts));
+    }
     match &outcome {
         Outcome::Passed(report) => service.finish_check(&step, true, report, exit, counts)?,
         Outcome::Failed(_, report) => service.finish_check(&step, false, report, exit, counts)?,

@@ -21,7 +21,25 @@ To configure ktask, see [Configure ktask](#configure-ktask).
 Two tiny executable entry points select the instance; both use the same application code.
 Build profile, working directory, renaming the binary, and inherited environment cannot switch it.
 Ordinary builds never update the installed executable. `--paths` shows the executable and
-config, state, cache, and runtime locations; the header identifies the instance.
+config, state, data, cache, and runtime locations; the header identifies the instance.
+
+Reusable tool generations live below the explicit instance's XDG data root (`data/tools`);
+task scratch and build caches live under XDG cache and are disposable. `tool register`
+records an existing installation and its concrete version, host platform, architecture and
+components. External paths remain user owned and are never updated or deleted by ktask.
+For an existing Android SDK, register `~/Android/Sdk` as `android-sdk` with each required
+semicolon separated component (for example `system-images;android-36;google_apis;x86_64`),
+then `tool bind android-sdk ID --if-version 0` in the project. The same registered ID can be
+bound by another project in this instance. `tool list` shows readiness and binding versions;
+`tool refresh` explicitly acknowledges a changed external tree; `tool unbind` returns a
+project to its normal environment. The Configuration screen's
+`t Tools` dialog offers the same registration and binding commands by keyboard or mouse.
+Projects without bindings retain their existing environment. Bound tools supply PATH and
+Android SDK variables to probes, checks and workers. Package download caches are under
+`cache/package-downloads`, project runtime data under `cache/project-runtime/ID`, and
+lockfile dependent build trees stay in their project. No task installs SDKs in its TMPDIR.
+If a bound generation disappears or changes, Current Task enters Needs dependency; refresh
+or rebind the generation and use Recheck before resuming.
 
 Scratch files belong to one run and are removed on exit. After a crash or forced kill,
 the next launch reclaims abandoned scratch directories; ownership locks protect live runs.

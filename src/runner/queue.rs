@@ -152,6 +152,7 @@ fn run_inner(
             },
             &paths.cache.join("workers"),
             &paths.executable,
+            paths,
         )? {
             return Ok(format!(
                 "Waiting for dependency on task #{}; use dependency recheck after setup",

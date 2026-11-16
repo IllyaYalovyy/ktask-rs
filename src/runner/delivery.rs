@@ -881,6 +881,7 @@ fn conflict(service: &mut Service, run: &Run, reason: &str) -> Result<()> {
         ),
     )?;
     progress.verified_tree.clear();
+    progress.verified_environment.clear();
     service.save_progress(run, &progress)
 }
 pub(super) fn continue_integration(

@@ -1,6 +1,7 @@
 use crate::support::{self, Result, Terminal};
 use ktask_rs_mk3::{
     application::{Definition, Kind, ModelConfig, Service, VersionedTask},
+    instance::Paths,
     storage::Database,
 };
 use rusqlite::OptionalExtension;
@@ -15,6 +16,434 @@ use std::{
     time::{Duration, Instant},
 };
 const BIN: &str = env!("CARGO_BIN_EXE_ktask-dev");
+
+#[test]
+fn bound_tool_probes_protect_installations_on_admission_and_recheck() -> Result {
+    use ktask_rs_mk3::application::{dependency::Requirement, tools::Registration};
+    for managed in [false, true] {
+        for mouse in [false, true] {
+            let f = Fixture::new()?;
+            f.add("Probe bound rg safely")?;
+            let root = f.scratch.path();
+            let paths = Paths {
+                config: root.join("config/ktask-dev"),
+                state: root.join("state/ktask-dev"),
+                cache: root.join("cache/ktask-dev"),
+                data: root.join(".local/share/ktask-dev"),
+                runtime: root.join("runtime/ktask-dev"),
+                executable: BIN.into(),
+            };
+            let install = if managed {
+                paths.data.join("tools/rg-managed")
+            } else {
+                root.join("rg-external")
+            };
+            fs::create_dir_all(install.join("bin"))?;
+            support::write_executable(&install.join("bin/rg"), format!(
+                "#!/bin/sh\nset -e\nprintf x >> \"$ANDROID_USER_HOME/probe-starts\"\nmkdir -p \"$PIP_CACHE_DIR\"\nprintf c >> \"$PIP_CACHE_DIR/probe-cache\"\nif (printf changed > '{}/unwanted') 2>/dev/null; then\n  printf allowed >> \"$ANDROID_USER_HOME/probe-results\"\nelse\n  printf denied >> \"$ANDROID_USER_HOME/probe-results\"\n  exit 1\nfi\necho 'rg 14.1'\n",
+                install.display(),
+            ).as_bytes())?;
+            let mut service = Service::find(f.db()?, &f.root)?.ok_or("project")?;
+            let id = service.register_tool(
+                &paths,
+                &Registration {
+                    name: "rg",
+                    version: "14.1",
+                    platform: std::env::consts::OS,
+                    architecture: std::env::consts::ARCH,
+                    components: &[],
+                    path: &install,
+                    managed,
+                },
+            )?;
+            service.bind_tool("rg", id, Some(0))?;
+            let other = root.join("other-project");
+            fs::create_dir(&other)?;
+            let mut second = Service::open(f.db()?, &other, None)?;
+            second.bind_tool("rg", id, Some(0))?;
+            let other_lease = second.resolve_tools(&paths)?;
+            let current = service.current_task()?.ok_or("current task")?;
+            service.declare_requirement(
+                VersionedTask {
+                    id: current.id,
+                    version: current.version,
+                },
+                &Requirement {
+                    kind: "executable".into(),
+                    item: "rg".into(),
+                    version: Some("14.1".into()),
+                    scope: "project".into(),
+                    stage: "baseline".into(),
+                    reproduction: "registered rg must not write its installation".into(),
+                },
+            )?;
+            let current = service.current_task()?.ok_or("current task")?;
+            assert!(!service.admit_dependencies_for_run(
+                VersionedTask {
+                    id: current.id,
+                    version: current.version
+                },
+                &paths.cache.join("workers"),
+                Path::new(BIN),
+                &paths,
+            )?);
+            let runtime = paths.cache.join("project-runtime/1/android");
+            assert_eq!(fs::read_to_string(runtime.join("probe-starts"))?, "x");
+            assert_eq!(fs::read_to_string(runtime.join("probe-results"))?, "denied");
+            let cache_probe = paths.cache.join("package-downloads/pip/probe-cache");
+            assert_eq!(fs::read_to_string(&cache_probe)?, "c");
+            assert!(!install.join("unwanted").exists());
+
+            let mut terminal = Terminal::open_project(BIN, root, &f.root, 110, 32)?;
+            terminal.screen("bound tool dependency wait", |screen| {
+                screen.contains("Current #1 · Needs dependency")
+            })?;
+            if mouse {
+                terminal.click("r Recheck")?;
+            } else {
+                terminal.send("r")?;
+            }
+            let screen = terminal.screen("bound tool recheck denied", |screen| {
+                screen.contains("Dependency still missing")
+                    && screen.contains("Current #1 · Needs dependency")
+            })?;
+            if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+                support::screen_png(
+                    &screen,
+                    &PathBuf::from(directory).join(format!(
+                        "bound-probe-wait-managed-{managed}-mouse-{mouse}.png"
+                    )),
+                )?;
+            }
+            terminal.send("q")?;
+            terminal.finish()?;
+            assert_eq!(fs::read_to_string(runtime.join("probe-starts"))?, "xx");
+            assert_eq!(
+                fs::read_to_string(runtime.join("probe-results"))?,
+                "denieddenied"
+            );
+            assert_eq!(fs::read_to_string(&cache_probe)?, "cc");
+            assert!(!install.join("unwanted").exists());
+            assert!(other_lease.installations.contains(&install));
+            if !managed {
+                assert!(
+                    service
+                        .refresh_external_tool(&paths, id, 1, "14.2", &[])
+                        .is_err()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn bound_adb_provider_denial_waits_until_a_replacement_is_accessible() -> Result {
+    use ktask_rs_mk3::application::{dependency::Requirement, tools::Registration};
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.add("Use bound adb")?;
+        let root = f.scratch.path();
+        let paths = Paths {
+            config: root.join("config/ktask-dev"),
+            state: root.join("state/ktask-dev"),
+            cache: root.join("cache/ktask-dev"),
+            data: root.join(".local/share/ktask-dev"),
+            runtime: root.join("runtime/ktask-dev"),
+            executable: BIN.into(),
+        };
+        let mut service = Service::find(f.db()?, &f.root)?.ok_or("fixture project")?;
+        let forbidden = root.join("outside-worker-roots");
+        fs::create_dir_all(&forbidden)?;
+        let mut ids = Vec::new();
+        for version in ["1.0", "2.0"] {
+            let sdk = root.join(format!("sdk-{version}"));
+            fs::create_dir_all(sdk.join("platform-tools"))?;
+            let startup = if version == "1.0" {
+                format!("printf used > '{}/used'\n", forbidden.display())
+            } else {
+                "printf used > \"$ANDROID_USER_HOME/adb-probe\"\n".into()
+            };
+            support::write_executable(
+                &sdk.join("platform-tools/adb"),
+                format!("#!/bin/sh\nset -e\n{startup}echo 'adb {version}'\n").as_bytes(),
+            )?;
+            ids.push(service.register_tool(
+                &paths,
+                &Registration {
+                    name: "android-sdk",
+                    version,
+                    platform: std::env::consts::OS,
+                    architecture: std::env::consts::ARCH,
+                    components: &["platform-tools".into()],
+                    path: &sdk,
+                    managed: false,
+                },
+            )?);
+        }
+        service.bind_tool("android-sdk", ids[0], Some(0))?;
+        let current = service.current_task()?.ok_or("current task")?;
+        let run = service.begin_run(
+            VersionedTask {
+                id: current.id,
+                version: current.version,
+            },
+            "adb-fixture",
+            &f.git(&["rev-parse", "HEAD"])?,
+            false,
+        )?;
+        let tools = service.resolve_tools(&paths)?;
+        let effective_path = tools
+            .env
+            .iter()
+            .find(|(key, _)| key == "PATH")
+            .ok_or("bound PATH")?
+            .1
+            .clone();
+        let req = Requirement {
+            kind: "executable".into(),
+            item: "adb".into(),
+            version: None,
+            scope: "project".into(),
+            stage: "execution".into(),
+            reproduction: "adb: command not found inside provider context".into(),
+        };
+        service.request_live_requirement(
+            run.task,
+            run.attempt,
+            &run.token,
+            &req,
+            &tools.fingerprint,
+            &effective_path,
+        )?;
+        assert!(
+            service.dependencies(run.task)?[0]
+                .observed
+                .as_deref()
+                .unwrap()
+                .starts_with("PROVIDER_DENIED|")
+        );
+        service.wait_for_dependency(run.attempt, &run.token, "provider denied adb")?;
+        drop(tools);
+        let target = VersionedTask {
+            id: run.task,
+            version: service.current_task()?.unwrap().version,
+        };
+        assert!(!service.recheck_dependencies(
+            target,
+            &paths.cache.join("workers"),
+            &paths.executable,
+            &paths
+        )?);
+        let rg = root.join("unrelated-rg");
+        fs::create_dir_all(rg.join("bin"))?;
+        support::write_executable(&rg.join("bin/rg"), b"#!/bin/sh\necho 'rg 14.1'\n")?;
+        let rg_id = service.register_tool(
+            &paths,
+            &Registration {
+                name: "rg",
+                version: "14.1",
+                platform: std::env::consts::OS,
+                architecture: std::env::consts::ARCH,
+                components: &[],
+                path: &rg,
+                managed: false,
+            },
+        )?;
+        service.bind_tool("rg", rg_id, Some(0))?;
+        let target = VersionedTask {
+            id: run.task,
+            version: service.current_task()?.unwrap().version,
+        };
+        assert!(
+            !service.recheck_dependencies(
+                target,
+                &paths.cache.join("workers"),
+                &paths.executable,
+                &paths
+            )?,
+            "unrelated binding cannot repair a worker-denied tool"
+        );
+        assert_eq!(service.dependencies(run.task)?[0].state, "waiting");
+        let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
+        terminal.screen("provider denial wait", |s| {
+            s.contains("Current #1 · Needs dependency")
+        })?;
+        if mouse {
+            terminal.click("r Recheck")?;
+        } else {
+            terminal.send("r")?;
+        }
+        let waiting = terminal.screen("provider denial retained after recheck", |s| {
+            s.contains("Dependency still missing") && s.contains("Current #1 · Needs dependency")
+        })?;
+        if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            support::screen_png(
+                &waiting,
+                &PathBuf::from(directory).join(format!("provider-denial-wait-mouse-{mouse}.png")),
+            )?;
+        }
+        service.bind_tool("android-sdk", ids[1], Some(1))?;
+        if mouse {
+            terminal.click("r Recheck")?;
+        } else {
+            terminal.send("r")?;
+        }
+        let paused = terminal.screen("provider access repaired", |s| {
+            s.contains("Current #1 · Paused") && s.contains("Dependencies verified")
+        })?;
+        if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            support::screen_png(
+                &paused,
+                &PathBuf::from(directory)
+                    .join(format!("provider-denial-repaired-mouse-{mouse}.png")),
+            )?;
+        }
+        terminal.send("q")?;
+        terminal.finish()?;
+        assert_eq!(service.dependencies(run.task)?[0].state, "satisfied");
+        let resolved = service.resolve_tools(&paths)?;
+        let runtime = resolved
+            .env
+            .iter()
+            .find(|(key, _)| key == "ANDROID_USER_HOME")
+            .ok_or("Android runtime")?
+            .1
+            .clone();
+        assert!(Path::new(&runtime).join("adb-probe").exists());
+        let attempt: i64 = f.db()?.connection().query_row(
+            "SELECT id FROM attempts WHERE task_id=?1",
+            [run.task],
+            |r| r.get(0),
+        )?;
+        assert_eq!(attempt, run.attempt);
+    }
+    Ok(())
+}
+
+#[test]
+fn provider_denial_recheck_accepts_runtime_repair_without_binding_change() -> Result {
+    use ktask_rs_mk3::application::{dependency::Requirement, tools::Registration};
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.add("Repair bound adb runtime")?;
+        let root = f.scratch.path();
+        let paths = Paths {
+            config: root.join("config/ktask-dev"),
+            state: root.join("state/ktask-dev"),
+            cache: root.join("cache/ktask-dev"),
+            data: root.join(".local/share/ktask-dev"),
+            runtime: root.join("runtime/ktask-dev"),
+            executable: BIN.into(),
+        };
+        let sdk = root.join("sdk");
+        fs::create_dir_all(sdk.join("platform-tools"))?;
+        support::write_executable(&sdk.join("platform-tools/adb"),
+            b"#!/bin/sh\nset -e\ntest -d \"$ANDROID_USER_HOME/startup\"\nprintf used > \"$ANDROID_USER_HOME/startup/probe\"\necho 'adb 1.0'\n")?;
+        let mut service = Service::find(f.db()?, &f.root)?.ok_or("fixture project")?;
+        let id = service.register_tool(
+            &paths,
+            &Registration {
+                name: "android-sdk",
+                version: "1.0",
+                platform: std::env::consts::OS,
+                architecture: std::env::consts::ARCH,
+                components: &["platform-tools".into()],
+                path: &sdk,
+                managed: false,
+            },
+        )?;
+        service.bind_tool("android-sdk", id, Some(0))?;
+        let current = service.current_task()?.ok_or("current task")?;
+        let run = service.begin_run(
+            VersionedTask {
+                id: current.id,
+                version: current.version,
+            },
+            "runtime-fixture",
+            &f.git(&["rev-parse", "HEAD"])?,
+            false,
+        )?;
+        let resolved = service.resolve_tools(&paths)?;
+        let fingerprint = resolved.fingerprint.clone();
+        let effective_path = resolved
+            .env
+            .iter()
+            .find(|(key, _)| key == "PATH")
+            .ok_or("bound PATH")?
+            .1
+            .clone();
+        let runtime = resolved
+            .env
+            .iter()
+            .find(|(key, _)| key == "ANDROID_USER_HOME")
+            .ok_or("Android runtime")?
+            .1
+            .clone();
+        service.request_live_requirement(
+            run.task,
+            run.attempt,
+            &run.token,
+            &Requirement {
+                kind: "executable".into(),
+                item: "adb".into(),
+                version: Some("1.0".into()),
+                scope: "project".into(),
+                stage: "execution".into(),
+                reproduction: "adb needs runtime setup".into(),
+            },
+            &fingerprint,
+            &effective_path,
+        )?;
+        service.wait_for_dependency(run.attempt, &run.token, "provider denied adb runtime")?;
+        drop(resolved);
+        let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
+        terminal.screen("runtime wait", |s| {
+            s.contains("Current #1 · Needs dependency")
+        })?;
+        if mouse {
+            terminal.click("r Recheck")?;
+        } else {
+            terminal.send("r")?;
+        }
+        let waiting = terminal.screen("runtime still missing", |s| {
+            s.contains("Dependency still missing") && s.contains("Current #1 · Needs dependency")
+        })?;
+        if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            support::screen_png(
+                &waiting,
+                &PathBuf::from(directory).join(format!("provider-runtime-wait-mouse-{mouse}.png")),
+            )?;
+        }
+        fs::create_dir_all(Path::new(&runtime).join("startup"))?;
+        assert_eq!(service.resolve_tools(&paths)?.fingerprint, fingerprint);
+        if mouse {
+            terminal.click("r Recheck")?;
+        } else {
+            terminal.send("r")?;
+        }
+        let paused = terminal.screen("runtime repaired", |s| {
+            s.contains("Current #1 · Paused") && s.contains("Dependencies verified")
+        })?;
+        if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+            support::screen_png(
+                &paused,
+                &PathBuf::from(directory)
+                    .join(format!("provider-runtime-repaired-mouse-{mouse}.png")),
+            )?;
+        }
+        terminal.send("q")?;
+        terminal.finish()?;
+        assert!(Path::new(&runtime).join("startup/probe").exists());
+        let db = f.db()?;
+        let (attempt, round): (i64, i64) = db.connection().query_row(
+            "SELECT a.id,coalesce(p.repair_round,0) FROM attempts a LEFT JOIN attempt_progress p ON p.attempt_id=a.id WHERE a.task_id=?1",
+            [run.task], |r| Ok((r.get(0)?,r.get(1)?))
+        )?;
+        assert_eq!((attempt, round), (run.attempt, 0));
+    }
+    Ok(())
+}
 
 #[test]
 fn worker_dependency_callback_waits_and_recheck_resumes_same_attempt() -> Result {
@@ -50,7 +479,7 @@ fn worker_dependency_callback_waits_and_recheck_resumes_same_attempt() -> Result
     };
     assert!(
         stale
-            .request_live_requirement(1, attempt, "wrong", &replay)
+            .request_live_requirement(1, attempt, "wrong", &replay, "unbound", "")
             .is_err()
     );
     drop(stale);
@@ -5686,9 +6115,13 @@ esac"#,
     fn no_scratch(&self) -> Result {
         let root = self.scratch.path().join("cache/ktask-dev/workers");
         if root.exists() {
+            let mut entries = fs::read_dir(&root)?
+                .map(|entry| Ok(entry?.file_name()))
+                .collect::<std::io::Result<Vec<_>>>()?;
+            entries.sort();
             assert_eq!(
-                fs::read_dir(root)?.count(),
-                1,
+                entries,
+                [std::ffi::OsString::from(".sweep.lock")],
                 "Only .sweep.lock may remain"
             );
         }
@@ -6380,6 +6813,164 @@ fn changing_source_while_review_is_paused_invalidates_saved_proof() -> Result {
     t.send("q")?;
     t.finish()?;
     f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn tool_drift_during_check_waits_without_spending_a_repair_round() -> Result {
+    let f = Fixture::new()?;
+    f.provider("normal")?;
+    f.add("Check while a registered tool changes")?;
+    let install = f.scratch.path().join("rg-during-check");
+    fs::create_dir_all(install.join("bin"))?;
+    let binary = install.join("bin/rg");
+    support::write_executable(&binary, b"#!/bin/sh\necho 'rg 14.1'\n")?;
+    let id = f.ok(&[
+        "tool",
+        "register",
+        "rg",
+        "14.1",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        install.to_str().ok_or("tool path")?,
+    ])?["id"]
+        .as_i64()
+        .ok_or("generation id")?;
+    f.ok(&["tool", "bind", "rg", &id.to_string(), "--if-version", "0"])?;
+    let marker = f.scratch.path().join("check-started");
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        &format!(
+            "test ! -f result.txt || (touch '{}'; sleep 2; test -f result.txt)",
+            marker.display()
+        ),
+    ])?;
+    let mut run = Running(
+        f.process()
+            .args(["run", "--one"])
+            .stdout(Stdio::null())
+            .spawn()?,
+    );
+    support::eventually("check started", || Ok(marker.exists().then_some(())))?;
+    support::write_executable(&binary, b"#!/bin/sh\necho 'rg 14.2'\n")?;
+    assert!(run.0.wait()?.success());
+    let waiting = f.ok(&["current"])?;
+    assert_eq!(waiting["state"], "needs_dependency");
+    assert_eq!(waiting["attempts"][0]["wait_reason"], "dependency");
+    let db = f.db()?;
+    let round: i64 =
+        db.connection()
+            .query_row("SELECT repair_round FROM attempt_progress", [], |r| {
+                r.get(0)
+            })?;
+    assert_eq!(round, 0);
+    let remediation: i64 = db.connection().query_row(
+        "SELECT count(*) FROM attempt_steps WHERE role='remediation'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(remediation, 0);
+    Ok(())
+}
+
+#[test]
+fn resumed_review_rechecks_after_binding_or_generation_change() -> Result {
+    for refresh in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("slow-review")?;
+        f.add("Recheck after tool environment changes")?;
+        let install = f.scratch.path().join("rg-14");
+        fs::create_dir_all(install.join("bin"))?;
+        support::write_executable(&install.join("bin/rg"), b"#!/bin/sh\necho 'rg 14.1'\n")?;
+        let register = |path: &Path, version: &str| -> Result<i64> {
+            let value = f.ok(&[
+                "tool",
+                "register",
+                "rg",
+                version,
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                path.to_str().ok_or("tool path")?,
+            ])?;
+            Ok(value["id"].as_i64().ok_or("generation id")?)
+        };
+        let first = register(&install, "14.1")?;
+        f.ok(&[
+            "tool",
+            "bind",
+            "rg",
+            &first.to_string(),
+            "--if-version",
+            "0",
+        ])?;
+        let run = Running(
+            f.process()
+                .args(["run", "--one"])
+                .stdout(Stdio::null())
+                .spawn()?,
+        );
+        support::eventually("review started", || {
+            Ok(f.scratch
+                .path()
+                .join("review-started")
+                .exists()
+                .then_some(()))
+        })?;
+        f.pause_runner(run)?;
+        let db = f.db()?;
+        let before: i64 = db.connection().query_row(
+            "SELECT count(*) FROM attempt_steps WHERE role='check' AND state='succeeded'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(before, 1);
+        if refresh {
+            support::write_executable(&install.join("bin/rg"), b"#!/bin/sh\necho 'rg 14.2'\n")?;
+            f.ok(&[
+                "tool",
+                "refresh",
+                &first.to_string(),
+                "14.2",
+                "--if-version",
+                "1",
+            ])?;
+        } else {
+            let second = f.scratch.path().join("rg-15");
+            fs::create_dir_all(second.join("bin"))?;
+            support::write_executable(&second.join("bin/rg"), b"#!/bin/sh\necho 'rg 15.0'\n")?;
+            let id = register(&second, "15.0")?;
+            f.ok(&["tool", "bind", "rg", &id.to_string(), "--if-version", "1"])?;
+        }
+        f.provider("normal")?;
+        let result = f.process().args(["run", "--one"]).output()?;
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let after: i64 = db.connection().query_row("SELECT count(*) FROM attempt_steps WHERE role='check' AND state='succeeded' AND reused_from_step_id IS NULL",[],|r|r.get(0))?;
+        assert_eq!(
+            after, 2,
+            "new environment must run a new check before review"
+        );
+        let explained: i64 = db.connection().query_row(
+            "SELECT count(*) FROM attempt_output WHERE content LIKE '%Tool environment changed since verification%'",
+            [], |r| r.get(0)
+        )?;
+        assert!(
+            explained > 0,
+            "environment-only invalidation must name its cause"
+        );
+        let round: i64 =
+            db.connection()
+                .query_row("SELECT repair_round FROM attempt_progress", [], |r| {
+                    r.get(0)
+                })?;
+        assert_eq!(round, 0);
+        assert_eq!(f.ok(&["show", "1"])?["state"], "done");
+    }
     Ok(())
 }
 
@@ -8221,6 +8812,53 @@ fn real_tui_shows_liveness_and_settles_a_dead_supervisor_on_every_screen() -> Re
     }
     Ok(())
 }
+
+#[test]
+fn real_tui_retries_orphan_settlement_after_guardian_lease_releases() -> Result {
+    let f = Fixture::new()?;
+    f.provider("slow")?;
+    f.add("Settle after guardian cleanup")?;
+    let mut run = Running(f.process().arg("run").stdout(Stdio::null()).spawn()?);
+    f.state("running")?;
+    run.0.kill()?;
+    run.0.wait()?;
+    f.guardian_finished()?;
+
+    // Hold the same worker lease the guardian uses so the first UI recovery
+    // cannot settle the orphan. The next refresh must retry after release.
+    let worker = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(f.root.join(".git/ktask-worker.lock"))?;
+    worker.try_lock()?;
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
+    let waiting = t.screen("guardian lease still held", |s| {
+        s.contains("Current #1 · Running · runner stopped")
+    })?;
+    println!("WAITING FOR GUARDIAN LEASE\n{waiting}");
+    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+        support::screen_png(
+            &waiting,
+            &PathBuf::from(directory).join("orphan-worker-reclaim-wait.png"),
+        )?;
+    }
+    drop(worker);
+    let settled = t.screen("orphan settled after guardian lease", |s| {
+        s.contains("Current #1 · Paused · runner stopped") && s.contains("[r Resume]")
+    })?;
+    println!("SETTLED AFTER GUARDIAN LEASE\n{settled}");
+    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+        support::screen_png(
+            &settled,
+            &PathBuf::from(directory).join("orphan-worker-reclaim-settled.png"),
+        )?;
+    }
+    t.send("q")?;
+    t.finish()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
 #[test]
 fn real_tui_shows_lost_paused_and_rate_wait_supervisors_as_paused() -> Result {
     for (state, mouse) in [("paused", false), ("waiting", true)] {
