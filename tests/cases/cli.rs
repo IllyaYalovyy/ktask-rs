@@ -8,6 +8,148 @@ use std::{
 const DEV: &str = env!("CARGO_BIN_EXE_ktask-dev");
 const PROD: &str = env!("CARGO_BIN_EXE_ktask");
 
+fn complete_android_image_fixture(sdk: &Path, revision: &str) -> Result {
+    let image = sdk.join("system-images/android-36/google_apis/x86_64");
+    std::fs::create_dir_all(&image)?;
+    std::fs::write(
+        image.join("source.properties"),
+        format!(
+            "Pkg.Revision={revision}\nAndroidVersion.ApiLevel=36\nSystemImage.TagId=google_apis\nSystemImage.Abi=x86_64\n"
+        ),
+    )?;
+    std::fs::write(image.join("system.img"), b"fake system image")?;
+    std::fs::create_dir_all(sdk.join("licenses"))?;
+    std::fs::write(
+        sdk.join("licenses/android-sdk-license"),
+        ktask_rs_mk3::application::provision::ANDROID_SDK_LICENSE_SHA1,
+    )?;
+    for (relative, body) in [
+        (
+            "platform-tools/adb",
+            b"#!/bin/sh\necho 'adb 2.0'\n".as_slice(),
+        ),
+        (
+            "emulator/emulator",
+            b"#!/bin/sh\necho 'emulator 2.0'\n".as_slice(),
+        ),
+    ] {
+        let binary = sdk.join(relative);
+        if !binary.exists() {
+            std::fs::create_dir_all(binary.parent().ok_or("Android binary parent")?)?;
+            support::write_executable(&binary, body)?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn external_android_image_requires_reviewed_license_hash_on_recheck() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    support::empty_repository(root)?;
+    add(root, "External Android license")?;
+    let component = "system-images;android-36;google_apis;x86_64";
+    json(
+        root,
+        &[
+            "require",
+            "1",
+            "--kind",
+            "sdk_component",
+            "--item",
+            component,
+            "--version",
+            "7",
+            "--scope",
+            "project",
+            "--stage",
+            "execution",
+            "--reproduction",
+            "Android image missing",
+        ],
+        0,
+    )?;
+    assert_eq!(
+        json(root, &["dependency-recheck", "1"], 0)?["data"]["passed"],
+        false
+    );
+    let sdk = root.join("external-sdk");
+    complete_android_image_fixture(&sdk, "7")?;
+    let registered = json(
+        root,
+        &[
+            "tool",
+            "register",
+            "android-sdk",
+            "36",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            sdk.to_str().ok_or("SDK path")?,
+            "--component",
+            component,
+        ],
+        0,
+    )?;
+    let id = registered["data"]["id"].as_i64().ok_or("SDK ID")?;
+    json(
+        root,
+        &[
+            "tool",
+            "bind",
+            "android-sdk",
+            &id.to_string(),
+            "--if-version",
+            "0",
+        ],
+        0,
+    )?;
+    let license = sdk.join("licenses/android-sdk-license");
+    let mut generation_version = 1;
+    for invalid in ["", "unrelated", "0123456789abcdef0123456789abcdef01234567"] {
+        std::fs::write(&license, invalid)?;
+        json(
+            root,
+            &[
+                "tool",
+                "refresh",
+                &id.to_string(),
+                "36",
+                "--component",
+                component,
+                "--if-version",
+                &generation_version.to_string(),
+            ],
+            0,
+        )?;
+        generation_version += 1;
+        let checked = json(root, &["dependency-recheck", "1"], 0)?;
+        assert_eq!(checked["data"]["passed"], false, "{invalid:?}: {checked}");
+    }
+    std::fs::write(
+        &license,
+        ktask_rs_mk3::application::provision::ANDROID_SDK_LICENSE_SHA1,
+    )?;
+    json(
+        root,
+        &[
+            "tool",
+            "refresh",
+            &id.to_string(),
+            "36",
+            "--component",
+            component,
+            "--if-version",
+            &generation_version.to_string(),
+        ],
+        0,
+    )?;
+    assert_eq!(
+        json(root, &["dependency-recheck", "1"], 0)?["data"]["passed"],
+        true
+    );
+    Ok(())
+}
+
 #[test]
 fn candidate_sdk_probe_uses_bound_java_and_protects_external_and_managed_installations() -> Result {
     for managed in [false, true] {
@@ -147,10 +289,8 @@ fn candidate_sdk_probe_case(managed: bool) -> Result {
     )?["data"]["id"]
         .as_i64()
         .ok_or("good SDK ID")?;
-    assert_eq!(
-        json(root, &["dependency-recheck", "1"], 0)?["data"]["passed"],
-        true
-    );
+    let checked = json(root, &["dependency-recheck", "1"], 0)?;
+    assert_eq!(checked["data"]["passed"], true, "{checked}");
     assert!(
         json(root, &["tool", "list"], 0)?["data"]["tools"]
             .as_array()
@@ -200,13 +340,7 @@ fn automatic_android_selection_checks_component_and_binary_versions() -> Result 
                 format!("#!/bin/sh\necho '{binary} {binary_version}'\n").as_bytes(),
             )?;
         }
-        let image = sdk.join(component.replace(';', "/"));
-        std::fs::create_dir_all(&image)?;
-        std::fs::write(
-            image.join("source.properties"),
-            format!("Pkg.Revision={component_version}\n"),
-        )?;
-        std::fs::write(image.join("system.img"), b"fake system image")?;
+        complete_android_image_fixture(&sdk, component_version)?;
         let registered = json(
             root,
             &[
@@ -257,10 +391,8 @@ fn automatic_android_selection_checks_component_and_binary_versions() -> Result 
             0,
         )?;
     }
-    assert_eq!(
-        json(root, &["dependency-recheck", "1"], 0)?["data"]["passed"],
-        true
-    );
+    let checked = json(root, &["dependency-recheck", "1"], 0)?;
+    assert_eq!(checked["data"]["passed"], true, "{checked}");
     let tools = json(root, &["tool", "list"], 0)?;
     assert_eq!(tools["data"]["tools"][2]["id"], ids[2]);
     assert_eq!(tools["data"]["tools"][2]["binding_version"], 1);
@@ -354,15 +486,12 @@ fn standalone_android_executables_and_mixed_sdk_bindings_resolve() -> Result {
     )?;
     let sdk = root.join("sdk");
     let component = "system-images;android-36;google_apis;x86_64";
-    let image = sdk.join(component.replace(';', "/"));
-    std::fs::create_dir_all(&image)?;
-    std::fs::write(image.join("source.properties"), b"Pkg.Revision=2.0\n")?;
-    std::fs::write(image.join("system.img"), b"fake system image")?;
     std::fs::create_dir_all(sdk.join("platform-tools"))?;
     support::write_executable(
         &sdk.join("platform-tools/adb"),
         b"#!/bin/sh\necho 'adb 1.0'\n",
     )?;
+    complete_android_image_fixture(&sdk, "2.0")?;
     json(
         root,
         &[
@@ -454,10 +583,8 @@ fn registered_android_sdk_satisfies_project_dependency_without_installing() -> R
     )?;
     let component = "system-images;android-36;google_apis;x86_64";
     let sdk = root.join("Android/Sdk");
+    complete_android_image_fixture(&sdk, "1.0")?;
     let installed = sdk.join(component.replace(';', "/"));
-    std::fs::create_dir_all(&installed)?;
-    std::fs::write(installed.join("source.properties"), b"Pkg.Revision=1.0\n")?;
-    std::fs::write(installed.join("system.img"), b"fake system image")?;
     json(
         root,
         &[

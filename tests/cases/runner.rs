@@ -519,6 +519,437 @@ fn worker_dependency_callback_waits_and_recheck_resumes_same_attempt() -> Result
 }
 
 #[test]
+fn android_installer_continues_original_attempt_by_mouse_and_keyboard() -> Result {
+    use ktask_rs_mk3::application::{provision::ANDROID_SDK_LICENSE_SHA1, tools::Registration};
+    for queue in [false, true] {
+        for mouse in [false, true] {
+            let f = Fixture::new()?;
+            f.provider("android-dependency-request")?;
+            f.add("Android work")?;
+            f.add("Later work")?;
+            let root = f.scratch.path();
+            let paths = Paths {
+                config: root.join("config/ktask-dev"),
+                state: root.join("state/ktask-dev"),
+                cache: root.join("cache/ktask-dev"),
+                data: root.join("data/ktask-dev"),
+                runtime: root.join("runtime/ktask-dev"),
+                executable: BIN.into(),
+            };
+            let first = f
+                .process()
+                .env("XDG_DATA_HOME", root.join("data"))
+                .args(if queue {
+                    ["run", "--queue"]
+                } else {
+                    ["run", "--one"]
+                })
+                .output()?;
+            assert!(
+                first.status.success(),
+                "{}",
+                String::from_utf8_lossy(&first.stderr)
+            );
+            let waiting = f.ok(&["show", "1"])?;
+            assert_eq!(waiting["state"], "needs_dependency");
+            let attempt = waiting["attempts"][0]["id"].clone();
+            let source = root.join("fixture-sdk-source");
+            fs::create_dir_all(source.join("cmdline-tools/latest/bin"))?;
+            fs::create_dir_all(source.join("licenses"))?;
+            fs::write(
+                source.join("licenses/android-sdk-license"),
+                ANDROID_SDK_LICENSE_SHA1,
+            )?;
+            support::write_executable(&source.join("cmdline-tools/latest/bin/sdkmanager"), br#"#!/bin/sh
+set -eu
+if [ "$1" = --version ]; then echo 16.0; exit 0; fi
+case "$1" in --sdk_root=*) ;; *) exit 23 ;; esac
+sleep 2
+mkdir -p "$ANDROID_HOME/platform-tools" "$ANDROID_HOME/emulator" "$ANDROID_HOME/platforms/android-36" "$ANDROID_HOME/system-images/android-36/google_apis/x86_64"
+printf 'Pkg.Revision=37.0.1\n' > "$ANDROID_HOME/platform-tools/source.properties"
+printf 'Pkg.Revision=37.2.13\n' > "$ANDROID_HOME/emulator/source.properties"
+printf 'Pkg.Revision=2\nAndroidVersion.ApiLevel=36\n' > "$ANDROID_HOME/platforms/android-36/source.properties"
+printf 'Pkg.Revision=7\nAndroidVersion.ApiLevel=36\nSystemImage.TagId=google_apis\nSystemImage.Abi=x86_64\n' > "$ANDROID_HOME/system-images/android-36/google_apis/x86_64/source.properties"
+printf '#!/bin/sh\nexit 0\n' > "$ANDROID_HOME/platform-tools/adb"
+printf '#!/bin/sh\nexit 0\n' > "$ANDROID_HOME/emulator/emulator"
+chmod +x "$ANDROID_HOME/platform-tools/adb" "$ANDROID_HOME/emulator/emulator"
+printf image > "$ANDROID_HOME/system-images/android-36/google_apis/x86_64/system.img"
+"#)?;
+            let mut service = Service::find(f.db()?, &f.root)?.ok_or("fixture project")?;
+            let source_id = service.register_tool(
+                &paths,
+                &Registration {
+                    name: "android-sdk",
+                    version: "cmdline-tools-16",
+                    platform: std::env::consts::OS,
+                    architecture: std::env::consts::ARCH,
+                    components: &[],
+                    path: &source,
+                    managed: false,
+                },
+            )?;
+            service.set_provision_enabled(true)?;
+            service.consent_to_provision("android-36-google-apis-x86_64", source_id)?;
+            drop(service);
+            let fake_kvm = root.join("fake-kvm");
+            fs::write(&fake_kvm, [])?;
+            let wrapper = root.join("ktask-with-kvm");
+            support::write_executable(&wrapper, format!(
+                "#!/bin/sh\nexec /usr/bin/bwrap --dev-bind / / --bind '{}' /dev/kvm -- '{}' \"$@\"\n",
+                fake_kvm.display(), BIN).as_bytes())?;
+            let mut terminal =
+                Terminal::open_project(wrapper.to_str().ok_or("wrapper")?, root, &f.root, 140, 45)?;
+            terminal.screen("original Android attempt waiting", |s| {
+                s.contains("Current #1 · Needs dependency")
+            })?;
+            if mouse {
+                terminal.click("4 Config")?;
+                terminal.screen("configuration opened for Android install", |s| {
+                    s.contains("[t Tools]")
+                })?;
+                terminal.click("t Tools")?;
+            } else {
+                terminal.send("4t")?;
+            }
+            terminal.screen("installer action", |s| s.contains("Project tools"))?;
+            if mouse {
+                let actions = [
+                    "Register",
+                    "Bind",
+                    "Unbind",
+                    "Refresh external",
+                    "Plan",
+                    "Enable automatic",
+                    "Use manual",
+                    "Consent",
+                    "Install",
+                ];
+                for pair in actions.windows(2) {
+                    terminal.click(&format!("< {} >", pair[0]))?;
+                    terminal.screen("next Android tool action", |s| {
+                        s.contains(&format!("< {} >", pair[1]))
+                    })?;
+                }
+                terminal.screen("install selected by mouse", |s| s.contains("< Install >"))?;
+                terminal.click("Apply")?;
+            } else {
+                terminal.send("        ")?;
+                terminal.screen("install selected by keyboard", |s| {
+                    s.contains("< Install >")
+                })?;
+                terminal.send("\x13")?;
+            }
+            terminal.screen("installer started", |s| {
+                s.contains("Android installer started")
+            })?;
+            if mouse {
+                terminal.click("t Tools")?;
+            } else {
+                terminal.send("t")?;
+            }
+            terminal.screen("installer tools during work", |s| {
+                s.contains("Project tools")
+            })?;
+            if mouse {
+                let actions = [
+                    "Register",
+                    "Bind",
+                    "Unbind",
+                    "Refresh external",
+                    "Plan",
+                    "Enable automatic",
+                    "Use manual",
+                    "Consent",
+                    "Install",
+                    "Progress",
+                ];
+                for pair in actions.windows(2) {
+                    terminal.click(&format!("< {} >", pair[0]))?;
+                    terminal.screen("next progress action", |s| {
+                        s.contains(&format!("< {} >", pair[1]))
+                    })?;
+                }
+                terminal.click("Apply")?;
+            } else {
+                terminal.send("         ")?;
+                terminal.screen("progress action", |s| s.contains("< Progress >"))?;
+                terminal.send("\x13")?;
+            }
+            let progress = terminal.screen("installer progress from active operation", |s| {
+                s.contains("Android install progress")
+            })?;
+            assert!(
+                f.ok(&["show", "2"])?["attempts"]
+                    .as_array()
+                    .ok_or("later attempts")?
+                    .is_empty()
+            );
+            if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+                support::screen_png(
+                    &progress,
+                    &PathBuf::from(dir)
+                        .join(format!("android-progress-queue-{queue}-mouse-{mouse}.png")),
+                )?;
+            }
+            terminal.click("Close")?;
+            let resumed = terminal.screen("installer continued saved session", |s| {
+                s.contains("resumed: true")
+            })?;
+            if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+                let path = PathBuf::from(dir)
+                    .join(format!("android-resumed-queue-{queue}-mouse-{mouse}.png"));
+                support::screen_png(&resumed, &path)?;
+            }
+            let first_done = support::eventually("original attempt complete", || {
+                let shown = f.ok(&["show", "1"])?;
+                Ok((shown["status"] == "succeeded").then_some(shown))
+            })?;
+            assert_eq!(
+                first_done["attempts"].as_array().ok_or("attempts")?.len(),
+                1
+            );
+            assert_eq!(first_done["attempts"][0]["id"], attempt);
+            if queue {
+                support::eventually("later task runs after first", || {
+                    Ok((f.ok(&["show", "2"])?["status"] == "succeeded").then_some(()))
+                })?;
+            } else {
+                let later = f.ok(&["show", "2"])?;
+                assert_eq!(later["status"], "ready");
+                assert!(later["attempts"].as_array().ok_or("attempts")?.is_empty());
+            }
+            let finished = terminal.screen("saved run mode final state", |s| {
+                if queue {
+                    s.contains("History 2") && s.contains("Queue · complete")
+                } else {
+                    s.contains("History 1") && s.contains("Queue 1")
+                }
+            })?;
+            if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+                support::screen_png(
+                    &finished,
+                    &PathBuf::from(dir)
+                        .join(format!("android-finished-queue-{queue}-mouse-{mouse}.png")),
+                )?;
+            }
+            terminal.send("q")?;
+            terminal.finish()?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn installed_codex_command_sandbox_uses_owned_android_transport_only() -> Result {
+    use ktask_rs_mk3::application::tools::Registration;
+    for cancel in [false, true] {
+        let f = Fixture::new()?;
+        f.provider(if cancel {
+            "android-transport-cancel"
+        } else {
+            "android-transport"
+        })?;
+        f.add("Owned Android transport")?;
+        let root = f.scratch.path();
+        let codex = Command::new("which").arg("codex").output()?;
+        assert!(
+            codex.status.success(),
+            "installed Codex is required for the command-boundary test"
+        );
+        let codex = String::from_utf8(codex.stdout)?.trim().to_owned();
+        std::os::unix::fs::symlink(codex, root.join("bin/codex-linux-sandbox"))?;
+        let sdk = root.join("owned-sdk");
+        fs::create_dir_all(sdk.join("platform-tools"))?;
+        fs::create_dir_all(sdk.join("emulator"))?;
+        support::write_executable(&sdk.join("platform-tools/adb"), br#"#!/bin/sh
+if [ "$1" = get-state ]; then
+  python3 -c 'import os,socket; s=socket.socket(); s.connect(("127.0.0.1",int(os.environ["KTASK_EMULATOR_PORT"]))); print(s.recv(100).decode().strip())'
+elif [ "$1" = shell ]; then
+  case "$2" in
+    binary) python3 -c 'import sys; sys.stdout.buffer.write(bytes([0,255,65])); sys.stderr.buffer.write(bytes([0,254,66]))' ;;
+    exact) python3 -c 'import sys; sys.stdout.buffer.write(bytes([255])*65536); sys.stderr.buffer.write(bytes([0])*65536)' ;;
+    oversized) python3 -c 'import sys; sys.stdout.buffer.write(bytes([88])*65537)' ;;
+  esac
+elif [ "$1" = install ] || [ "$1" = push ]; then
+  cat "$2"
+elif [ "$1" = pull ]; then
+  printf 'owned-pull' > "$3"
+else echo 'adb fixture'; fi
+"#)?;
+        support::write_executable(
+            &sdk.join("emulator/emulator"),
+            br#"#!/bin/sh
+python3 -u - <<'PY'
+import os, socket
+root=os.environ['KTASK_ANDROID_RUNTIME_ROOT']
+port=int(os.environ['KTASK_EMULATOR_PORT'])
+s=socket.socket()
+s.bind(('127.0.0.1',port))
+s.listen()
+open(root+'/emulator.pid','w').write(str(os.getpid()))
+open(root+'/listening','w').write('ready')
+while True:
+    c,_=s.accept()
+    c.sendall(b'owned\n')
+    c.close()
+PY
+"#,
+        )?;
+        let paths = Paths {
+            config: root.join("config/ktask-dev"),
+            state: root.join("state/ktask-dev"),
+            cache: root.join("cache/ktask-dev"),
+            data: root.join(".local/share/ktask-dev"),
+            runtime: root.join("runtime/ktask-dev"),
+            executable: BIN.into(),
+        };
+        let mut service = Service::find(f.db()?, &f.root)?.ok_or("project")?;
+        let id = service.register_tool(
+            &paths,
+            &Registration {
+                name: "android-sdk",
+                version: "fixture-36",
+                platform: std::env::consts::OS,
+                architecture: std::env::consts::ARCH,
+                components: &[],
+                path: &sdk,
+                managed: false,
+            },
+        )?;
+        service.bind_tool("android-sdk", id, Some(0))?;
+        drop(service);
+        let sentinel = std::net::TcpListener::bind("127.0.0.1:0")?;
+        sentinel.set_nonblocking(true)?;
+        fs::write(root.join("host.apk"), b"outside-project")?;
+        let running = f
+            .process()
+            .env("KTASK_TEST_HOST_APK", root.join("host.apk"))
+            .env(
+                "KTASK_TEST_SENTINEL_PORT",
+                sentinel.local_addr()?.port().to_string(),
+            )
+            .args(["run", "--one"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        support::eventually("Android emulator runtime exposed", || {
+            Ok(root.join("android-runtime-path").exists().then_some(()))
+        })?;
+        let runtime = PathBuf::from(fs::read_to_string(root.join("android-runtime-path"))?);
+        let inner_pid: u32 = fs::read_to_string(root.join("android-emulator-pid"))?.parse()?;
+        let host_pid =
+            support::eventually("owned emulator visible in outer PID namespace", || {
+                host_android_emulator_pid(&runtime, inner_pid)
+            })?;
+        assert_ne!(
+            host_pid, inner_pid,
+            "emulator must run in a private PID namespace"
+        );
+        let started = support::start_time(host_pid)?.ok_or("owned emulator exited early")?;
+        fs::write(root.join("android-emulator-pid-captured"), b"ready")?;
+        if cancel {
+            support::eventually("Android transport ready for cancellation", || {
+                Ok(root.join("android-transport-ready").exists().then_some(()))
+            })?;
+            f.ok(&["stop", "1"])?;
+        }
+        let output = running.wait_with_output()?;
+        assert!(
+            cancel || output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            f.ok(&["show", "1"])?["status"],
+            if cancel { "ready" } else { "succeeded" }
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("android-owned-state"))?,
+            "owned\n"
+        );
+        assert_android_broker_files(root)?;
+        assert!(root.join("android-provider-api-connected").exists());
+        assert!(root.join("android-host-denied").exists());
+        assert!(
+            sentinel.accept().is_ok(),
+            "provider could not reach its API sentinel"
+        );
+        assert!(
+            sentinel.accept().is_err(),
+            "an Android command reached the host sentinel"
+        );
+        assert!(!runtime.exists(), "owned Android runtime was not reset");
+        assert_ne!(
+            support::start_time(host_pid)?,
+            Some(started),
+            "owned emulator survived guardian teardown"
+        );
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+fn assert_android_broker_files(root: &Path) -> Result {
+    assert_eq!(fs::read(root.join("android-binary-out"))?, [0, 255, 65]);
+    assert_eq!(fs::read(root.join("android-binary-err"))?, [0, 254, 66]);
+    assert_eq!(fs::read(root.join("android-exact-out"))?, vec![255; 65_536]);
+    assert_eq!(fs::read(root.join("android-exact-err"))?, vec![0; 65_536]);
+    assert!(fs::read(root.join("android-oversized-out"))?.is_empty());
+    assert!(fs::read_to_string(root.join("android-oversized-err"))?.contains("capacity"));
+    assert_eq!(fs::read(root.join("android-install-state"))?, b"sub-apk");
+    assert_eq!(fs::read(root.join("android-push-state"))?, b"sub-apk");
+    assert!(
+        fs::read_to_string(root.join("android-forbidden-symlink"))?.contains("Android local files")
+    );
+    assert!(
+        fs::read_to_string(root.join("android-forbidden-cwd"))?
+            .contains("Android caller directory")
+    );
+    assert_eq!(fs::read(root.join("android-root-apk"))?, b"root-apk");
+    assert_eq!(fs::read(root.join("android-root-result"))?, b"root-result");
+    assert_eq!(fs::read(root.join("android-pull-result"))?, b"owned-pull");
+    Ok(())
+}
+
+fn host_android_emulator_pid(runtime: &Path, inner_pid: u32) -> Result<Option<u32>> {
+    let owned_env = format!("KTASK_ANDROID_RUNTIME_ROOT={}", runtime.display());
+    for entry in fs::read_dir("/proc")?.flatten() {
+        let Some(host_pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse().ok())
+        else {
+            continue;
+        };
+        let Ok(status) = fs::read_to_string(entry.path().join("status")) else {
+            continue;
+        };
+        let nested = status
+            .lines()
+            .find_map(|line| line.strip_prefix("NSpid:"))
+            .map(|line| {
+                line.split_whitespace()
+                    .filter_map(|part| part.parse::<u32>().ok())
+                    .collect::<Vec<_>>()
+            });
+        if !nested.is_some_and(|pids| pids.len() >= 2 && pids.last() == Some(&inner_pid)) {
+            continue;
+        }
+        let Ok(environment) = fs::read(entry.path().join("environ")) else {
+            continue;
+        };
+        if environment
+            .split(|byte| *byte == 0)
+            .any(|variable| variable == owned_env.as_bytes())
+        {
+            return Ok(Some(host_pid));
+        }
+    }
+    Ok(None)
+}
+
+#[test]
 fn satisfied_requirements_allow_failed_rate_wait_and_answered_question_continuations() -> Result {
     for continuation in ["failed", "rate_limit", "answered_question"] {
         let f = Fixture::new()?;
@@ -1284,7 +1715,23 @@ fn sdk_component_probe_waits_without_download_or_attempt() -> Result {
             .unwrap()
             .starts_with("WRONG_VERSION:")
     );
-    fs::write(component.join("source.properties"), "Pkg.Revision=1.0\n")?;
+    fs::write(
+        component.join("source.properties"),
+        "Pkg.Revision=1.0\nAndroidVersion.ApiLevel=36\nSystemImage.TagId=google_apis\nSystemImage.Abi=x86_64\n",
+    )?;
+    fs::write(component.join("system.img"), b"fixture image")?;
+    fs::create_dir_all(sdk.join("licenses"))?;
+    fs::write(
+        sdk.join("licenses/android-sdk-license"),
+        ktask_rs_mk3::application::provision::ANDROID_SDK_LICENSE_SHA1,
+    )?;
+    fs::create_dir_all(sdk.join("platform-tools"))?;
+    fs::create_dir_all(sdk.join("emulator"))?;
+    support::write_executable(&sdk.join("platform-tools/adb"), b"#!/bin/sh\necho adb\n")?;
+    support::write_executable(
+        &sdk.join("emulator/emulator"),
+        b"#!/bin/sh\necho emulator\n",
+    )?;
     let ready = f
         .process()
         .env("ANDROID_SDK_ROOT", &sdk)
@@ -1807,11 +2254,17 @@ fn run_starts_while_another_project_streams_output_over_a_large_evidence_tree() 
         thread::spawn(move || -> ktask_rs_mk3::storage::Result<(u32, Duration)> {
             let started = Instant::now();
             let mut rows = 0;
+            // The real runner flushes queued rows together. Keep one admission-generation
+            // change every 50 ms without making a separate FULL-sync commit per row.
+            let batch = [
+                ("stdout".into(), "chatty output row".into()),
+                ("stdout".into(), "chatty output row".into()),
+            ];
             while !stop.load(std::sync::atomic::Ordering::Relaxed)
                 && started.elapsed() < NEIGHBOUR_EMITS
             {
-                chatty.output(&run, "stdout", "chatty output row")?;
-                rows += 1;
+                chatty.output_rows(&run, &batch)?;
+                rows += batch.len() as u32;
                 thread::sleep(Duration::from_millis(50));
             }
             Ok((rows, started.elapsed()))
@@ -1836,8 +2289,12 @@ fn run_starts_while_another_project_streams_output_over_a_large_evidence_tree() 
         elapsed.as_millis()
     );
     assert!(
-        emitting >= elapsed && rows as u128 >= elapsed.as_millis() / 100,
-        "the neighbour stopped emitting before the run finished"
+        emitting >= elapsed,
+        "the neighbour stopped before run --one finished"
+    );
+    assert!(
+        rows as u128 >= elapsed.as_millis() / 100,
+        "neighbour output stalled: {rows} rows in {emitting:?} beside a {elapsed:?} run"
     );
     // Restarting the scan at every row would wait for the neighbour's whole emission. Alone
     // the run takes about 10 s; the margin absorbs a loaded full suite (observed up to 46 s).
@@ -5645,6 +6102,44 @@ case "$prompt" in *"Fix what Context reports"*) repair=yes; cp "$HOME/packet-$mo
 [ -n "$session" ] || session="session-$model-$$"
 printf '{{"type":"thread.started","thread_id":"%s"}}\n' "$session"
 printf '%s\n' "$model" >> "$HOME/provider-invocations"
+if [ '{mode}' = android-transport ] || [ '{mode}' = android-transport-cancel ]; then
+ if [ "$model" = execution ]; then
+  bash -c 'echo api >/dev/tcp/127.0.0.1/'"$KTASK_TEST_SENTINEL_PORT" || exit 51
+  touch "$HOME/android-provider-api-connected"
+  profile='{{"type":"external","network":"restricted"}}'
+  codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- sh -c 'mkdir -p "$ANDROID_AVD_HOME/fixture.avd"' || exit 52
+  codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- emulator -avd fixture -port "$KTASK_EMULATOR_PORT" || exit 53
+  i=0; while [ ! -f "$KTASK_ANDROID_RUNTIME_ROOT/listening" ] && [ "$i" -lt 100 ]; do i=$((i+1)); sleep .02; done
+  [ -f "$KTASK_ANDROID_RUNTIME_ROOT/listening" ] || exit 54
+  cat "$KTASK_ANDROID_RUNTIME_ROOT/emulator.pid" > "$HOME/android-emulator-pid"
+  printf '%s' "$KTASK_ANDROID_RUNTIME_ROOT" > "$HOME/android-runtime-path"
+  i=0; while [ ! -f "$HOME/android-emulator-pid-captured" ] && [ "$i" -lt 100 ]; do i=$((i+1)); sleep .02; done
+  [ -f "$HOME/android-emulator-pid-captured" ] || exit 61
+  codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- adb get-state > "$HOME/android-owned-state" || exit 55
+  mkdir -p app
+  printf root-apk > fixture.apk
+  printf sub-apk > app/fixture.apk
+  printf root-result > result.bin
+  codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- adb shell binary > "$HOME/android-binary-out" 2> "$HOME/android-binary-err" || exit 62
+  codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- adb shell exact > "$HOME/android-exact-out" 2> "$HOME/android-exact-err" || exit 63
+  if codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- adb shell oversized > "$HOME/android-oversized-out" 2> "$HOME/android-oversized-err"; then exit 64; fi
+  codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- sh -c 'cd app && adb install fixture.apk' > "$HOME/android-install-state" || exit 58
+  codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- sh -c 'cd app && adb push fixture.apk /remote' > "$HOME/android-push-state" || exit 65
+  codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- sh -c 'cd app && adb pull /remote result.bin' || exit 66
+  ln -s "$KTASK_TEST_HOST_APK" app/escape.apk
+  if codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- sh -c 'cd app && adb install escape.apk' > "$HOME/android-forbidden-symlink" 2>&1; then exit 67; fi
+  if codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- sh -c 'cd .. && adb install host.apk' > "$HOME/android-forbidden-cwd" 2>&1; then exit 68; fi
+  cp fixture.apk "$HOME/android-root-apk"
+  cp result.bin "$HOME/android-root-result"
+  cp app/result.bin "$HOME/android-pull-result"
+  if codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- adb install "$KTASK_TEST_HOST_APK" > "$HOME/android-forbidden-file" 2>&1; then exit 59; fi
+  if codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- adb -H 127.0.0.1 -P "$KTASK_TEST_SENTINEL_PORT" get-state > "$HOME/android-forbidden-out" 2>&1; then exit 56; fi
+  if codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- adb -s personal-device get-state > "$HOME/android-forbidden-serial" 2>&1; then exit 60; fi
+  if codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- python3 -c 'import socket;socket.socket().connect(("127.0.0.1", 9))' > "$HOME/android-direct-out" 2>&1; then exit 57; fi
+  touch "$HOME/android-host-denied"
+  if [ '{mode}' = android-transport-cancel ]; then touch "$HOME/android-transport-ready"; sleep 30; fi
+ fi
+fi
 if [ "$model" = execution ] && [ -f "$HOME/change-source-each-turn" ]; then
  printf 'repair\n' >> repair-progress.txt
 fi
@@ -5760,7 +6255,7 @@ case '{mode}' in
    cat "$artifact" > "$HOME/repair-capture-read" || exit 23
    if (printf tamper >> "$artifact") 2>/dev/null; then exit 24; fi
   fi;;
- dependency-request|dependency-baseline|dependency-crash)
+ dependency-request|dependency-baseline|dependency-crash|android-dependency-request)
   if [ "$model" = execution ] && [ ! -f "$HOME/dependency-requested" ]; then
    if [ '{mode}' = dependency-crash ]; then
     touch "$HOME/dependency-worker-ready"
@@ -5774,7 +6269,9 @@ case '{mode}' in
    version=1.2.3
    stage=execution
    if [ '{mode}' = dependency-baseline ] || [ '{mode}' = dependency-crash ]; then item=rg; version=14.1.1; stage=baseline; fi
-   eval "$callback --kind executable --item $item --version $version --scope task --stage $stage --reproduction 'fixture tool: command not found'" > "$HOME/dependency-receipt" || exit 32
+   kind=executable
+   if [ '{mode}' = android-dependency-request ]; then kind=sdk_component; item='system-images;android-36;google_apis;x86_64'; version=7; fi
+   eval "$callback --kind $kind --item '$item' --version $version --scope task --stage $stage --reproduction 'fixture tool: command not found'" > "$HOME/dependency-receipt" || exit 32
    if [ '{mode}' = dependency-crash ]; then
     eval "$callback --kind executable --item $item --version $version --scope task --stage $stage --reproduction 'fixture tool: command not found'" > "$HOME/dependency-duplicate-receipt" || exit 33
     touch "$HOME/dependency-committed"
@@ -5809,6 +6306,9 @@ case '{mode}' in
   if [ "$model" = execution ] && [ ! -f "$HOME/check-launch-armed" ]; then
    touch "$HOME/check-launch-armed"
    chmod 600 "$HOME/check-launch-ktask-dev"
+   # Spend active time only on the first attempt. Its two failed launches and
+   # 1 s + 2 s backoffs then exhaust the configured limit; Retry has fresh time.
+   sleep 7
   fi;;
  minor-required|validation-critical)
   if [ '{mode}' = validation-critical ] && [ "$model" = validation ]; then printf '%s\n' '{{"type": "item.completed", "item": {{"type": "agent_message", "text": "{{\"outcome\": \"changes_requested\", \"summary\": \"Mandatory proof is missing\", \"question\": null, \"criteria\": [{{\"ordinal\": 1, \"passed\": false, \"evidence\": \"Required boundary behavior is not verified\"}}], \"findings\": [{{\"severity\": \"critical\", \"description\": \"result.txt:1: boundary case needs correction\"}}]}}"}}}}' '{{"type": "turn.completed", "usage": {{}}}}'; exit 0; fi
@@ -5882,6 +6382,7 @@ case '{mode}' in
  slow-repair) if [ "$repair" = yes ]; then touch "$HOME/repair-started"; sleep 30; fi;;
  slow-review) if [ "$model" = review ]; then touch "$HOME/review-started"; sleep 30; fi;;
  slow) sleep 3;;
+ slow-interrupt) if [ "$model" = execution ]; then printf '%s' "$$" > "$HOME/interrupt-pid"; fi; sleep 30;;
  usage-live) if [ "$model" = execution ]; then sleep 30; fi;;
  dirty-live) if [ "$model" = execution ]; then printf partial > partial.txt; printf '%s' "$$" > "$HOME/dirty-pid"; touch "$HOME/dirty-started"; sleep 30; fi;;
  overlap) if [ "$model" = execution ]; then
@@ -5977,6 +6478,86 @@ esac"#,
         support::eventually("guardian finished its cleanup", || {
             let lease = OpenOptions::new().read(true).write(true).open(&path)?;
             Ok((lease.try_lock().is_ok() && lease.metadata()?.len() == 0).then_some(()))
+        })
+    }
+    /// Ten review/repair rounds can outlast one UI poll under a loaded test suite.
+    /// Every round must still make durable progress within a bounded phase interval.
+    fn await_review_progress(
+        &self,
+        what: &str,
+        mut done: impl FnMut(&rusqlite::Connection) -> Result<bool>,
+    ) -> Result {
+        let db = self.db()?;
+        let started = Instant::now();
+        let mut last_progress = started;
+        let mut prior = (-1_i64, -1_i64);
+        loop {
+            let progress: (i64, i64) = db.connection().query_row(
+                "SELECT coalesce((SELECT repair_round FROM attempt_progress WHERE attempt_id=1),0),(SELECT count(*) FROM attempt_steps WHERE attempt_id=1 AND role='review')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            if done(db.connection())? {
+                return Ok(());
+            }
+            if progress != prior {
+                prior = progress;
+                last_progress = Instant::now();
+            }
+            if last_progress.elapsed() >= Duration::from_secs(30)
+                || started.elapsed() >= Duration::from_secs(180)
+            {
+                return Err(format!(
+                    "{what}: review stalled at round {}, {} review steps after {:?}",
+                    progress.0,
+                    progress.1,
+                    started.elapsed()
+                )
+                .into());
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+    fn await_critical_review_decision(&self) -> Result {
+        self.await_review_progress("critical review decision", |db| {
+            Ok(db.query_row(
+                "SELECT count(*) FROM attempts WHERE task_id=1 AND state='failed'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )? == 1)
+        })
+    }
+    /// A running task is not yet a running provider. Interrupt only after the provider
+    /// has started, its reusable session is durable, and the guardian owns scratch.
+    fn interrupt_worker_started(&self) -> Result<(i32, i32)> {
+        let lease_path = self.root.join(".git/ktask-worker.lock");
+        support::eventually("interrupt provider and guardian started", || {
+            let pid_path = self.scratch.path().join("interrupt-pid");
+            if !pid_path.exists() || !lease_path.exists() {
+                return Ok(None);
+            }
+            let Some(worker) = fs::read_to_string(pid_path)?.parse::<i32>().ok() else {
+                return Ok(None);
+            };
+            let marker = fs::read_to_string(&lease_path)?;
+            let Some(guardian) = marker
+                .lines()
+                .find_map(|line| line.strip_prefix("guardian "))
+                .and_then(|pid| pid.parse::<i32>().ok())
+            else {
+                return Ok(None);
+            };
+            let saved: i64 = self.db()?.connection().query_row(
+                "SELECT count(*) FROM ai_sessions s JOIN attempt_steps p ON p.session_id=s.id WHERE p.task_id=1 AND p.role='execution' AND p.state='running' AND s.provider_session_id IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok((saved == 1).then_some((guardian, worker)))
+        })
+    }
+    fn interrupt_worker_reaped(&self, worker: i32) -> Result {
+        support::eventually("interrupted provider reaped", || {
+            Ok((!PathBuf::from(format!("/proc/{worker}")).exists()).then_some(()))
         })
     }
     fn launch_workers_reaped(&self) -> Result {
@@ -6356,10 +6937,9 @@ fn review_rounds_repair_only_critical_findings_in_real_tui() -> Result {
                 "REVIEW LOOP READY mouse={mouse} critical={critical}\n{}",
                 t.screen("ready", |s| s.contains("r Run queue"))?
             );
-            if mouse {
-                t.click("r Run queue")?;
-            } else {
-                t.send("r")?;
+            press(&mut t, mouse, "r Run queue", "r")?;
+            if critical {
+                f.await_critical_review_decision()?;
             }
             f.state(if critical { "failed" } else { "succeeded" })?;
             println!(
@@ -6560,12 +7140,8 @@ fn pause_at_tenth_review_resumes_the_phase_without_an_eleventh_repair() -> Resul
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
         t.screen("ready", |s| s.contains("r Run queue"))?;
         t.send("r")?;
-        support::eventually("tenth review started", || {
-            Ok(f.scratch
-                .path()
-                .join("tenth-review-started")
-                .exists()
-                .then_some(()))
+        f.await_review_progress("tenth review started", |_| {
+            Ok(f.scratch.path().join("tenth-review-started").exists())
         })?;
         println!(
             "TENTH REVIEW ACTIVE mouse={mouse}\n{}",
@@ -7956,7 +8532,9 @@ fn current_screen_shows_recorded_check_counts_in_real_terminal() -> Result {
     println!("CURRENT COUNTS\n{screen}");
     f.ok(&["pause"])?;
     assert!(runner.wait()?.success());
-    t.screen("paused current", |s| s.contains("Current #1 · Paused"))?;
+    t.screen("paused current", |s| {
+        s.contains("Current #1 · Paused · runner stopped")
+    })?;
     t.send("o")?;
     let report = t.screen("paused current count report", |s| {
         s.contains("Report · attempt 1") && s.contains("Check build: 3 passed, 0 failed, 1 ignored")
@@ -8319,13 +8897,16 @@ fn failure_judge_may_ask_the_owner_after_exhausted_check_repair() -> Result {
 #[test]
 fn pause_resume_keeps_attempt_session_and_cleans_worker_tmp() -> Result {
     let f = Fixture::new()?;
-    f.provider("slow")?;
+    f.provider("slow-interrupt")?;
     f.add("Pause me")?;
     let mut run = Running(f.process().args(["run"]).stdout(Stdio::null()).spawn()?);
     f.state("running")?;
-    thread::sleep(Duration::from_millis(200));
+    let (guardian, worker) = f.interrupt_worker_started()?;
+    println!("PAUSE ACTIVE guardian={guardian} worker={worker}");
     f.ok(&["pause"])?;
     run.0.wait()?;
+    f.guardian_finished()?;
+    f.interrupt_worker_reaped(worker)?;
     f.state("paused")?;
     f.no_scratch()?;
     f.provider("normal")?;
@@ -8703,14 +9284,16 @@ fn real_tui_shows_the_open_question_and_stops_or_marks_done_by_keyboard_and_mous
 #[test]
 fn supervisor_death_stops_worker_and_stop_ends_its_unfinished_work() -> Result {
     let f = Fixture::new()?;
-    f.provider("slow")?;
+    f.provider("slow-interrupt")?;
     f.add("Crash")?;
     let mut run = Running(f.process().args(["run"]).stdout(Stdio::null()).spawn()?);
     f.state("running")?;
-    thread::sleep(Duration::from_millis(200));
+    let (guardian, worker) = f.interrupt_worker_started()?;
+    println!("SUPERVISOR DEATH ACTIVE guardian={guardian} worker={worker}");
     run.0.kill()?;
     run.0.wait()?;
     f.guardian_finished()?;
+    f.interrupt_worker_reaped(worker)?;
     f.no_scratch()?;
     assert!(!f.root.join("result.txt").exists());
     // Stop settles the dead attempt first, ending its unfinished step and provider call, so
@@ -12243,10 +12826,18 @@ fn real_tui_check_launch_backoff_deadline_survives_restart_and_retry_restarts_th
     for mouse in [false, true] {
         let f = Fixture::new()?;
         let binary = f.fail_check_launch()?;
-        // The third launch comes at least 3 s of backoff after the first, so a 3 s limit
-        // always expires during a backoff once the first launch has failed.
-        let limit = 3000;
-        f.ok(&["edit", "1", "--timeout-ms", "3000", "--attempt-limit", "3"])?;
+        // The first execution spends 7 s; its two failed launches add 1 s + 2 s
+        // of backoff. Retry skips that fixture delay and gets the full limit.
+        let limit = 10_000;
+        let limit_arg = limit.to_string();
+        f.ok(&[
+            "edit",
+            "1",
+            "--timeout-ms",
+            &limit_arg,
+            "--attempt-limit",
+            "3",
+        ])?;
         let mut t =
             Terminal::open_project(binary.to_str().unwrap(), f.scratch.path(), &f.root, 120, 34)?;
         t.screen("deadline launch fixture ready", |s| {
@@ -12307,7 +12898,7 @@ fn real_tui_check_launch_backoff_deadline_survives_restart_and_retry_restarts_th
                 && s.contains("[r Retry]")
                 && s.contains("configured task-wide limit"))?
         );
-        // Retry restarts the limit: the kept work is checked and judged with a full 3 s.
+        // Retry restarts the limit: the kept work is checked and judged with fresh time.
         if mouse {
             t.click("r Retry")?;
         } else {

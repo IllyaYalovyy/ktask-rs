@@ -306,6 +306,21 @@ impl Service {
             self.wait_for_registered_tool(target,&name,&format!("Bound tool {name} generation #{id} is missing or changed; refresh or rebind it, then Recheck"))?;
             return Ok(false);
         }
+        if self
+            .tools()?
+            .iter()
+            .any(|tool| tool.name == "android-sdk" && tool.bound)
+        {
+            let readiness = self.resolve_tools(paths).map(|_| ());
+            if let Err(error) = readiness {
+                self.wait_for_registered_tool(
+                    target,
+                    "android-sdk",
+                    &format!("Android runtime unavailable: {error}; repair setup, then Recheck"),
+                )?;
+                return Ok(false);
+            }
+        }
         if dependencies.is_empty() {
             return Ok(true);
         }
@@ -617,10 +632,16 @@ pub(super) fn probe(
             Err(error) => return format!("DENIED: provider context unavailable: {error}"),
         };
     }
-    let (code, stdout, stderr) = match crate::runner::process::capture_probe(supervisor, &spec) {
-        Ok(result) => result,
-        Err(error) => return format!("TRANSIENT: {error}"),
+    let timeout = if req.kind == "sdk_component" && req.item.starts_with("system-images;") {
+        std::time::Duration::from_secs(15)
+    } else {
+        std::time::Duration::from_secs(3)
     };
+    let (code, stdout, stderr) =
+        match crate::runner::process::capture_probe(supervisor, &spec, timeout) {
+            Ok(result) => result,
+            Err(error) => return format!("TRANSIENT: {error}"),
+        };
     if req.kind != "executable" {
         return if code == 0 {
             String::from_utf8_lossy(&stdout).trim().to_owned()
@@ -753,7 +774,15 @@ fn probe_sdk_component(item: &str, version: Option<&str>) -> String {
     let Some(root) = root else {
         return "MISSING: set ANDROID_SDK_ROOT or ANDROID_HOME to an installed SDK".into();
     };
-    probe_sdk_component_at(&PathBuf::from(root), item, version)
+    let root = PathBuf::from(root);
+    let observed = probe_sdk_component_at(&root, item, version);
+    if !observed.starts_with("OK:") || !item.starts_with("system-images;") {
+        return observed;
+    }
+    match super::provision::admit_android_image_at(&root, item) {
+        Ok(()) => observed,
+        Err(error) => format!("MISSING: {error}"),
+    }
 }
 
 pub(super) fn probe_sdk_component_at(root: &Path, item: &str, version: Option<&str>) -> String {

@@ -33,6 +33,10 @@ pub struct Invocation {
     /// Provider settings for this turn only, such as a read-only permission policy.
     #[serde(default)]
     pub env: Vec<(String, String)>,
+    #[serde(default)]
+    pub unset_env: Vec<String>,
+    #[serde(default)]
+    pub provision_scratch: Option<(u64, u64)>,
     pub cwd: PathBuf,
     pub prompt: String,
     pub schema: Option<serde_json::Value>,
@@ -60,6 +64,8 @@ impl Invocation {
             executable,
             args,
             env: Vec::new(),
+            unset_env: Vec::new(),
+            provision_scratch: None,
             cwd,
             prompt: String::new(),
             schema: None,
@@ -132,18 +138,20 @@ pub fn capture_readonly(
 pub fn capture_probe(
     supervisor: &std::path::Path,
     spec: &Invocation,
+    timeout: Duration,
 ) -> Result<(i32, Vec<u8>, Vec<u8>)> {
     const LIMIT: usize = 4096;
     let mut worker = Worker::spawn(supervisor, spec)?;
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + timeout;
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     loop {
         if Instant::now() >= deadline {
             worker.join()?;
-            return Err(Error::Conflict(
-                "Dependency probe timed out after 3 seconds".into(),
-            ));
+            return Err(Error::Conflict(format!(
+                "Dependency probe timed out after {} seconds",
+                timeout.as_secs()
+            )));
         }
         match worker.receive(Duration::from_millis(20))? {
             Received::Idle => {}
@@ -299,6 +307,20 @@ pub fn lock(path: &std::path::Path) -> Result<Lease> {
         thread::sleep(Duration::from_millis(1));
     }
 }
+
+/// Before reclaiming provisioning staging, stop a previous guardian's orphaned
+/// descendants using the same worker marker used for ordinary task recovery.
+pub(crate) fn recover_orphaned(path: &std::path::Path) -> Result<()> {
+    let mut lease = lock(path)?;
+    let mut marker = Vec::new();
+    lease.read_to_end(&mut marker)?;
+    if !marker.is_empty() {
+        stop_orphaned_workers(&marker)?;
+        lease.set_len(0)?;
+        lease.sync_all()?;
+    }
+    Ok(())
+}
 /// Read-only ownership check: None while an owner holds the lock, else `read`'s result.
 /// The shared lock never blocks another check, and keeps owners out while `read` runs.
 pub fn inspect<T>(file: &File, read: impl FnOnce(&File) -> io::Result<T>) -> io::Result<Option<T>> {
@@ -394,10 +416,27 @@ fn reader(
         }
     })
 }
-fn scratch_error(path: &std::path::Path) -> io::Result<Option<String>> {
-    let bytes = crate::resource::limit("KTASK_SCRATCH_BYTES", 4 * 1024 * 1024 * 1024);
-    let entries = crate::resource::limit("KTASK_SCRATCH_ENTRIES", 200_000);
+fn scratch_error(
+    path: &std::path::Path,
+    provision: Option<(u64, u64)>,
+) -> io::Result<Option<String>> {
+    let (bytes, entries) = provision.unwrap_or_else(|| {
+        (
+            crate::resource::limit("KTASK_SCRATCH_BYTES", 4 * 1024 * 1024 * 1024),
+            crate::resource::limit("KTASK_SCRATCH_ENTRIES", 200_000),
+        )
+    });
     Ok(crate::resource::scratch_exceeded(path, bytes, entries)?.then(|| format!("Resource limit: managed scratch exceeded {bytes} bytes or {entries} entries; work and captured evidence retained. Raise the limit or free capacity, then resume")))
+}
+
+fn android_runtime_error(root: Option<&std::path::Path>) -> io::Result<Option<String>> {
+    let Some(root) = root else {
+        return Ok(None);
+    };
+    let bytes = crate::resource::limit("KTASK_ANDROID_RUNTIME_BYTES", 8 * 1024 * 1024 * 1024);
+    let entries = crate::resource::limit("KTASK_ANDROID_RUNTIME_ENTRIES", 200_000);
+    Ok(crate::resource::scratch_exceeded(root, bytes, entries)?
+        .then(|| format!("Resource limit: isolated Android runtime exceeded {bytes} bytes or {entries} entries; emulator and adb descendants stopped")))
 }
 pub fn worker() -> Result<WorkerResult> {
     nix::sys::prctl::set_child_subreaper(true).map_err(io::Error::other)?;
@@ -428,12 +467,38 @@ pub fn worker() -> Result<WorkerResult> {
     if spec.artifact_target.is_some() {
         std::fs::create_dir(&artifact_dir)?;
     }
+    let android = if spec.callback.is_some() {
+        super::android_transport::Transport::start(
+            &std::env::current_exe()?,
+            &spec.cwd,
+            scratch.path(),
+            &spec.env,
+        )?
+    } else {
+        None
+    };
+    let callback_token = spec
+        .callback
+        .as_ref()
+        .map(|capability| capability.token.clone());
     let callback = spec
         .callback
-        .map(|capability| Server::start(scratch.path(), capability))
+        .map(|capability| {
+            Server::start(
+                scratch.path(),
+                capability,
+                android.as_ref().map(|transport| transport.endpoint()),
+            )
+        })
         .transpose()?;
     let mut command = match &spec.sandbox {
-        Some(sandbox) => sandbox.command(&spec.executable, scratch.path()),
+        Some(sandbox) => {
+            let mut sandbox = sandbox.clone();
+            if let Some(android) = &android {
+                sandbox.hide(android.hidden_path())?;
+            }
+            sandbox.command(&spec.executable, scratch.path())
+        }
         None => Command::new(&spec.executable),
     };
     command
@@ -446,6 +511,9 @@ pub fn worker() -> Result<WorkerResult> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
+    for key in &spec.unset_env {
+        command.env_remove(key);
+    }
     if spec.artifact_target.is_some() {
         command.env("KTASK_ARTIFACT_DIR", &artifact_dir);
     } else {
@@ -453,8 +521,12 @@ pub fn worker() -> Result<WorkerResult> {
     }
     if let Some(callback) = &callback {
         command.env("KTASK_CALLBACK_DIR", callback.path());
+        if let Some(token) = &callback_token {
+            command.env("KTASK_ANDROID_TOKEN", token);
+        }
     } else {
         command.env_remove("KTASK_CALLBACK_DIR");
+        command.env_remove("KTASK_ANDROID_TOKEN");
     }
     if let Some(schema) = &spec.schema {
         let path = scratch.path().join("response-schema.json");
@@ -463,6 +535,11 @@ pub fn worker() -> Result<WorkerResult> {
     }
     let mut child = Group(command.spawn()?);
     let mut child_input = child.0.stdin.take().expect("piped stdin");
+    let android_runtime_root = spec
+        .env
+        .iter()
+        .find(|(key, _)| key == "KTASK_ANDROID_RUNTIME_ROOT")
+        .map(|(_, path)| std::path::PathBuf::from(path));
     let writer = thread::spawn(move || {
         let _ = child_input.write_all(spec.prompt.as_bytes());
     });
@@ -497,7 +574,9 @@ pub fn worker() -> Result<WorkerResult> {
     while !disconnected || code.is_none() || pending_message.is_some() {
         if quota_error.is_none() && last_scan.elapsed() >= Duration::from_millis(250) {
             last_scan = Instant::now();
-            if let Some(error) = scratch_error(scratch.path())? {
+            if let Some(error) = scratch_error(scratch.path(), spec.provision_scratch)?
+                .or(android_runtime_error(android_runtime_root.as_deref())?)
+            {
                 quota_error = Some(error);
                 child.stop()?;
                 code.get_or_insert(130);
@@ -561,7 +640,8 @@ pub fn worker() -> Result<WorkerResult> {
         .join()
         .map_err(|_| io::Error::other("stderr reader panicked"))?;
     if quota_error.is_none() {
-        quota_error = scratch_error(scratch.path())?;
+        quota_error = scratch_error(scratch.path(), spec.provision_scratch)?
+            .or(android_runtime_error(android_runtime_root.as_deref())?);
     }
     let artifact_error = spec
         .artifact_target
@@ -570,6 +650,7 @@ pub fn worker() -> Result<WorkerResult> {
         .transpose()
         .err();
     drop(callback);
+    drop(android);
     scratch.close()?;
     lease.set_len(0)?;
     lease.sync_all()?;

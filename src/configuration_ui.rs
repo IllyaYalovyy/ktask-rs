@@ -5,6 +5,7 @@ use crate::{
         ModelConfig,
         configuration::{Defaults, DeliveryConfig, MODEL_ROLES, ProjectCheck},
         preferences::{Continuation, PlannerApproval, Preferences},
+        provision::Plan,
         user_defaults::{DefaultsRow, UserDefaults},
     },
     dialog::{Dialog, DialogKind, Field},
@@ -82,7 +83,12 @@ impl StoredWorkspace {
         Ok(match action {
             Action::Tools => {
                 let tools = self.service.tools().map_err(|e| e.to_string())?;
-                let body: String = if tools.is_empty() {
+                let source = tools
+                    .iter()
+                    .find(|tool| tool.name == "android-sdk" && tool.provenance == "external")
+                    .map(|tool| tool.id.to_string())
+                    .unwrap_or_default();
+                let mut body: String = if tools.is_empty() {
                     "No registered tool generations. Register an existing installation, then bind its generation to this project.".into()
                 } else {
                     tools
@@ -110,6 +116,7 @@ impl StoredWorkspace {
                         })
                         .collect()
                 };
+                body.push_str(&format!("\nProvisioning: {} (manual is the default). Select Plan for packages, source, destination, capacity and license status.\n", if self.service.provision_enabled().map_err(|e| e.to_string())? { "automatic enabled" } else { "manual" }));
                 Dialog::new(
                     DialogKind::Tools,
                     "Project tools",
@@ -117,7 +124,19 @@ impl StoredWorkspace {
                     vec![
                         Field::choice(
                             TOOL_ACTION,
-                            &["Register", "Bind", "Unbind", "Refresh external"],
+                            &[
+                                "Register",
+                                "Bind",
+                                "Unbind",
+                                "Refresh external",
+                                "Plan",
+                                "Enable automatic",
+                                "Use manual",
+                                "Consent",
+                                "Install",
+                                "Progress",
+                                "Cancel install",
+                            ],
                             "Register",
                         ),
                         Field::text(TOOL_NAME, ""),
@@ -127,7 +146,7 @@ impl StoredWorkspace {
                         Field::text(TOOL_PATH, ""),
                         Field::text(TOOL_COMPONENTS, ""),
                         Field::choice(TOOL_OWNERSHIP, &["External", "Managed"], "External"),
-                        Field::text(TOOL_GENERATION, ""),
+                        Field::text(TOOL_GENERATION, &source),
                         Field::text(TOOL_ROW_VERSION, "0"),
                     ],
                 )
@@ -365,6 +384,111 @@ impl StoredWorkspace {
         match &dialog.kind {
             DialogKind::Tools => {
                 let paths = screen.instance.paths().map_err(|e| e.to_string())?;
+                if dialog.get(TOOL_ACTION) == "Plan" {
+                    let source: i64 = dialog
+                        .get(TOOL_GENERATION)
+                        .parse()
+                        .map_err(|_| "Source generation ID must be a number")?;
+                    let plan = self
+                        .service
+                        .provision_plan(&paths, crate::application::provision::RECIPE, source)
+                        .map_err(|e| e.to_string())?;
+                    dialog.body = install_plan_text(&plan);
+                    dialog.kind = DialogKind::ToolPreview;
+                    dialog.title = "Android install plan".into();
+                    dialog.fields.clear();
+                    dialog.scroll = 0;
+                    return Ok(false);
+                }
+                if dialog.get(TOOL_ACTION) == "Progress" {
+                    let status = self
+                        .service
+                        .provision_status(&paths)
+                        .map_err(|e| e.to_string())?;
+                    dialog.body = match status {
+                        Some(status) => {
+                            serde_json::to_string_pretty(&status).map_err(|e| e.to_string())?
+                        }
+                        None => "No Android installation has started for this project.".into(),
+                    };
+                    dialog.kind = DialogKind::ToolPreview;
+                    dialog.title = "Android install progress".into();
+                    dialog.fields.clear();
+                    dialog.scroll = 0;
+                    return Ok(false);
+                }
+                if dialog.get(TOOL_ACTION) == "Cancel install" {
+                    if let Some(job) = &self.provision_job {
+                        job.cancelled
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                    } else {
+                        self.service
+                            .cancel_provision(&paths)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    screen.message("Provisioning cancellation requested");
+                    return Ok(true);
+                }
+                if matches!(dialog.get(TOOL_ACTION), "Enable automatic" | "Use manual") {
+                    let enabled = dialog.get(TOOL_ACTION) == "Enable automatic";
+                    self.service
+                        .set_provision_enabled(enabled)
+                        .map_err(|e| e.to_string())?;
+                    screen.message(if enabled {
+                        "Provisioning enabled"
+                    } else {
+                        "Manual tool setup selected"
+                    });
+                    return Ok(true);
+                }
+                if dialog.get(TOOL_ACTION) == "Install" {
+                    if self.provision_job.is_some() {
+                        return Err("An Android installer is already running in this window".into());
+                    }
+                    let source: i64 = dialog
+                        .get(TOOL_GENERATION)
+                        .parse()
+                        .map_err(|_| "Source generation ID must be a number")?;
+                    let recipe = crate::application::provision::RECIPE.to_owned();
+                    let root = self.service.project_root().map_err(|e| e.to_string())?;
+                    let waiting_task =
+                        self.service.provision_target().map_err(|e| e.to_string())?;
+                    let instance = screen.instance;
+                    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let signal = std::sync::Arc::clone(&cancelled);
+                    let handle = std::thread::spawn(move || {
+                        let paths = instance.paths().map_err(|e| e.to_string())?;
+                        let database =
+                            crate::storage::Database::open(&paths).map_err(|e| e.to_string())?;
+                        let mut service = crate::application::Service::open(database, &root, None)
+                            .map_err(|e| e.to_string())?;
+                        service
+                            .provision_android_cancelable(&paths, &recipe, source, &signal)
+                            .map_err(|e| e.to_string())
+                    });
+                    self.provision_job = Some(crate::persistent::ProvisionJob {
+                        cancelled,
+                        handle: Some(handle),
+                        waiting_task,
+                    });
+                    screen.message(
+                        "Android installer started; Tools shows progress and cancellation",
+                    );
+                    return Ok(true);
+                }
+                if dialog.get(TOOL_ACTION) == "Consent" {
+                    let source: i64 = dialog
+                        .get(TOOL_GENERATION)
+                        .parse()
+                        .map_err(|_| "Source generation ID must be a number")?;
+                    let result = self
+                        .service
+                        .consent_to_provision(crate::application::provision::RECIPE, source)
+                        .map(|_| "Recorded human license consent".to_string())
+                        .map_err(|e| e.to_string())?;
+                    screen.message(result);
+                    return Ok(true);
+                }
                 let components: Vec<String> = dialog
                     .get(TOOL_COMPONENTS)
                     .split(',')
@@ -434,6 +558,7 @@ impl StoredWorkspace {
                 screen.message(result);
                 return Ok(true);
             }
+            DialogKind::ToolPreview => return Ok(true),
             DialogKind::Profiles(_) | DialogKind::Profile { .. } => {
                 return self.save_profile_form(screen, dialog);
             }
@@ -779,4 +904,36 @@ fn check_label(check: &ProjectCheck) -> String {
         check.name,
         if check.enabled { "enabled" } else { "disabled" }
     )
+}
+
+fn install_plan_text(plan: &Plan) -> String {
+    let mut text = format!(
+        "Recipe: {}\nSource: {}\nSource version: {}\nRepository: {}\nDestination: {}\n\nPackages:\n",
+        plan.recipe,
+        plan.source.display(),
+        plan.source_version,
+        plan.repository,
+        plan.destination.display(),
+    );
+    for (package, revision) in plan.packages.iter().zip(&plan.package_revisions) {
+        text.push_str(&format!("  {package} @ {revision}\n"));
+    }
+    text.push_str(&format!(
+        "\nDownload cache: {} bytes / {} entries\nStage capacity: {} bytes\nRetained capacity: {} bytes\nFree-space reserve: {} bytes\nTime limit: {} seconds\nPolicy: {}\nLicense consent: {}\n",
+        plan.download_cache_max_bytes,
+        plan.download_cache_max_entries,
+        plan.stage_max_bytes,
+        plan.retained_max_bytes,
+        plan.min_free_bytes,
+        plan.timeout_seconds,
+        if plan.enabled { "automatic enabled" } else { "manual" },
+        if plan.consented { "recorded by a human" } else { "missing" },
+    ));
+    if !plan.issues.is_empty() {
+        text.push_str("\nBefore install:\n");
+        for issue in &plan.issues {
+            text.push_str(&format!("  • {issue}\n"));
+        }
+    }
+    text
 }

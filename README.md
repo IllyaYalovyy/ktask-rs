@@ -41,6 +41,58 @@ lockfile dependent build trees stay in their project. No task installs SDKs in i
 If a bound generation disappears or changes, Current Task enters Needs dependency; refresh
 or rebind the generation and use Recheck before resuming.
 
+Managed Android provisioning is optional and **manual mode is the default**. A reviewed
+`android-36-google-apis-x86_64` recipe installs pinned `platform-tools` 37.0.1, `emulator`
+37.2.13, API 36 revision 2 and the Google APIs x86_64 image revision 7 from the Google stable
+SDK repository. Register a compatible existing
+SDK containing Android CLI or `sdkmanager` as the external bootstrap. Accept its SDK licenses
+interactively outside ktask first, inspect `tool provision-plan android-36-google-apis-x86_64 ID`,
+then record consent for that exact source and license set with
+`tool provision-consent android-36-google-apis-x86_64 ID`. Consent records the source licenses
+and bootstrap executable digest. Set
+`tool provision-mode automatic` to permit the fixed recipe; `tool provision-mode manual` disables
+it. `tool provision-install android-36-google-apis-x86_64 ID` runs it explicitly, while a matching
+SDK dependency wait can invoke it once without another AI turn. `tool provision-status` and
+`tool provision-cancel` report progress and request cancellation. The Tools dialog on Current Task
+and Configuration exposes the same plan and controls. A successful install binds a managed SDK;
+the waiting task is rechecked before its original run session continues. Missing consent,
+Java, usable KVM or a compatible bootstrap leaves manual setup and Recheck available.
+The reviewed packages require `licenses/android-sdk-license` to contain their accepted license
+hash; unrelated or empty license files leave the dependency waiting.
+Unbind an explicitly selected SDK before choosing a managed generation; provisioning does not
+replace that binding silently.
+
+The installer uses its own bounded staging and `TMPDIR` under XDG data, a separate reusable
+`data/provision-download-cache`, then publishes a generation atomically under `data/tools`;
+task scratch is never used for an SDK download. The plan shows its separate 12 GiB download
+cache, 12 GiB staging, 32 GiB retained and 2 GiB free-space budgets and 30-minute
+limit. The package manager uses explicit SDK roots: current Android CLI receives `--sdk=PATH sdk
+install`, and installed `sdkmanager` receives `--sdk_root=PATH --install`. Android's
+Google repository manager handles archive checksums; the recipe isolates its configuration,
+retains its cache for supported resumes, and rejects a manager failure or mismatched package
+revision before publication. The source bootstrap executable and license files are hashed at
+human consent. Android's
+[environment variables](https://developer.android.com/tools/variables) distinguish the shared
+SDK from isolated AVD and user state; [sdkmanager](https://developer.android.com/tools/sdkmanager)
+is deprecated in favor of [Android CLI](https://developer.android.com/tools/agents/android-cli/commands/sdk).
+Installing an emulator does not grant [KVM access](https://developer.android.com/studio/run/emulator-acceleration)
+or authorize a personal device.
+Android-bound runs get a fresh owned `ANDROID_AVD_HOME`, a private adb server port, a leased
+emulator console/adb port pair (`KTASK_EMULATOR_PORT`), and `ANDROID_SERIAL` for that emulator.
+For the reviewed image, `KTASK_ANDROID_AVD_TEMPLATE` points to a small reusable configuration
+template; it never contains a mutable disk. Create the AVD inside the owned directory with the
+exact installed image before starting it, and
+pass `-port "$KTASK_EMULATOR_PORT"` to the emulator. The runtime and its mutable disk are reset
+when the run ends; the SDK and system image stay shared. Android sandboxes hide attached device
+nodes and the personal `~/.android` directory. They also use a private network namespace so
+adb cannot discover or explicitly select another project's host emulator. Set project agent
+network to Off before an Android-bound run; an incompatible On policy leaves an actionable
+dependency wait. The Codex provider retains API connectivity. Its network-restricted project
+commands use the `adb` and `emulator` wrappers on PATH; a scoped guardian callback runs those
+commands against the bound SDK and owned AVD inside one private Android network namespace.
+Direct socket access and overrides targeting another server or device remain denied. This does
+not change the network policy of non-Android tasks.
+
 Scratch files belong to one run and are removed on exit. After a crash or forced kill,
 the next launch reclaims abandoned scratch directories; ownership locks protect live runs.
 Tests use private homes and app roots under `$TMPDIR/ktask-test-scratch/` (system temporary

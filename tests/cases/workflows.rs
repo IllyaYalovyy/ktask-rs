@@ -523,6 +523,12 @@ fn queue_search_filter_navigation_history_and_selection_are_independent() -> Res
     )?;
     let details = key(&mut t, "\r", "Task details / attempts")?;
     println!("HISTORY DETAILS\n{details}");
+    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
+        support::screen_png(
+            &details,
+            &std::path::PathBuf::from(directory).join("provision-240-task-regression.png"),
+        )?;
+    }
     t.send("\x1b[F")?;
     t.screen("details scrolled to the end", |s| {
         s.contains("Review: approved") && !s.contains("Acceptance check:")

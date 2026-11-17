@@ -64,6 +64,7 @@ pub enum DialogKind {
     BuildCache(crate::build_cache::Policy),
     BuildCacheConfirm(BuildCachePlan),
     Tools,
+    ToolPreview,
     Config,
     ResetConfig,
     Help,
@@ -274,6 +275,7 @@ impl Dialog {
         matches!(
             self.kind,
             DialogKind::Readiness
+                | DialogKind::ToolPreview
                 | DialogKind::BreakdownPending
                 | DialogKind::Help
                 | DialogKind::Stats

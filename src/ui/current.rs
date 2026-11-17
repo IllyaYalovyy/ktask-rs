@@ -49,6 +49,12 @@ pub(super) fn controls(app: &App) -> Vec<(&'static str, Action)> {
     if app.follow {
         controls.retain(|(label, _)| *label != "End Follow");
     }
+    if app
+        .current()
+        .is_some_and(|task| task.status() == Status::NeedsDependency)
+    {
+        controls.insert(1, ("t Tools and install plan", Action::Tools));
+    }
     controls
 }
 

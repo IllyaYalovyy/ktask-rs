@@ -2,6 +2,7 @@
 //! The guardian, outside the Codex sandbox, applies follow-up and dependency requests.
 use crate::{
     application::{Actor, ActorKind, Definition, Kind, Service, dependency::Requirement},
+    runner::android_transport::{Endpoint, MAX_RESPONSE, Output},
     storage::{Database, Error, Result},
 };
 use serde::{Deserialize, Serialize};
@@ -46,12 +47,20 @@ enum Request {
         token: String,
         requirement: Requirement,
     },
+    Android {
+        token: String,
+        operation: String,
+        args: Vec<String>,
+        cwd: PathBuf,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
 struct Response {
     id: Option<i64>,
     error: Option<String>,
+    #[serde(default)]
+    output: Option<Output>,
 }
 
 /// The CLI writes only beneath the worker's sandbox-owned TMPDIR, never SQLite.
@@ -71,7 +80,38 @@ pub fn dependency(token: &str, requirement: &Requirement) -> Result<i64> {
     })
 }
 
+pub fn android(token: &str, operation: &str, args: &[String]) -> Result<Output> {
+    let cwd = std::env::current_dir()?;
+    let reply = exchange(
+        Request::Android {
+            token: token.into(),
+            operation: operation.into(),
+            args: args.to_vec(),
+            cwd,
+        },
+        Duration::from_secs(120),
+    )?;
+    reply.output.ok_or_else(|| {
+        Error::Conflict(
+            reply
+                .error
+                .unwrap_or_else(|| "Android command returned no result".into()),
+        )
+    })
+}
+
 fn send(request: Request) -> Result<i64> {
+    let reply = exchange(request, Duration::from_secs(15))?;
+    reply.id.ok_or_else(|| {
+        Error::Conflict(
+            reply
+                .error
+                .unwrap_or_else(|| "Worker callback returned no receipt".into()),
+        )
+    })
+}
+
+fn exchange(request: Request, timeout: Duration) -> Result<Response> {
     let root = std::env::var_os("KTASK_CALLBACK_DIR")
         .map(PathBuf::from)
         .ok_or_else(|| Error::Conflict("No active worker callback endpoint".into()))?;
@@ -92,21 +132,22 @@ fn send(request: Request) -> Result<i64> {
     output.sync_all()?;
     drop(output);
     fs::rename(&temporary, &ready)?;
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + timeout;
     loop {
-        match fs::read(&response) {
-            Ok(bytes) => {
+        match File::open(&response) {
+            Ok(mut file) => {
+                let mut bytes = Vec::new();
+                (&mut file).take(MAX_RESPONSE + 1).read_to_end(&mut bytes)?;
                 let _ = fs::remove_file(&response);
+                if bytes.len() as u64 > MAX_RESPONSE {
+                    return Err(Error::Conflict(
+                        "Worker callback response exceeds capacity".into(),
+                    ));
+                }
                 let reply: Response = serde_json::from_slice(&bytes).map_err(|error| {
                     Error::Conflict(format!("Invalid callback receipt: {error}"))
                 })?;
-                return reply.id.ok_or_else(|| {
-                    Error::Conflict(
-                        reply
-                            .error
-                            .unwrap_or_else(|| "Worker callback returned no receipt".into()),
-                    )
-                });
+                return Ok(reply);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
@@ -133,7 +174,11 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn start(scratch: &Path, capability: Capability) -> Result<Self> {
+    pub fn start(
+        scratch: &Path,
+        capability: Capability,
+        android: Option<Endpoint>,
+    ) -> Result<Self> {
         let path = scratch.join("callback");
         fs::create_dir(&path)?;
         let directory_fd = File::open(&path)?;
@@ -148,7 +193,7 @@ impl Server {
                 if let Ok(entries) = fs::read_dir(&directory) {
                     for entry in entries.flatten() {
                         if entry.path().extension().is_some_and(|ext| ext == "ready") {
-                            serve(&entry.path(), &capability);
+                            serve(&entry.path(), &capability, android.as_ref(), &stopping);
                         }
                     }
                 }
@@ -176,7 +221,7 @@ impl Drop for Server {
     }
 }
 
-fn serve(ready: &Path, capability: &Capability) {
+fn serve(ready: &Path, capability: &Capability, android: Option<&Endpoint>, stop: &AtomicBool) {
     let processing = ready.with_extension("processing");
     if fs::rename(ready, &processing).is_err() {
         return;
@@ -186,15 +231,13 @@ fn serve(ready: &Path, capability: &Capability) {
     // Reserve the response inode before changing state; a worker cannot replace
     // the file with a symlink and make the guardian write outside scratch.
     if let Ok(mut output) = new_file(&writing) {
-        let result = apply(&processing, capability);
+        let result = apply(&processing, capability, android, stop);
         let reply = match result {
-            Ok(id) => Response {
-                id: Some(id),
-                error: None,
-            },
+            Ok(reply) => reply,
             Err(error) => Response {
                 id: None,
                 error: Some(error.to_string()),
+                output: None,
             },
         };
         if serde_json::to_writer(&mut output, &reply).is_ok() && output.sync_all().is_ok() {
@@ -204,7 +247,12 @@ fn serve(ready: &Path, capability: &Capability) {
     let _ = fs::remove_file(processing);
 }
 
-fn apply(path: &Path, capability: &Capability) -> Result<i64> {
+fn apply(
+    path: &Path,
+    capability: &Capability,
+    android: Option<&Endpoint>,
+    stop: &AtomicBool,
+) -> Result<Response> {
     let mut input = OpenOptions::new()
         .read(true)
         .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
@@ -222,7 +270,9 @@ fn apply(path: &Path, capability: &Capability) -> Result<i64> {
     let request: Request = serde_json::from_slice(&bytes)
         .map_err(|error| Error::Conflict(format!("Invalid worker callback: {error}")))?;
     let token = match &request {
-        Request::FollowUp { token, .. } | Request::Dependency { token, .. } => token,
+        Request::FollowUp { token, .. }
+        | Request::Dependency { token, .. }
+        | Request::Android { token, .. } => token,
     };
     if *token != capability.token {
         return Err(Error::Conflict(
@@ -255,16 +305,50 @@ fn apply(path: &Path, capability: &Capability) -> Result<i64> {
                 timeout_ms: None,
                 stage_timeout_ms: None,
             };
-            service.file_follow_up(&token, capability.task, capability.attempt, &definition)
+            Ok(Response {
+                id: Some(service.file_follow_up(
+                    &token,
+                    capability.task,
+                    capability.attempt,
+                    &definition,
+                )?),
+                error: None,
+                output: None,
+            })
         }
-        Request::Dependency { token, requirement } => service.request_live_requirement(
-            capability.task,
-            capability.attempt,
-            &token,
-            &requirement,
-            &capability.environment_fingerprint,
-            &capability.environment_path,
-        ),
+        Request::Dependency { token, requirement } => Ok(Response {
+            id: Some(service.request_live_requirement(
+                capability.task,
+                capability.attempt,
+                &token,
+                &requirement,
+                &capability.environment_fingerprint,
+                &capability.environment_path,
+            )?),
+            error: None,
+            output: None,
+        }),
+        Request::Android {
+            token,
+            operation,
+            args,
+            cwd,
+        } => {
+            let endpoint = android.ok_or_else(|| {
+                Error::Conflict("No owned Android transport for this attempt".into())
+            })?;
+            service.authorize_android_transport(
+                capability.task,
+                capability.attempt,
+                &token,
+                endpoint.sdk(),
+            )?;
+            Ok(Response {
+                id: None,
+                error: None,
+                output: Some(endpoint.exchange(&operation, &args, &cwd, stop)?),
+            })
+        }
     }
 }
 
@@ -289,6 +373,7 @@ mod tests {
                 environment_fingerprint: "unbound".into(),
                 environment_path: std::env::var("PATH").unwrap_or_default(),
             },
+            None,
         )?;
         let replacement = root.path().join("outside");
         fs::create_dir(&replacement)?;

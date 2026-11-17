@@ -4,6 +4,7 @@
 //! bounds automatic retries and waits; `session` continues a detached supervisor; `log`
 //! keeps its runner log.
 pub(crate) mod agent;
+pub(crate) mod android_transport;
 mod attempt;
 mod backoff;
 pub(crate) mod callback;
@@ -34,7 +35,9 @@ pub(crate) mod workspace;
 pub use backoff::wait_for_limit_reset;
 pub(crate) use log::rotate_log;
 pub use queue::{holds_own_work, run};
-pub use session::{background, continue_after_intervention, supervisor_alive};
+pub use session::{
+    background, continue_after_intervention, continue_after_provision, supervisor_alive,
+};
 pub(crate) use turn::provider_invocation;
 
 use crate::storage::{Error, Result};

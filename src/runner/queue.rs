@@ -129,6 +129,7 @@ fn run_inner(
     // Set by a failure: the next attempt is the supervisor's own repair. A replanned task's
     // is too, whenever it is current again (after any inserted prerequisites).
     let mut repairing = false;
+    let mut auto_provision_attempted = std::collections::BTreeSet::new();
     loop {
         if let Some(halt) = halted(service, &stop)? {
             return Ok(halt);
@@ -140,6 +141,12 @@ fn run_inner(
             ControlFlow::Continue(task) => task,
             ControlFlow::Break(halt) => return Ok(halt),
         };
+        if task.state() == State::NeedsDependency
+            && auto_provision_attempted.insert(task.id)
+            && service.try_auto_provision_wait(paths)?
+        {
+            continue;
+        }
         if let Some(stopped) = admit(service, &task, notified)? {
             return Ok(stopped);
         }
@@ -154,6 +161,9 @@ fn run_inner(
             &paths.executable,
             paths,
         )? {
+            if auto_provision_attempted.insert(task.id) && service.try_auto_provision_wait(paths)? {
+                continue;
+            }
             return Ok(format!(
                 "Waiting for dependency on task #{}; use dependency recheck after setup",
                 task.id
@@ -182,7 +192,14 @@ fn run_inner(
         match attempt::run(service, &launch, begun)? {
             Then::Continue => {}
             Then::Repair => repairing = true,
-            Then::Return(message) => return Ok(message),
+            Then::Return(message) => {
+                if auto_provision_attempted.insert(task.id)
+                    && service.try_auto_provision_wait(paths)?
+                {
+                    continue;
+                }
+                return Ok(message);
+            }
         }
     }
 }

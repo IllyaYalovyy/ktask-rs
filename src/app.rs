@@ -605,6 +605,7 @@ impl App {
                 KeyCode::Char('o') => Some(Action::Output),
                 KeyCode::Char('e') => Some(Action::Edit),
                 KeyCode::Char('b') => Some(Action::Breakdown),
+                KeyCode::Char('t') => self.enabled(Action::Tools).then_some(Action::Tools),
                 KeyCode::Enter => Some(Action::Inspect),
                 KeyCode::End | KeyCode::Char('G') => Some(Action::Follow),
                 _ => {

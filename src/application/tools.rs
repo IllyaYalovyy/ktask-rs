@@ -41,6 +41,7 @@ pub struct ResolvedTools {
     pub writable_roots: Vec<PathBuf>,
     pub installations: Vec<PathBuf>,
     _leases: Vec<File>,
+    _android_runtime: Option<crate::scratch::Scratch>,
 }
 
 pub struct Registration<'a> {
@@ -51,6 +52,71 @@ pub struct Registration<'a> {
     pub components: &'a [String],
     pub path: &'a Path,
     pub managed: bool,
+}
+
+fn has_android_image(tools: &[Tool]) -> bool {
+    tools.iter().any(|tool| {
+        tool.name == "android-sdk"
+            && tool
+                .components
+                .iter()
+                .any(|component| component == "system-images;android-36;google_apis;x86_64")
+    })
+}
+
+fn add_android_template(
+    runtime: &Path,
+    has_image: bool,
+    env: &mut Vec<(String, String)>,
+) -> Result<()> {
+    if has_image {
+        let template = runtime.join("avd-template.json");
+        fs::write(&template, super::provision::avd_template())?;
+        env.push((
+            "KTASK_ANDROID_AVD_TEMPLATE".into(),
+            template.to_string_lossy().into_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn add_android_sdk_bindings(
+    tool: &Tool,
+    env: &mut Vec<(String, String)>,
+    sdk_bins: &mut Vec<PathBuf>,
+) {
+    let root = tool.path.to_string_lossy().into_owned();
+    env.push(("ANDROID_HOME".into(), root.clone()));
+    env.push(("ANDROID_SDK_ROOT".into(), root));
+    for relative in ["platform-tools", "cmdline-tools/latest/bin", "emulator"] {
+        let path = tool.path.join(relative);
+        if path.is_dir() {
+            sdk_bins.push(path);
+        }
+    }
+    for component in &tool.components {
+        if component.starts_with("cmdline-tools;") {
+            let path = tool.path.join(component.replace(';', "/")).join("bin");
+            if path.is_dir() && !sdk_bins.contains(&path) {
+                sdk_bins.push(path);
+            }
+        }
+    }
+    if let Ok(packages) = fs::read_dir(tool.path.join("cmdline-tools")) {
+        let mut packages = packages
+            .flatten()
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        packages.sort();
+        for package in packages {
+            let bin = package.join("bin");
+            if (bin.join("android").is_file() || bin.join("sdkmanager").is_file())
+                && !sdk_bins.contains(&bin)
+            {
+                sdk_bins.push(bin);
+            }
+        }
+    }
 }
 
 fn name(value: &str) -> Result<String> {
@@ -103,10 +169,35 @@ fn probe(path: &Path, name: &str, components: &[String]) -> Result<String> {
         watched.push(bin);
     }
     if name == "android-sdk" {
-        for binary in ["platform-tools/adb", "cmdline-tools/latest/bin/sdkmanager"] {
+        for binary in [
+            "platform-tools/adb",
+            "cmdline-tools/latest/bin/sdkmanager",
+            "bin/android",
+        ] {
             let path = path.join(binary);
             if path.exists() {
                 watched.push(path);
+            }
+        }
+        if watched.len() == 1 {
+            let packaged = path.join("cmdline-tools/latest/bin/android");
+            if packaged.is_file() {
+                watched.push(packaged);
+            } else if let Ok(packages) = fs::read_dir(path.join("cmdline-tools")) {
+                let mut packages = packages
+                    .flatten()
+                    .map(|package| package.path())
+                    .collect::<Vec<_>>();
+                packages.sort();
+                let binary = ["android", "sdkmanager"].into_iter().find_map(|name| {
+                    packages
+                        .iter()
+                        .map(|package| package.join("bin").join(name))
+                        .find(|binary| binary.is_file())
+                });
+                if let Some(binary) = binary {
+                    watched.push(binary);
+                }
             }
         }
         require(
@@ -188,21 +279,35 @@ fn probe(path: &Path, name: &str, components: &[String]) -> Result<String> {
 
 fn candidate_binary(tool: &Tool, item: &str) -> Option<PathBuf> {
     if tool.name == "android-sdk" {
+        if item == "android" {
+            let root = tool.path.join("bin/android");
+            if root.is_file() {
+                return Some(root);
+            }
+            let latest = tool.path.join("cmdline-tools/latest/bin/android");
+            if latest.is_file() {
+                return Some(latest);
+            }
+            let mut bins = fs::read_dir(tool.path.join("cmdline-tools"))
+                .ok()?
+                .flatten()
+                .map(|entry| entry.path().join("bin/android"))
+                .collect::<Vec<_>>();
+            bins.sort();
+            return bins.into_iter().find(|binary| binary.is_file());
+        }
         if item == "sdkmanager" {
             let latest = tool.path.join("cmdline-tools/latest/bin/sdkmanager");
             if latest.is_file() {
                 return Some(latest);
             }
-            return tool
-                .components
-                .iter()
-                .filter(|component| component.starts_with("cmdline-tools;"))
-                .map(|component| {
-                    tool.path
-                        .join(component.replace(';', "/"))
-                        .join("bin/sdkmanager")
-                })
-                .find(|binary| binary.is_file());
+            let mut bins = fs::read_dir(tool.path.join("cmdline-tools"))
+                .ok()?
+                .flatten()
+                .map(|entry| entry.path().join("bin/sdkmanager"))
+                .collect::<Vec<_>>();
+            bins.sort();
+            return bins.into_iter().find(|binary| binary.is_file());
         }
         let relative = match item {
             "adb" => "platform-tools/adb",
@@ -247,16 +352,26 @@ fn candidate_matches(
     requirements.iter().all(|req| {
         let mut direct = (*req).clone();
         if req.kind == "sdk_component" {
-            // Component verification reads bounded metadata only. No candidate
-            // executable runs here; executable requirements use the guarded probe.
             return tool.name == "android-sdk"
                 && tool.components.contains(&req.item)
-                && super::dependency::probe_sdk_component_at(
-                    &tool.path,
-                    &req.item,
-                    req.version.as_deref(),
-                )
-                .starts_with("OK:");
+                && if req.item.starts_with("system-images;") {
+                    super::dependency::probe(
+                        &direct,
+                        context.scratch,
+                        context.project,
+                        context.supervisor,
+                        &resolved.env,
+                        policy(),
+                    )
+                    .starts_with("OK:")
+                } else {
+                    super::dependency::probe_sdk_component_at(
+                        &tool.path,
+                        &req.item,
+                        req.version.as_deref(),
+                    )
+                    .starts_with("OK:")
+                };
         } else {
             let Some(binary) = candidate_binary(tool, &req.item) else {
                 return false;
@@ -574,11 +689,48 @@ impl Service {
         generation: i64,
         if_version: Option<i64>,
     ) -> Result<i64> {
+        self.bind_tool_at_epoch(tool_name, generation, if_version, None)
+    }
+
+    /// Provisioning pins the project epoch before it starts. The epoch also detects
+    /// an intervening bind followed by unbind, when no binding row remains.
+    pub(crate) fn tool_epoch(&self) -> Result<i64> {
+        Ok(self
+            .db
+            .connection()
+            .query_row(
+                "SELECT epoch FROM project_tool_epochs WHERE project_id=?1",
+                [self.project_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0))
+    }
+
+    pub(crate) fn bind_tool_at_epoch(
+        &mut self,
+        tool_name: &str,
+        generation: i64,
+        if_version: Option<i64>,
+        expected_epoch: Option<i64>,
+    ) -> Result<i64> {
         let tool_name = name(tool_name)?;
         let tx = self
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let epoch_before: i64 = tx
+            .query_row(
+                "SELECT epoch FROM project_tool_epochs WHERE project_id=?1",
+                [self.project_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        require(
+            expected_epoch.is_none_or(|expected| expected == epoch_before),
+            "Tool binding changed during provisioning; published generation remains available",
+        )?;
         let candidate: Option<(String, String, String)> = tx
             .query_row(
                 "SELECT name,platform,architecture FROM tool_generations WHERE id=?1",
@@ -661,6 +813,30 @@ impl Service {
         self.resolve_tools_with_overlay(paths, None)
     }
 
+    /// A file callback may use Android transport only while its original attempt
+    /// still owns execution and the same registered SDK remains bound.
+    pub(crate) fn authorize_android_transport(
+        &self,
+        task: i64,
+        attempt: i64,
+        token: &str,
+        sdk: &Path,
+    ) -> Result<()> {
+        let owned: bool = self.db.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE a.id=?1 AND a.task_id=?2 AND a.execution_token=?3 AND a.state='running' AND t.project_id=?4)",
+            rusqlite::params![attempt, task, token, self.project_id], |row| row.get(0))?;
+        require(
+            owned,
+            "Android transport belongs to a different or stopped attempt",
+        )?;
+        require(
+            self.tools()?.iter().any(|tool| {
+                tool.name == "android-sdk" && tool.bound && tool.ready && tool.path == sdk
+            }),
+            "Android transport SDK binding changed; Recheck before using adb",
+        )
+    }
+
     /// Resolve a prospective binding without writing it. The returned leases pin
     /// both the candidate and every already bound dependency for the probe's life.
     fn resolve_tools_with_overlay(
@@ -703,8 +879,18 @@ impl Service {
                 writable_roots: vec![],
                 installations: vec![],
                 _leases: vec![],
+                _android_runtime: None,
             });
         }
+        let has_android = tools.iter().any(|tool| tool.name == "android-sdk");
+        require(
+            !has_android || !self.agent_network()?,
+            "Android adb transport isolation requires project agent network Off; set it in Configuration, then Recheck",
+        )?;
+        if has_android {
+            crate::runner::sandbox::available_android_transport()?;
+        }
+        let has_android_image = has_android_image(&tools);
         let lease_root = paths.data.join("tools").join(".leases");
         fs::create_dir_all(&lease_root)?;
         let mut leases = Vec::new();
@@ -713,6 +899,9 @@ impl Service {
         let mut env = Vec::new();
         let mut digest = Sha256::new();
         digest.update(epoch.to_le_bytes());
+        if has_android {
+            digest.update(b"android-tool-path-v2");
+        }
         let mut description = Vec::new();
         let mut installations = Vec::new();
         for tool in tools {
@@ -760,23 +949,7 @@ impl Service {
                 }
             }
             if tool.name == "android-sdk" {
-                let root = tool.path.to_string_lossy().into_owned();
-                env.push(("ANDROID_HOME".into(), root.clone()));
-                env.push(("ANDROID_SDK_ROOT".into(), root));
-                for relative in ["platform-tools", "cmdline-tools/latest/bin", "emulator"] {
-                    let path = tool.path.join(relative);
-                    if path.is_dir() {
-                        sdk_bins.push(path);
-                    }
-                }
-                for component in &tool.components {
-                    if component.starts_with("cmdline-tools;") {
-                        let path = tool.path.join(component.replace(';', "/")).join("bin");
-                        if path.is_dir() && !sdk_bins.contains(&path) {
-                            sdk_bins.push(path);
-                        }
-                    }
-                }
+                add_android_sdk_bindings(&tool, &mut env, &mut sdk_bins);
             }
             description.push(format!(
                 "{} {} {} ({})",
@@ -813,17 +986,93 @@ impl Service {
             ("PUB_CACHE", downloads.join("pub")),
             ("GRADLE_USER_HOME", runtime.join("gradle")),
             ("ANDROID_USER_HOME", runtime.join("android")),
+            ("ANDROID_EMULATOR_HOME", runtime.join("android")),
         ] {
             fs::create_dir_all(&path)?;
             env.push((key.into(), path.to_string_lossy().into_owned()));
+        }
+        let mut android_runtime = None;
+        let mut writable_roots = vec![downloads, runtime.clone()];
+        if has_android {
+            let owned = crate::scratch::Scratch::new(&runtime.join("android-avd-runs"))?;
+            let wrappers = owned.path().join("bin");
+            fs::create_dir(&wrappers)?;
+            for name in ["adb", "emulator"] {
+                let script = format!(
+                    "#!/bin/sh\nexec \"$KTASK_ANDROID_CLIENT\" __android_client {name} \"$@\"\n"
+                );
+                fs::write(wrappers.join(name), script)?;
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(wrappers.join(name), fs::Permissions::from_mode(0o755))?;
+            }
+            env.push((
+                "KTASK_ANDROID_WRAPPER_DIR".into(),
+                wrappers.to_string_lossy().into_owned(),
+            ));
+            env.push((
+                "KTASK_ANDROID_CLIENT".into(),
+                paths.executable.to_string_lossy().into_owned(),
+            ));
+            let avd = owned.path().join("avd");
+            fs::create_dir_all(&avd)?;
+            add_android_template(owned.path(), has_android_image, &mut env)?;
+            env.push((
+                "ANDROID_AVD_HOME".into(),
+                avd.to_string_lossy().into_owned(),
+            ));
+            env.push((
+                "KTASK_ANDROID_RUNTIME_ROOT".into(),
+                owned.path().to_string_lossy().into_owned(),
+            ));
+            let port_root = paths.runtime.join("adb-ports");
+            fs::create_dir_all(&port_root)?;
+            let mut port = None;
+            for number in 35_000..45_000 {
+                let lease = crate::scratch::open_lock(&port_root.join(format!("{number}.lock")))?;
+                if lease.try_lock().is_ok()
+                    && std::net::TcpListener::bind(("127.0.0.1", number)).is_ok()
+                {
+                    port = Some(number);
+                    leases.push(lease);
+                    break;
+                }
+            }
+            let port = port.ok_or_else(|| {
+                Error::Conflict("No isolated adb server port is available".into())
+            })?;
+            env.push(("ADB_SERVER_SOCKET".into(), format!("tcp:localhost:{port}")));
+            env.push(("ANDROID_ADB_SERVER_PORT".into(), port.to_string()));
+            let emulator_port_root = paths.runtime.join("emulator-ports");
+            fs::create_dir_all(&emulator_port_root)?;
+            let mut emulator_port = None;
+            for number in (5554..=5682).step_by(2) {
+                let lease =
+                    crate::scratch::open_lock(&emulator_port_root.join(format!("{number}.lock")))?;
+                if lease.try_lock().is_ok()
+                    && std::net::TcpListener::bind(("127.0.0.1", number)).is_ok()
+                    && std::net::TcpListener::bind(("127.0.0.1", number + 1)).is_ok()
+                {
+                    emulator_port = Some(number);
+                    leases.push(lease);
+                    break;
+                }
+            }
+            let emulator_port = emulator_port.ok_or_else(|| {
+                Error::Conflict("No exclusive Android emulator port pair is available".into())
+            })?;
+            env.push(("KTASK_EMULATOR_PORT".into(), emulator_port.to_string()));
+            env.push(("ANDROID_SERIAL".into(), format!("emulator-{emulator_port}")));
+            writable_roots.push(owned.path().to_path_buf());
+            android_runtime = Some(owned);
         }
         Ok(ResolvedTools {
             env,
             fingerprint: format!("{:x}", digest.finalize()),
             description: description.join("; "),
-            writable_roots: vec![downloads, runtime],
+            writable_roots,
             installations,
             _leases: leases,
+            _android_runtime: android_runtime,
         })
     }
 }
@@ -845,6 +1094,144 @@ mod tests {
         fs::write(&binary, format!("#!/bin/sh\necho 'rg {version}'\n"))?;
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
         Ok(path)
+    }
+
+    #[test]
+    fn android_bindings_lease_distinct_adb_ports_and_reset_owned_avd_state() -> Result<()> {
+        let sandbox = Scratch::new(&std::env::temp_dir().join("ktask-test-scratch"))?;
+        let root = sandbox.path();
+        let paths = Paths {
+            config: root.join("config/ktask-dev"),
+            state: root.join("state/ktask-dev"),
+            cache: root.join("cache/ktask-dev"),
+            data: root.join("data/ktask-dev"),
+            runtime: root.join("run/ktask-dev"),
+            executable: std::env::current_exe()?,
+        };
+        let sdk = root.join("sdk");
+        fs::create_dir_all(sdk.join("platform-tools"))?;
+        fs::write(sdk.join("platform-tools/adb"), b"adb fixture")?;
+        let image = sdk.join("system-images/android-36/google_apis/x86_64");
+        fs::create_dir_all(&image)?;
+        fs::write(image.join("source.properties"), "Pkg.Revision=7\n")?;
+        fs::write(image.join("system.img"), b"small fixture")?;
+        let first_root = root.join("first");
+        let second_root = root.join("second");
+        fs::create_dir(&first_root)?;
+        fs::create_dir(&second_root)?;
+        let mut first = Service::open(Database::open_in(&paths.state)?, &first_root, None)?;
+        let id = first.register_tool(
+            &paths,
+            &Registration {
+                name: "android-sdk",
+                version: "fixture-1",
+                platform: std::env::consts::OS,
+                architecture: std::env::consts::ARCH,
+                components: &[
+                    "platform-tools".into(),
+                    "system-images;android-36;google_apis;x86_64".into(),
+                ],
+                path: &sdk,
+                managed: false,
+            },
+        )?;
+        let mut second = Service::open(Database::open_in(&paths.state)?, &second_root, None)?;
+        first.bind_tool("android-sdk", id, Some(0))?;
+        second.bind_tool("android-sdk", id, Some(0))?;
+        let one = first.resolve_tools(&paths)?;
+        let two = second.resolve_tools(&paths)?;
+        let value = |env: &[(String, String)], key: &str| {
+            env.iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value.clone())
+                .unwrap()
+        };
+        let one_avd = PathBuf::from(value(&one.env, "ANDROID_AVD_HOME"));
+        let two_avd = PathBuf::from(value(&two.env, "ANDROID_AVD_HOME"));
+        assert!(one_avd.is_dir() && two_avd.is_dir() && one_avd != two_avd);
+        let template_path = PathBuf::from(value(&one.env, "KTASK_ANDROID_AVD_TEMPLATE"));
+        let template: serde_json::Value =
+            serde_json::from_slice(&fs::read(template_path)?).expect("valid reviewed template");
+        assert_eq!(
+            template["system_image"],
+            "system-images;android-36;google_apis;x86_64"
+        );
+        let one_socket = value(&one.env, "ADB_SERVER_SOCKET");
+        let two_socket = value(&two.env, "ADB_SERVER_SOCKET");
+        assert!(one_socket.starts_with("tcp:localhost:") && one_socket != two_socket);
+        assert!(!one_socket.ends_with(":5037") && !two_socket.ends_with(":5037"));
+        let one_port = value(&one.env, "KTASK_EMULATOR_PORT");
+        let two_port = value(&two.env, "KTASK_EMULATOR_PORT");
+        assert_ne!(one_port, two_port);
+        assert_eq!(
+            value(&one.env, "ANDROID_SERIAL"),
+            format!("emulator-{one_port}")
+        );
+        assert_eq!(
+            value(&two.env, "ANDROID_SERIAL"),
+            format!("emulator-{two_port}")
+        );
+        fs::write(one_avd.join("disk.img"), "isolated")?;
+        drop(one);
+        assert!(!one_avd.exists() && two_avd.exists());
+        drop(two);
+        assert!(!two_avd.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn versioned_android_cli_registers_and_resolves_without_latest_alias() -> Result<()> {
+        let sandbox = Scratch::new(&std::env::temp_dir().join("ktask-test-scratch"))?;
+        let root = sandbox.path();
+        let paths = Paths {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+            data: root.join("data"),
+            runtime: root.join("runtime"),
+            executable: std::env::current_exe()?,
+        };
+        let project = root.join("project");
+        fs::create_dir(&project)?;
+        let sdk = root.join("sdk");
+        fs::create_dir_all(sdk.join("cmdline-tools/16/bin"))?;
+        let binary = sdk.join("cmdline-tools/16/bin/android");
+        fs::write(&binary, b"#!/bin/sh\nexit 0\n")?;
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
+        let mut service = Service::open(Database::open_in(&paths.state)?, &project, None)?;
+        let id = service.register_tool(
+            &paths,
+            &Registration {
+                name: "android-sdk",
+                version: "cmdline-tools-16",
+                platform: std::env::consts::OS,
+                architecture: std::env::consts::ARCH,
+                components: &[],
+                path: &sdk,
+                managed: false,
+            },
+        )?;
+        service.bind_tool("android-sdk", id, Some(0))?;
+        let registered = service
+            .tools()?
+            .into_iter()
+            .find(|tool| tool.id == id)
+            .expect("SDK");
+        assert!(registered.ready);
+        assert_eq!(
+            candidate_binary(&registered, "android"),
+            Some(binary.clone())
+        );
+        let resolved = service.resolve_tools(&paths)?;
+        let path = resolved
+            .env
+            .iter()
+            .find(|(name, _)| name == "PATH")
+            .expect("PATH")
+            .1
+            .clone();
+        assert!(std::env::split_paths(&path).any(|entry| entry == binary.parent().unwrap()));
+        Ok(())
     }
 
     #[test]
@@ -905,7 +1292,11 @@ mod tests {
             cache: root.join("cache/ktask-dev"),
             data: root.join("data/ktask-dev"),
             runtime: root.join("run/ktask-dev"),
-            executable: std::env::current_exe()?,
+            executable: std::env::current_exe()?
+                .parent()
+                .and_then(Path::parent)
+                .expect("target/debug/deps")
+                .join("ktask-dev"),
         };
         let image = "system-images;android-36;google_apis;x86_64".to_string();
         let mut ids = Vec::new();
@@ -917,9 +1308,18 @@ mod tests {
             fs::set_permissions(&emulator, fs::Permissions::from_mode(0o755))?;
             let mut components = vec!["emulator".to_string()];
             if index == 1 {
+                fs::create_dir_all(install.join("platform-tools"))?;
+                fs::create_dir_all(install.join("licenses"))?;
+                fs::write(
+                    install.join("licenses/android-sdk-license"),
+                    crate::application::provision::ANDROID_SDK_LICENSE_SHA1,
+                )?;
+                let adb = install.join("platform-tools/adb");
+                fs::write(&adb, b"#!/bin/sh\necho adb\n")?;
+                fs::set_permissions(&adb, fs::Permissions::from_mode(0o755))?;
                 let directory = install.join(image.replace(';', "/"));
                 fs::create_dir_all(&directory)?;
-                fs::write(directory.join("source.properties"), b"Pkg.Revision=1.0\n")?;
+                fs::write(directory.join("source.properties"), b"Pkg.Revision=1.0\nAndroidVersion.ApiLevel=36\nSystemImage.TagId=google_apis\nSystemImage.Abi=x86_64\n")?;
                 fs::write(directory.join("system.img"), b"system image one")?;
                 components.push(image.clone());
             }
@@ -989,6 +1389,58 @@ mod tests {
                 ids[1]
             );
         }
+        // Metadata and a registered signature alone do not admit a broken
+        // external emulator for a new image requirement.
+        let broken = root.join("sdk-1/emulator/emulator");
+        fs::write(&broken, b"#!/bin/sh\nexit 17\n")?;
+        let registry_project = root.join("registry-project");
+        let mut registry =
+            Service::open(Database::open_in(&paths.state)?, &registry_project, None)?;
+        registry.refresh_external_tool(
+            &paths,
+            ids[1],
+            1,
+            "36",
+            &["emulator".into(), image.clone()],
+        )?;
+        let project = root.join("project-broken-external");
+        fs::create_dir(&project)?;
+        let mut waiting = Service::open(Database::open_in(&paths.state)?, &project, None)?;
+        let task = waiting.create(
+            &[Definition {
+                title: "External Android admission".into(),
+                goal: "Use image".into(),
+                criteria: vec!["working emulator".into()],
+                kind: Kind::Ai,
+                category: None,
+                lenses: None,
+                models: std::array::from_fn(|_| None),
+                attempt_limit: None,
+                timeout_ms: None,
+                stage_timeout_ms: None,
+            }],
+            None,
+            true,
+        )?[0];
+        let version = waiting.current_task()?.unwrap().version;
+        waiting.declare_requirement(
+            VersionedTask { id: task, version },
+            &Requirement {
+                kind: "sdk_component".into(),
+                item: image.clone(),
+                version: None,
+                scope: "project".into(),
+                stage: "execution".into(),
+                reproduction: "image required".into(),
+            },
+        )?;
+        waiting.ensure_requirement_bindings(
+            task,
+            &root.join("cache/workers"),
+            &paths.executable,
+            &paths,
+        )?;
+        assert!(waiting.tools()?.iter().all(|tool| !tool.bound));
         let project = root.join("registry-project");
         let mut service = Service::open(Database::open_in(&paths.state)?, &project, None)?;
         let image_path = root
@@ -1004,7 +1456,7 @@ mod tests {
                 .unwrap()
                 .ready
         );
-        service.refresh_external_tool(&paths, ids[1], 1, "36", &["emulator".into(), image])?;
+        service.refresh_external_tool(&paths, ids[1], 2, "36", &["emulator".into(), image])?;
         assert!(
             service
                 .tools()?

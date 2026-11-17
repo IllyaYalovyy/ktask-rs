@@ -16,6 +16,8 @@ mod lifecycle;
 mod persistence;
 #[path = "cases/profiles.rs"]
 mod profiles;
+#[path = "cases/provision.rs"]
+mod provision;
 #[path = "cases/runner.rs"]
 mod runner;
 #[path = "cases/storage.rs"]

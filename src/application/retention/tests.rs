@@ -270,8 +270,9 @@ fn admission_during_a_scan_is_kept_by_its_settlement_and_competing_scans_are_rej
     assert!(!settle_scan(&service.db, walking.revision, &walking.walk)?);
     assert!(!settle_scan(&service.db, scan.revision, &scan.walk)?);
     assert_eq!(projected_allocation(&service.db)?.bytes, settled.bytes);
-    // What changed during the scan is measured again by the next one.
-    assert_eq!(bounded_allocation_scan(&service.db)?, ScanProgress::Visited);
+    // Admitted claims keep the result conservative without another full walk.
+    assert_eq!(bounded_allocation_scan(&service.db)?, ScanProgress::Settled);
+    assert_eq!(projected_allocation(&service.db)?.bytes, settled.bytes);
     Ok(())
 }
 
@@ -1884,30 +1885,51 @@ fn cleanup_holds_the_write_lock_only_briefly() -> Result<()> {
                 // NORMAL still syncs the header of a restarted WAL; the commit needs no other sync.
                 db.connection()
                     .execute_batch("PRAGMA wal_autocheckpoint=0; PRAGMA synchronous=NORMAL")?;
-                // Retry every millisecond for at most 5 s, so the measured wait is how long
-                // cleanup holds the lock rather than where SQLite's backoff happens to wake.
+                // BEGIN IMMEDIATE may also spend time syncing a new WAL header after it
+                // acquires the lock. Measure the busy-handler interval, which is the part
+                // waiting for cleanup's lock, rather than attributing that I/O to cleanup.
+                std::thread_local! {
+                    static BUSY_STARTED: std::cell::Cell<Option<(std::time::Instant, std::time::Duration)>> = const { std::cell::Cell::new(None) };
+                    static CLEANUP_THREAD: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+                }
+                CLEANUP_THREAD.with(|thread| *thread.borrow_mut() = Some(cleanup_thread));
+                fn preempted() -> std::time::Duration {
+                    CLEANUP_THREAD.with(|thread| {
+                        thread
+                            .borrow()
+                            .as_deref()
+                            .map_or(std::time::Duration::ZERO, scheduler_delay)
+                    }) + scheduler_delay(Path::new("/proc/thread-self"))
+                }
                 fn poll(retries: i32) -> bool {
+                    if retries == 0 {
+                        BUSY_STARTED.with(|started| {
+                            started.set(Some((std::time::Instant::now(), preempted())))
+                        });
+                    }
                     std::thread::sleep(std::time::Duration::from_millis(1));
                     retries < 5000
                 }
                 db.connection().busy_handler(Some(poll))?;
                 // A loaded machine can also keep the lock holder or this writer runnable but off
                 // a CPU; that time is the machine's. Cleanup's work and I/O under the lock count.
-                let preempted = || {
-                    scheduler_delay(&cleanup_thread)
-                        + scheduler_delay(Path::new("/proc/thread-self"))
-                };
                 let mut longest = std::time::Duration::ZERO;
                 let mut longest_wall = std::time::Duration::ZERO;
                 let mut turns = 0;
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                     let started = std::time::Instant::now();
-                    let delayed = preempted();
                     db.connection().execute_batch("BEGIN IMMEDIATE")?;
-                    let waited = started.elapsed();
-                    longest_wall = longest_wall.max(waited);
-                    longest =
-                        longest.max(waited.saturating_sub(preempted().saturating_sub(delayed)));
+                    let wall = started.elapsed();
+                    let busy = BUSY_STARTED.with(|started| started.take()).map_or(
+                        std::time::Duration::ZERO,
+                        |(started, delayed)| {
+                            started
+                                .elapsed()
+                                .saturating_sub(preempted().saturating_sub(delayed))
+                        },
+                    );
+                    longest_wall = longest_wall.max(wall);
+                    longest = longest.max(busy);
                     // Requested only after a cleanup call returned, so this lock was taken after
                     // its checkpoint: this write is the first since the WAL could restart.
                     let first = restart.load(std::sync::atomic::Ordering::SeqCst);

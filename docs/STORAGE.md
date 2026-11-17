@@ -19,6 +19,10 @@ binds one generation per tool name with a monotonic row version that survives un
 `project_tool_epochs` advances on every bind or unbind, including a return to the unbound
 environment, so older successful checks cannot be reused after a binding change. The
 explicit instance's XDG data `tools/` directory holds managed generations and lease locks.
+`provision_policy` opts a project into reviewed automatic installation; absent rows mean
+manual setup. `provision_consents` records a human's acceptance of the exact source SDK
+license files and bootstrap executable for a recipe. A different source or digest needs new
+consent.
 External registrations refer to user owned
 trees without adopting them. A changed external signature makes a generation unready until an
 explicit version guarded refresh. Live attempts hold shared leases; refresh needs an exclusive
@@ -222,7 +226,10 @@ erDiagram
     projects ||--o{ project_models : "project_id"
     projects ||--o{ project_tools : "project_id"
     projects ||--o| project_tool_epochs : "project_id"
+    projects ||--o| provision_policy : "project_id"
+    projects ||--o{ provision_consents : "project_id"
     tool_generations ||--o{ project_tools : "generation_id"
+    tool_generations ||--o{ provision_consents : "source_id"
     model_profiles ||--o{ model_profile_roles : "profile_id"
     model_profiles ||--o{ projects : "profile_id"
     model_profiles ||--o{ user_defaults : "default_profile_id"
@@ -733,6 +740,7 @@ workspace lease and explicit worker recovery still govern execution.
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
 | `project_id` | INTEGER | no | Owning project. |
+| `generation` | INTEGER | no | Increments on each explicit Run; guards continuation after a long install. |
 | `mode` | TEXT | no | queue or one. |
 | `state` | TEXT | no | running, waiting, resume_requested, paused, stopped, completed. |
 | `reason` | TEXT | no | Durable reason for the current scheduler state. |
@@ -985,6 +993,40 @@ Monotonic project environment revision, including transitions back to no binding
 | `epoch` | INTEGER | no | Positive binding revision. |
 
 - PK `(project_id)`.
+- FK `(project_id)` → `projects(id)`.
+
+### provision_policy
+
+Automatic provisioning is explicitly enabled per project. Without a row the project uses
+manual setup; a row version guards concurrent changes.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `project_id` | INTEGER | no | Project whose policy is recorded. |
+| `enabled` | INTEGER | no | 1 enables reviewed recipes; 0 selects manual setup. |
+| `row_version` | INTEGER | no | Positive optimistic policy guard. |
+
+- PK `(project_id)`.
+- FK `(project_id)` → `projects(id)`.
+
+### provision_consents
+
+Human license consent is scoped to a project, reviewed recipe and registered source.
+License and bootstrap digests prevent changed source files from inheriting consent.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `project_id` | INTEGER | no | Project accepting the license. |
+| `recipe` | TEXT | no | Reviewed recipe name. |
+| `source_id` | INTEGER | no | Registered source SDK generation. |
+| `license_sha256` | TEXT | no | Digest of the accepted license files. |
+| `bootstrap_sha256` | TEXT | no | Digest of the accepted command-line tool. |
+| `actor_kind` | TEXT | no | Human actor only. |
+| `actor_name` | TEXT | no | Human actor attribution. |
+| `accepted_at_ms` | INTEGER | no | Acceptance timestamp. |
+
+- PK `(project_id, recipe, source_id)`.
+- FK `(source_id)` → `tool_generations(id)`.
 - FK `(project_id)` → `projects(id)`.
 
 ### project_delivery

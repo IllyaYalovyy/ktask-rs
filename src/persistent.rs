@@ -26,6 +26,7 @@ pub(crate) struct StoredWorkspace {
     /// The stored tasks the screen's projection came from, by id.
     pub(crate) stored: BTreeMap<usize, domain::Task>,
     proposal_job: Option<ProposalJob>,
+    pub(crate) provision_job: Option<ProvisionJob>,
     pending_control: Option<PendingControl>,
     /// Shown instead of "Saved to SQLite" once the saved form's change is committed.
     saved_notice: Option<String>,
@@ -40,6 +41,22 @@ struct ProposalJob {
     cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     handle:
         Option<std::thread::JoinHandle<Result<crate::runner::agent::BreakdownProposal, String>>>,
+}
+
+pub(crate) struct ProvisionJob {
+    pub(crate) cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) handle: Option<std::thread::JoinHandle<Result<i64, String>>>,
+    pub(crate) waiting_task: Option<crate::application::provision::ProvisionTarget>,
+}
+
+impl Drop for ProvisionJob {
+    fn drop(&mut self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 /// Stop or Mark done on a running task: the worker was asked to pause, and the control
@@ -64,6 +81,7 @@ impl StoredWorkspace {
             service,
             stored: BTreeMap::new(),
             proposal_job: None,
+            provision_job: None,
             pending_control: None,
             saved_notice: None,
             launch_issue: None,
@@ -352,6 +370,53 @@ impl StoredWorkspace {
         match result {
             Ok(proposal) => screen.dialog = Some(breakdown_review(job.target, proposal)),
             Err(error) => screen.message(error),
+        }
+        true
+    }
+
+    fn poll_provision(&mut self, screen: &mut Screen) -> bool {
+        if !self
+            .provision_job
+            .as_ref()
+            .and_then(|job| job.handle.as_ref())
+            .is_some_and(std::thread::JoinHandle::is_finished)
+        {
+            return false;
+        }
+        let mut job = self
+            .provision_job
+            .take()
+            .expect("finished provisioning job");
+        let result = job.handle.take().expect("provisioning handle").join();
+        let message = match result {
+            Ok(Ok(id)) => {
+                match screen
+                    .instance
+                    .paths()
+                    .map_err(|e| e.to_string())
+                    .and_then(|paths| {
+                        crate::runner::continue_after_provision(
+                            &mut self.service,
+                            &paths,
+                            job.waiting_task.clone(),
+                        )
+                        .map_err(|e| e.to_string())
+                    }) {
+                    Ok((rechecked, resumed)) => format!(
+                        "Android SDK generation #{id} published; dependency rechecked: {rechecked}; resumed: {resumed}"
+                    ),
+                    Err(error) => format!(
+                        "Android SDK generation #{id} published; dependency recheck needs attention: {error}"
+                    ),
+                }
+            }
+            Ok(Err(error)) => format!("Android provisioning stopped: {error}"),
+            Err(_) => "Android provisioning panicked; inspect progress and retry explicitly".into(),
+        };
+        if let Err(error) = self.reload(screen) {
+            screen.message(error);
+        } else {
+            screen.message(message);
         }
         true
     }
@@ -975,7 +1040,8 @@ impl StoredWorkspace {
             | DialogKind::StorageConfirm(_)
             | DialogKind::BuildCache(_)
             | DialogKind::BuildCacheConfirm(_)
-            | DialogKind::Tools => {
+            | DialogKind::Tools
+            | DialogKind::ToolPreview => {
                 return Err("Simulation is available only with --demo".into());
             }
         }
@@ -1235,6 +1301,7 @@ impl Backend for StoredWorkspace {
                 | DialogKind::BuildCache(_)
                 | DialogKind::BuildCacheConfirm(_)
                 | DialogKind::Tools
+                | DialogKind::ToolPreview
         ) {
             return self.save_project_config(screen, dialog);
         }
@@ -1290,7 +1357,7 @@ impl Backend for StoredWorkspace {
     }
 
     fn tick(&mut self, screen: &mut Screen) -> bool {
-        if self.poll_proposal(screen) || self.poll_control(screen) {
+        if self.poll_provision(screen) || self.poll_proposal(screen) || self.poll_control(screen) {
             return true;
         }
         if screen.dialog.is_some() || screen.last_tick.elapsed() < Duration::from_millis(500) {

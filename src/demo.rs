@@ -849,6 +849,7 @@ impl Backend for DemoWorkspace {
             | DialogKind::BuildCache(_)
             | DialogKind::BuildCacheConfirm(_)
             | DialogKind::Tools
+            | DialogKind::ToolPreview
             | DialogKind::StoredImport(_)
             | DialogKind::FileOverwrite { .. } => {
                 return Err("Disk operations require SQLite mode".into());

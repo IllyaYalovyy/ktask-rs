@@ -76,6 +76,9 @@
 - Run `make check`. Use compiler/Clippy diagnostics and behavioral tests, not custom
   file/function line limits. Use complexity and duplication measurements to guide review;
   do not invent metric gates or refactor solely to satisfy a number.
+- Resource-limit tests use explicit small per-test budgets and fixtures. Never create a
+  production-scale capacity fixture inside an enclosing task's `TMPDIR`; its guardian
+  accounts for those files too. Assert the specific capacity failure and cleanup.
 - Keep prompts, specs, and reports short. State the outcome, constraints, and proof.
 - Self-hosting: `ktask` supervises development; `ktask-dev` and tests own separate app roots.
   Never infer the instance from cwd, build profile, filename, or inherited environment.

@@ -89,6 +89,37 @@ pub enum CacheAction {
 pub enum ToolAction {
     /// Show this instance's registered generations and this project's bindings.
     List,
+    /// Show the fixed Android package, source, consent, capacity and destination plan.
+    ProvisionPlan {
+        /// Reviewed provisioning recipe name.
+        recipe: String,
+        /// Registered external Android SDK generation ID.
+        source: i64,
+    },
+    /// Enable or disable managed provisioning for this project (human actor only).
+    ProvisionMode {
+        /// Manual or automatic provisioning policy for this project.
+        #[arg(value_enum)]
+        mode: ProvisionMode,
+    },
+    /// Record human consent for the exact license files of a registered SDK.
+    ProvisionConsent {
+        /// Reviewed provisioning recipe name.
+        recipe: String,
+        /// Registered external Android SDK generation ID.
+        source: i64,
+    },
+    /// Run the fixed recipe in owned staging and bind the published generation.
+    ProvisionInstall {
+        /// Reviewed provisioning recipe name.
+        recipe: String,
+        /// Registered external Android SDK generation ID.
+        source: i64,
+    },
+    /// Show the last provisioning progress or outcome for this project.
+    ProvisionStatus,
+    /// Cancel this project's active installer; its staging is reclaimed after reaping.
+    ProvisionCancel,
     /// Register an existing installation. External trees stay user owned and read only.
     Register {
         /// Normalized tool name, such as rg or android-sdk.
@@ -139,6 +170,12 @@ pub enum ToolAction {
         #[arg(long)]
         if_version: i64,
     },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum ProvisionMode {
+    Manual,
+    Automatic,
 }
 
 #[derive(Subcommand)]

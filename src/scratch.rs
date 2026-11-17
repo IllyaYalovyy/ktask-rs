@@ -76,9 +76,21 @@ impl Scratch {
         self.dir.as_ref().expect("open scratch directory").path()
     }
 
+    /// Pass a duplicate lease into a supervised child so a killed guardian cannot
+    /// reclaim staging while that child still owns an open process tree.
+    pub fn child_lease(&self) -> io::Result<File> {
+        self._lease.try_clone()
+    }
+
     /// Normal exits report cleanup errors; unwinding also gets TempDir's fallback cleanup.
     pub fn close(mut self) -> io::Result<()> {
         self.cleanup()
+    }
+
+    /// Keep an owned directory when an external writer could still be alive.
+    /// The next owner must recover that writer before sweeping abandoned files.
+    pub(crate) fn preserve(mut self) -> PathBuf {
+        self.dir.take().expect("open scratch directory").keep()
     }
 
     fn cleanup(&mut self) -> io::Result<()> {

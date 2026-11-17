@@ -302,6 +302,63 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
     if let Command::Tool { action } = command {
         use args::ToolAction;
         let reply = match action {
+            ToolAction::ProvisionPlan { recipe, source } => {
+                let plan = service.provision_plan(&paths, recipe, *source)?;
+                output::Reply {
+                    text: format!(
+                        "{}\n",
+                        serde_json::to_string_pretty(&plan).expect("plan JSON")
+                    ),
+                    data: json!({"plan":plan}),
+                }
+            }
+            ToolAction::ProvisionMode { mode } => {
+                let enabled = matches!(mode, args::ProvisionMode::Automatic);
+                service.set_provision_enabled(enabled)?;
+                output::Reply {
+                    text: format!(
+                        "provisioning mode: {}\n",
+                        if enabled { "automatic" } else { "manual" }
+                    ),
+                    data: json!({"mode":if enabled { "automatic" } else { "manual" }}),
+                }
+            }
+            ToolAction::ProvisionConsent { recipe, source } => {
+                service.consent_to_provision(recipe, *source)?;
+                output::Reply {
+                    text: format!("recorded human license consent for {recipe}\n"),
+                    data: json!({"action":"consented","recipe":recipe}),
+                }
+            }
+            ToolAction::ProvisionInstall { recipe, source } => {
+                let waiting = service.provision_target()?;
+                let id = service.provision_android(&paths, recipe, *source)?;
+                let (rechecked, resumed) =
+                    crate::runner::continue_after_provision(&mut service, &paths, waiting)?;
+                output::Reply {
+                    text: format!(
+                        "published and bound Android SDK generation #{id}; dependency rechecked: {rechecked}; resumed: {resumed}\n"
+                    ),
+                    data: json!({"action":"provisioned","id":id,"rechecked":rechecked,"resumed":resumed}),
+                }
+            }
+            ToolAction::ProvisionStatus => {
+                let status = service.provision_status(&paths)?;
+                output::Reply {
+                    text: format!(
+                        "{}\n",
+                        serde_json::to_string_pretty(&status).expect("status JSON")
+                    ),
+                    data: json!({"status":status}),
+                }
+            }
+            ToolAction::ProvisionCancel => {
+                service.cancel_provision(&paths)?;
+                output::Reply {
+                    text: "provisioning cancellation requested\n".into(),
+                    data: json!({"action":"cancellation_requested"}),
+                }
+            }
             ToolAction::List => {
                 let tools = service.tools()?;
                 output::Reply {

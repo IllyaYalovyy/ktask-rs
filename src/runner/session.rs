@@ -6,7 +6,7 @@ use super::{
     workspace,
 };
 use crate::{
-    application::{Service, lifecycle::State, require},
+    application::{Service, VersionedTask, lifecycle::State, provision::ProvisionTarget, require},
     instance::Paths,
     storage::{Error, Result},
 };
@@ -24,6 +24,57 @@ pub fn supervisor_alive(service: &Service) -> Result<bool> {
 /// conditional state change elects one window to launch the next supervisor.
 pub fn continue_after_intervention(service: &mut Service, paths: &Paths) -> Result<bool> {
     continue_session(service, paths, true)
+}
+
+/// After an explicit tool install, recheck only the task that originally waited.
+/// A saved run-one session resumes that attempt; a queue session uses its existing
+/// continuation guard. An install without a saved session never starts new work.
+pub fn continue_after_provision(
+    service: &mut Service,
+    paths: &Paths,
+    target: Option<ProvisionTarget>,
+) -> Result<(bool, bool)> {
+    let Some(target) = target else {
+        return Ok((false, false));
+    };
+    if !service.provision_target_is_current(&target)? {
+        return Ok((false, false));
+    }
+    let Some(task) = service.current_task()? else {
+        return Ok((false, false));
+    };
+    let rechecked = service.recheck_dependencies(
+        VersionedTask {
+            id: task.id,
+            version: task.version,
+        },
+        &paths.cache.join("workers"),
+        &paths.executable,
+        paths,
+    )?;
+    if !rechecked {
+        return Ok((false, false));
+    }
+    let Some(session) = service.execution_session()? else {
+        return Ok((true, false));
+    };
+    if Some(session.generation) != target.session_generation
+        || Some(session.mode.clone()) != target.mode
+    {
+        return Ok((true, false));
+    }
+    if !matches!(session.state.as_str(), "waiting" | "resume_requested") {
+        return Ok((true, false));
+    }
+    let resumed = match session.mode.as_str() {
+        "queue" => continue_after_intervention(service, paths)?,
+        "one" if !supervisor_alive(service)? => {
+            background(service, paths, false, false)?;
+            true
+        }
+        _ => false,
+    };
+    Ok((true, resumed))
 }
 
 /// The exiting supervisor may claim an intervention already recorded by

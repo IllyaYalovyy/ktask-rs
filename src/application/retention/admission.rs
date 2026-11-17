@@ -188,21 +188,22 @@ pub(super) fn scan_base(tx: &Connection) -> Result<(i64, i64, i64)> {
 
 /// Install a completed walk. Claims admitted while it ran, and those of reservations
 /// pending when it started, are added to the measurement instead of discarding it, so a
-/// busy instance still settles. Only the scan's own revision may settle it; if anything
-/// changed meanwhile, the next housekeeping call measures again.
+/// busy instance still settles. Only the scan's own revision may settle it. The admitted
+/// delta makes the result conservative even if the admission generation changed during
+/// the walk, so a continuous writer cannot force a second full walk before launch.
 pub(super) fn settle_scan(db: &Database, revision: i64, walk: &Walk) -> Result<bool> {
     let known = known_allocation(db.state_dir())?;
     super::database::unsynced(db.connection(), || {
         let tx =
             rusqlite::Transaction::new_unchecked(db.connection(), TransactionBehavior::Immediate)?;
-        let scan: Option<(i64, i64, i64)> = tx
+        let scan: Option<(i64, i64)> = tx
         .query_row(
-            "SELECT generation,base_bytes,base_files FROM instance_allocation_scan WHERE id=1 AND revision=?1 AND complete=1",
+            "SELECT base_bytes,base_files FROM instance_allocation_scan WHERE id=1 AND revision=?1 AND complete=1",
             [revision],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
-        let Some((started, base_bytes, base_files)) = scan else {
+        let Some((base_bytes, base_files)) = scan else {
             return Ok(false);
         };
         let (generation, projected_bytes, projected_files): (i64, i64, i64) = tx.query_row(
@@ -221,16 +222,9 @@ pub(super) fn settle_scan(db: &Database, revision: i64, walk: &Walk) -> Result<b
         "UPDATE instance_storage_admission SET projected_bytes=?1,projected_files=?2,known_bytes=?3,known_files=?4,generation=generation+1 WHERE id=1",
         params![bytes, files, known.bytes, known.files],
     )?;
-        // An unchanged instance is settled at the new generation; otherwise the old one
-        // differs from it and the next call starts a fresh walk.
-        let settled = if generation == started {
-            generation + 1
-        } else {
-            started
-        };
         tx.execute(
         "UPDATE instance_allocation_scan SET generation=?1,complete=2,revision=revision+1,bytes=?2,files=?3,database_bytes=?4,wal_bytes=?5 WHERE id=1",
-        params![settled, observed.bytes, observed.files, observed.database, observed.wal],
+        params![generation.saturating_add(1), observed.bytes, observed.files, observed.database, observed.wal],
     )?;
         tx.commit()?;
         Ok(true)

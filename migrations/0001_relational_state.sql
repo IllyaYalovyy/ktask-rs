@@ -68,6 +68,26 @@ CREATE TABLE project_tool_epochs (
     epoch INTEGER NOT NULL CHECK (epoch > 0)
 ) STRICT;
 
+-- Provisioning is opt in per project. Consent is bound to the exact license files
+-- from a registered SDK, and only a human actor can record it.
+CREATE TABLE provision_policy (
+    project_id INTEGER PRIMARY KEY REFERENCES projects(id),
+    enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),
+    row_version INTEGER NOT NULL DEFAULT 1 CHECK (row_version > 0)
+) STRICT;
+
+CREATE TABLE provision_consents (
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    recipe TEXT NOT NULL,
+    source_id INTEGER NOT NULL REFERENCES tool_generations(id),
+    license_sha256 TEXT NOT NULL CHECK (length(license_sha256) = 64),
+    bootstrap_sha256 TEXT NOT NULL CHECK (length(bootstrap_sha256) = 64),
+    actor_kind TEXT NOT NULL CHECK (actor_kind = 'human'),
+    actor_name TEXT NOT NULL,
+    accepted_at_ms INTEGER NOT NULL,
+    PRIMARY KEY(project_id, recipe, source_id)
+) STRICT;
+
 -- Project delivery is guarded independently of task and preference versions.
 CREATE TABLE project_delivery (
     project_id INTEGER PRIMARY KEY REFERENCES projects(id),
@@ -83,6 +103,7 @@ CREATE TABLE project_delivery (
 -- Attempt state remains solely on attempts; this records the scheduler's policy.
 CREATE TABLE execution_sessions (
     project_id INTEGER PRIMARY KEY REFERENCES projects(id),
+    generation INTEGER NOT NULL DEFAULT 1 CHECK (generation > 0),
     mode TEXT NOT NULL CHECK (mode IN ('queue', 'one')),
     state TEXT NOT NULL CHECK (state IN ('running', 'waiting', 'resume_requested', 'paused', 'stopped', 'completed')),
     reason TEXT NOT NULL CHECK (length(trim(reason)) > 0),

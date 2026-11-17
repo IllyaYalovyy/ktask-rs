@@ -3,6 +3,7 @@ use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionSession {
+    pub generation: i64,
     pub mode: String,
     pub state: String,
     pub reason: String,
@@ -13,13 +14,14 @@ impl Service {
         self.db
             .connection()
             .query_row(
-                "SELECT mode,state,reason FROM execution_sessions WHERE project_id=?1",
+                "SELECT generation,mode,state,reason FROM execution_sessions WHERE project_id=?1",
                 [self.project_id],
                 |row| {
                     Ok(ExecutionSession {
-                        mode: row.get(0)?,
-                        state: row.get(1)?,
-                        reason: row.get(2)?,
+                        generation: row.get(0)?,
+                        mode: row.get(1)?,
+                        state: row.get(2)?,
+                        reason: row.get(3)?,
                     })
                 },
             )
@@ -34,7 +36,7 @@ impl Service {
         self.db.connection().execute(
             "INSERT INTO execution_sessions(project_id,mode,state,reason,updated_at_ms)
              VALUES (?1,?2,'running','Run requested',?3)
-             ON CONFLICT(project_id) DO UPDATE SET mode=excluded.mode,state='running',reason='Run requested',updated_at_ms=excluded.updated_at_ms",
+             ON CONFLICT(project_id) DO UPDATE SET generation=generation+1,mode=excluded.mode,state='running',reason='Run requested',updated_at_ms=excluded.updated_at_ms",
             params![self.project_id, mode, now_ms()],
         )?;
         Ok(())

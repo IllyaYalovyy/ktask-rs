@@ -86,6 +86,38 @@ pub fn launch(instance: instance::Instance) -> std::process::ExitCode {
     }
     if std::env::args_os()
         .nth(1)
+        .is_some_and(|a| a == "__android_sidecar")
+    {
+        return if runner::android_transport::sidecar().is_ok() {
+            std::process::ExitCode::SUCCESS
+        } else {
+            std::process::ExitCode::FAILURE
+        };
+    }
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|a| a == "__android_client")
+    {
+        let mut args = std::env::args().skip(2);
+        let Some(operation) = args.next() else {
+            return std::process::ExitCode::FAILURE;
+        };
+        let token = std::env::var("KTASK_ANDROID_TOKEN").unwrap_or_default();
+        return match runner::callback::android(&token, &operation, &args.collect::<Vec<_>>()) {
+            Ok(output) => {
+                use std::io::Write;
+                let _ = std::io::stdout().write_all(&output.stdout);
+                let _ = std::io::stderr().write_all(&output.stderr);
+                std::process::ExitCode::from(output.code.clamp(0, 255) as u8)
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
+    if std::env::args_os()
+        .nth(1)
         .is_some_and(|a| a == "__dependency_probe")
     {
         let mut args = std::env::args().skip(2);

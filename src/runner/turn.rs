@@ -53,6 +53,24 @@ pub(crate) fn provider_invocation(
     })
 }
 
+fn protect_installations(
+    invocation: &mut Invocation,
+    access: Access,
+    policy: &sandbox::WorkspaceWrite<'_>,
+    installations: &[PathBuf],
+) -> Result<()> {
+    if access == Access::Write {
+        if !installations.is_empty() {
+            invocation.sandbox = Some(policy.provider_mount()?);
+        }
+    } else if let Some(mount) = invocation.sandbox.as_mut() {
+        for path in installations {
+            mount.protect(path)?;
+        }
+    }
+    Ok(())
+}
+
 /// The model configured for `role`, one of [`ROLES`].
 pub(super) fn role_model<'r>(run: &'r Run, role: &str) -> Option<&'r ModelConfig> {
     ROLES
@@ -344,14 +362,17 @@ impl Turn<'_> {
         )?;
         if access == Access::Write {
             invocation.env.extend(ctx.tools.env.clone());
-            if !ctx.tools.installations.is_empty() {
-                invocation.sandbox = Some(policy.provider_mount()?);
-            }
-        } else if let Some(sandbox) = invocation.sandbox.as_mut() {
-            for path in &ctx.tools.installations {
-                sandbox.protect(path)?;
+            if let Some((_, wrappers)) = ctx
+                .tools
+                .env
+                .iter()
+                .find(|(key, _)| key == "KTASK_ANDROID_WRAPPER_DIR")
+                && let Some((_, path)) = invocation.env.iter_mut().find(|(key, _)| key == "PATH")
+            {
+                *path = format!("{wrappers}:{path}");
             }
         }
+        protect_installations(&mut invocation, access, &policy, &ctx.tools.installations)?;
         invocation.callback = (access == Access::Write).then(|| callback::Capability {
             project: ctx.workspace.root.clone(),
             state: ctx.paths.state.clone(),
@@ -509,5 +530,76 @@ fn exit_failure(run: &Run, stream: &provider::Stream, role: &str, code: i32) -> 
                 }
             },
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{fs, net::TcpListener};
+
+    #[test]
+    fn android_provider_launch_keeps_api_transport_and_denies_agent_host_transport() -> Result<()> {
+        let root = tempfile::tempdir_in(std::env::temp_dir())?;
+        let sdk = root.path().join("sdk");
+        let scratch = root.path().join("scratch");
+        fs::create_dir_all(sdk.join("platform-tools"))?;
+        fs::create_dir_all(&scratch)?;
+        fs::write(sdk.join("platform-tools/adb"), b"fixture")?;
+        let sentinel = TcpListener::bind("127.0.0.1:0")?;
+        sentinel.set_nonblocking(true)?;
+        let port = sentinel.local_addr()?.port();
+        let paths = Paths {
+            config: root.path().join("config"),
+            state: root.path().join("state"),
+            cache: root.path().join("cache"),
+            data: root.path().join("data"),
+            runtime: root.path().join("runtime"),
+            executable: std::env::current_exe()?,
+        };
+        let mut invocation = provider_invocation(
+            Provider::Codex,
+            provider::Launch {
+                args: vec![],
+                env: vec![],
+                schema_file: None,
+                prompt: String::new(),
+            },
+            Access::Write,
+            root.path(),
+            &paths,
+            scratch.clone(),
+            root.path().join("worker.lock"),
+        )?;
+        let installations = vec![sdk];
+        let policy = sandbox::WorkspaceWrite::new(root.path(), &[], &installations, false);
+        protect_installations(&mut invocation, Access::Write, &policy, &installations)?;
+        invocation.executable = "/bin/bash".into();
+        invocation.args = vec!["-c".into(), format!("echo api >/dev/tcp/127.0.0.1/{port}")];
+        let provider = invocation.sandbox.expect("provider sandbox");
+        assert!(
+            provider
+                .command(&invocation.executable, &scratch)
+                .args(&invocation.args)
+                .status()?
+                .success()
+        );
+        assert!(
+            sentinel.accept().is_ok(),
+            "provider could not reach API sentinel"
+        );
+        let child = policy.probe_mount()?;
+        assert!(
+            !child
+                .command(&invocation.executable, &scratch)
+                .args(&invocation.args)
+                .status()?
+                .success()
+        );
+        assert!(
+            sentinel.accept().is_err(),
+            "agent child reached unrelated host sentinel"
+        );
+        Ok(())
     }
 }

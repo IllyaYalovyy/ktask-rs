@@ -72,6 +72,7 @@ pub mod preferences;
 pub mod profiles;
 pub mod progress;
 pub mod prompt;
+pub mod provision;
 mod queries;
 pub mod retention;
 pub(crate) mod scoped;
