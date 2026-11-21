@@ -9,6 +9,7 @@ mod attempt;
 mod backoff;
 pub(crate) mod callback;
 mod check_report;
+mod check_timeout;
 mod checks;
 mod context;
 pub mod control;
@@ -59,6 +60,9 @@ enum Outcome {
         report: String,
         critical: bool,
     },
+    CheckTimedOut,
+    CheckTimeoutDecision(check_timeout::Judgment),
+    CheckTimeoutDiagnosisUnavailable(&'static str, String),
     Paused,
     DeliveryBlocked(String),
     Question(String),

@@ -1,6 +1,6 @@
 //! Findings are normal work within one durable attempt, not failed attempts.
 use super::{
-    Context, Outcome, checks,
+    Context, Outcome, check_timeout, checks,
     judge::{judge, judge_attempt},
     turn::ai,
 };
@@ -45,35 +45,18 @@ pub(super) fn run(
         if let Some(wait) = ctx.environment_wait(service, run, "during the attempt")? {
             return Ok(wait);
         }
-        if matches!(
-            progress.phase,
-            Phase::Review | Phase::Validate | Phase::Decide | Phase::Complete
-        ) {
-            let observed = ctx.workspace.fingerprint(&ctx.scratch_root())?;
-            if observed != progress.verified_tree
-                || ctx.tools.fingerprint != progress.verified_environment
-            {
-                let paths = if progress.verified_tree.is_empty() {
-                    "unavailable (no verified tree recorded)".into()
-                } else {
-                    ctx.workspace
-                        .tree_difference(&progress.verified_tree, &observed)?
-                };
-                let cause = if observed != progress.verified_tree {
-                    "Worktree changed since verification"
-                } else {
-                    "Tool environment changed since verification"
-                };
-                let change = format!(
-                    "{cause} · expected tree {}; observed tree {observed}; differing paths: {paths}; expected environment {}; observed environment {} · rerunning checks, review and validation; repair count retained",
-                    progress.verified_tree, progress.verified_environment, ctx.tools.fingerprint
-                );
-                progress.phase = Phase::Check;
-                progress.evidence = format!("{}\n{change}", progress.context);
-                progress.verified_tree.clear();
-                progress.verified_environment.clear();
-                service.output(run, "system", &change)?;
-                service.save_progress(run, &progress)?;
+        refresh_verified_proof(service, run, ctx, &mut progress)?;
+        if matches!(progress.phase, Phase::Baseline | Phase::Check)
+            && let Some(timeout) = service.pending_check_timeout(run)?
+        {
+            match check_timeout::resolve(service, run, ctx, &mut progress, &timeout) {
+                Ok(Some(outcome)) => return Ok(outcome),
+                Ok(None) => continue,
+                Err(error) => {
+                    return Ok(Outcome::DeliveryBlocked(format!(
+                        "Check timeout diagnosis could not continue: {error}; timed-out check retained. Resume to retry diagnosis"
+                    )));
+                }
             }
         }
         let answers = service.answers(run)?;
@@ -176,6 +159,9 @@ pub(super) fn run(
             // A replanned attempt has ended; its successor opens with the judge.
             Phase::Replanned => return Err(Error::Conflict("Unknown workflow phase".into())),
         };
+        if matches!(outcome, Outcome::CheckTimedOut) {
+            continue;
+        }
         if progress.phase == Phase::Baseline {
             match outcome {
                 Outcome::Passed(_) => {
@@ -322,6 +308,48 @@ pub(super) fn run(
     }
 }
 
+/// Before using verified evidence, send changed work or tools through verification again.
+fn refresh_verified_proof(
+    service: &mut Service,
+    run: &Run,
+    ctx: &Context<'_>,
+    progress: &mut Progress,
+) -> Result<()> {
+    if !matches!(
+        progress.phase,
+        Phase::Review | Phase::Validate | Phase::Decide | Phase::Complete
+    ) {
+        return Ok(());
+    }
+    let observed = ctx.workspace.fingerprint(&ctx.scratch_root())?;
+    let worktree_changed = observed != progress.verified_tree;
+    if !worktree_changed && ctx.tools.fingerprint == progress.verified_environment {
+        return Ok(());
+    }
+
+    let paths = if progress.verified_tree.is_empty() {
+        "unavailable (no verified tree recorded)".into()
+    } else {
+        ctx.workspace
+            .tree_difference(&progress.verified_tree, &observed)?
+    };
+    let cause = if worktree_changed {
+        "Worktree changed since verification"
+    } else {
+        "Tool environment changed since verification"
+    };
+    let change = format!(
+        "{cause} · expected tree {}; observed tree {observed}; differing paths: {paths}; expected environment {}; observed environment {} · rerunning checks, review and validation; repair count retained",
+        progress.verified_tree, progress.verified_environment, ctx.tools.fingerprint
+    );
+    progress.phase = Phase::Check;
+    progress.evidence = format!("{}\n{change}", progress.context);
+    progress.verified_tree.clear();
+    progress.verified_environment.clear();
+    service.output(run, "system", &change)?;
+    service.save_progress(run, progress)
+}
+
 /// What the reviewers examine: the attempt's change from its baseline to the verified tree.
 fn review_scope(service: &Service, run: &Run, ctx: &Context<'_>, tree: &str) -> Result<String> {
     let original_base = service
@@ -374,7 +402,12 @@ fn finding_headline(report: &str) -> String {
         .to_owned()
 }
 
-fn fix_checks(service: &Service, run: &Run, progress: &mut Progress, report: &str) -> Result<()> {
+pub(super) fn fix_checks(
+    service: &Service,
+    run: &Run,
+    progress: &mut Progress,
+    report: &str,
+) -> Result<()> {
     progress.round += 1;
     progress.context = format!(
         "Supervisor checks failed, repair round {}/{REPAIR_ROUNDS}. Make every check pass by fixing the cause; never skip, weaken or delete a test. Preserve useful work and the full goal.\nPrior failure context (scope only; not proof of current success):\n{report}",
@@ -456,12 +489,24 @@ fn opening_progress(
         .skip(1)
         .find_map(|a| a.outcome.clone())
         .unwrap_or_default();
+    let last_failed_before_implementation = task
+        .attempts
+        .iter()
+        .rev()
+        .nth(1)
+        .is_some_and(|a| a.failure_category.as_deref() == Some("check_timeout"))
+        && service
+            .prior_progress(run)?
+            .is_some_and(|p| p.phase == Phase::Baseline);
     let mut progress = match opening {
         Opening::Fresh { verify } => fresh(if verify {
             Phase::Baseline
         } else {
             Phase::Implement
         }),
+        Opening::Retry if last_failed_before_implementation && run.runs_checks() => {
+            fresh(Phase::Baseline)
+        }
         Opening::Retry if ctx.workspace.clean()? => fresh(Phase::Implement),
         Opening::Retry => {
             let mut progress = fresh(Phase::Check);

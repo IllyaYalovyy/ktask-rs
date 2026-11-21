@@ -16,6 +16,8 @@ pub const BASELINE_RED: &str = "Checks fail before any work started";
 pub const CHECKS_STILL_FAIL: &str = "Checks still fail";
 /// A persistent check failure survived both direct repair and a judged repair.
 pub const CHECKS_NO_PROGRESS: &str = "Automatic check repair made no progress";
+pub const CHECK_TIMEOUT_STOP: &str = "Supervisor check timeout needs attention";
+pub const CHECK_TIMEOUT_DIAGNOSIS_LIMIT: &str = "Check timeout diagnosis hit its stage time limit";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stop {
@@ -49,7 +51,18 @@ pub fn unresolvable(task: &Task) -> Option<Stop> {
             .count()
     };
     let active_ms: i64 = attempts.iter().map(|a| a.active_ms).sum();
-    let (unresolved, next) = if outcome.starts_with(CHECKS_NO_PROGRESS) {
+    let (unresolved, next) = if attempt.failure_category.as_deref() == Some("check_timeout") {
+        (
+            "Automatic recovery stopped. Read the transcript and decision, then use check-set to adjust the named check before retrying."
+                .to_owned(),
+            "Configuration > Checks or check-set: adjust the named check, then r Retry",
+        )
+    } else if outcome.starts_with(CHECK_TIMEOUT_DIAGNOSIS_LIMIT) {
+        (
+            "The remediation model ran out of stage time while investigating the check. Raise the stage time limit before retrying.".to_owned(),
+            "c Models: raise or switch off the stage time limit, then r Retry",
+        )
+    } else if outcome.starts_with(CHECKS_NO_PROGRESS) {
         (
             "Repeated checks on unchanged source still fail after direct repair and a remediation plan; automatic repair is stopped to avoid repeating ineffective work."
                 .to_owned(),

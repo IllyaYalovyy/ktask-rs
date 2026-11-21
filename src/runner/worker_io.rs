@@ -139,25 +139,27 @@ impl Limit {
         if ctx.interrupted(service, run)? {
             return Ok(Some(Outcome::Paused));
         }
+        if let Some(outcome) = ctx.deadline_outcome(run) {
+            return Ok(Some(outcome));
+        }
         if let Some(limit) = self
             .timeout
             .filter(|&n| self.started.elapsed().as_millis() >= n as u128)
         {
-            return Ok(Some(Outcome::Failed(
-                "timeout",
-                if self.ai {
+            return Ok(Some(if self.ai {
+                Outcome::Failed(
+                    "timeout",
                     format!(
                         "{}: the agent ran {} without returning a result; work and transcript retained",
                         crate::application::stop::STAGE_LIMIT,
                         crate::application::limits::label(Some(limit))
-                    )
-                } else {
-                    "Individual supervisor check timeout reached; work and transcript retained"
-                        .into()
-                },
-            )));
+                    ),
+                )
+            } else {
+                Outcome::CheckTimedOut
+            }));
         }
-        Ok(ctx.deadline_outcome(run))
+        Ok(None)
     }
 }
 

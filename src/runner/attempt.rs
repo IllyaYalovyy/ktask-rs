@@ -237,8 +237,11 @@ pub(super) fn run(service: &mut Service, launch: &Launch<'_>, begun: Begun) -> R
     };
     let result = drive(service, &run, &mut context, opening, delivery);
     // A transport error during a provider wait belongs to the same outage.
-    let had_rate_wait =
-        matches!(&result, Ok(Outcome::Failed("transport", _))) && service.rate_waits(&run)? > 0;
+    let had_rate_wait = matches!(
+        &result,
+        Ok(Outcome::Failed("transport", _)
+            | Outcome::CheckTimeoutDiagnosisUnavailable("transport", _))
+    ) && service.rate_waits(&run)? > 0;
     let outcome = settle_result(result, had_rate_wait);
     if !launch.queue
         && let Outcome::Passed(report) = &outcome
@@ -261,7 +264,15 @@ pub(super) fn run(service: &mut Service, launch: &Launch<'_>, begun: Begun) -> R
 
 fn settle_result(result: Result<Outcome>, had_rate_wait: bool) -> Outcome {
     match result {
-        Ok(Outcome::Failed("transport", _)) if had_rate_wait => Outcome::RateLimit(None),
+        Ok(
+            Outcome::Failed("transport", _)
+            | Outcome::CheckTimeoutDiagnosisUnavailable("transport", _),
+        ) if had_rate_wait => Outcome::RateLimit(None),
+        Ok(Outcome::CheckTimeoutDiagnosisUnavailable(category, message)) => {
+            Outcome::DeliveryBlocked(format!(
+                "Check timeout diagnosis unavailable ({category}): {message}. Restore the remediation provider, then Resume"
+            ))
+        }
         Ok(outcome) => outcome,
         Err(error) => match resource_limit(&error) {
             Some(reason) => Outcome::DeliveryBlocked(reason.into()),
@@ -496,7 +507,11 @@ fn settle(
         }
         Outcome::Replanned(judgment) => replan(service, launch, run, judgment),
         Outcome::Failed(category, message) => fail(service, launch, run, category, &message),
-        Outcome::Passed(_) | Outcome::Changes { .. } => unreachable!(),
+        Outcome::Passed(_)
+        | Outcome::Changes { .. }
+        | Outcome::CheckTimedOut
+        | Outcome::CheckTimeoutDecision(_)
+        | Outcome::CheckTimeoutDiagnosisUnavailable(_, _) => unreachable!(),
     }
 }
 

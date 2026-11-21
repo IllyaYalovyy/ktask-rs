@@ -1,5 +1,5 @@
 //! Persisted progress within an attempt; a review finding is ordinary work.
-use super::{execution::Run, *};
+use super::{check_timeout::TimeoutDecision, execution::Run, *};
 
 pub const REPAIR_ROUNDS: i64 = 10;
 pub(crate) const BASELINE_FAILURE_NOTE: &str = "The starting checks failed before implementation. Repair their cause and complete the original task; baseline repair alone does not satisfy the goal.";
@@ -133,6 +133,24 @@ impl Service {
 
     /// The runner owns this row through its attempt token, including during resume.
     pub fn save_progress(&mut self, run: &Run, progress: &Progress) -> Result<()> {
+        self.save_workflow(run, progress, None)
+    }
+
+    pub(crate) fn save_timeout_decision(
+        &mut self,
+        run: &Run,
+        progress: &Progress,
+        decision: TimeoutDecision<'_>,
+    ) -> Result<()> {
+        self.save_workflow(run, progress, Some(decision))
+    }
+
+    fn save_workflow(
+        &mut self,
+        run: &Run,
+        progress: &Progress,
+        decision: Option<TimeoutDecision<'_>>,
+    ) -> Result<()> {
         let tx = self
             .db
             .connection_mut()
@@ -164,6 +182,9 @@ impl Service {
              VALUES (?1,?2,?3,?4,'workflow.progress','info',?5)",
             params![self.project_id, run.task, run.attempt, now_ms(), label],
         )?;
+        if let Some(decision) = decision {
+            decision.record(&tx, run)?;
+        }
         tx.commit()?;
         Ok(())
     }

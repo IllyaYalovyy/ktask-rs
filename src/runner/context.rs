@@ -62,13 +62,18 @@ impl Context<'_> {
     }
 
     pub(super) fn deadline_outcome(&self, run: &Run) -> Option<Outcome> {
-        run.definition
-            .timeout_ms
-            .filter(|&limit| self.earlier_task_ms.saturating_add(self.active_ms()) >= limit)
+        self.remaining_task_ms(run)
+            .filter(|&remaining| remaining <= 0)
             .map(|_| Outcome::Failed(
                 "agent",
                 "Active time limit reached (configured task-wide limit); work and evidence retained. Retry restarts the limit".into(),
             ))
+    }
+
+    pub(super) fn remaining_task_ms(&self, run: &Run) -> Option<i64> {
+        run.definition.timeout_ms.map(|limit| {
+            limit.saturating_sub(self.earlier_task_ms.saturating_add(self.active_ms()))
+        })
     }
 
     /// Pause or Stop reached this attempt; see [`interrupted`].

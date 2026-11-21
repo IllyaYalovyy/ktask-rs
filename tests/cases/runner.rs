@@ -6102,6 +6102,18 @@ case "$prompt" in *"Fix what Context reports"*) repair=yes; cp "$HOME/packet-$mo
 [ -n "$session" ] || session="session-$model-$$"
 printf '{{"type":"thread.started","thread_id":"%s"}}\n' "$session"
 printf '%s\n' "$model" >> "$HOME/provider-invocations"
+if [ '{mode}' = check-timeout ] && [ "$model" = remediation ]; then
+ transcript=$(sed -n '/"name":"build"/s/.*"path":"\([^"]*\)".*/\1/p' "$packet/artifacts.jsonl" | head -n 1)
+ [ -n "$transcript" ] || exit 70
+ cat "$transcript" > "$HOME/timeout-judge-transcript" || exit 71
+ if [ -f "$HOME/hold-timeout-judge" ]; then
+  touch "$HOME/timeout-judge-started"
+  sleep 30
+ fi
+ cat "$HOME/timeout-judge-reply"
+ if grep -q '"type":"turn.failed"' "$HOME/timeout-judge-reply"; then exit 2; fi
+ exit 0
+fi
 if [ '{mode}' = android-transport ] || [ '{mode}' = android-transport-cancel ]; then
  if [ "$model" = execution ]; then
   bash -c 'echo api >/dev/tcp/127.0.0.1/'"$KTASK_TEST_SENTINEL_PORT" || exit 51
@@ -6422,6 +6434,9 @@ if [ '{mode}' = normal ] && {{ [ "$model" = review ] || [ "$model" = validation 
   if (printf 'write-test' >> "$artifact") 2>/dev/null; then exit 21; fi
  fi
 fi
+if [ '{mode}' = check-timeout ] && [ "$repair" = yes ] && [ -f "$HOME/repair-timeout-source" ]; then
+ printf 'repaired\n' > check-ready.txt
+fi
 if [ "$repair" = yes ]; then
  if [ '{mode}' = judge-noisy ]; then printf 'verified repair\n' >> result.txt
  elif [ '{mode}' = resolve-conflict ] || [ '{mode}' = resolve-conflict-pause ]; then printf 'remote\nverified\n' > result.txt; elif [ '{mode}' = reuse-changed ] || [ '{mode}' = lens-flow ]; then printf 'verified after repair\n' > result.txt; else printf 'verified\n' > result.txt; fi
@@ -6432,6 +6447,18 @@ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":
 "##
         );
         support::write_executable(&self.scratch.path().join("bin/codex"), script)?;
+        Ok(())
+    }
+    fn timeout_judgment(&self, judgment: Value) -> Result {
+        let response = serde_json::json!({ "judgment": judgment });
+        let message = serde_json::json!({
+            "type": "item.completed",
+            "item": { "type": "agent_message", "text": response.to_string() },
+        });
+        fs::write(
+            self.scratch.path().join("timeout-judge-reply"),
+            format!("{message}\n{{\"type\":\"turn.completed\",\"usage\":{{}}}}\n"),
+        )?;
         Ok(())
     }
     /// These fixtures choose behavior by turn, independently of the requested model ID.
@@ -12024,15 +12051,20 @@ fn configured_task_deadline_counts_earlier_repairs_and_retry_restarts_it() -> Re
 fn real_tui_individual_check_timeout_remains_separate_from_task_deadline() -> Result {
     for mouse in [false, true] {
         let f = Fixture::new()?;
+        f.provider("check-timeout")?;
+        f.timeout_judgment(serde_json::json!({
+            "action": "escalate", "reason": "The integration fixture needs an owner decision."
+        }))?;
         f.add("Keep supervisor checks bounded")?;
         f.add("Blocked behind timed out check")?;
+        let command = "printf 'suite started\\n'; sleep 1; printf 'suite completed\\n'";
         f.ok(&[
             "check-set",
             "build",
             "--command",
-            "sleep 30",
+            command,
             "--timeout-ms",
-            "200",
+            "400",
         ])?;
         if mouse {
             f.ok(&["edit", "1", "--timeout-ms", "30000"])?;
@@ -12041,52 +12073,379 @@ fn real_tui_individual_check_timeout_remains_separate_from_task_deadline() -> Re
         }
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 34)?;
         t.screen("check timeout fixture ready", |s| s.contains("r Run queue"))?;
-        if mouse {
-            t.click("r Run queue")?;
-        } else {
-            t.send("r")?;
-        }
+        press(&mut t, mouse, "r Run queue", "r")?;
         println!(
             "INDIVIDUAL CHECK TIMEOUT mouse={mouse}\n{}",
             t.screen("individual check timeout", |s| s
                 .contains("EXECUTION STOPPED")
-                && s.contains("Individual supervisor check timeout reached")
-                && s.contains("failed 3 attempts in a row"))?
+                && s.contains("Supervisor check timeout needs attention")
+                && s.contains("Retry"))?
         );
         f.supervisor_stopped()?;
         let failed = f.ok(&["show", "1"])?;
-        println!("INDIVIDUAL CHECK TIMEOUT TASK {failed}");
-        assert!(failed["attempts"][0]["active_ms"].as_i64().unwrap() >= 200);
-        assert!(
-            !failed["attempts"][0]["outcome"]
-                .as_str()
-                .unwrap()
-                .contains("task-wide")
-        );
+        assert_eq!(failed["attempts"].as_array().unwrap().len(), 1, "{failed}");
+        assert!(failed["attempts"][0]["active_ms"].as_i64().unwrap() >= 400);
+        assert_eq!(failed["attempts"][0]["failure_category"], "check_timeout");
+        let outcome = failed["attempts"][0]["outcome"].as_str().unwrap();
+        assert!(outcome.contains("The integration fixture needs an owner decision"));
         assert_eq!(
             f.db()?.connection().query_row(
-                "SELECT failure_category FROM attempts WHERE task_id=1",
+                "SELECT count(*) FROM attempt_steps WHERE role='check'",
                 [],
-                |r| r.get::<_, String>(0),
+                |r| r.get::<_, i64>(0),
             )?,
-            "timeout"
+            1
         );
-        // Two automatic repairs (judge, then repair worker) before the stop.
-        assert_eq!(failed["attempts"].as_array().unwrap().len(), 3);
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-            "execution\nremediation\nexecution\nremediation\nexecution\n"
+            "execution\nremediation\n"
         );
+        let log = fs::read_to_string(f.scratch.path().join("timeout-judge-transcript"))?;
+        assert!(log.contains("suite started") && !log.contains("suite completed"));
         assert!(
             f.ok(&["show", "2"])?["attempts"]
                 .as_array()
                 .unwrap()
                 .is_empty()
         );
+        f.ok(&[
+            "check-set",
+            "build",
+            "--command",
+            command,
+            "--timeout-ms",
+            "3000",
+        ])?;
+        press(&mut t, mouse, "r Retry", "r")?;
+        let recovered = t.screen("retry after check configuration edit", |s| {
+            s.contains("Queue complete.") && s.contains("History 2")
+        })?;
+        println!("CHECK TIMEOUT MANUAL RETRY mouse={mouse}\n{recovered}");
+        assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+        f.supervisor_stopped()?;
         t.send("q")?;
         t.finish()?;
         f.no_scratch()?;
     }
+    Ok(())
+}
+
+#[test]
+fn real_tui_check_timeout_extension_survives_pause_and_preserves_configuration() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("check-timeout")?;
+        f.timeout_judgment(serde_json::json!({
+            "action": "extend", "reason": "The integration suite started and is making progress."
+        }))?;
+        let hold = f.scratch.path().join("hold-timeout-judge");
+        fs::write(&hold, "")?;
+        if !mouse {
+            f.ok(&["init", "--check-before-task", "on"])?;
+        }
+        f.add("Finish a progressing verification")?;
+        let mut command = String::new();
+        if !mouse {
+            command.push_str("if test -f result.txt; then exit 0; fi; ");
+        }
+        command.push_str(
+            "printf 'suite started\\nstage 1 complete\\n'; sleep 1.3; printf 'suite completed\\n'",
+        );
+        f.ok(&[
+            "check-set",
+            "build",
+            "--command",
+            &command,
+            "--timeout-ms",
+            "1000",
+        ])?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 34)?;
+        t.screen("check timeout fixture ready", |s| s.contains("r Run queue"))?;
+        press(&mut t, mouse, "r Run queue", "r")?;
+        support::eventually("timeout judge read the transcript", || {
+            Ok(f.scratch
+                .path()
+                .join("timeout-judge-started")
+                .exists()
+                .then_some(()))
+        })?;
+        t.screen("supervisor diagnosing timeout", |s| s.contains("p Pause"))?;
+        press(&mut t, mouse, "p Pause", "p")?;
+        let paused = t.screen("timeout diagnosis paused", |s| {
+            s.contains("Paused · runner stopped")
+                && s.contains("Paused; worker stopped, Resume continues the same attempt")
+                && s.contains("[r Resume]")
+        })?;
+        f.supervisor_stopped()?;
+        println!("CHECK TIMEOUT REMEDIATION PAUSED mouse={mouse}\n{paused}");
+        fs::remove_file(&hold)?;
+        press(&mut t, mouse, "r Resume", "r")?;
+        let done = t.screen("check passed with granted time", |s| {
+            s.contains("Queue complete.") && s.contains("History 1")
+        })?;
+        println!("CHECK TIMEOUT EXTENSION PASSED mouse={mouse}\n{done}");
+        let task = f.ok(&["show", "1"])?;
+        assert_eq!(task["attempts"].as_array().unwrap().len(), 1, "{task}");
+        assert_eq!(task["status"], "succeeded");
+        assert_eq!(f.ok(&["checks"])?["checks"][0]["timeout_ms"], 1000);
+        let db = f.db()?;
+        let check_results: Vec<(String, i64)> = db
+            .connection()
+            .prepare("SELECT state, timeout_ms FROM attempt_steps WHERE role='check' ORDER BY id")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        assert_eq!(
+            check_results[0],
+            ("failed".into(), 1000),
+            "{check_results:?}"
+        );
+        assert_eq!(
+            check_results[1],
+            ("succeeded".into(), 2000),
+            "{check_results:?}"
+        );
+        let repair_round: i64 =
+            db.connection()
+                .query_row("SELECT repair_round FROM attempt_progress", [], |r| {
+                    r.get(0)
+                })?;
+        assert_eq!(repair_round, 0);
+        let log = fs::read_to_string(f.scratch.path().join("timeout-judge-transcript"))?;
+        assert!(log.contains("stage 1 complete") && !log.contains("suite completed"));
+        let roles: String = fs::read_to_string(f.scratch.path().join("provider-invocations"))?;
+        let expected = if mouse {
+            "execution\nremediation\nremediation\nreview\nvalidation\n"
+        } else {
+            "remediation\nremediation\nexecution\nreview\nvalidation\n"
+        };
+        assert_eq!(roles, expected);
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn check_timeout_repair_requires_a_change_before_retrying_at_the_same_limit() -> Result {
+    for changed in [true, false] {
+        let f = Fixture::new()?;
+        f.provider("check-timeout")?;
+        f.timeout_judgment(serde_json::json!({
+            "action": "repair", "reason": "The suite is blocked waiting for setup.",
+            "plan": "Supply check-ready.txt to release the waiting check."
+        }))?;
+        if changed {
+            fs::write(f.scratch.path().join("repair-timeout-source"), "")?;
+        }
+        f.add("Repair a stuck verification")?;
+        f.ok(&[
+            "check-set",
+            "build",
+            "--command",
+            "test -f check-ready.txt || { echo 'Waiting for setup'; sleep 30; }",
+            "--timeout-ms",
+            "400",
+        ])?;
+        let run = f.process().args(["run", "--one"]).output()?;
+        let task = f.ok(&["show", "1"])?;
+        assert_eq!(task["attempts"].as_array().unwrap().len(), 1, "{task}");
+        let checks: i64 = f.db()?.connection().query_row(
+            "SELECT count(*) FROM attempt_steps WHERE role='check'",
+            [],
+            |r| r.get(0),
+        )?;
+        if changed {
+            assert!(
+                run.status.success(),
+                "{}",
+                String::from_utf8_lossy(&run.stderr)
+            );
+            assert_eq!(task["status"], "succeeded");
+            assert_eq!(checks, 2);
+        } else {
+            assert_eq!(run.status.code(), Some(4), "{task}");
+            assert_eq!(task["attempts"][0]["failure_category"], "check_timeout");
+            assert_eq!(checks, 1);
+        }
+        let why = fs::read_to_string(f.scratch.path().join("prompt-repair-worker"))?;
+        assert!(why.contains("Supply check-ready.txt"));
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn check_timeout_cannot_extend_twice_or_extend_the_task_deadline() -> Result {
+    let f = Fixture::new()?;
+    f.provider("check-timeout")?;
+    f.timeout_judgment(serde_json::json!({
+        "action": "extend", "reason": "The suite reports ongoing progress."
+    }))?;
+    f.add("Keep check extension bounded")?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        "echo running; sleep 30",
+        "--timeout-ms",
+        "400",
+    ])?;
+    let run = f.process().args(["run", "--one"]).output()?;
+    assert_eq!(run.status.code(), Some(4));
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 1, "{task}");
+    assert_eq!(task["attempts"][0]["failure_category"], "check_timeout");
+    let db = f.db()?;
+    let limits: Vec<i64> = db
+        .connection()
+        .prepare("SELECT timeout_ms FROM attempt_steps WHERE role='check' ORDER BY id")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    assert_eq!(limits, [400, 800]);
+    f.no_scratch()?;
+
+    let f = Fixture::new()?;
+    f.ok(&["init", "--check-before-task", "on"])?;
+    f.add("Stop the whole task while a check runs")?;
+    f.ok(&["edit", "1", "--timeout-ms", "1000"])?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        "echo running; sleep 30",
+        "--timeout-ms",
+        "3000",
+    ])?;
+    let run = f.process().args(["run", "--one"]).output()?;
+    assert_eq!(run.status.code(), Some(4));
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 1, "{task}");
+    let outcome = task["attempts"][0]["outcome"].as_str().unwrap();
+    assert!(outcome.contains("configured task-wide limit"), "{outcome}");
+    assert!(!f.scratch.path().join("provider-invocations").exists());
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn check_timeout_resume_archives_retained_output_before_any_check_rerun() -> Result {
+    let f = Fixture::new()?;
+    f.provider("check-timeout")?;
+    f.timeout_judgment(serde_json::json!({
+        "action": "escalate", "reason": "The retained log shows the suite waiting indefinitely."
+    }))?;
+    f.add("Recover original timed-out check evidence")?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        "echo 'original check transcript'; head -c 512 /dev/zero | tr '\\000' x; sleep 30",
+        "--timeout-ms",
+        "400",
+    ])?;
+    let run = f
+        .process()
+        .env("KTASK_ARTIFACT_FILE_BYTES", "128")
+        .args(["run", "--one"])
+        .output()?;
+    assert!(run.status.success(), "{run:?}");
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("transcript evidence incomplete"),
+        "{run:?}"
+    );
+    assert_eq!(f.ok(&["show", "1"])?["status"], "paused");
+    f.guardian_finished()?;
+    f.no_scratch()?;
+
+    let run = f.process().args(["resume"]).output()?;
+    assert_eq!(run.status.code(), Some(4), "{run:?}");
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 1, "{task}");
+    assert_eq!(task["attempts"][0]["failure_category"], "check_timeout");
+    assert_eq!(
+        f.db()?.connection().query_row(
+            "SELECT count(*) FROM attempt_steps WHERE role='check'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        1
+    );
+    let log = fs::read_to_string(f.scratch.path().join("timeout-judge-transcript"))?;
+    assert!(log.contains("original check transcript"));
+    assert!(log.contains(&"x".repeat(512)));
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn check_timeout_reports_a_rejected_remediation_model_as_configuration() -> Result {
+    let f = Fixture::new()?;
+    f.provider("check-timeout")?;
+    fs::write(
+        f.scratch.path().join("timeout-judge-reply"),
+        r#"{"type":"turn.failed","error":{"status":404,"code":"model_not_found","param":"model","message":"The model `remediation` does not exist or you do not have access to it"}}
+"#,
+    )?;
+    f.add("Report the rejected timeout judge model")?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        "echo running; sleep 30",
+        "--timeout-ms",
+        "400",
+    ])?;
+    let run = f.process().args(["run", "--one"]).output()?;
+    assert_eq!(run.status.code(), Some(4), "{run:?}");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("remediation model rejected"),
+        "{run:?}"
+    );
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 1, "{task}");
+    assert_eq!(task["attempts"][0]["failure_category"], "configuration");
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn check_timeout_diagnosis_transport_failure_after_rate_limit_preserves_wait() -> Result {
+    let f = Fixture::new()?;
+    f.provider("check-timeout")?;
+    let reply = f.scratch.path().join("timeout-judge-reply");
+    fs::write(
+        &reply,
+        "{\"type\":\"turn.failed\",\"error\":{\"message\":\"rate_limit reached\"}}\n",
+    )?;
+    f.add("Preserve timeout evidence while the diagnosis provider is limited")?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        "echo running; sleep 30",
+        "--timeout-ms",
+        "400",
+    ])?;
+    let run = f.limit_wait()?;
+    fs::write(
+        &reply,
+        "{\"type\":\"turn.failed\",\"error\":{\"message\":\"connection reset\"}}\n",
+    )?;
+    f.db()?.connection().execute(
+        "UPDATE attempts SET resume_at_ms=waiting_since_ms WHERE task_id=1",
+        [],
+    )?;
+    f.next_limit_wait()?;
+    let db = f.db()?;
+    let (attempts, checks, waits): (i64, i64, i64) = db.connection().query_row(
+        "SELECT count(*), (SELECT count(*) FROM attempt_steps WHERE role='check'), max(rate_waits) FROM attempts",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    assert_eq!((attempts, checks, waits), (1, 1, 2));
+    f.pause_runner(run)?;
+    f.no_scratch()?;
     Ok(())
 }
 

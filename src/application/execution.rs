@@ -667,10 +667,19 @@ impl Service {
         cursor: i64,
         writer: &mut impl std::io::Write,
     ) -> Result<()> {
+        self.write_output_range(run, (cursor, i64::MAX), writer)
+    }
+
+    pub(crate) fn write_output_range(
+        &self,
+        run: &Run,
+        (start, end): (i64, i64),
+        writer: &mut impl std::io::Write,
+    ) -> Result<()> {
         let mut query = self.db.connection().prepare(
-            "SELECT content FROM attempt_output WHERE attempt_id=?1 AND sequence>?2 ORDER BY sequence",
+            "SELECT content FROM attempt_output WHERE attempt_id=?1 AND sequence>?2 AND sequence<=?3 ORDER BY sequence",
         )?;
-        let mut rows = query.query(params![run.attempt, cursor])?;
+        let mut rows = query.query(params![run.attempt, start, end])?;
         while let Some(row) = rows.next()? {
             writer.write_all(row.get::<_, String>(0)?.as_bytes())?;
         }

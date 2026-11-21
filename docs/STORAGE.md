@@ -280,6 +280,7 @@ erDiagram
     attempts ||--o| attempt_progress : "attempt_id"
     attempts ||--o{ lens_reviews : "attempt_id"
     attempt_steps ||--o| lens_reviews : "step_id"
+    attempt_steps ||--o| check_timeouts : "step_id"
     lens_reviews ||--o{ lens_review_findings : "attempt_id, repair_round, source_tree, ordinal"
     attempts ||--o| attempt_delivery : "attempt_id"
     attempts o|--o{ attempt_delivery : "handoff_claimed_by"
@@ -481,7 +482,7 @@ Durable phase within one attempt. Initial implementation is round zero; at most 
 | `verified_tree` | TEXT | no | Git tree fingerprint binding the retained proof to source content. |
 | `verified_environment` | TEXT | no | Tool environment fingerprint binding retained proof to the verified generation set. |
 | `reset_fresh` | INTEGER | no | Unused; always 0. Kept because V1 reconciliation cannot drop columns. |
-| `why` | TEXT | no | One readable line on why the current fix round runs: the failing check and its first error, the reviewer's summary, or the judge's reason. Empty outside a fix round. |
+| `why` | TEXT | no | A short explanation for the current repair round or a temporary check timeout extension. |
 
 - PK `(attempt_id)`.
 - FK `(attempt_id)` → `attempts(id)`.
@@ -511,8 +512,8 @@ Check counts sum completed Rust test-harness summaries in an actual check's reta
 | `check_name` | TEXT | yes | Check name snapshot for exact definition matching; NULL for historical V1 rows or AI phases. |
 | `command` | TEXT | yes | Shell command executed by the supervisor. |
 | `working_directory` | TEXT | yes | Working directory relative to the project root; validated by runner. |
-| `timeout_ms` | INTEGER | yes | Positive execution timeout. |
-| `source_tree` | TEXT | yes | Git tree fingerprint of the source verified by a stable check; NULL when no stable result was recorded. |
+| `timeout_ms` | INTEGER | yes | Effective execution timeout, including an attempt-specific grant. |
+| `source_tree` | TEXT | yes | Git tree fingerprint used to match a check result or identify the inputs of a timed-out check. |
 | `environment_fingerprint` | TEXT | yes | Bound tool and project environment identity recorded for check reuse; NULL on older or non-check steps. |
 | `reused_from_step_id` | INTEGER | yes | Source check step whose passing result was reused; NULL for actual runs and AI phases. |
 | `exit_code` | INTEGER | yes | Tool exit status; NULL if no exit was observed. |
@@ -555,7 +556,7 @@ One execution against an exact revision; retry creates another row. This is the 
 | `waiting_since_ms` | INTEGER | yes | Start of the current wait; required only while waiting. |
 | `resume_at_ms` | INTEGER | yes | Earliest resume time for a timed wait; NULL means no scheduled time. |
 | `outcome` | TEXT | yes | Nonblank terminal attempt outcome. |
-| `failure_category` | TEXT | yes | rate_limit, timeout, transport, configuration, environment, protocol, check, review, validation, agent, interrupted, unknown. |
+| `failure_category` | TEXT | yes | rate_limit, timeout, check_timeout, transport, configuration, environment, protocol, check, review, validation, agent, interrupted, unknown. |
 | `base_commit` | TEXT | yes | Checkout commit before this attempt, if available. |
 | `head_commit` | TEXT | yes | Resulting commit, if available. |
 | `report` | TEXT | yes | Human-readable summary/evidence; not a serialized entity. |
@@ -591,6 +592,22 @@ A work category exactly as a revision pinned it: the resolved name, the layer it
 
 - PK `(id)`.
 - UQ `(digest)`.
+
+### check_timeouts
+
+A timed-out supervisor check keeps its step and transcript. This row persists remediation across pause and resume. An extension changes the effective limit for the check in the attempt that owns the step.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `step_id` | INTEGER | no | Timed-out check step. |
+| `output_start` | INTEGER | no | Exclusive starting sequence in the attempt output. |
+| `output_end` | INTEGER | no | Inclusive ending sequence. The sequence range can recreate an interrupted transcript publication. |
+| `decision` | TEXT | yes | repair, reconsider, extend or escalate. NULL while the initial diagnosis is pending. |
+| `reason` | TEXT | yes | Reason recorded by remediation. |
+| `extension_ms` | INTEGER | yes | New effective timeout for an extend decision. |
+
+- PK `(step_id)`.
+- FK `(step_id)` → `attempt_steps(id)`.
 
 ### criterion_results
 

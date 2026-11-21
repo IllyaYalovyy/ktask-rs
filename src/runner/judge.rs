@@ -10,8 +10,11 @@ use super::{
 };
 use crate::{
     application::{
-        Actor, ActorKind, Definition, Service, VersionedTask, delivery::Stage, execution::Run,
-        preferences::PlannerApproval, progress::REPAIR_ROUNDS,
+        Actor, ActorKind, Definition, Service, VersionedTask,
+        delivery::Stage,
+        execution::{Run, Step},
+        preferences::PlannerApproval,
+        progress::REPAIR_ROUNDS,
     },
     instance::Paths,
     storage::{Error, Result},
@@ -58,23 +61,6 @@ fn judge_once(
     ctx: &mut Context<'_>,
     failed: i64,
 ) -> Result<Outcome> {
-    let model = role_model(run, "remediation").expect("preflight models");
-    let provider = Provider::of(model)?;
-    let step = service.start_ai_step(
-        run,
-        "remediation",
-        model,
-        &format!("{}#read-only-judge", provider.auth_scope()?),
-        false,
-    )?;
-    service.output(
-        run,
-        "system",
-        &format!(
-            "Fix planning: {}/{} · read-only",
-            model.provider, model.model
-        ),
-    )?;
     let (evidence, judging) = evidence(service, run, ctx, failed)?;
     let packet = crate::scratch::Scratch::new(&ctx.paths.state.join("review-packets"))?;
     let tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
@@ -87,38 +73,14 @@ fn judge_once(
         ctx.paths.executable.display()
     );
     let (prompt, schema) = request(run, &evidence, judging)?;
-    let launch = provider.launch(
-        model,
-        step.provider_session.as_deref(),
-        Access::ReadOnly,
-        false,
-        &schema,
-        prompt,
-    );
-    let mut invocation = provider_invocation(
-        provider,
-        launch,
-        Access::ReadOnly,
-        &ctx.workspace.root,
-        ctx.paths,
-        ctx.scratch_root(),
-        ctx.workspace.worker_lock.clone(),
-    )?;
-    if let Some(sandbox) = invocation.sandbox.as_mut() {
-        for path in &ctx.tools.installations {
-            sandbox.protect(path)?;
-        }
-    }
-    let mut stream = provider::Stream::new(provider);
-    if let Some(outcome) = provider_turn(
+    let (step, stream, outcome) = read_only_turn(
         service,
         run,
-        &step,
         ctx,
-        &invocation,
-        &mut stream,
-        "remediation",
-    )? {
+        ("read-only-judge", "Fix planning"),
+        (prompt, schema),
+    )?;
+    if let Some(outcome) = outcome {
         return Ok(outcome);
     }
     if !stream.completed || stream.failed {
@@ -159,6 +121,63 @@ fn judge_once(
     };
     service.finish_step(&step, true, &summary)?;
     Ok(outcome)
+}
+
+/// Run a read-only remediation turn using the configured provider and protected tools.
+pub(super) fn read_only_turn(
+    service: &mut Service,
+    run: &Run,
+    ctx: &mut Context<'_>,
+    (scope, label): (&str, &str),
+    (prompt, schema): (String, serde_json::Value),
+) -> Result<(Step, provider::Stream, Option<Outcome>)> {
+    let model = role_model(run, "remediation").expect("preflight models");
+    let provider = Provider::of(model)?;
+    let step = service.start_ai_step(
+        run,
+        "remediation",
+        model,
+        &format!("{}#{scope}", provider.auth_scope()?),
+        false,
+    )?;
+    service.output(
+        run,
+        "system",
+        &format!("{label}: {}/{} · read-only", model.provider, model.model),
+    )?;
+    let launch = provider.launch(
+        model,
+        step.provider_session.as_deref(),
+        Access::ReadOnly,
+        false,
+        &schema,
+        prompt,
+    );
+    let mut invocation = provider_invocation(
+        provider,
+        launch,
+        Access::ReadOnly,
+        &ctx.workspace.root,
+        ctx.paths,
+        ctx.scratch_root(),
+        ctx.workspace.worker_lock.clone(),
+    )?;
+    if let Some(sandbox) = invocation.sandbox.as_mut() {
+        for path in &ctx.tools.installations {
+            sandbox.protect(path)?;
+        }
+    }
+    let mut stream = provider::Stream::new(provider);
+    let outcome = provider_turn(
+        service,
+        run,
+        &step,
+        ctx,
+        &invocation,
+        &mut stream,
+        "remediation",
+    )?;
+    Ok((step, stream, outcome))
 }
 
 /// Which decision the judge makes, and so which judgments it may return.

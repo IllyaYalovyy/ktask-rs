@@ -44,12 +44,16 @@ pub(super) fn run(
                 critical: true,
             });
         }
-        if let Some(source) = service.reusable_check(check, tree, &ctx.tools.fingerprint)? {
+        let mut check = check.clone();
+        if let Some(extended) = service.check_extension_for(run, check.id)? {
+            check.timeout_ms = extended;
+        }
+        if let Some(source) = service.reusable_check(&check, tree, &ctx.tools.fingerprint)? {
             let transcript = ctx.paths.state.join(&source.transcript);
             if !source.transcript.is_empty() && transcript.is_file() {
                 service.reuse_check(
                     run,
-                    check,
+                    &check,
                     tree,
                     &ctx.tools.fingerprint,
                     &source,
@@ -66,7 +70,7 @@ pub(super) fn run(
                 evidence.push_str(&format!(
                     "\nSupervisor check evidence: {}",
                     serde_json::json!({
-                        "name": check.name, "command": check.command, "exit_code": 0,
+                        "name": check.name, "command": check.command, "exit_code": 0, "timeout_ms": check.timeout_ms,
                         "environment_fingerprint": ctx.tools.fingerprint,
                         "transcript": transcript, "reused_from_attempt": source.attempt,
                         "reused_from_step": source.step, "current_counts": source.counts,
@@ -75,6 +79,9 @@ pub(super) fn run(
                 ));
                 continue;
             }
+        }
+        if service.reconsider_check_timeout(run, &check, tree, &ctx.tools.fingerprint)? {
+            return Ok(Outcome::CheckTimedOut);
         }
         match backoff::bounded(
             service,
@@ -85,7 +92,7 @@ pub(super) fn run(
                 retained: "transcript retained",
             },
             |outcome| matches!(outcome, Outcome::Failed("environment", _)),
-            |service, ctx| run_recorded(service, run, ctx, check, tree),
+            |service, ctx| run_recorded(service, run, ctx, &check, tree),
         )? {
             Outcome::Passed(recorded) => evidence.push_str(&recorded),
             other => return Ok(other),
@@ -108,7 +115,7 @@ fn run_recorded(
         Outcome::Passed(_) => Outcome::Passed(format!(
             "\nSupervisor check evidence: {}",
             serde_json::json!({
-                "name": check.name, "command": check.command, "exit_code": 0,
+                "name": check.name, "command": check.command, "exit_code": 0, "timeout_ms": check.timeout_ms,
                 "environment_fingerprint": ctx.tools.fingerprint,
                 "transcript": path, "current_counts": counts,
                 "previous_checkpoint_counts": service.previous_check_counts(run, check.id)?,
@@ -142,7 +149,10 @@ fn run_one(
     service.output(
         run,
         "system",
-        &format!("Check {}: {}", check.name, check.command),
+        &format!(
+            "Check {}: {} (timeout {} ms)",
+            check.name, check.command, check.timeout_ms
+        ),
     )?;
     let mut invocation = ctx.invocation(
         PathBuf::from("/bin/sh"),
@@ -165,41 +175,36 @@ fn run_one(
         None,
     );
     let relative = format!("evidence/attempt-{}/step-{}.log", run.attempt, step.id);
-    let scratch = crate::scratch::Scratch::new(&ctx.scratch_root())?;
-    let temporary = scratch.path().join("check-transcript");
-    let mut transcript = std::fs::File::create_new(&temporary)?;
-    service.write_output_since(run, cursor, &mut transcript)?;
-    transcript.flush()?;
-    transcript.sync_all()?;
+    if matches!(finish, Ok(Finish::Stopped(Outcome::CheckTimedOut))) {
+        let end = service.output_cursor(run)?;
+        let report = format!(
+            "Check {} timed out after {} ms.\nCommand: {}\nTranscript publication pending. See output captured for check step #{}.",
+            check.name, check.timeout_ms, check.command, step.id,
+        );
+        service.record_check_timeout(run, &step, tree, &report, (cursor, end))?;
+        return Ok((Outcome::CheckTimedOut, ctx.paths.state.join(relative), None));
+    }
     let transcript_tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
+    let path = archive_transcript(
+        service,
+        run,
+        ctx,
+        Transcript {
+            relative: &relative,
+            name: &check.name,
+            tree: &transcript_tree,
+            output: (cursor, i64::MAX),
+        },
+    )?;
     let environment_changed = service
         .resolve_tools(ctx.paths)
         .map_or(true, |current| current.fingerprint != ctx.tools.fingerprint);
-    service.publish_artifact(
-        run.attempt,
-        &run.token,
-        &check.name,
-        &temporary,
-        &relative,
-        &transcript_tree,
-    ).map_err(|error| crate::storage::Error::Conflict(format!("Resource limit: check transcript evidence incomplete: {error}; captured output retained. Raise the limit or free capacity, then resume")))?;
-    scratch.close().map_err(|error| {
-        crate::storage::Error::Conflict(format!(
-            "Cannot remove check transcript scratch after publication: {error}"
-        ))
-    })?;
-    let path = ctx.paths.state.join(&relative);
     let (outcome, exit, counts) = match finish? {
         Finish::Exited(code) => {
-            let transcript = String::from_utf8_lossy(&std::fs::read(&path).map_err(|error| {
-                crate::storage::Error::Conflict(format!(
-                    "Cannot read published check transcript {}: {error}",
-                    path.display()
-                ))
-            })?)
-            .into_owned();
-            let counts = test_summary::parse(&transcript);
-            let suites = super::check_report::parse(&transcript);
+            let bytes = std::fs::read(&path)?;
+            let transcript = String::from_utf8_lossy(&bytes);
+            let counts = test_summary::parse(transcript.as_ref());
+            let suites = super::check_report::parse(transcript.as_ref());
             let suite_json = serde_json::to_string(&suites).expect("suite serialization");
             let verdict = match verdict(&check.name, code, counts) {
                 Outcome::Passed(_) if suites.blocks() => Outcome::Failed(
@@ -216,7 +221,7 @@ fn run_one(
                     category,
                     format!(
                         "{headline}\n{}\nSuite results: {suite_json}",
-                        failure_summary::summarize(&transcript).join("\n")
+                        failure_summary::summarize(transcript.as_ref()).join("\n")
                     ),
                 ),
                 Outcome::Passed(message) => {
@@ -257,6 +262,41 @@ fn run_one(
         )?;
     }
     Ok((outcome, path, counts))
+}
+
+pub(super) struct Transcript<'a> {
+    pub relative: &'a str,
+    pub name: &'a str,
+    pub tree: &'a str,
+    pub output: (i64, i64),
+}
+
+pub(super) fn archive_transcript(
+    service: &Service,
+    run: &Run,
+    ctx: &Context<'_>,
+    transcript: Transcript<'_>,
+) -> Result<PathBuf> {
+    let scratch = crate::scratch::Scratch::new(&ctx.scratch_root())?;
+    let temporary = scratch.path().join("check-transcript");
+    let mut output = std::fs::File::create_new(&temporary)?;
+    service.write_output_range(run, transcript.output, &mut output)?;
+    output.flush()?;
+    output.sync_all()?;
+    service.publish_artifact(
+        run.attempt,
+        &run.token,
+        transcript.name,
+        &temporary,
+        transcript.relative,
+        transcript.tree,
+    ).map_err(|error| crate::storage::Error::Conflict(format!("Resource limit: check transcript evidence incomplete: {error}; captured output retained. Raise the limit or free capacity, then resume")))?;
+    scratch.close().map_err(|error| {
+        crate::storage::Error::Conflict(format!(
+            "Cannot remove check transcript scratch after publication: {error}"
+        ))
+    })?;
+    Ok(ctx.paths.state.join(transcript.relative))
 }
 
 /// A check passes only when it exits 0 and its own test summaries report no failed test, so a

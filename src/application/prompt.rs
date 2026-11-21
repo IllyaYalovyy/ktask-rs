@@ -22,6 +22,7 @@ pub enum Turn {
     Review,
     Validation,
     Judge,
+    CheckTimeout,
 }
 
 impl Turn {
@@ -40,11 +41,14 @@ impl Turn {
             Self::Execution => &t.execution,
             Self::Review => &t.review,
             Self::Validation => &t.validation,
-            Self::Repair | Self::Judge => &t.remediation,
+            Self::Repair | Self::Judge | Self::CheckTimeout => &t.remediation,
         }
     }
     fn reads_only(self) -> bool {
-        matches!(self, Self::Review | Self::Validation | Self::Judge)
+        matches!(
+            self,
+            Self::Review | Self::Validation | Self::Judge | Self::CheckTimeout
+        )
     }
 }
 
@@ -114,6 +118,11 @@ const JUDGE: &str = "You are the failure judge: a read-only senior engineer who 
 
 /// The supervisor's fixed rules for a turn.
 pub fn rules(turn: Turn, checks: bool) -> String {
+    if turn == Turn::CheckTimeout {
+        return format!(
+            "{READ_ONLY} {COMMON} {EVIDENCE} Diagnose the individual supervisor check timeout using the partial transcript and relevant current source. Cite concrete evidence for your decision. Return exactly one judgment. Choose repair when there is a specific project cause and give a concrete plan. Preserve the full task goal and every check. Choose extend only when the transcript shows useful progress and the bounded extra time is likely to suffice. Choose escalate when repair or more time cannot help, or an external runner setting must change. The supervisor sets the limit. The decision choices and available budget are in Context."
+        );
+    }
     if turn == Turn::Judge {
         return format!(
             "{JUDGE}\n{}",
@@ -283,7 +292,7 @@ pub fn preview(turn: Turn, category: &Category, task: &Task<'_>, example: bool) 
             Turn::Execution => "execution",
             Turn::Review => "review",
             Turn::Validation => "validation",
-            Turn::Repair | Turn::Judge => "remediation",
+            Turn::Repair | Turn::Judge | Turn::CheckTimeout => "remediation",
         },
         if example {
             "example task content"

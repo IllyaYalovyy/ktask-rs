@@ -411,7 +411,7 @@ CREATE TABLE attempts (
     waiting_since_ms INTEGER CHECK (waiting_since_ms >= started_at_ms),
     resume_at_ms INTEGER CHECK (resume_at_ms >= waiting_since_ms),
     outcome TEXT,
-    failure_category TEXT CHECK (failure_category IN ('rate_limit', 'timeout', 'transport', 'configuration', 'environment', 'protocol', 'check', 'review', 'validation', 'agent', 'interrupted', 'unknown')),
+    failure_category TEXT CHECK (failure_category IN ('rate_limit', 'timeout', 'transport', 'configuration', 'environment', 'protocol', 'check', 'check_timeout', 'review', 'validation', 'agent', 'interrupted', 'unknown')),
     base_commit TEXT,
     head_commit TEXT,
     report TEXT,
@@ -558,6 +558,16 @@ CREATE TABLE attempt_steps (
                 AND project_check_id IS NULL AND check_name IS NULL AND command IS NULL AND working_directory IS NULL AND timeout_ms IS NULL AND source_tree IS NULL AND reused_from_step_id IS NULL AND exit_code IS NULL)
         OR (role = 'check' AND session_id IS NULL AND provider IS NULL AND model IS NULL AND effort IS NULL AND invocation IS NULL
                 AND command IS NOT NULL AND length(trim(command)) > 0 AND working_directory IS NOT NULL AND timeout_ms IS NOT NULL))
+) STRICT;
+
+CREATE TABLE check_timeouts (
+    step_id INTEGER PRIMARY KEY REFERENCES attempt_steps(id),
+    output_start INTEGER NOT NULL CHECK (output_start >= 0),
+    output_end INTEGER NOT NULL CHECK (output_end >= output_start),
+    decision TEXT CHECK (decision IN ('repair', 'reconsider', 'extend', 'escalate')),
+    reason TEXT,
+    extension_ms INTEGER CHECK (extension_ms > 0),
+    CHECK ((extension_ms IS NOT NULL) = (decision IS 'extend'))
 ) STRICT;
 
 CREATE TABLE criterion_results (
