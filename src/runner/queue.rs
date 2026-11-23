@@ -5,6 +5,7 @@ use super::{
     attempt::{self, Then},
     control, cycle, process, provider,
     provider::Provider,
+    registration::Registration,
     sandbox, session, workspace,
 };
 use crate::{
@@ -26,22 +27,22 @@ use std::{
 };
 
 pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<String> {
+    let mut registration = Registration::start(paths, service.project_id)?;
     let workspace = Workspace::acquire(&service.project_root()?)?;
     // Holding the lease proves no supervisor owns the project: a running attempt is orphaned.
     service.settle_orphan()?;
     control::finish_pending_with_workspace(service, &workspace)?;
     workspace::git_identity(&workspace.root)?;
-    let mut owns_session = false;
-    let result = run_inner(service, paths, options, &workspace, &mut owns_session);
-    if !owns_session {
-        return result;
-    }
+    open_session(service, options)?;
+    registration.admitted();
+    let result = run_inner(service, paths, options, &workspace);
     let requested = settle_session(service, &result)?;
     // The control is owned by this supervisor, not the terminal that requested it.
     control::finish_pending_with_workspace(service, &workspace)?;
     // Keep the lease until the final state is committed. An intervention that
     // arrived during this handoff is retained and claims the next supervisor.
     drop(workspace);
+    drop(registration);
     if requested
         || service
             .execution_session()?
@@ -108,10 +109,7 @@ fn run_inner(
     paths: &Paths,
     options: &Options,
     workspace: &Workspace,
-    owns_session: &mut bool,
 ) -> Result<String> {
-    open_session(service, options)?;
-    *owns_session = true;
     let stop = process::stopped()?;
     require(
         !checks_required(service)? || !service.checks()?.is_empty(),

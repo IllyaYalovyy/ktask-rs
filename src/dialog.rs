@@ -23,6 +23,12 @@ pub enum DialogKind {
     Breakdown(usize),
     Answer(usize),
     Readiness,
+    /// Add the folder the TUI started in as a project, under the name entered.
+    RegisterProject,
+    /// Point the project selected on the Projects screen at another folder.
+    MoveProject,
+    /// Delete the project selected on the Projects screen with everything stored for it.
+    DeleteProject,
     Import,
     ImportPreview(Vec<Task>),
     StoredImport(Vec<crate::application::Definition>),

@@ -124,6 +124,28 @@ pub fn location(screen: &str, needle: &str) -> Result<(usize, usize)> {
         .ok_or_else(|| format!("missing {needle:?} in screen:\n{screen}").into())
 }
 
+/// Join wrapped dialog rows without pulling in the screen behind the modal.
+pub fn dialog_text(screen: &str, title: &str, stop_at: Option<&str>) -> String {
+    let Ok((left, top)) = location(screen, &format!("╭ {title}")) else {
+        return String::new();
+    };
+    screen
+        .lines()
+        .skip(top + 1)
+        .map(|row| row.chars().skip(left))
+        .map_while(|mut row| {
+            (row.next() == Some('│'))
+                .then(|| row.take_while(|&cell| cell != '│').collect::<String>())
+        })
+        .take_while(|row| Some(row.trim()) != stop_at)
+        .filter_map(|row| {
+            let text = row.trim();
+            (!text.is_empty()).then(|| text.to_owned())
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Render the terminal parser's observed cells as a readable image for visual evidence.
 /// The source is a real PTY frame; no screen text is reconstructed by this renderer.
 pub fn screen_png(screen: &str, path: &Path) -> Result {

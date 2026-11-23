@@ -492,7 +492,14 @@ pub(super) fn command(
             *agent_network,
             *check_before_task,
         ),
-        Command::Pause => {
+        Command::Pause { all: true }
+        | Command::Shutdown
+        | Command::Projects
+        | Command::ProjectMove { .. }
+        | Command::ProjectDelete { .. } => {
+            unreachable!("global commands")
+        }
+        Command::Pause { all: false } => {
             let paused = crate::runner::control::pause(service)?;
             let text = match paused {
                 None => "Nothing is running\n".to_owned(),

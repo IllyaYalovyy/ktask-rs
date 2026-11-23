@@ -99,12 +99,25 @@ Tests use private homes and app roots under `$TMPDIR/ktask-test-scratch/` (syste
 directory when unset), cleaned on success or panic. The next test reclaims crash debris.
 
 The TUI opens **Current Task**, with separate **Queue**, **History**, **Configuration**,
-and **About** screens. Normal startup opens real SQLite tasks for the current directory.
+**About** and **Projects** screens. Normal startup opens real SQLite tasks for the current
+directory. **Projects** lists every project of the instance with its state, queue size and
+current task; Enter opens one in the same terminal, and each project keeps its own queue,
+background runner and place on screen. Started in a directory that is not a project, while
+other projects exist, the TUI opens **Projects** and registers nothing until **n Add this
+folder**; `--project DIR` and the first project of an instance register as before.
+`ktask projects` prints the same list from any directory.
+On **Projects**, **m Move** points the selected project at another existing folder after you
+moved or cloned its repository (`ktask project-move ID DIR`); tasks, history and settings
+follow it and ktask moves no files. **D Delete** (`ktask project-delete ID --confirm NAME`)
+is permanent: after you type the project's exact name it deletes every task, attempt, output,
+evidence and setting of that project and ktask's own files for it, and touches nothing in the
+project's folder. Both are refused while the project's runner is alive; the TUI does not
+delete the project it has open.
 A new project starts empty; changes save immediately, including after a forced exit.
 The project name defaults to the directory name. For a new directory with a name already in
 use, launch with `--project-name UNIQUE_NAME`. Each instance retains its own database.
 
-Click tabs, rows, buttons, and form fields; use the wheel to scroll. `1`–`5` or `Tab`
+Click tabs, rows, buttons, and form fields; use the wheel to scroll. `1`–`6` or `Tab`
 switches screens; `j/k`, arrows, `PgUp/PgDn`, and `Home/End` navigate. `?` shows shortcuts.
 
 **Current Task** leads with the situation: one line says what is happening and which action it
@@ -250,6 +263,9 @@ The supervisor records sessions, normalized usage, checks and criterion evidence
 - `src/runner/`: supervisor, agent prompts, process guardian, Git checkpoints
 - `src/runner/provider/`: Codex, Claude Code and OpenCode launch arguments and event parsing
 - `src/persistent.rs`: the SQLite workspace: TUI forms → commands → refreshed projections
+- `src/projects.rs`, `src/application/overview.rs`: the Projects screen, project switching
+  and the cross-project read query behind it and `ktask projects`
+- `src/application/registry.rs`: moving a project to another folder and deleting one
 - `src/demo.rs`, `src/mock.rs`: the `--demo` workspace and its deterministic fake tasks
 - `src/ui/`: terminal layout: frame chrome, Current, Queue/History, dialogs, text fitting
 - `src/presentation.rs`: terminal read projections and formatters; `task_text` renders tasks
@@ -560,8 +576,11 @@ Answering a question continues that task at once in either mode. In queue mode, 
 current or marking Human work done also continues the queue. A saved intervention stays saved if starting fails; the footer explains the blocker.
 **Pause** stops/reaps workers before recording paused state; **Run/resume** retains the attempt
 and compatible session. Closing the TUI does not stop the supervisor (the background runner):
-press `p` on any screen, or run `ktask pause`; it returns once the runner has exited. Start it again with `r` or `ktask run`. A failing check
-returns to the worker directly; critical review and validation findings go to a read-only judge
+press `p` on any screen, or run `ktask pause`; it returns once the runner has exited. Start it again with `r` or `ktask run`.
+From any directory, `ktask pause --all` pauses active runners in both `ktask` and `ktask-dev`.
+Before an upgrade, `ktask shutdown` also closes open TUIs.
+
+A failing check returns to the worker directly; critical review and validation findings go to a read-only judge
 that plans the fix. Each fix round shows a one-line **Why:** in
 Status and Activity, and regenerates proof; the ten-round limit applies, then the failure judge
 decides. A terminal failed attempt opens a separately recorded repair attempt.

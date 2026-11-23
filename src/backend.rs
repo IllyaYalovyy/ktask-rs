@@ -37,6 +37,11 @@ pub(crate) trait Backend {
     fn stats(&self, screen: &Screen) -> Result<Dialog, String>;
     /// Advance live state; true when the screen must redraw.
     fn tick(&mut self, screen: &mut Screen) -> bool;
+    /// Whether work this workspace started still needs `tick` to finish while another
+    /// project is on screen.
+    fn busy(&self) -> bool {
+        false
+    }
 
     // Task details: the body of an Inspect dialog and the evidence it pages through. The
     // defaults describe a workspace without stored evidence pages.

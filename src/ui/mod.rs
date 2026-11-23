@@ -2,6 +2,7 @@
 mod catalog;
 mod current;
 mod dialog;
+mod projects;
 mod text;
 
 pub(crate) use text::OutputCache;
@@ -81,6 +82,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             ),
             Span::raw(format!(" / {}   ", shortened(&app.project_name, 24))),
             Span::styled(app.backend.label(), Style::new().fg(MUTED)),
+            projects::summary(app),
         ])),
         header,
     );
@@ -146,6 +148,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         View::Current => current::draw(frame, app, toolbar, body),
         View::Queue | View::History => catalog::draw(frame, app, toolbar, body),
         View::Config | View::About => draw_information(frame, app, toolbar, body),
+        View::Projects => projects::draw(frame, app, toolbar, body),
     }
     buttons(frame, app, actions, &controls, false);
     frame.render_widget(
@@ -310,8 +313,9 @@ fn controls(app: &App) -> Vec<(&'static str, Action)> {
         ],
         View::Config => app.backend.config_controls(),
         View::About => vec![("Esc Back", Action::Back)],
+        View::Projects => app.project_controls(),
     };
-    if app.view != View::Current {
+    if !matches!(app.view, View::Current | View::Projects) {
         controls.insert(0, ("p Pause", Action::Pause));
     }
     controls.retain(|(_, action)| app.enabled(*action));

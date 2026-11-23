@@ -75,7 +75,8 @@ fn dependency_wait_rechecks_by_keyboard_and_mouse_with_large_queue_and_history()
             t.send("u")?;
         }
         let readiness = t.screen("dependency readiness", |s| {
-            s.contains("rg: command not found") && s.contains("install/configure externally")
+            support::dialog_text(s, "Execution readiness", None)
+                .contains("rg: command not found → install/configure externally")
         })?;
         if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
             fs::write(
@@ -85,7 +86,7 @@ fn dependency_wait_rechecks_by_keyboard_and_mouse_with_large_queue_and_history()
         }
         t.send("\x1b")?;
         t.screen("readiness closed", |s| {
-            s.contains("r Recheck") && !s.contains("install/configure externally")
+            s.contains("r Recheck") && !s.contains("╭ Execution readiness")
         })?;
         if mouse {
             t.click("4 Config")?;

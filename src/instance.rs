@@ -1,3 +1,7 @@
+mod tui_shutdown;
+
+pub(crate) use tui_shutdown::{TuiSession, TuiShutdown};
+
 use std::{env, io, io::Write, path::PathBuf};
 
 /// Fixed by the executable's entry point, never by cwd, filename, profile, or environment.

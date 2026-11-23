@@ -97,6 +97,51 @@ fn both_instances_run_side_by_side_in_one_checkout() -> Result {
 }
 
 #[test]
+fn shutdown_restores_live_terminals_across_instances() -> Result {
+    let sandbox = support::sandbox()?;
+    let root = sandbox.path();
+    let project = root.join("checkout");
+    fs::create_dir(&project)?;
+    let mut production = Terminal::open_project(PROD, root, &project, 100, 26)?;
+    let mut development = Terminal::open_project(DEV, root, &project, 100, 26)?;
+    let mut simulator = Terminal::open_at(DEV, root, 100, 26)?;
+    for (name, terminal) in [("production", &production), ("development", &development)] {
+        let screen = terminal.screen(name, |s| s.contains("Current") && s.contains("Queue"))?;
+        assert!(terminal.mouse_capture());
+        println!("Before shutdown ({name})\n{screen}");
+    }
+    let demo = simulator.screen("isolated demo before shutdown", |s| s.contains("MOCK DATA"))?;
+    println!("Before shutdown (demo)\n{demo}");
+
+    let output = Command::new(PROD)
+        .args(["shutdown", "--json"])
+        .env_clear()
+        .env("HOME", root)
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_STATE_HOME", root.join("state"))
+        .env("XDG_CACHE_HOME", root.join("cache"))
+        .env("XDG_DATA_HOME", root.join("data"))
+        .env("XDG_RUNTIME_DIR", root.join("runtime"))
+        .env("TMPDIR", root)
+        .current_dir(root)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    println!(
+        "Shutdown reply\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    production.finish()?;
+    development.finish()?;
+    simulator.finish()?;
+    println!("All three terminals restored the screen, mouse capture and paste mode.");
+    Ok(())
+}
+
+#[test]
 fn default_paths_are_scoped_and_relative_xdg_roots_are_rejected() -> Result {
     let sandbox = support::sandbox()?;
     for (binary, name) in [(DEV, "ktask-dev"), (PROD, "ktask")] {

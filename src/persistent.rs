@@ -1014,6 +1014,10 @@ impl StoredWorkspace {
             DialogKind::Help
             | DialogKind::Stats
             | DialogKind::Events
+            // The Projects screen applies these: they act on projects, not on this one's tasks.
+            | DialogKind::RegisterProject
+            | DialogKind::MoveProject
+            | DialogKind::DeleteProject
             | DialogKind::Inspect { .. } => return Ok(true),
             DialogKind::Readiness
             | DialogKind::Config
@@ -1254,7 +1258,7 @@ impl Backend for StoredWorkspace {
             }),
             Action::Answer => self.answer_form(screen)?,
             Action::Help => Some(forms::help(
-                "Changes save immediately. r runs the current task in a background supervisor; p pauses it.\nr on a paused task resumes the same attempt; on a failed task it retries, keeping the code and restarting the limits.\ns Stop returns any live task to Pending and stashes its uncommitted changes; the next Run starts fresh. T Restart also starts it again from current HEAD.\nD marks any unfinished task done. Pending tasks can be cancelled (x) or superseded (R); History offers C Copy to queue.\nChecks gate every result; review and validation judge it once the checks pass.",
+                "Changes save immediately. r runs the current task in a background supervisor; p pauses it.\nr on a paused task resumes the same attempt; on a failed task it retries, keeping the code and restarting the limits.\ns Stop returns any live task to Pending and stashes its uncommitted changes; the next Run starts fresh. T Restart also starts it again from current HEAD.\nD marks any unfinished task done. Pending tasks can be cancelled (x) or superseded (R); History offers C Copy to queue.\nChecks gate every result; review and validation judge it once the checks pass.\n6 Projects lists every project of this instance; Enter opens one, and each keeps its own queue and background runner. There m points a project at another folder and D deletes one permanently.",
             )),
             Action::Import => Some(Dialog::new(
                 DialogKind::Import,
@@ -1368,6 +1372,10 @@ impl Backend for StoredWorkspace {
         // snapshot. Leave an input-processing interval after refresh finishes.
         screen.last_tick = Instant::now();
         changed
+    }
+
+    fn busy(&self) -> bool {
+        self.provision_job.is_some() || self.pending_control.is_some()
     }
 
     fn inspect_body(&self, screen: &Screen, dialog: &Dialog) -> String {

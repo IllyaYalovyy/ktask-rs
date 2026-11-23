@@ -152,22 +152,35 @@ pub fn git(root: &Path, args: &[&str]) -> Result<String> {
 }
 impl Workspace {
     pub fn supervisor_alive(root: &Path) -> Result<bool> {
-        let common = match git(
-            root,
-            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-        ) {
-            Ok(path) => PathBuf::from(path),
-            Err(Error::Conflict(_)) => return Ok(false),
-            Err(error) => return Err(error),
+        let Some(common) = Self::common_dir(root)? else {
+            return Ok(false);
         };
+        Ok(Self::live_lease(&common)?.is_some())
+    }
+
+    pub(crate) fn live_lease(common: &Path) -> Result<Option<File>> {
         let path = common.join("ktask-runner.lock");
         let file = match File::open(path) {
             Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error.into()),
         };
-        Ok(super::process::inspect(&file, |_| Ok(()))?.is_none())
+        Ok(super::process::inspect(&file, |_| Ok(()))?
+            .is_none()
+            .then_some(file))
     }
+
+    pub(crate) fn common_dir(root: &Path) -> Result<Option<PathBuf>> {
+        match git(
+            root,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        ) {
+            Ok(path) => Ok(Some(PathBuf::from(path))),
+            Err(Error::Conflict(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     pub fn acquire(root: &Path) -> Result<Self> {
         let root = root.canonicalize()?;
         let top = PathBuf::from(git(&root, &["rev-parse", "--show-toplevel"])?).canonicalize()?;

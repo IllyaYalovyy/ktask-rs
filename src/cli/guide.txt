@@ -76,6 +76,11 @@ TYPICAL SESSION
   ktask --json events --after 0        # progress feed; pass next_after on the next call
   ktask --json show 12                 # full record: revisions, attempts, steps, usage
   ktask --json pause                   # pause the runner; waits until it exits; run resumes
+  ktask pause --all                    # pause all project runners in ktask and ktask-dev
+  ktask shutdown                       # pause all runners and close TUIs for upgrade
+  ktask --json projects                # every project: state, queue size, current task
+  ktask project-move ID DIR            # the project now lives in DIR; ktask moves no files
+  ktask project-delete ID --confirm NAME   # DANGER: permanent; the folder is not touched
   ktask --json stop 12                 # back to Pending; changes stashed; run starts afresh
   ktask --json done 12 --reason '...'  # the owner's verdict; the task goes to History
   Foreground run (no --background) blocks until the queue is done or something needs

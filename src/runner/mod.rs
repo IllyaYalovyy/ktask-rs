@@ -23,6 +23,7 @@ mod output;
 pub(crate) mod process;
 pub(crate) mod provider;
 mod queue;
+pub(crate) mod registration;
 pub mod remediation;
 mod reset;
 pub(crate) mod sandbox;

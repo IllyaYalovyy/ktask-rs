@@ -86,6 +86,12 @@ impl App {
             Action::Filter | Action::Search | Action::Clear | Action::Export => {
                 matches!(self.view, View::Queue | View::History)
             }
+            Action::OpenProject | Action::MoveProject | Action::DeleteProject => {
+                self.view == View::Projects && self.hub.selected.is_some()
+            }
+            Action::RegisterProject => {
+                self.view == View::Projects && self.hub.unregistered.is_some()
+            }
             _ => true,
         }
     }
@@ -110,6 +116,9 @@ impl App {
             Action::Approve | Action::Reject => TaskAction::Approve,
             Action::Models | Action::Edit => TaskAction::Edit,
             Action::Move => TaskAction::Move,
+            Action::RegisterProject if self.view == View::Projects => {
+                return "This folder is already a project".into();
+            }
             _ => return ELSEWHERE.into(),
         };
         let target = match action {
@@ -233,6 +242,11 @@ impl App {
             Action::Select(id) => {
                 self.catalog_mut().selected = Some(id);
             }
+            Action::SelectProject(id) => self.hub.selected = Some(id),
+            Action::OpenProject => self.open_project(),
+            Action::RegisterProject => self.register_form(),
+            Action::MoveProject => self.move_form(),
+            Action::DeleteProject => self.delete_form(),
             Action::PreviousAttempt | Action::NextAttempt => {
                 self.change_attempt(matches!(action, Action::NextAttempt))
             }
@@ -843,7 +857,13 @@ impl App {
         let Some(mut dialog) = self.dialog.take() else {
             return;
         };
-        match self.backend.apply(&mut self.screen, &mut dialog) {
+        let applied = match dialog.kind {
+            DialogKind::RegisterProject => self.register_project(&dialog).map(|()| true),
+            DialogKind::MoveProject => self.move_project(&dialog).map(|()| true),
+            DialogKind::DeleteProject => self.delete_project(&dialog).map(|()| true),
+            _ => self.backend.apply(&mut self.screen, &mut dialog),
+        };
+        match applied {
             Ok(true) => {}
             Ok(false) => self.dialog = Some(dialog),
             Err(error) => {

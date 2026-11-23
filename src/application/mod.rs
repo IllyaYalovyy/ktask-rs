@@ -69,12 +69,14 @@ pub mod execution;
 pub mod lenses;
 pub mod lifecycle;
 pub mod limits;
+pub mod overview;
 pub mod preferences;
 pub mod profiles;
 pub mod progress;
 pub mod prompt;
 pub mod provision;
 mod queries;
+pub mod registry;
 pub mod retention;
 pub(crate) mod scoped;
 pub mod search;
@@ -452,7 +454,13 @@ impl Service {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        let service = project.map(|(project_id, project_name)| Self {
+        project
+            .map(|(id, name)| Self::registered(db, id, name))
+            .transpose()
+    }
+
+    pub(crate) fn registered(db: Database, project_id: i64, project_name: String) -> Result<Self> {
+        let service = Self {
             db,
             project_id,
             project_name,
@@ -461,10 +469,8 @@ impl Service {
             actor: Actor::default(),
             vacuum_failure: None,
             reported_evidence: Default::default(),
-        });
-        if let Some(service) = &service {
-            service.reconcile_artifact_reservations()?;
-        }
+        };
+        service.reconcile_artifact_reservations()?;
         Ok(service)
     }
     pub fn set_actor(&mut self, actor: Actor) -> Result<()> {

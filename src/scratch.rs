@@ -6,6 +6,8 @@ use std::{
 
 use tempfile::{Builder, TempDir};
 
+pub(crate) const LEASE_NAME: &str = ".lease";
+
 /// Owns disposable files for one run or test. A kernel lock distinguishes live owners
 /// from crashed ones without trusting PIDs or deleting another live run's files.
 pub struct Scratch {
@@ -61,7 +63,7 @@ impl Scratch {
         let mut abandoned = reclaimed_entries(root)?;
         abandoned.extend(set_aside_abandoned(root)?);
         let dir = Builder::new().prefix("run-").tempdir_in(root)?;
-        let lease = open_lock(&dir.path().join(".lease"))?;
+        let lease = open_lock(&dir.path().join(LEASE_NAME))?;
         lease.lock()?;
         sweep.unlock()?;
         let scratch = Self {
@@ -163,7 +165,7 @@ fn entries(root: &Path, prefix: &str) -> io::Result<Vec<PathBuf>> {
 fn set_aside_abandoned(root: &Path) -> io::Result<Vec<PathBuf>> {
     let mut abandoned = Vec::new();
     for path in entries(root, "run-")? {
-        let lease = match open_lock(&path.join(".lease")) {
+        let lease = match open_lock(&path.join(LEASE_NAME)) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error),

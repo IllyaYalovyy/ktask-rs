@@ -25,8 +25,13 @@
 - Follow the owner's `docs/USECASES.md`: Current Task opens at startup and shows the
   first unfinished task in execution order, retaining it while running. An unresolved failure
   blocks later work; remediation may be inserted before it when it is not running.
-  Queue, History, Configuration, and About are separate screens. Only current can run,
-  resume, or retry; Queue contains current/pending work in execution order, without sorting.
+  Queue, History, Configuration, About, and Projects are separate screens. Projects lists
+  every project of the instance and opens one at a time; queues, execution order and runners
+  stay per project, and no screen merges tasks across projects. Starting the TUI outside a
+  registered project never registers one by itself. Deleting a project removes its rows and
+  ktask's own files only after its exact name is typed, never anything in its folder; moving
+  one changes only its registered folder. Both require its runner to be stopped.
+  Only current can run, resume, or retry; Queue contains current/pending work in execution order, without sorting.
 - The task state machine (`application::lifecycle`, docs/USECASES.md) is the one source of
   what a task allows; TUI, CLI and runner all ask it. Stop returns any live task to Pending
   with its changes stashed; remediation is automatic only. Do not add side paths around it.

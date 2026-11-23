@@ -6,7 +6,10 @@ use crate::{
     application::{Service, VersionedTask, lifecycle::State, require},
     storage::{Error, Result},
 };
-use std::time::{Duration, Instant};
+use std::{
+    fs::File,
+    time::{Duration, Instant},
+};
 
 /// How long a control waits for the runner to stop its worker and exit.
 pub const PATIENCE: Duration = Duration::from_secs(120);
@@ -246,8 +249,18 @@ fn existing_stash(workspace: &Workspace, label: &str) -> Result<bool> {
 }
 
 fn wait_for_exit(service: &Service) -> Result<()> {
-    let deadline = Instant::now() + PATIENCE;
-    while supervisor_alive(service)? {
+    wait_for_release(|| supervisor_alive(service), Instant::now() + PATIENCE)
+}
+
+pub(crate) fn wait_for_lease(lease: &File, deadline: Instant) -> Result<()> {
+    wait_for_release(
+        || Ok(super::process::inspect(lease, |_| Ok(()))?.is_none()),
+        deadline,
+    )
+}
+
+fn wait_for_release(alive: impl Fn() -> Result<bool>, deadline: Instant) -> Result<()> {
+    while alive()? {
         require(
             Instant::now() < deadline,
             "The runner has not stopped its worker after two minutes; try again",

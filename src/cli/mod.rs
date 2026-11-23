@@ -4,6 +4,7 @@ mod evidence;
 mod execute;
 mod lens;
 mod output;
+mod pause_all;
 mod profile;
 
 use crate::{
@@ -136,6 +137,103 @@ fn emit(reply: output::Reply, json_output: bool) -> Result<()> {
     Ok(())
 }
 
+/// `ktask projects`: every registered project, without selecting or registering one.
+fn projects(instance: Instance) -> Result<output::Reply> {
+    let paths = instance.paths()?;
+    let listed = match Database::open_existing(&paths)? {
+        Some(db) => crate::runner::registration::listed(&paths, &db)?,
+        None => Vec::new(),
+    };
+    let mut text = String::new();
+    let mut data = Vec::new();
+    for (project, alive) in &listed {
+        let attention = project.attention(*alive).name();
+        let current = project.current.as_ref();
+        text.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\n",
+            project.id,
+            attention,
+            project.queued,
+            output::safe(&project.name),
+            output::safe(&project.root.to_string_lossy()),
+            current.map_or("-".into(), |task| format!(
+                "#{} {} · {}",
+                task.id,
+                task.state.label(),
+                output::safe(&task.title)
+            )),
+        ));
+        data.push(json!({
+            "id": project.id,
+            "name": project.name,
+            "root": project.root.to_string_lossy(),
+            "state": attention,
+            "runner_alive": alive,
+            "queued": project.queued,
+            "finished": project.finished,
+            "current": current.map(|task| json!({
+                "id": task.id,
+                "title": task.title,
+                "kind": task.kind.as_str(),
+                "state": task.state,
+            })),
+        }));
+    }
+    if listed.is_empty() {
+        text.push_str("No projects.\n");
+    }
+    Ok(output::Reply {
+        data: json!({"projects": data, "count": listed.len()}),
+        text,
+    })
+}
+
+/// The instance database for a project command that must not create storage.
+fn registry_database(paths: &crate::instance::Paths, id: i64) -> Result<Database> {
+    Database::open_existing(paths)?.ok_or_else(|| {
+        crate::storage::Error::Conflict(format!("Project {id} is not registered")).into()
+    })
+}
+
+fn project_move(instance: Instance, id: i64, folder: &std::path::Path) -> Result<output::Reply> {
+    let paths = instance.paths()?;
+    let mut db = registry_database(&paths, id)?;
+    let folder = std::path::absolute(folder)?;
+    let root = crate::application::registry::relocate(&mut db, &paths, id, &folder)?;
+    Ok(output::Reply {
+        text: format!("Project {id} moved to {}\n", root.display()),
+        data: json!({"id": id, "root": root.to_string_lossy()}),
+    })
+}
+
+fn project_delete(instance: Instance, id: i64, confirm: &str) -> Result<output::Reply> {
+    let paths = instance.paths()?;
+    let mut db = registry_database(&paths, id)?;
+    let removed = crate::application::registry::remove(&mut db, &paths, id, confirm)?;
+    let mut text = format!(
+        "Deleted project {} ({}): {} tasks, {} attempts. {} was not touched.\n",
+        removed.id,
+        output::safe(&removed.name),
+        removed.tasks,
+        removed.attempts,
+        removed.root.display()
+    );
+    for leftover in &removed.leftovers {
+        text.push_str(&format!("not removed: {}\n", output::safe(leftover)));
+    }
+    Ok(output::Reply {
+        text,
+        data: json!({
+            "id": removed.id,
+            "name": removed.name,
+            "root": removed.root.to_string_lossy(),
+            "tasks": removed.tasks,
+            "attempts": removed.attempts,
+            "leftovers": removed.leftovers,
+        }),
+    })
+}
+
 fn run(instance: Instance, cli: &Cli) -> Result<()> {
     if let Some(Command::Evidence {
         file,
@@ -182,6 +280,18 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         paths.print(instance)?;
         return Ok(());
     }
+    match cli.command {
+        Some(Command::Pause { all: true }) => return emit(pause_all::run(false)?, cli.json),
+        Some(Command::Shutdown) => return emit(pause_all::run(true)?, cli.json),
+        Some(Command::Projects) => return emit(projects(instance)?, cli.json),
+        Some(Command::ProjectMove { id, ref folder }) => {
+            return emit(project_move(instance, id, folder)?, cli.json);
+        }
+        Some(Command::ProjectDelete { id, ref confirm }) => {
+            return emit(project_delete(instance, id, confirm)?, cli.json);
+        }
+        _ => {}
+    }
     let root = cli.project.clone().map_or_else(std::env::current_dir, Ok)?;
     let Some(command) = &cli.command else {
         if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -189,7 +299,14 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
                 "The TUI needs a terminal; use list, current, or --help for CLI commands",
             ));
         }
-        crate::launch_tui(instance, &root, cli.project_name.as_deref(), cli.demo)?;
+        let explicit = cli.project.is_some() || cli.project_name.is_some();
+        crate::launch_tui(
+            instance,
+            &root,
+            cli.project_name.as_deref(),
+            explicit,
+            cli.demo,
+        )?;
         return Ok(());
     };
     if let Command::FollowUp {
@@ -772,6 +889,20 @@ fn validate(cli: &Cli) -> Result<()> {
         && file.to_str().is_none()
     {
         return Err(Failure::usage("--json requires a UTF-8 import/export path"));
+    }
+    if matches!(
+        cli.command,
+        Some(
+            Command::Shutdown
+                | Command::Projects
+                | Command::ProjectMove { .. }
+                | Command::ProjectDelete { .. }
+        )
+    ) && (cli.project.is_some() || cli.project_name.is_some())
+    {
+        return Err(Failure::usage(
+            "shutdown, projects, project-move and project-delete take no --project; name the project by ID",
+        ));
     }
     if (cli.paths || cli.demo) && cli.command.is_some() {
         return Err(Failure::usage(

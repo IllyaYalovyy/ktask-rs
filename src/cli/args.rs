@@ -491,7 +491,40 @@ pub enum Command {
     ///
     /// The worker stops and its scratch is cleaned; the attempt keeps its phase, changes
     /// and provider session. Nothing to pause is not an error.
-    Pause,
+    Pause {
+        /// Pause runners for all registered projects in both ktask instances.
+        #[arg(long, conflicts_with_all = ["project", "project_name"])]
+        all: bool,
+    },
+    /// Pause every runner and close the TUIs in both ktask instances for an upgrade.
+    Shutdown,
+    /// List every registered project of this instance, from any working directory.
+    ///
+    /// Each line: ID, state, unfinished tasks, name, root, then the current task. States:
+    /// running, needs_owner (approval, answer, prerequisite, failure or Human task), paused,
+    /// ready, idle, missing (the root is no longer a directory). Never registers a project.
+    Projects,
+    /// Point a registered project at another folder; its tasks and history follow it.
+    ///
+    /// ktask moves no files: move or clone the repository first. Refused while the
+    /// project's runner is alive or the folder already is a project.
+    ProjectMove {
+        /// Project ID, from `ktask projects`.
+        id: i64,
+        /// The existing folder the project now lives in.
+        folder: PathBuf,
+    },
+    /// DANGER: permanently delete a project with all its tasks, attempts, output,
+    /// evidence, usage and settings, and ktask's own files for it. Cannot be undone.
+    ///
+    /// Nothing in the project's folder is touched. Refused while its runner is alive.
+    ProjectDelete {
+        /// Project ID, from `ktask projects`.
+        id: i64,
+        /// The project's exact name, as confirmation.
+        #[arg(long)]
+        confirm: String,
+    },
     /// Stop a running, paused, waiting or failed task: it returns to Pending.
     ///
     /// The worker stops, the attempt ends and its uncommitted changes are saved as a git

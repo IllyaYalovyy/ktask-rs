@@ -20,6 +20,7 @@ mod persistent;
 mod presentation;
 mod profile_ui;
 mod projection;
+mod projects;
 mod readiness;
 pub(crate) mod resource;
 pub mod runner;
@@ -136,33 +137,69 @@ pub fn launch(instance: instance::Instance) -> std::process::ExitCode {
     cli::launch(instance)
 }
 
+/// The project the TUI opens, and the start folder when that is not it. A registered
+/// folder, an explicit choice and the first project of an instance open as themselves.
+/// Any other folder opens the first project that still exists, on the Projects screen,
+/// which offers to add the folder: starting elsewhere never registers a project by itself.
+fn startup_project(
+    paths: &instance::Paths,
+    root: &std::path::Path,
+    project_name: Option<&str>,
+    explicit: bool,
+) -> storage::Result<(application::Service, Option<std::path::PathBuf>)> {
+    use application::Service;
+    let open = || storage::Database::open(paths);
+    if explicit {
+        return Ok((Service::open(open()?, root, project_name)?, None));
+    }
+    if let Some(service) = Service::find(open()?, root)? {
+        return Ok((service, None));
+    }
+    let db = open()?;
+    let other = application::overview::projects(&db)?
+        .into_iter()
+        .find(|project| project.root.is_dir());
+    Ok(match other {
+        Some(project) => (
+            Service::registered(db, project.id, project.name)?,
+            Some(root.canonicalize()?),
+        ),
+        None => (Service::open(db, root, project_name)?, None),
+    })
+}
+
 pub(crate) fn launch_tui(
     instance: instance::Instance,
     root: &std::path::Path,
     project_name: Option<&str>,
+    explicit: bool,
     demo: bool,
 ) -> io::Result<()> {
     let paths = instance.paths()?;
+    let session = instance::TuiSession::register(&paths)?;
     let app = if demo {
         app::App::demo(instance)
     } else {
-        let db = storage::Database::open(&paths).map_err(io::Error::other)?;
-        let service =
-            application::Service::open(db, root, project_name).map_err(io::Error::other)?;
-        app::App::persistent(instance, service).map_err(io::Error::other)?
+        let (service, unregistered) =
+            startup_project(&paths, root, project_name, explicit).map_err(io::Error::other)?;
+        app::App::persistent(instance, service, unregistered).map_err(io::Error::other)?
     };
     let scratch = scratch::Scratch::new_in_background(&paths.cache.join("scratch"))?;
     let workers = paths.cache.join("workers");
     let worker_reclaim = std::thread::spawn(move || scratch::Scratch::reclaim(&workers));
-    let result = terminal_session(app);
+    let result = terminal_session(app, &session);
     let worker_cleanup = worker_reclaim
         .join()
         .map_err(|_| io::Error::other("worker scratch reclamation panicked"))?;
     let scratch_cleanup = scratch.close();
-    result.and(worker_cleanup).and(scratch_cleanup)
+    let session_cleanup = session.close();
+    result
+        .and(worker_cleanup)
+        .and(scratch_cleanup)
+        .and(session_cleanup)
 }
 
-fn terminal_session(app: app::App) -> io::Result<()> {
+fn terminal_session(app: app::App, session: &instance::TuiSession) -> io::Result<()> {
     let mut terminal = ratatui::try_init()?;
     let mut input_restore = RestoreInput {
         keyboard_pushed: false,
@@ -173,7 +210,7 @@ fn terminal_session(app: app::App) -> io::Result<()> {
         PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
     );
     input_restore.keyboard_pushed = setup.is_ok();
-    let result = setup.and_then(|_| run(&mut terminal, app));
+    let result = setup.and_then(|_| run(&mut terminal, app, session));
     let mouse_restored = execute!(
         terminal.backend_mut(),
         DisableMouseCapture,
@@ -205,7 +242,11 @@ impl Drop for RestoreInput {
     }
 }
 
-fn run(terminal: &mut ratatui::DefaultTerminal, mut app: app::App) -> io::Result<()> {
+fn run(
+    terminal: &mut ratatui::DefaultTerminal,
+    mut app: app::App,
+    session: &instance::TuiSession,
+) -> io::Result<()> {
     let mut captured = false;
     loop {
         if captured != app.mouse_enabled {
@@ -231,7 +272,11 @@ fn run(terminal: &mut ratatui::DefaultTerminal, mut app: app::App) -> io::Result
             terminal.backend_mut().flush()?;
         }
         loop {
-            if event::poll(std::time::Duration::from_millis(40))? {
+            let has_event = event::poll(std::time::Duration::from_millis(40))?;
+            if session.close_requested()? {
+                return Ok(());
+            }
+            if has_event {
                 let fits = ui::fits(terminal.size()?);
                 match event::read()? {
                     Event::Key(key) if key.kind != KeyEventKind::Release => app.key(key, fits),

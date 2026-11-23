@@ -5997,7 +5997,10 @@ impl Fixture {
     }
     /// The same ktask instance (state, cache, config) used from another project.
     fn process_in(&self, project: &Path) -> Command {
-        let mut c = Command::new(BIN);
+        self.process_for(BIN, project)
+    }
+    fn process_for(&self, executable: &str, project: &Path) -> Command {
+        let mut c = Command::new(executable);
         c.current_dir(project)
             .env_clear()
             .env("HOME", self.scratch.path())
@@ -13522,6 +13525,109 @@ fn many_projects_streaming_output_at_once_all_finish() -> Result {
         |r| r.get(0),
     )?;
     assert_eq!(rows, 12, "every execution's last streamed event was stored");
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn pause_all_waits_for_both_instances_from_an_unregistered_directory() -> Result {
+    const PROD: &str = env!("CARGO_BIN_EXE_ktask");
+    let f = Fixture::new()?;
+    let production = f.second_project("production")?;
+    let deleted = f.second_project("deleted-registration")?;
+    fs::rename(&deleted, deleted.with_extension("moved"))?;
+    f.provider("overlap")?;
+    f.add("Development work")?;
+
+    let command = |binary, project: &Path, args: &[&str]| -> Result<Value> {
+        let output = f
+            .process_for(binary, project)
+            .arg("--json")
+            .args(args)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(serde_json::from_slice::<Value>(&output.stdout)?["data"].clone())
+    };
+    // A second instance knows about this checkout but only production is running it.
+    command(
+        PROD,
+        &production,
+        &["check-set", "build", "--command", "test -f result.txt"],
+    )?;
+    for role in ["execution", "review", "validation", "remediation"] {
+        command(
+            PROD,
+            &production,
+            &[
+                "model-default",
+                role,
+                "--provider",
+                "codex",
+                "--model",
+                role,
+            ],
+        )?;
+    }
+    command(
+        PROD,
+        &production,
+        &[
+            "add",
+            "--title",
+            "Production work",
+            "--goal",
+            "Create result.txt containing verified",
+            "--criterion",
+            "result.txt contains verified",
+        ],
+    )?;
+    command(PROD, &production, &["init", "--check-before-task", "off"])?;
+
+    let mut foreground = Running(f.process().arg("run").stdout(Stdio::null()).spawn()?);
+    command(PROD, &production, &["run", "--background"])?;
+    support::eventually("both executions running", || {
+        let started =
+            fs::read_to_string(f.scratch.path().join("overlap-started")).unwrap_or_default();
+        Ok((started.lines().count() == 2).then_some(()))
+    })?;
+
+    let outside = f.scratch.path();
+    let paused = command(PROD, outside, &["pause", "--all"])?;
+    assert_eq!(
+        paused,
+        serde_json::json!({
+            "action": "paused",
+            "count": 2,
+            "runners": [
+                {"instance": "ktask", "project": production, "id": 1},
+                {"instance": "ktask-dev", "project": f.root, "id": 1},
+            ],
+        }),
+    );
+    assert!(foreground.0.wait()?.success());
+    for (binary, project) in [(BIN, &f.root), (PROD, &production)] {
+        assert_eq!(command(binary, project, &["current"])?["status"], "paused");
+        let lease = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(project.join(".git/ktask-runner.lock"))?;
+        lease.try_lock()?;
+    }
+    assert_eq!(command(BIN, outside, &["pause", "--all"])?["count"], 0);
+    let gate = OpenOptions::new().read(true).write(true).open(
+        f.scratch
+            .path()
+            .join("state/ktask-dev/runners/.shutdown.lock"),
+    )?;
+    gate.try_lock()?;
+    let blocked = f.process().args(["--json", "run"]).output()?;
+    assert_eq!(blocked.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&blocked.stderr).contains("Instance shutdown is in progress"));
+    assert_eq!(f.ok(&["current"])?["status"], "paused");
     f.no_scratch()?;
     Ok(())
 }

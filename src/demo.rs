@@ -826,6 +826,9 @@ impl Backend for DemoWorkspace {
             | DialogKind::Help
             | DialogKind::Stats
             | DialogKind::Events
+            | DialogKind::RegisterProject
+            | DialogKind::MoveProject
+            | DialogKind::DeleteProject
             | DialogKind::Inspect { .. } => {}
             DialogKind::BreakdownPending | DialogKind::BreakdownReview { .. } => {
                 return Err("Persistent proposal is unavailable in demo mode".into());

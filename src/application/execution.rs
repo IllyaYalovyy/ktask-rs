@@ -411,15 +411,26 @@ impl Service {
     }
     /// Every registered project root in this instance, oldest first.
     pub fn project_roots(db: &Database) -> Result<Vec<PathBuf>> {
+        Ok(Self::project_registrations(db)?
+            .into_iter()
+            .map(|(_, _, root)| root)
+            .collect())
+    }
+
+    pub(crate) fn project_registrations(db: &Database) -> Result<Vec<(i64, String, PathBuf)>> {
         let mut statement = db
             .connection()
-            .prepare("SELECT root_path FROM projects ORDER BY id")?;
-        let roots = statement
-            .query_map([], |r| r.get::<_, Vec<u8>>(0))?
-            .map(|bytes| Ok(PathBuf::from(OsString::from_vec(bytes?))))
-            .collect::<Result<_>>()?;
-        Ok(roots)
+            .prepare("SELECT id,name,root_path FROM projects ORDER BY id")?;
+        let registrations = statement.query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                PathBuf::from(OsString::from_vec(row.get(2)?)),
+            ))
+        })?;
+        Ok(registrations.collect::<rusqlite::Result<_>>()?)
     }
+
     pub fn project_root(&self) -> Result<PathBuf> {
         let bytes = self.db.connection().query_row(
             "SELECT root_path FROM projects WHERE id = ?1",
@@ -696,7 +707,7 @@ impl Service {
         )?)
     }
     pub fn request_pause(&mut self, target: VersionedTask) -> Result<()> {
-        self.request_pause_for(target, None)
+        self.request_pause_for(Some(target), None).map(drop)
     }
     /// Persist the owner's final control before signalling the runner. The runner completes
     /// this request under its workspace lease even if the requesting process disappears.
@@ -707,21 +718,43 @@ impl Service {
         reason: &str,
     ) -> Result<()> {
         require(matches!(action, "stop" | "done"), "Invalid control action")?;
-        self.request_pause_for(target, Some((action, reason)))
+        self.request_pause_for(Some(target), Some((action, reason)))
+            .map(drop)
     }
+    pub(crate) fn request_current_pause(&mut self) -> Result<Option<i64>> {
+        self.request_pause_for(None, None)
+    }
+
     fn request_pause_for(
         &mut self,
-        target: VersionedTask,
+        target: Option<VersionedTask>,
         control: Option<(&str, &str)>,
-    ) -> Result<()> {
+    ) -> Result<Option<i64>> {
         let tx = self
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current: Option<(String, Option<String>, Option<i64>)> = tx.query_row("SELECT status,wait_reason,latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2 AND row_version=?3", params![self.project_id,target.id,target.version], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-        let (status, wait_reason, latest) = current.ok_or_else(|| {
-            Error::Conflict("Current task changed; refresh before pausing".into())
-        })?;
+        let current: Option<(i64, String, Option<String>, Option<i64>)> = tx
+            .query_row(
+                "SELECT id,status,wait_reason,latest_attempt_id FROM current_tasks
+             WHERE project_id=?1 AND (?2 IS NULL OR (id=?2 AND row_version=?3))",
+                params![
+                    self.project_id,
+                    target.map(|task| task.id),
+                    target.map(|task| task.version)
+                ],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?;
+        let (id, status, wait_reason, latest) = match current {
+            Some((id, status, wait_reason, latest)) => (Some(id), status, wait_reason, latest),
+            None if target.is_none() => (None, String::new(), None, None),
+            None => {
+                return Err(Error::Conflict(
+                    "Current task changed; refresh before pausing".into(),
+                ));
+            }
+        };
         let session: Option<(String, String)> = tx
             .query_row(
                 "SELECT mode,state FROM execution_sessions WHERE project_id=?1",
@@ -759,17 +792,19 @@ impl Service {
                 "A Stop or Mark done is already pending",
             )?;
             tx.execute("INSERT INTO pending_controls(project_id,task_id,attempt_id,action,reason,actor_kind,actor,state) VALUES (?1,?2,?3,?4,?5,?6,?7,'requested') ON CONFLICT(project_id) DO UPDATE SET task_id=excluded.task_id,attempt_id=excluded.attempt_id,action=excluded.action,reason=excluded.reason,actor_kind=excluded.actor_kind,actor=excluded.actor,state='requested',stash=NULL,stash_checked=0,completed_version=NULL",
-                params![self.project_id,target.id,attempt,action,control_reason,self.actor.kind.as_str(),self.actor.name])?;
+                params![self.project_id,id,attempt,action,control_reason,self.actor.kind.as_str(),self.actor.name])?;
         }
         let reason = if attempt.is_some() {
             "Pause requested; stopping worker"
         } else {
             "Pause requested; no later task will start"
         };
-        tx.execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'runner.pause','info',?5)", params![self.project_id,target.id,attempt,now_ms(),reason])?;
+        if let Some(id) = id {
+            tx.execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'runner.pause','info',?5)", params![self.project_id,id,attempt,now_ms(),reason])?;
+        }
         tx.execute("UPDATE execution_sessions SET state='paused',reason=?2,updated_at_ms=?3 WHERE project_id=?1", params![self.project_id,reason,now_ms()])?;
         tx.commit()?;
-        Ok(())
+        Ok(id)
     }
     pub fn control_cursor(&self, run: &Run) -> Result<i64> {
         self.pause_cursor(run.attempt)

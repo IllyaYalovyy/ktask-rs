@@ -69,7 +69,7 @@ for proc in /proc/[0-9]*; do
     esac
 done
 if [ -n "$live" ]; then
-    fail "ktask is running from $target (pid$live); pause or finish its run before reinstalling"
+    fail "ktask is running from $target (pid$live). Run ktask shutdown before reinstalling. If the installed version predates shutdown, run cargo run --locked --manifest-path \"$repo/Cargo.toml\" --bin ktask -- shutdown and quit any older ktask windows with q."
 fi
 
 echo "Installing $repo -> $target"

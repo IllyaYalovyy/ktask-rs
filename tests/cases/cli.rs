@@ -629,6 +629,10 @@ fn registered_android_sdk_satisfies_project_dependency_without_installing() -> R
     Ok(())
 }
 
+fn tool_registry_text(screen: &str) -> String {
+    support::dialog_text(screen, "Project tools", Some("Tool action"))
+}
+
 #[test]
 fn registered_tool_is_visible_in_real_config_by_keyboard_and_mouse() -> Result {
     let scratch = support::sandbox()?;
@@ -683,7 +687,8 @@ fn registered_tool_is_visible_in_real_config_by_keyboard_and_mouse() -> Result {
     assert_eq!(listed["data"]["tools"][0]["binding_version"], 1);
     terminal.send("t")?;
     let keyboard = terminal.screen("Tool registry keyboard", |s| {
-        s.contains("Project tools") && s.contains("rg 14.1") && s.contains("bound v1")
+        let registry = tool_registry_text(s);
+        registry.contains("rg 14.1") && registry.contains("bound v1")
     })?;
     println!("TOOL REGISTRY KEYBOARD SCREEN\n{keyboard}");
     if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
@@ -765,7 +770,8 @@ fn real_tool_dialog_runs_every_mutation_by_keyboard_and_mouse() -> Result {
         let inspect = |t: &mut Terminal, name: &str, expected: &str| -> Result {
             open(t)?;
             let screen = t.screen("Tool registry state", |s| {
-                s.contains(expected) && s.contains("ktask-test-scratch")
+                let registry = tool_registry_text(s);
+                registry.contains(expected) && registry.contains("ktask-test-scratch")
             })?;
             save_screen(name, &screen)?;
             t.send("\x1b")?;
@@ -823,7 +829,7 @@ fn real_tool_dialog_runs_every_mutation_by_keyboard_and_mouse() -> Result {
         support::write_executable(&install.join("bin/rg"), b"#!/bin/sh\necho 'rg 14.2'\n")?;
         open(&mut terminal)?;
         let changed = terminal.screen("External tool changed", |s| {
-            s.contains("changed or missing")
+            tool_registry_text(s).contains("changed or missing")
         })?;
         save_screen("changed", &changed)?;
         if mouse {
@@ -859,7 +865,8 @@ fn real_tool_dialog_runs_every_mutation_by_keyboard_and_mouse() -> Result {
 
         open(&mut terminal)?;
         terminal.screen("Refreshed tool ready", |s| {
-            s.contains("rg 14.2") && s.contains("ready")
+            let registry = tool_registry_text(s);
+            registry.contains("rg 14.2") && registry.contains("ready")
         })?;
         if mouse {
             terminal.click_after("Tool action", "Register")?;

@@ -18,14 +18,17 @@ pub enum View {
     History,
     Config,
     About,
+    /// Every project of this instance; the other screens show the open one.
+    Projects,
 }
 impl View {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Current,
         Self::Queue,
         Self::History,
         Self::Config,
         Self::About,
+        Self::Projects,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -34,6 +37,7 @@ impl View {
             Self::History => "History",
             Self::Config => "Config",
             Self::About => "About",
+            Self::Projects => "Projects",
         }
     }
 }
@@ -102,6 +106,15 @@ pub enum Action {
     Storage,
     BuildCache,
     Tools,
+    /// Open the project selected on the Projects screen.
+    OpenProject,
+    /// Offer to add the folder the TUI started in as a project.
+    RegisterProject,
+    /// Offer to point the selected project at another folder.
+    MoveProject,
+    /// Offer to delete the selected project and everything stored for it.
+    DeleteProject,
+    SelectProject(i64),
     Scroll(i32),
     Position(i32),
     Fields(i32),
@@ -247,6 +260,7 @@ pub struct Screen {
 pub struct App {
     pub backend: Box<dyn Backend>,
     pub(crate) screen: Screen,
+    pub(crate) hub: crate::projects::Hub,
 }
 
 /// Screens read and change view state through `App`; workspace commands go to `backend`.
@@ -271,6 +285,7 @@ impl App {
         Self {
             backend: Box::new(backend),
             screen,
+            hub: crate::projects::Hub::demo(),
         }
     }
     #[cfg(test)]
@@ -280,23 +295,33 @@ impl App {
         Self {
             backend: Box::new(backend),
             screen,
+            hub: crate::projects::Hub::demo(),
         }
     }
+    /// `unregistered`: the folder the TUI started in when it is not a project. It then
+    /// opens on Projects, with `service` the first project that can be opened.
     pub fn persistent(
         instance: Instance,
         service: crate::application::Service,
+        unregistered: Option<std::path::PathBuf>,
     ) -> Result<Self, String> {
         let mut screen = Screen::new(instance, &service.project_name);
+        let hub = crate::projects::Hub::open(instance, service.project_id, unregistered)?;
         let backend = crate::persistent::StoredWorkspace::open(&mut screen, service)?;
+        if hub.unregistered.is_some() {
+            screen.view = View::Projects;
+            screen.message("This folder is not a project · Enter opens one, n adds this folder");
+        }
         Ok(Self {
             backend: Box::new(backend),
             screen,
+            hub,
         })
     }
 }
 
 impl Screen {
-    fn new(instance: Instance, project_name: &str) -> Self {
+    pub(crate) fn new(instance: Instance, project_name: &str) -> Self {
         Self {
             supervisor_alive: None,
             project_name: project_name.into(),
@@ -563,20 +588,25 @@ impl App {
         let action = match key.code {
             KeyCode::Char('q') => Some(Action::Quit),
             KeyCode::Char('?') => Some(Action::Help),
-            KeyCode::Char(ch @ '1'..='5') => {
+            KeyCode::Char(ch @ '1'..='6') => {
                 Some(Action::View(View::ALL[(ch as u8 - b'1') as usize]))
             }
             KeyCode::Tab | KeyCode::BackTab => {
                 let n = View::ALL.iter().position(|v| *v == self.view).unwrap_or(0);
-                Some(Action::View(
-                    View::ALL[(n + if key.code == KeyCode::Tab { 1 } else { 4 }) % 5],
-                ))
+                let count = View::ALL.len();
+                let step = if key.code == KeyCode::Tab {
+                    1
+                } else {
+                    count - 1
+                };
+                Some(Action::View(View::ALL[(n + step) % count]))
             }
             KeyCode::Esc if matches!(self.view, View::About | View::Config) => Some(Action::Back),
             KeyCode::Esc => Some(Action::Clear),
-            KeyCode::Char('S') => Some(Action::Stats),
-            KeyCode::Char('l') => Some(Action::Events),
-            KeyCode::Char('a') => Some(Action::Add),
+            // Projects lists every project; task commands belong to the open one's screens.
+            KeyCode::Char('S') if self.view != View::Projects => Some(Action::Stats),
+            KeyCode::Char('l') if self.view != View::Projects => Some(Action::Events),
+            KeyCode::Char('a') if self.view != View::Projects => Some(Action::Add),
             code => self.view_key(code),
         };
         if let Some(action) = action {
@@ -584,7 +614,7 @@ impl App {
         }
     }
     fn view_key(&mut self, code: KeyCode) -> Option<Action> {
-        if code == KeyCode::Char('p') && self.view != View::Current {
+        if code == KeyCode::Char('p') && !matches!(self.view, View::Current | View::Projects) {
             return self.enabled(Action::Pause).then_some(Action::Pause);
         }
         match self.view {
@@ -662,7 +692,17 @@ impl App {
                     .any(|(_, offered)| *offered == action)
                     .then_some(action)
             }
-            _ => None,
+            View::Projects => match code {
+                KeyCode::Enter => Some(Action::OpenProject),
+                KeyCode::Char('n') => Some(Action::RegisterProject),
+                KeyCode::Char('m') => Some(Action::MoveProject),
+                KeyCode::Char('D') => Some(Action::DeleteProject),
+                _ => {
+                    self.navigate_projects(code);
+                    None
+                }
+            },
+            View::About => None,
         }
     }
     fn dialog_key(&mut self, key: KeyEvent) {
@@ -845,6 +885,10 @@ impl App {
         }
     }
     fn navigate(&mut self, code: KeyCode, logs: bool) {
+        if self.view == View::Projects {
+            self.navigate_projects(code);
+            return;
+        }
         let ids = self.visible();
         let pos = if logs {
             self.log_offset
@@ -958,6 +1002,7 @@ impl App {
         }
     }
     pub fn tick(&mut self) -> bool {
-        self.backend.tick(&mut self.screen)
+        let changed = self.backend.tick(&mut self.screen);
+        self.tick_projects() || changed
     }
 }
