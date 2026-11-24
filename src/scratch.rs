@@ -102,7 +102,12 @@ impl Scratch {
         // Removing .lease and its directory must be atomic with respect to the
         // sweeper: otherwise it can recreate .lease during TempDir::close.
         self.sweep.lock()?;
-        let result = self.dir.take().expect("open scratch directory").close();
+        let dir = self.dir.take().expect("open scratch directory");
+        // A stopped process may leave directories it locked, which TempDir cannot remove.
+        let result = remove_tree(dir.path()).and_then(|()| match dir.close() {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        });
         let unlocked = self.sweep.unlock();
         result.and(unlocked)
     }
@@ -204,10 +209,96 @@ fn set_aside_abandoned(root: &Path) -> io::Result<Vec<PathBuf>> {
 /// Best effort: report failures and leave the original name for the next startup.
 fn delete_all(paths: &[PathBuf]) {
     for path in paths {
-        if let Err(error) = fs::remove_dir_all(path)
-            && error.kind() != io::ErrorKind::NotFound
-        {
+        if let Err(error) = remove_tree(path) {
             eprintln!("scratch reclamation failed for {}: {error}", path.display());
         }
+    }
+}
+
+/// Removes a scratch tree even when a stopped process left directories without owner
+/// permissions (a test fixture with mode 000, for example). A missing tree is success.
+fn remove_tree(path: &Path) -> io::Result<()> {
+    match fs::remove_dir_all(path) {
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            unlock_directories(path)?;
+            fs::remove_dir_all(path)
+        }
+        other => other,
+    }
+    .or_else(|error| match error.kind() {
+        io::ErrorKind::NotFound => Ok(()),
+        _ => Err(error),
+    })
+}
+
+/// Gives the owner full access to every directory below `root`, never through a link.
+fn unlock_directories(root: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut directories = vec![root.to_path_buf()];
+    while let Some(path) = directories.pop() {
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_dir() => {
+                if metadata.permissions().mode() & 0o700 != 0o700 {
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+                }
+            }
+            Ok(_) => continue,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        }
+        for entry in fs::read_dir(&path)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                directories.push(entry.path());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn locked_tree(run: &Path) -> io::Result<()> {
+        let locked = run.join("fixture/a/locked");
+        fs::create_dir_all(&locked)?;
+        fs::write(locked.join("hidden"), b"x")?;
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))?;
+        fs::set_permissions(run.join("fixture"), fs::Permissions::from_mode(0o500))
+    }
+
+    #[test]
+    fn close_removes_directories_a_process_left_locked() -> io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let scratch = Scratch::new(root.path())?;
+        let run = scratch.path().to_path_buf();
+        locked_tree(&run)?;
+        scratch.close()?;
+        assert!(!run.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn reclaim_removes_abandoned_runs_with_locked_directories() -> io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let run = Scratch::new(root.path())?.preserve();
+        locked_tree(&run)?;
+        // A link to a locked directory outside the run must leave it untouched.
+        let outside = tempfile::tempdir()?;
+        let kept = outside.path().join("kept");
+        fs::create_dir(&kept)?;
+        fs::set_permissions(&kept, fs::Permissions::from_mode(0o000))?;
+        std::os::unix::fs::symlink(&kept, run.join("link"))?;
+
+        let reclaimed = Scratch::reclaim(root.path());
+        let mode = fs::symlink_metadata(&kept)?.permissions().mode() & 0o777;
+        fs::set_permissions(&kept, fs::Permissions::from_mode(0o700))?;
+        assert_eq!(reclaimed?, 1);
+        assert_eq!(mode, 0o000);
+        assert!(entries(root.path(), "run-")?.is_empty());
+        assert!(entries(root.path(), RECLAIMED)?.is_empty());
+        Ok(())
     }
 }

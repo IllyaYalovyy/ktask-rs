@@ -178,7 +178,7 @@ fn ordinary_startup_retries_reclaimed_trees_and_file_count_plateaus() -> Result 
 }
 
 #[test]
-fn reclamation_error_keeps_original_tree_for_a_later_startup() -> Result {
+fn reclamation_removes_a_tree_whose_directory_a_stopped_process_locked() -> Result {
     use std::os::unix::fs::PermissionsExt;
     let sandbox = support::sandbox()?;
     let root = sandbox.path().join("scratch");
@@ -186,18 +186,14 @@ fn reclamation_error_keeps_original_tree_for_a_later_startup() -> Result {
     let stranded = root.join(".reclaimed-123-run-ABCDEF");
     let protected = stranded.join("protected");
     fs::create_dir_all(&protected)?;
-    fs::write(protected.join("file"), "retry me")?;
+    fs::write(protected.join("file"), "left by a killed test")?;
     fs::set_permissions(&protected, fs::Permissions::from_mode(0o000))?;
-    let first = Scratch::new(&root)?;
+    let scratch = Scratch::new(&root)?;
     assert!(
-        stranded.exists(),
-        "failed deletion must retain its retryable name"
+        !stranded.exists(),
+        "a locked directory must not strand its scratch tree"
     );
-    first.close()?;
-    fs::set_permissions(&protected, fs::Permissions::from_mode(0o700))?;
-    let second = Scratch::new(&root)?;
-    assert!(!stranded.exists());
-    second.close()?;
+    scratch.close()?;
     Ok(())
 }
 
