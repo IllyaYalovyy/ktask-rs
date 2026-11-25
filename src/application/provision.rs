@@ -174,7 +174,7 @@ impl Drop for ProvisionStage {
         if self.guardian_started
             && let Err(error) = crate::runner::process::recover_orphaned(&self.guardian_lock)
         {
-            eprintln!("provisioning stage preserved after guardian recovery failure: {error}");
+            note!("provisioning stage preserved after guardian recovery failure: {error}");
             if let Some(scratch) = self.scratch.take() {
                 let _ = scratch.preserve();
             }

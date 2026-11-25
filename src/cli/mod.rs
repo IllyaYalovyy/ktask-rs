@@ -21,6 +21,9 @@ use std::{
     process::ExitCode,
 };
 
+/// The status a shell reports for a process ended by SIGPIPE.
+const SIGPIPE_EXIT: u8 = 141;
+
 pub(super) struct Failure {
     pub status: u8,
     pub code: &'static str,
@@ -32,6 +35,14 @@ impl Failure {
             status: 2,
             code: "usage",
             message: message.into(),
+        }
+    }
+    /// The reader of stdout went away (`| head`): like other tools, stop without a word.
+    fn closed_output() -> Self {
+        Self {
+            status: SIGPIPE_EXIT,
+            code: "closed_output",
+            message: String::new(),
         }
     }
     fn missing(message: impl Into<String>) -> Self {
@@ -90,6 +101,9 @@ pub fn launch(instance: Instance) -> ExitCode {
         Err(error) if !error.use_stderr() => {
             return match error.print() {
                 Ok(()) => ExitCode::SUCCESS,
+                Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {
+                    report(Failure::closed_output(), requested_json)
+                }
                 Err(error) => report(error.into(), requested_json),
             };
         }
@@ -106,6 +120,9 @@ pub fn launch(instance: Instance) -> ExitCode {
 }
 
 fn report(error: Failure, json_output: bool) -> ExitCode {
+    if error.code == "closed_output" {
+        return ExitCode::from(error.status);
+    }
     let mut stderr = io::stderr().lock();
     // Never panic again if the error stream is itself closed.
     if json_output {
@@ -126,17 +143,20 @@ fn report(error: Failure, json_output: bool) -> ExitCode {
 }
 fn emit(reply: output::Reply, json_output: bool) -> Result<()> {
     let mut stdout = io::stdout().lock();
-    if json_output {
+    let written = if json_output {
         writeln!(
             stdout,
             "{}",
             json!({"schema_version":1,"ok":true,"data":reply.data})
-        )?;
+        )
     } else {
-        write!(stdout, "{}", reply.text)?;
+        write!(stdout, "{}", reply.text)
     }
-    stdout.flush()?;
-    Ok(())
+    .and_then(|()| stdout.flush());
+    written.map_err(|error| match error.kind() {
+        io::ErrorKind::BrokenPipe => Failure::closed_output(),
+        _ => error.into(),
+    })
 }
 
 /// `ktask projects`: every registered project, without selecting or registering one.
@@ -279,8 +299,13 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
                 true,
             );
         }
-        paths.print(instance)?;
-        return Ok(());
+        return emit(
+            output::Reply {
+                data: json!(null),
+                text: paths.text(instance),
+            },
+            false,
+        );
     }
     match cli.command {
         Some(Command::Pause { all: true }) => return emit(pause_all::run(false)?, cli.json),
@@ -675,16 +700,18 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
                 },
             )?
         };
-        let reply = output::Reply {
-            data: json!({"message":message}),
-            text: format!("{message}\n"),
-        };
         if *notify {
-            // A detached runner's launcher may be gone, its pipe closed; nobody waits for this.
-            let _ = emit(reply, cli.json);
+            // A detached runner has no caller to answer: its outcome goes to its log.
+            note!("{message}");
             return Ok(());
         }
-        return emit(reply, cli.json);
+        return emit(
+            output::Reply {
+                data: json!({"message":message}),
+                text: format!("{message}\n"),
+            },
+            cli.json,
+        );
     }
     if let Command::Breakdown { target, apply } = command {
         let task = service

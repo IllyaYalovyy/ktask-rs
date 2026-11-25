@@ -378,12 +378,12 @@ pub fn clean(paths: &Paths, apply: bool) -> Result<Cleanup> {
 /// obsolete generations in owned caches. Failures never block the queue.
 pub fn maintain(paths: &Paths, project: &Path) -> Option<Cleanup> {
     if let Err(error) = claim_fresh(paths, project) {
-        eprintln!("build cache: cannot claim the project target: {error}");
+        note!("build cache: cannot claim the project target: {error}");
     }
     match clean(paths, true) {
         Ok(done) => Some(done),
         Err(error) => {
-            eprintln!("build cache: cleanup failed, caches stay unbounded until fixed: {error}");
+            note!("build cache: cleanup failed, caches stay unbounded until fixed: {error}");
             None
         }
     }

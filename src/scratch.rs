@@ -116,7 +116,7 @@ impl Scratch {
 impl Drop for Scratch {
     fn drop(&mut self) {
         if let Err(error) = self.cleanup() {
-            eprintln!("scratch cleanup failed: {error}");
+            note!("scratch cleanup failed: {error}");
         }
     }
 }
@@ -210,7 +210,7 @@ fn set_aside_abandoned(root: &Path) -> io::Result<Vec<PathBuf>> {
 fn delete_all(paths: &[PathBuf]) {
     for path in paths {
         if let Err(error) = remove_tree(path) {
-            eprintln!("scratch reclamation failed for {}: {error}", path.display());
+            note!("scratch reclamation failed for {}: {error}", path.display());
         }
     }
 }

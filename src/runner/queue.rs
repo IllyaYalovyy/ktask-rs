@@ -187,6 +187,9 @@ fn run_inner(
             // runner never depends on it, so a failed notification is no failure.
             let mut stdout = std::io::stdout();
             let _ = writeln!(stdout, "ready").and_then(|()| stdout.flush());
+            // The launcher is done with this pipe. Nothing later writes to it, and
+            // the descriptor is not kept open on the launching command's behalf.
+            detach_stdout();
         }
         notified = true;
         match attempt::run(service, &launch, begun)? {
@@ -243,7 +246,7 @@ fn next_task(service: &mut Service, stop: &AtomicBool) -> Result<ControlFlow<Str
     // Safe point: no worker of this runner is live. The conversion also requires that no
     // other attempt, pin or reservation exists in the instance.
     if let Some(freed) = service.enable_incremental_vacuum()? {
-        eprintln!("storage: enabled incremental vacuum; the SQLite file shrank by {freed} bytes");
+        note!("storage: enabled incremental vacuum; the SQLite file shrank by {freed} bytes");
     }
     let (storage, cleanup_progress) = service.automatic_housekeeping_progress(1)?;
     let Some(task) = service.current_task()? else {
@@ -370,7 +373,7 @@ fn retire_build_generations(paths: &Paths, workspace: &Workspace) {
     if let Some(done) = crate::build_cache::maintain(paths, &workspace.root) {
         let freed: u64 = done.reports.iter().map(|r| r.freed_bytes).sum();
         if freed > 0 || done.scratch_reclaimed > 0 {
-            eprintln!(
+            note!(
                 "build cache: retired {freed} bytes of obsolete generations; {} abandoned scratch run(s) reclaimed",
                 done.scratch_reclaimed
             );
@@ -469,4 +472,12 @@ pub(super) fn preflight(service: &Service, definition: &Definition) -> Result<()
         }
     }
     sandbox::available()
+}
+
+/// Point stdout at /dev/null so a detached runner holds nothing of its launcher.
+fn detach_stdout() {
+    use std::os::fd::AsFd as _;
+    if let Ok(null) = std::fs::OpenOptions::new().write(true).open("/dev/null") {
+        let _ = nix::unistd::dup2_stdout(null.as_fd());
+    }
 }

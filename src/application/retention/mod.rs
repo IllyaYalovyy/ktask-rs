@@ -156,7 +156,7 @@ impl Service {
             let batch = self.cleanup_batch(&before, CLEANUP_BATCH, &projected, false)?;
             for path in batch.skipped {
                 if self.reported_evidence.insert(path.clone()) {
-                    eprintln!("storage: {path}; other evidence is still cleaned");
+                    note!("storage: {path}; other evidence is still cleaned");
                 }
             }
             let receipt = batch.receipt;

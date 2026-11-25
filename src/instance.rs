@@ -2,7 +2,7 @@ mod tui_shutdown;
 
 pub(crate) use tui_shutdown::{TuiSession, TuiShutdown};
 
-use std::{env, io, io::Write, path::PathBuf};
+use std::{env, io, path::PathBuf};
 
 /// Fixed by the executable's entry point, never by cwd, filename, profile, or environment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,9 +59,9 @@ pub struct Paths {
 }
 
 impl Paths {
-    pub fn print(&self, instance: Instance) -> io::Result<()> {
-        let mut out = io::stdout().lock();
-        writeln!(out, "instance\t{}", instance.name())?;
+    /// The `--paths` listing: one tab-separated `label<TAB>value` line each.
+    pub fn text(&self, instance: Instance) -> String {
+        let mut text = format!("instance\t{}\n", instance.name());
         for (label, path) in [
             ("executable", &self.executable),
             ("config", &self.config),
@@ -70,9 +70,9 @@ impl Paths {
             ("data", &self.data),
             ("runtime", &self.runtime),
         ] {
-            writeln!(out, "{label}\t{}", path.display())?;
+            text.push_str(&format!("{label}\t{}\n", path.display()));
         }
-        Ok(())
+        text
     }
 }
 

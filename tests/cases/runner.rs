@@ -4751,6 +4751,70 @@ fn cli_stop_and_done_wait_for_the_running_worker_and_report_the_stash() -> Resul
     Ok(())
 }
 
+/// A stdout whose reader is already gone, as after `ktask ... | true`.
+fn closed_pipe() -> Result<Stdio> {
+    let (reader, writer) = std::io::pipe()?;
+    drop(reader);
+    Ok(writer.into())
+}
+
+#[test]
+fn background_runner_survives_its_launchers_output_closing() -> Result {
+    let f = Fixture::new()?;
+    f.provider("dirty-live")?;
+    f.add("Detached from the caller")?;
+    // The launcher's own output is a pipe nobody reads, as in `run --background | true`.
+    let launched = f
+        .process()
+        .args(["run", "--background"])
+        .stdout(closed_pipe()?)
+        .output()?;
+    // The launcher exits quietly: no panic, no diagnostic about the closed pipe.
+    assert_eq!(launched.status.code(), Some(141));
+    assert_eq!(String::from_utf8_lossy(&launched.stderr), "");
+    let worker = f.dirty_worker()?;
+    let supervisor = f.supervisor_pid()?;
+    // The runner keeps neither of the launcher's streams: stdout is discarded after the
+    // startup handshake and stderr feeds the runner log.
+    let fd = |n: u8| fs::read_link(format!("/proc/{supervisor}/fd/{n}"));
+    assert_eq!(fd(1)?, Path::new("/dev/null"));
+    assert!(fd(2)?.to_string_lossy().starts_with("pipe:"));
+    thread::sleep(Duration::from_millis(500));
+    assert!(
+        Path::new(&format!("/proc/{supervisor}")).exists(),
+        "the runner died after its launcher's output closed"
+    );
+    let shown = f.ok(&["show", "1"])?;
+    assert_eq!(shown["state"], "running");
+    assert_eq!(shown["attempts"][0]["state"], "running");
+    f.ok(&["stop", "1", "--reason", "Done checking"])?;
+    f.runner_gone(worker)?;
+    let shown = f.ok(&["show", "1"])?;
+    let outcome = shown["attempts"][0]["outcome"].as_str().unwrap();
+    assert_eq!(outcome, "Stopped: Done checking");
+    assert!(!outcome.contains("unexpectedly"));
+    let log = fs::read_to_string(f.scratch.path().join("state/ktask-dev/runner-1.log"))?;
+    assert!(!log.contains("panicked"), "{log}");
+    Ok(())
+}
+
+#[test]
+fn foreground_commands_exit_quietly_when_their_output_pipe_is_closed() -> Result {
+    let f = Fixture::new()?;
+    f.add("Closed pipe")?;
+    for args in [
+        &["--json", "show", "1"][..],
+        &["list"],
+        &["--help"],
+        &["--paths"],
+    ] {
+        let run = f.process().args(args).stdout(closed_pipe()?).output()?;
+        assert_eq!(run.status.code(), Some(141), "{args:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stderr), "", "{args:?}");
+    }
+    Ok(())
+}
+
 struct PausedSupervisor(i32);
 impl Drop for PausedSupervisor {
     fn drop(&mut self) {

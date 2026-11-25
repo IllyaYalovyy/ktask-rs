@@ -1,5 +1,14 @@
 /// User-facing product name; instance names stay `ktask`/`ktask-dev` for paths.
 pub const PRODUCT: &str = "ktask RS";
+/// A diagnostic line on stderr. Unlike `eprintln!` it never panics: a closed or full error
+/// stream (a detached runner's launcher is gone, a pipe reader exited) loses the line only.
+macro_rules! note {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
+
 mod actions;
 mod app;
 pub mod application;
@@ -76,7 +85,9 @@ pub fn launch(instance: instance::Instance) -> std::process::ExitCode {
                     storage::Error::Conflict(message) => message,
                     other => other.to_string(),
                 };
-                println!(
+                use std::io::Write as _;
+                let _ = writeln!(
+                    std::io::stdout(),
                     "{}",
                     serde_json::to_string(&runner::process::Message::Error(message))
                         .expect("error JSON")
@@ -112,7 +123,7 @@ pub fn launch(instance: instance::Instance) -> std::process::ExitCode {
                 std::process::ExitCode::from(output.code.clamp(0, 255) as u8)
             }
             Err(error) => {
-                eprintln!("{error}");
+                note!("{error}");
                 std::process::ExitCode::FAILURE
             }
         };
@@ -128,7 +139,9 @@ pub fn launch(instance: instance::Instance) -> std::process::ExitCode {
         if kind == "executable" {
             return application::dependency::probe_executable(&item);
         }
-        println!(
+        use std::io::Write as _;
+        let _ = writeln!(
+            std::io::stdout(),
             "{}",
             application::dependency::probe_local_file(&kind, &item, args.next().as_deref())
         );

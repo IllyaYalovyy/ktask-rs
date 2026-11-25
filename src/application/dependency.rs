@@ -690,19 +690,24 @@ pub fn probe_executable(item: &str) -> ExitCode {
     let path = match selected {
         Ok(path) => path,
         Err(observed) => {
-            println!("KTASK_PROBE_LOOKUP_ERROR: {observed}");
+            use std::io::Write as _;
+            let _ = writeln!(std::io::stdout(), "KTASK_PROBE_LOOKUP_ERROR: {observed}");
             return ExitCode::from(125);
         }
     };
     match Command::new(path).arg("--version").status() {
         Ok(status) => ExitCode::from(status.code().unwrap_or(1) as u8),
         Err(error) => {
+            use std::io::Write as _;
             let category = match error.kind() {
                 std::io::ErrorKind::PermissionDenied => "DENIED",
                 std::io::ErrorKind::NotFound => "MISSING",
                 _ => "TRANSIENT",
             };
-            println!("KTASK_PROBE_LOOKUP_ERROR: {category}: {error}");
+            let _ = writeln!(
+                std::io::stdout(),
+                "KTASK_PROBE_LOOKUP_ERROR: {category}: {error}"
+            );
             ExitCode::from(125)
         }
     }

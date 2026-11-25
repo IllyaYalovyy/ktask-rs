@@ -224,7 +224,7 @@ impl Service {
             .and_then(|()| db.execute_batch("VACUUM"));
         if let Err(error) = vacuum {
             if !sqlite_busy(&error) {
-                eprintln!("storage: incremental-vacuum conversion deferred: {error}");
+                note!("storage: incremental-vacuum conversion deferred: {error}");
                 self.vacuum_failure = Some(error.to_string());
             }
             return Ok(None);
