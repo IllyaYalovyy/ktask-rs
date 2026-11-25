@@ -160,10 +160,10 @@ fn emit(reply: output::Reply, json_output: bool) -> Result<()> {
 }
 
 /// `ktask projects`: every registered project, without selecting or registering one.
-fn projects(instance: Instance) -> Result<output::Reply> {
-    let paths = instance.paths()?;
-    let listed = match Database::open_existing(&paths)? {
-        Some(db) => crate::runner::registration::listed(&paths, &db)?,
+/// Every project of the instance; an instance without a database has none.
+fn projects(paths: &crate::instance::Paths) -> Result<output::Reply> {
+    let listed = match Database::open_existing(paths)? {
+        Some(db) => crate::runner::registration::listed(paths, &db)?,
         None => Vec::new(),
     };
     let mut text = String::new();
@@ -256,6 +256,34 @@ fn project_delete(instance: Instance, id: i64, confirm: &str) -> Result<output::
     })
 }
 
+/// The host-wide MCP server: it opens nothing and registers nothing before a tool call, and a
+/// given `--project` only pins it to that registered project.
+fn mcp_host(instance: Instance, cli: &Cli) -> Result<mcp::Host> {
+    let paths = instance.paths()?;
+    let pin = match &cli.project {
+        None => None,
+        Some(folder) => {
+            let unregistered = || {
+                Failure::missing("--project is not a registered project; use add first, or omit it")
+            };
+            let db = Database::open_existing(&paths)?.ok_or_else(unregistered)?;
+            let service = Service::select(db, application::Selector::Folder(folder))?
+                .ok_or_else(unregistered)?;
+            Some(service.project_id)
+        }
+    };
+    Ok(mcp::Host {
+        paths,
+        version: instance.version(),
+        pin,
+        directory: std::env::current_dir().ok(),
+        actor: application::Actor {
+            kind: application::ActorKind::Ai,
+            name: cli.actor.clone().unwrap_or_else(|| "mcp".into()),
+        },
+    })
+}
+
 fn run(instance: Instance, cli: &Cli) -> Result<()> {
     if let Some(Command::Evidence {
         file,
@@ -310,13 +338,14 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
     match cli.command {
         Some(Command::Pause { all: true }) => return emit(pause_all::run(false)?, cli.json),
         Some(Command::Shutdown) => return emit(pause_all::run(true)?, cli.json),
-        Some(Command::Projects) => return emit(projects(instance)?, cli.json),
+        Some(Command::Projects) => return emit(projects(&instance.paths()?)?, cli.json),
         Some(Command::ProjectMove { id, ref folder }) => {
             return emit(project_move(instance, id, folder)?, cli.json);
         }
         Some(Command::ProjectDelete { id, ref confirm }) => {
             return emit(project_delete(instance, id, confirm)?, cli.json);
         }
+        Some(Command::Mcp) => return mcp::serve(mcp_host(instance, cli)?).map_err(Into::into),
         _ => {}
     }
     let root = cli.project.clone().map_or_else(std::env::current_dir, Ok)?;
@@ -436,21 +465,14 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         }
         service
     };
-    let mcp = matches!(command, Command::Mcp);
     service.set_actor(application::Actor {
-        kind: if mcp || matches!(cli.actor_kind, Some(args::ActorKind::Ai)) {
+        kind: if matches!(cli.actor_kind, Some(args::ActorKind::Ai)) {
             application::ActorKind::Ai
         } else {
             application::ActorKind::Human
         },
-        name: cli
-            .actor
-            .clone()
-            .unwrap_or_else(|| if mcp { "mcp" } else { "owner" }.into()),
+        name: cli.actor.clone().unwrap_or_else(|| "owner".into()),
     })?;
-    if mcp {
-        return mcp::serve(&mut service, instance.version()).map_err(Into::into);
-    }
     if let Command::Tool { action } = command {
         use args::ToolAction;
         let reply = match action {
@@ -969,13 +991,14 @@ fn validate(cli: &Cli) -> Result<()> {
         ));
     }
     if matches!(cli.command, Some(Command::Mcp)) {
-        if !cli
-            .project
-            .as_deref()
-            .is_some_and(std::path::Path::is_absolute)
-        {
+        if cli.project.as_deref().is_some_and(|p| !p.is_absolute()) {
             return Err(Failure::usage(
-                "mcp requires --project with an absolute registered path",
+                "mcp --project must be an absolute registered path",
+            ));
+        }
+        if cli.project_name.is_some() {
+            return Err(Failure::usage(
+                "mcp registers no project; omit --project-name",
             ));
         }
         if matches!(cli.actor_kind, Some(args::ActorKind::Human)) {

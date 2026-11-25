@@ -1,9 +1,9 @@
-//! Local JSON-RPC stdio transport for a single registered project.
+//! Local JSON-RPC stdio transport serving every project of the instance.
 mod tools;
 
-use crate::application::Service;
 use serde_json::{Map, Value, json};
 use std::io::{self, BufRead, Read, Write};
+pub(super) use tools::Host;
 use tools::Tool;
 
 const MAX_FRAME_BYTES: u64 = 1024 * 1024;
@@ -15,12 +15,11 @@ const METHOD_NOT_FOUND: i32 = -32601;
 const INVALID_PARAMS: i32 = -32602;
 const NOT_INITIALIZED: i32 = -32002;
 
-pub(super) fn serve(service: &mut Service, version: &str) -> io::Result<()> {
+pub(super) fn serve(host: Host) -> io::Result<()> {
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();
     let mut server = Server {
-        service,
-        version,
+        host,
         initialized: false,
     };
     let mut frame = Vec::new();
@@ -67,13 +66,12 @@ impl RpcError {
     }
 }
 
-struct Server<'a> {
-    service: &'a mut Service,
-    version: &'a str,
+struct Server {
+    host: Host,
     initialized: bool,
 }
 
-impl Server<'_> {
+impl Server {
     fn message(&mut self, message: &Value) -> Option<Value> {
         let id = message.get("id");
         let valid_id = id.filter(|id| id.is_string() || id.is_i64() || id.is_u64());
@@ -163,7 +161,7 @@ impl Server<'_> {
         Ok(json!({
             "protocolVersion":version,
             "capabilities":{"tools":{"listChanged":false}},
-            "serverInfo":{"name":"ktask","title":crate::PRODUCT,"version":self.version},
+            "serverInfo":{"name":"ktask","title":crate::PRODUCT,"version":self.host.version},
         }))
     }
 
@@ -187,7 +185,7 @@ impl Server<'_> {
         if !arguments.is_object() {
             return Err(RpcError::params("arguments must be an object"));
         }
-        Ok(match tool.invoke(self.service, arguments) {
+        Ok(match tool.invoke(&self.host, arguments) {
             Ok(data) => {
                 json!({"content":[{"type":"text","text":data.to_string()}],"structuredContent":data})
             }

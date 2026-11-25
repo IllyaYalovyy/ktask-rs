@@ -404,6 +404,16 @@ pub struct VersionedTask {
     pub version: i64,
 }
 
+/// How a command names a registered project.
+#[derive(Clone, Copy, Debug)]
+pub enum Selector<'a> {
+    Id(i64),
+    /// The project registered at exactly this absolute folder.
+    Folder(&'a Path),
+    /// The deepest registered project whose folder contains this directory.
+    Containing(&'a Path),
+}
+
 pub struct Service {
     db: Database,
     observed_data_version: i64,
@@ -459,6 +469,38 @@ impl Service {
         project
             .map(|(id, name)| Self::registered(db, id, name))
             .transpose()
+    }
+
+    /// Opens one registered project by ID, exact folder, or the folder containing a directory,
+    /// without registering anything. The folder itself may be missing: reads and drafts only
+    /// touch the database.
+    pub fn select(db: Database, selector: Selector<'_>) -> Result<Option<Self>> {
+        let registrations = Self::project_registrations(&db)?;
+        let found = match selector {
+            Selector::Id(id) => registrations.into_iter().find(|(known, ..)| *known == id),
+            Selector::Folder(folder) => {
+                let canonical = folder.canonicalize().ok();
+                registrations
+                    .into_iter()
+                    .find(|(_, _, root)| root == folder || canonical.as_ref() == Some(root))
+            }
+            Selector::Containing(directory) => {
+                let canonical = directory.canonicalize().ok();
+                registrations
+                    .into_iter()
+                    .filter(|(_, _, root)| {
+                        directory.starts_with(root)
+                            || canonical.as_ref().is_some_and(|dir| dir.starts_with(root))
+                    })
+                    .max_by_key(|(_, _, root)| root.components().count())
+            }
+        };
+        let Some((id, name, _)) = found else {
+            return Ok(None);
+        };
+        retention::initialize_capacity_admission(&db)?;
+        execution::backfill_output_usage(db.connection())?;
+        Self::registered(db, id, name).map(Some)
     }
 
     pub(crate) fn registered(db: Database, project_id: i64, project_name: String) -> Result<Self> {

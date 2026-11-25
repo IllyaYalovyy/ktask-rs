@@ -738,26 +738,44 @@ must use the supervisor's absolute executable, never a bare name resolved throug
 
 ## MCP for Codex and Claude Code
 
-Use `ktask mcp` to inspect one registered project and submit drafts from an interactive agent
-session. Copy the absolute executable path from `ktask --paths` and bind the server to the
-project's absolute directory. Run the Claude Code command from the project directory to scope
-its registration to that project. The Codex command adds a user-level entry that always points
-to the configured ktask project.
+`ktask mcp` is one host-wide stdio server for every project of the instance, so a single
+user-level registration in Codex and in Claude Code serves them all. Copy the absolute
+executable path from `ktask --paths` (`ktask-dev` is a separate instance with its own projects)
+and register it once per client:
 
 ```sh
-codex mcp add ktask -- /absolute/path/to/ktask --project /absolute/path/to/project --actor codex mcp
-claude mcp add --transport stdio ktask -- /absolute/path/to/ktask --project /absolute/path/to/project --actor claude-code mcp
+codex mcp add ktask -- /absolute/path/to/ktask --actor codex mcp
+claude mcp add --scope user --transport stdio ktask -- /absolute/path/to/ktask --actor claude-code mcp
 ```
+
+These commands were checked with codex-cli 0.166.0 and Claude Code 2.1.331.
+
+The server opens the project for each call, so projects added, moved or deleted while it runs
+are seen as they are then, and a failed call never stops it from serving the others. It starts
+from any directory, even outside a project or before the instance has a database, and never
+creates storage or registers a project. A project whose folder is missing can still be read and
+take drafts.
 
 | Tool | Use |
 | --- | --- |
+| `projects` | List every project with the fields of `ktask --json projects`: `id`, `name`, `root`, `state`, `runner_alive`, `queued`, `finished` and `current`. |
 | `current` | Read the current task, including its state, available actions and latest attempt. |
 | `list` | Browse the queue in execution order or select `history` or `all`. Pass `next_offset` as `offset` to continue. |
 | `show` | Inspect a task by `id`, including its definition, version, and any newer draft. |
 | `events` | Read project events in ascending ID order. Pass `next_after` as `after` to continue. |
 | `add_draft` | Append a draft with `title`, `goal`, and `criteria`. The owner can review it in Current Task or Queue. |
 
-For example, ask “What is blocking the current task?” or “Draft a task to fix pagination, with
-a criterion that the last row stays visible.” Drafts are recorded as AI-authored using the
-configured `--actor` name, which defaults to `mcp`. Approvals and execution controls are available
-through the CLI and TUI.
+**Choosing the project.** `current`, `list`, `show`, `events` and `add_draft` take an optional
+`project`: a project ID or the absolute folder it is registered at, both listed by `projects`.
+Without it they use the project the server is pinned to, else the registered project containing
+the server's working directory. When none applies, or the ID or folder is not registered, the call
+fails without side effects and the error points to the `projects` tool. Every result names the
+project it acted on (`project.id` and `project.name`). Add `--project /absolute/path/to/project`
+before `mcp` only to pin the server to that one registered project; it then refuses calls that
+name another.
+
+For example, ask “Which projects does ktask have?”, “What is blocking the current task in
+billing?” or “Draft a task in billing to fix pagination, with a criterion that the last row stays
+visible.” The server is read-only apart from `add_draft`: approvals, execution controls, edits,
+moves and deletion are available only through the CLI and TUI. Drafts are recorded as AI-authored
+using the configured `--actor` name, which defaults to `mcp`; `--actor-kind human` is refused.

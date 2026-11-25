@@ -87,6 +87,19 @@ TYPICAL SESSION
   the owner, then prints why it stopped. A detached runner logs to
   <state>/runner-<project id>.log (see --paths).
 
+MCP SERVER (one registration serves every project of the instance)
+  codex mcp add ktask -- /abs/ktask --actor codex mcp
+  claude mcp add --scope user --transport stdio ktask -- /abs/ktask --actor claude-code mcp
+  ktask mcp serves stdio from any directory, creates no storage and registers no project.
+  Each call opens its project afresh. Tools: projects (the fields of ktask --json projects);
+  current, list, show, events (read) and add_draft (an AI-attributed draft; the only change).
+  Those five take an optional project: an ID or an absolute folder from projects. Without it
+  they use the --project pin, else the registered project containing the working directory;
+  otherwise they fail naming the projects tool. Results carry project {id, name}. --project
+  ABSDIR before mcp pins the server to that project and refuses calls naming another.
+  Changes are AI under --actor (default mcp); --actor-kind human is refused. There is no
+  approve, run, edit, move or delete tool.
+
 STATES ("state" in list, show and current; "actions" lists what each offers)
   needs_approval  no approved revision, or a newer draft: approve, reject, edit, move, done
   pending         queued; run, edit, move, cancel, supersede --by IDS, done

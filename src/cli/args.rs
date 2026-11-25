@@ -711,7 +711,7 @@ pub enum Command {
     },
     /// Show the current task like show; prints null when the queue is empty.
     Current,
-    /// Serve the registered --project over MCP on standard input/output.
+    /// Serve every project of this instance over MCP on standard input/output (--project pins one).
     Mcp,
     /// Add a task at the end of the queue (or --before ID). Ready unless --approval draft.
     ///

@@ -4,9 +4,9 @@ use crate::{
 };
 use serde_json::{Value, json};
 use std::{
-    io::Write,
+    io::{BufRead, BufReader, Write},
     path::Path,
-    process::{Command, Stdio},
+    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
 };
 
 fn cli(root: &Path, project: &Path, arguments: &[&str]) -> Result<Value> {
@@ -86,12 +86,12 @@ fn file_draft(root: &Path, project: &Path, foreign_id: i64, previous_id: i64) ->
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names.len(), 5);
-    for name in ["current", "list", "show", "events", "add_draft"] {
+    assert_eq!(names.len(), 6);
+    for name in ["projects", "current", "list", "show", "events", "add_draft"] {
         assert!(names.contains(&name), "{names:?}");
     }
     let structured = |id| &reply(id)["result"]["structuredContent"];
-    assert_eq!(*structured(2), json!({"task":null}));
+    assert_eq!(structured(2)["task"], Value::Null);
     assert_eq!(reply(3)["result"]["isError"], true);
     assert_eq!(reply(4)["result"]["isError"], true);
     let id = structured(5)["tasks"][0]["id"].as_i64().unwrap();
@@ -198,36 +198,556 @@ fn mcp_reads_one_project_and_files_a_draft_the_owner_can_review() -> Result {
     Ok(())
 }
 
+/// One server process answering one request at a time, so a test can change the host between calls.
+struct Session {
+    child: Child,
+    input: ChildStdin,
+    output: BufReader<ChildStdout>,
+    next: i64,
+}
+
+impl Session {
+    fn start(mut command: Command) -> Result<Self> {
+        let mut child = command
+            .arg("mcp")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let input = child.stdin.take().ok_or("MCP stdin")?;
+        let output = BufReader::new(child.stdout.take().ok_or("MCP stdout")?);
+        let mut session = Self {
+            child,
+            input,
+            output,
+            next: 1,
+        };
+        let reply = session.request(
+            "initialize",
+            json!({"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}),
+        )?;
+        assert_eq!(reply["result"]["protocolVersion"], "2025-11-25");
+        writeln!(
+            session.input,
+            r#"{{"jsonrpc":"2.0","method":"notifications/initialized"}}"#
+        )?;
+        Ok(session)
+    }
+
+    fn request(&mut self, method: &str, params: Value) -> Result<Value> {
+        let id = self.next;
+        self.next += 1;
+        writeln!(
+            self.input,
+            "{}",
+            json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})
+        )?;
+        self.input.flush()?;
+        let mut line = String::new();
+        assert_ne!(self.output.read_line(&mut line)?, 0, "server exited");
+        let reply: Value = serde_json::from_str(&line)?;
+        assert_eq!(reply["id"], id);
+        Ok(reply)
+    }
+
+    /// The structured result of a successful tool call.
+    fn ok(&mut self, name: &str, arguments: Value) -> Result<Value> {
+        let reply = self.request("tools/call", json!({"name":name,"arguments":arguments}))?;
+        assert_ne!(reply["result"]["isError"], true, "{name}: {reply}");
+        Ok(reply["result"]["structuredContent"].clone())
+    }
+
+    /// The message of a tool call that failed.
+    fn error(&mut self, name: &str, arguments: Value) -> Result<String> {
+        let reply = self.request("tools/call", json!({"name":name,"arguments":arguments}))?;
+        assert_eq!(reply["result"]["isError"], true, "{name}: {reply}");
+        Ok(reply["result"]["content"][0]["text"]
+            .as_str()
+            .ok_or("error text")?
+            .to_owned())
+    }
+
+    fn finish(mut self) -> Result {
+        drop(self.input);
+        let mut rest = String::new();
+        std::io::Read::read_to_string(&mut self.output, &mut rest)?;
+        assert!(rest.is_empty(), "{rest}");
+        let mut stderr = String::new();
+        std::io::Read::read_to_string(&mut self.child.stderr.take().ok_or("stderr")?, &mut stderr)?;
+        assert!(stderr.is_empty(), "{stderr}");
+        assert!(self.child.wait()?.success());
+        Ok(())
+    }
+}
+
+fn host(root: &Path, directory: &Path, arguments: &[&Path]) -> Command {
+    let mut command = process(DEV, root);
+    command
+        .current_dir(directory)
+        .args(["--actor", "test-client"]);
+    for argument in arguments {
+        command.arg("--project").arg(argument);
+    }
+    command
+}
+
+fn register(root: &Path, name: &str, title: &str) -> Result<(std::path::PathBuf, i64)> {
+    let folder = root.join(name);
+    std::fs::create_dir(&folder)?;
+    support::empty_repository(&folder)?;
+    let added = cli(
+        root,
+        &folder,
+        &[
+            "add",
+            "--title",
+            title,
+            "--goal",
+            "Be listed",
+            "--criterion",
+            "Shown",
+        ],
+    )?;
+    let task = added["data"]["tasks"][0]["id"].as_i64().ok_or("task id")?;
+    Ok((folder, task))
+}
+
+fn project_id(root: &Path, name: &str) -> Result<i64> {
+    let listed = json_result(process(DEV, root).args(["--json", "projects"]).output()?, 0)?;
+    listed["data"]["projects"]
+        .as_array()
+        .and_then(|projects| projects.iter().find(|project| project["name"] == name))
+        .and_then(|project| project["id"].as_i64())
+        .ok_or_else(|| format!("{name} is not registered").into())
+}
+
+fn tasks(root: &Path, folder: &Path) -> Result<Value> {
+    Ok(cli(root, folder, &["list", "--scope", "all"])?["data"]["tasks"].clone())
+}
+
+struct Fleet<'a> {
+    root: &'a Path,
+    alpha: std::path::PathBuf,
+    beta: std::path::PathBuf,
+    gamma: std::path::PathBuf,
+    alpha_id: i64,
+    beta_id: i64,
+    gamma_id: i64,
+    alpha_task: i64,
+    beta_task: i64,
+    /// Every project's tasks before the session changed anything.
+    before: Vec<Value>,
+}
+
+fn read_by_id_folder_and_default(server: &mut Session, fleet: &Fleet) -> Result {
+    let Fleet {
+        root,
+        alpha,
+        beta,
+        alpha_id,
+        beta_id,
+        gamma_id,
+        alpha_task,
+        beta_task,
+        ..
+    } = fleet;
+    let (alpha_id, beta_id, gamma_id, alpha_task, beta_task) =
+        (*alpha_id, *beta_id, *gamma_id, *alpha_task, *beta_task);
+    let listed = server.ok("projects", json!({}))?;
+    let cli_listed = json_result(process(DEV, root).args(["--json", "projects"]).output()?, 0)?;
+    assert_eq!(listed, cli_listed["data"]);
+    assert_eq!(listed["count"], 3);
+    for field in [
+        "id",
+        "name",
+        "root",
+        "state",
+        "runner_alive",
+        "queued",
+        "finished",
+        "current",
+    ] {
+        assert!(listed["projects"][0].get(field).is_some(), "{field}");
+    }
+
+    let by_default = server.ok("current", json!({}))?;
+    assert_eq!(by_default["project"], json!({"id":gamma_id,"name":"gamma"}));
+    assert_eq!(by_default["task"]["title"], "Gamma work");
+    let by_id = server.ok("current", json!({"project":alpha_id}))?;
+    assert_eq!(by_id["project"], json!({"id":alpha_id,"name":"alpha"}));
+    assert_eq!(by_id["task"]["title"], "Alpha work");
+    let by_folder = server.ok("current", json!({"project":beta}))?;
+    assert_eq!(by_folder["project"], json!({"id":beta_id,"name":"beta"}));
+    assert_eq!(by_folder["task"]["title"], "Beta work");
+    let shown = server.ok(
+        "show",
+        json!({"id":beta_task,"project":beta_id.to_string()}),
+    )?;
+    assert_eq!(shown["task"]["title"], "Beta work");
+    assert_eq!(shown["project"]["name"], "beta");
+    let shown = server.ok("show", json!({"id":alpha_task,"project":alpha}))?;
+    assert_eq!(shown["task"]["title"], "Alpha work");
+    let listed = server.ok("list", json!({"project":alpha_id}))?;
+    assert_eq!(listed["project"]["id"], alpha_id);
+    assert_eq!(listed["count"], 1);
+    let events = server.ok("events", json!({"project":beta_id}))?;
+    assert_eq!(events["project"]["id"], beta_id);
+    assert!(!events["events"].as_array().unwrap().is_empty());
+
+    Ok(())
+}
+
+fn failures_change_nothing(server: &mut Session, fleet: &Fleet) -> Result {
+    let Fleet {
+        root,
+        alpha,
+        beta,
+        gamma,
+        alpha_id,
+        beta_task,
+        before,
+        ..
+    } = fleet;
+    let (alpha_id, beta_task) = (*alpha_id, *beta_task);
+    let unknown = server.error("current", json!({"project":9999}))?;
+    assert!(unknown.contains("not a registered project"), "{unknown}");
+    let unregistered = server.error(
+        "add_draft",
+        json!({"project":root,"title":"T","goal":"G","criteria":["C"]}),
+    )?;
+    assert!(unregistered.contains("projects tool"), "{unregistered}");
+    let relative = server.error("current", json!({"project":"alpha"}))?;
+    assert!(relative.contains("absolute folder"), "{relative}");
+    assert!(
+        server
+            .error("show", json!({"id":beta_task,"project":alpha_id}))?
+            .contains("does not exist")
+    );
+    for (folder, expected) in [alpha, beta, gamma].into_iter().zip(before) {
+        assert_eq!(tasks(root, folder)?, *expected);
+    }
+
+    Ok(())
+}
+
+fn draft_into_named_project(server: &mut Session, fleet: &Fleet) -> Result {
+    let Fleet {
+        root,
+        alpha,
+        beta,
+        gamma,
+        alpha_id,
+        before,
+        ..
+    } = fleet;
+    let alpha_id = *alpha_id;
+    // A draft goes to the named project, not the working directory's, as the AI actor.
+    let draft =
+        json!({"title":"Filed over MCP","goal":"Arrive in alpha","criteria":["Only alpha has it"]});
+    let mut named = draft.clone();
+    named["project"] = json!(alpha_id);
+    let filed = server.ok("add_draft", named)?;
+    assert_eq!(filed["project"], json!({"id":alpha_id,"name":"alpha"}));
+    let draft_id = filed["tasks"][0]["id"].as_i64().ok_or("draft id")?;
+    let shown = cli(root, alpha, &["show", &draft_id.to_string()])?;
+    assert_eq!(shown["data"]["revisions"][0]["actor"], "ai: test-client");
+    assert_eq!(shown["data"]["state"], "needs_approval");
+    assert_eq!(tasks(root, beta)?, before[1]);
+    assert_eq!(tasks(root, gamma)?, before[2]);
+    let via_server = server.ok("show", json!({"id":draft_id,"project":alpha_id}))?;
+    assert_eq!(via_server["task"]["revision_actor"], "ai: test-client");
+    let by_folder = server.ok(
+        "add_draft",
+        json!({"project":gamma,"title":"Folder draft","goal":"G","criteria":["C"]}),
+    )?;
+    assert_eq!(by_folder["project"]["name"], "gamma");
+
+    Ok(())
+}
+
+fn missing_and_moved_folders(server: &mut Session, fleet: &Fleet) -> Result {
+    let Fleet {
+        root,
+        beta,
+        beta_id,
+        ..
+    } = fleet;
+    let beta_id = *beta_id;
+    // A missing folder is still readable and still takes drafts.
+    let moved = root.join("beta-elsewhere");
+    std::fs::rename(beta, &moved)?;
+    let missing = server.ok("current", json!({"project":beta_id}))?;
+    assert_eq!(missing["task"]["title"], "Beta work");
+    let state = server.ok("projects", json!({}))?;
+    let beta_row = state["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == beta_id)
+        .unwrap();
+    assert_eq!(beta_row["state"], "missing");
+    server.ok(
+        "add_draft",
+        json!({"project":beta,"title":"Into a missing folder","goal":"G","criteria":["C"]}),
+    )?;
+    // Moving it mid-session: the new folder resolves, the old one no longer does.
+    let relocated = json_result(
+        process(DEV, root)
+            .args(["--json", "project-move", &beta_id.to_string()])
+            .arg(&moved)
+            .output()?,
+        0,
+    )?;
+    assert_eq!(relocated["data"]["id"], beta_id);
+    let after_move = server.ok("list", json!({"project":moved}))?;
+    assert_eq!(after_move["count"], 2);
+    assert!(
+        server
+            .error("list", json!({"project":beta}))?
+            .contains("not a registered project")
+    );
+    assert_eq!(server.ok("list", json!({"project":beta_id}))?["count"], 2);
+
+    Ok(())
+}
+
+fn deleted_projects(server: &mut Session, fleet: &Fleet) -> Result {
+    let Fleet {
+        root,
+        alpha,
+        alpha_id,
+        beta_id,
+        gamma_id,
+        ..
+    } = fleet;
+    let (alpha_id, beta_id, gamma_id) = (*alpha_id, *beta_id, *gamma_id);
+    // Deleting a project mid-session fails only the calls that name it.
+    let removed = process(DEV, root)
+        .args([
+            "--json",
+            "project-delete",
+            &alpha_id.to_string(),
+            "--confirm",
+            "alpha",
+        ])
+        .output()?;
+    json_result(removed, 0)?;
+    assert!(
+        server
+            .error("current", json!({"project":alpha_id}))?
+            .contains("not a registered project")
+    );
+    assert!(
+        server
+            .error("list", json!({"project":alpha}))?
+            .contains("projects tool")
+    );
+    assert_eq!(server.ok("current", json!({}))?["project"]["name"], "gamma");
+    let remaining = server.ok("projects", json!({}))?;
+    assert_eq!(remaining["count"], 2);
+    assert!(
+        remaining["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["id"] != alpha_id)
+    );
+    // The folder the server started in is deleted too: no project applies any more.
+    json_result(
+        process(DEV, root)
+            .args([
+                "--json",
+                "project-delete",
+                &gamma_id.to_string(),
+                "--confirm",
+                "gamma",
+            ])
+            .output()?,
+        0,
+    )?;
+    assert!(
+        server
+            .error("current", json!({}))?
+            .contains("projects tool")
+    );
+    assert_eq!(
+        server.ok("current", json!({"project":beta_id}))?["project"]["name"],
+        "beta"
+    );
+
+    Ok(())
+}
+
 #[test]
-fn mcp_startup_never_registers_a_project_or_bypasses_worker_isolation() -> Result {
+fn one_host_wide_server_reads_and_drafts_for_every_project_in_one_session() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();
+    let (alpha, alpha_task) = register(root, "alpha", "Alpha work")?;
+    let (beta, beta_task) = register(root, "beta", "Beta work")?;
+    let (gamma, _) = register(root, "gamma", "Gamma work")?;
+    let inside = gamma.join("src");
+    std::fs::create_dir(&inside)?;
+    let (alpha_id, beta_id, gamma_id) = (
+        project_id(root, "alpha")?,
+        project_id(root, "beta")?,
+        project_id(root, "gamma")?,
+    );
+    let before: Vec<Value> = [&alpha, &beta, &gamma]
+        .iter()
+        .map(|folder| tasks(root, folder))
+        .collect::<Result<_>>()?;
+    let fleet = Fleet {
+        root,
+        alpha,
+        beta,
+        gamma,
+        alpha_id,
+        beta_id,
+        gamma_id,
+        alpha_task,
+        beta_task,
+        before,
+    };
+
+    // The working directory is inside gamma; every call may still name another project.
+    let mut server = Session::start(host(root, &inside, &[]))?;
+    let names: Vec<_> = server.request("tools/list", json!({}))?["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        names,
+        ["projects", "current", "list", "show", "events", "add_draft"]
+    );
+
+    read_by_id_folder_and_default(&mut server, &fleet)?;
+    failures_change_nothing(&mut server, &fleet)?;
+    draft_into_named_project(&mut server, &fleet)?;
+    missing_and_moved_folders(&mut server, &fleet)?;
+    deleted_projects(&mut server, &fleet)?;
+    server.finish()
+}
+
+#[test]
+fn a_pinned_server_refuses_every_other_project() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (alpha, _) = register(root, "alpha", "Alpha work")?;
+    let (beta, _) = register(root, "beta", "Beta work")?;
+    let (alpha_id, beta_id) = (project_id(root, "alpha")?, project_id(root, "beta")?);
+    let before = tasks(root, &beta)?;
+
+    let mut server = Session::start(host(root, root, &[&alpha]))?;
+    assert_eq!(server.ok("current", json!({}))?["project"]["id"], alpha_id);
+    assert_eq!(
+        server.ok("current", json!({"project":alpha_id}))?["project"]["id"],
+        alpha_id
+    );
+    assert_eq!(
+        server.ok("current", json!({"project":alpha}))?["project"]["id"],
+        alpha_id
+    );
+    for other in [json!(beta_id), json!(beta)] {
+        let refusal = server.error("current", json!({"project":other}))?;
+        assert!(refusal.contains("pinned to one project"), "{refusal}");
+        let refusal = server.error(
+            "add_draft",
+            json!({"project":other,"title":"T","goal":"G","criteria":["C"]}),
+        )?;
+        assert!(refusal.contains("pinned to one project"), "{refusal}");
+    }
+    assert_eq!(tasks(root, &beta)?, before);
+    assert_eq!(server.ok("projects", json!({}))?["count"], 2);
+    json_result(
+        process(DEV, root)
+            .args([
+                "--json",
+                "project-delete",
+                &alpha_id.to_string(),
+                "--confirm",
+                "alpha",
+            ])
+            .output()?,
+        0,
+    )?;
+    assert!(
+        server
+            .error("current", json!({}))?
+            .contains("not a registered project")
+    );
+    assert_eq!(server.ok("projects", json!({}))?["count"], 1);
+    server.finish()
+}
+
+#[test]
+fn mcp_startup_creates_nothing_and_registers_nothing() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let nowhere = root.join("nowhere");
+    std::fs::create_dir(&nowhere)?;
+
+    // No database yet, and the working directory is no project.
+    let mut server = Session::start(host(root, &nowhere, &[]))?;
+    assert_eq!(
+        server.ok("projects", json!({}))?,
+        json!({"projects":[],"count":0})
+    );
+    for tool in ["current", "list", "events"] {
+        let message = server.error(tool, json!({}))?;
+        assert!(message.contains("projects tool"), "{message}");
+    }
+    let message = server.error(
+        "add_draft",
+        json!({"project":nowhere,"title":"T","goal":"G","criteria":["C"]}),
+    )?;
+    assert!(message.contains("projects tool"), "{message}");
+    server.finish()?;
+    assert!(!root.join("state").exists(), "mcp created storage");
+
+    // A pin must name a registered project, a human actor is refused, and workers cannot serve.
     for output in [
-        process(DEV, root).arg("mcp").output()?,
-        server(root, Path::new(".")).output()?,
-        server(root, root).output()?,
+        host(root, &nowhere, &[&nowhere]).arg("mcp").output()?,
+        host(root, &nowhere, &[Path::new("relative")])
+            .arg("mcp")
+            .output()?,
+        host(root, &nowhere, &[])
+            .args(["--actor-kind", "human", "mcp"])
+            .output()?,
+        host(root, &nowhere, &[])
+            .args(["--project-name", "x", "mcp"])
+            .output()?,
     ] {
         assert!(!output.status.success(), "{:?}", output.status);
         assert!(output.stdout.is_empty(), "{:?}", output.stdout);
         assert!(!output.stderr.is_empty());
-        assert!(!root.join("state").exists());
+        assert!(!root.join("state").exists(), "mcp created storage");
     }
-    let project = root.join("registered");
-    std::fs::create_dir(&project)?;
-    support::empty_repository(&project)?;
-    cli(
-        root,
-        &project,
-        &["check-set", "fixture", "--command", "true"],
-    )?;
-    let unknown = server(root, root).output()?;
-    assert_eq!(unknown.status.code(), Some(3));
-    assert!(unknown.stdout.is_empty());
-    let worker = server(root, &project)
+    let worker = host(root, &nowhere, &[])
+        .arg("mcp")
         .env("KTASK_WORKER_CALLBACK", "1")
         .output()?;
     assert_eq!(worker.status.code(), Some(2));
-    assert!(worker.stdout.is_empty());
     assert!(String::from_utf8(worker.stderr)?.contains("Workers may only"));
+
+    // With projects registered, an unregistered directory still registers nothing.
+    let (project, _) = register(root, "registered", "Registered work")?;
+    let unknown = host(root, &nowhere, &[&nowhere]).arg("mcp").output()?;
+    assert_eq!(unknown.status.code(), Some(3));
+    assert!(unknown.stdout.is_empty());
+    let mut server = Session::start(host(root, &nowhere, &[]))?;
+    assert!(
+        server
+            .error("current", json!({}))?
+            .contains("projects tool")
+    );
+    assert_eq!(server.ok("projects", json!({}))?["count"], 1);
+    server.finish()?;
+    assert_eq!(
+        json_result(process(DEV, root).args(["--json", "projects"]).output()?, 0)?["data"]["count"],
+        1
+    );
+    assert_eq!(tasks(root, &project)?.as_array().map(Vec::len), Some(1));
     Ok(())
 }
