@@ -107,10 +107,10 @@ const WORKER_VERDICT: &str = "Return complete when your change is done, with no 
 const JUDGE_VERDICT: &str = "The normal lifecycle is implement, review, fix, validate, with up to ten repair rounds inside one attempt. Return changes_requested for actionable findings, not failed. List every finding with severity critical or minor and a concrete description with location, trigger, consequence and correction. Critical means real harm to correctness, behavior, security or data, performance, or long-term maintenance, or an unmet mandatory acceptance criterion; minor means anything else, which is recorded but never costs a fix round. Never mark a mandatory criterion passed merely because the repair budget is spent. Empty findings plus complete means acceptance. Preserve minor findings in the record even when accepting them at the repair limit.";
 const WORKER_ENVIRONMENT: &str = "If you blame the environment for a failure, include a concrete reproduction and its observed error. Repository instructions (AGENTS.md, CLAUDE.md and similar files) govern scope, quality and evidence.";
 const WORKER_EVIDENCE: &str = "Do not review or validate your own work; independent judges do. Save deliberate evidence files directly in KTASK_ARTIFACT_DIR. Archive safeguards are separate from reviewer input (128 MiB per file, 1 GiB and 4096 files per attempt by default). In each criterion assessment cite the exact test/check, source file/line or artifact name proving it; report missing proof explicitly. Do not duplicate logs already recorded by a supervisor check. The guardian archives them before deleting scratch; judges can read the archived paths in Context.";
-/// The worker's scratch budget and what must not fill it.
+/// The worker's scratch budget and what must not fill it, in one sentence.
 fn scratch_rule((bytes, entries): (u64, u64)) -> String {
     format!(
-        "Your TMPDIR may hold at most {bytes} bytes and {entries} entries in total; the guardian stops the worker and deletes its TMPDIR beyond that. Never build or copy a second copy of the project into TMPDIR (no clone, worktree or copy of the project tree, and no separate build of it): work in the project directory and keep only small temporary files in TMPDIR."
+        "Everything tests, builds and evidence put in your TMPDIR counts toward its limit of {bytes} bytes and {entries} entries (KTASK_SCRATCH_BYTES, KTASK_SCRATCH_ENTRIES), beyond which the guardian stops the worker and deletes it, so never copy or build a second copy of the project there: work in the project directory and keep only small temporary files in TMPDIR."
     )
 }
 
@@ -233,22 +233,15 @@ pub fn compose(
     callback: Option<&Callback<'_>>,
 ) -> Result<Prompt> {
     let work = render_work(turn.template(category), category, task, context)?;
-    let scratch = callback.map_or_else(configured_scratch, |callback| callback.scratch);
+    let scratch = callback.map_or_else(crate::resource::configured_scratch, |callback| {
+        callback.scratch
+    });
     Ok(Prompt {
         rules: rules(turn, category.checks, scratch),
         category: format!("{} ({} scope)", category.name, category.scope.label()),
         work,
         callback: callback.map(callback_text).unwrap_or_default(),
     })
-}
-
-/// The scratch limits when no attempt narrows them: a preview, or a turn that runs nothing.
-fn configured_scratch() -> (u64, u64) {
-    use crate::resource::Limit;
-    (
-        Limit::ScratchBytes.configured(),
-        Limit::ScratchEntries.configured(),
-    )
 }
 
 /// What the supervisor adds to a review turn that runs through a lens.
@@ -270,7 +263,11 @@ pub fn compose_lens(
     Ok(Prompt {
         rules: format!(
             "{} {}",
-            rules(Turn::Review, category.checks, configured_scratch()),
+            rules(
+                Turn::Review,
+                category.checks,
+                crate::resource::configured_scratch()
+            ),
             lens_rule(lens)
         ),
         category: format!(
@@ -376,6 +373,48 @@ mod tests {
             .text();
         assert!(review.contains("read-only by design") && review.contains("No project checks"));
         assert!(review.contains("1. First\n2. Second") && review.contains("Context:\nctx"));
+    }
+
+    #[test]
+    fn the_stated_scratch_limits_are_the_ones_the_guardian_enforces() {
+        use crate::resource::{Limit, configured_scratch};
+        let code = builtin::named("code").unwrap();
+        let (criteria, mut task) = task();
+        task.criteria = &criteria;
+        let (bytes, entries) = (
+            Limit::ScratchBytes.configured(),
+            Limit::ScratchEntries.configured(),
+        );
+        assert_eq!((bytes, entries), configured_scratch());
+        let named = format!("limit of {bytes} bytes and {entries} entries");
+        // A preview and a turn without an attempt state what the guardian enforces by default.
+        for text in [
+            compose(Turn::Execution, &code, &task, "ctx", None)
+                .unwrap()
+                .text(),
+            preview(Turn::Repair, &code, &task, false).unwrap(),
+        ] {
+            assert_eq!(text.matches(&named).count(), 1, "{text}");
+            assert!(text.contains("tests, builds and evidence"));
+        }
+        // An attempt's own (extended) limits are stated verbatim, not the configured ones.
+        let callback = Callback {
+            scratch: (bytes * 2 + 1, entries * 2 + 1),
+            supervisor: std::path::Path::new("/s"),
+            project: std::path::Path::new("/p"),
+            token: "t",
+            task: 1,
+            attempt: 2,
+        };
+        let text = compose(Turn::Execution, &code, &task, "ctx", Some(&callback))
+            .unwrap()
+            .text();
+        assert!(text.contains(&format!(
+            "limit of {} bytes and {} entries",
+            bytes * 2 + 1,
+            entries * 2 + 1
+        )));
+        assert!(!text.contains(&named));
     }
 
     #[test]

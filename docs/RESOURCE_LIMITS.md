@@ -41,7 +41,7 @@ If the owner raises the limit above the measured use before a pending diagnosis 
 
 **Record.** Each judgment is an event (`resource.breach`) with the limit, the measured use, the decision and the reason. `stats` (CLI `resource_limits` in JSON, and the Statistics dialog) reports per limit how often breaches were repaired, extended and escalated, so defaults can be revised from data.
 
-**Worker prompt.** Execution and repair prompts state the scratch byte and entry limits in effect for the attempt, including extensions, and forbid building or copying a second copy of the project into TMPDIR.
+**Worker prompt.** Execution and repair prompts state the scratch byte and entry limits in effect for the attempt, including extensions, and say that tests, builds and evidence in TMPDIR count toward them; they forbid a second copy of the project there.
 
 For budgets below 512 MiB, a new task starts only while at least half remains free for its startup records and subsequent recovery; in-step output and artifact admission retains a separate 25% recovery reserve. The launch reserve is capped at 256 MiB, and file-entry reserves at 256 entries. Cleanup can use recently closed evidence before the launch reserve is crossed, then continues with bounded SQLite page reclamation until starting work is safe.
 

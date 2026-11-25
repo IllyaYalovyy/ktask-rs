@@ -8208,6 +8208,19 @@ fn check_evidence_preserves_unicode_split_across_pipe_reads() -> Result {
     Ok(())
 }
 
+/// Runs the queue with scratch limits that are not the defaults, so the worker prompts must
+/// state the overrides.
+fn run_with_scratch_limits(f: &Fixture, bytes: u64, entries: u64) -> Result {
+    let run = f
+        .process()
+        .env("KTASK_SCRATCH_BYTES", bytes.to_string())
+        .env("KTASK_SCRATCH_ENTRIES", entries.to_string())
+        .arg("run")
+        .output()?;
+    assert!(run.status.success(), "{run:?}");
+    Ok(())
+}
+
 #[test]
 fn reviewers_receive_current_proof_and_authorized_repair_context() -> Result {
     let f = Fixture::new()?;
@@ -8218,7 +8231,8 @@ fn reviewers_receive_current_proof_and_authorized_repair_context() -> Result {
         "if [ ! -f \"$HOME/checked-once\" ]; then touch \"$HOME/checked-once\"; printf 'previous failed check\\n'; exit 7; fi; printf 'real check output\\n'; printf 'stderr evidence\\n' >&2; test -f result.txt",
     ])?;
     f.add("Evidence handoff")?;
-    f.ok(&["run"])?;
+    let (scratch_bytes, scratch_entries) = (3_221_225_473_u64, 150_001_u64);
+    run_with_scratch_limits(&f, scratch_bytes, scratch_entries)?;
     let db = f.db()?;
     let (relative, size): (String, i64) = db.connection().query_row(
         "SELECT relative_path,size_bytes FROM artifacts WHERE attempt_id=1 ORDER BY id DESC LIMIT 1",
@@ -8275,13 +8289,14 @@ fn reviewers_receive_current_proof_and_authorized_repair_context() -> Result {
     let execution = fs::read_to_string(f.scratch.path().join("prompt-execution"))?;
     assert!(execution.contains(writable_checks));
     assert!(execution.contains("temporary files only under the supplied TMPDIR"));
-    assert_worker_prompt_rules(&execution);
-    assert_worker_prompt_rules(&remediation);
+    let limits = format!("limit of {scratch_bytes} bytes and {scratch_entries} entries");
+    assert_worker_prompt_rules(&execution, &limits);
+    assert_worker_prompt_rules(&remediation, &limits);
     f.no_scratch()?;
     Ok(())
 }
 
-fn assert_worker_prompt_rules(prompt: &str) {
+fn assert_worker_prompt_rules(prompt: &str, scratch_limits: &str) {
     for rule in [
         "Never claim that checks passed or that your work was accepted",
         "include a concrete reproduction and its observed error",
@@ -8289,8 +8304,9 @@ fn assert_worker_prompt_rules(prompt: &str) {
         "ktask owns full checks, independent review, commit and delivery",
         "do not follow any manual check, review, commit or push loop",
         "leave out what you ran, untracked files, and what checks or reviewers will do next",
-        "Your TMPDIR may hold at most 4294967296 bytes and 200000 entries in total",
-        "Never build or copy a second copy of the project into TMPDIR",
+        "entries (KTASK_SCRATCH_BYTES, KTASK_SCRATCH_ENTRIES)",
+        "never copy or build a second copy of the project there",
+        scratch_limits,
     ] {
         assert!(prompt.contains(rule), "worker prompt missing: {rule}");
     }

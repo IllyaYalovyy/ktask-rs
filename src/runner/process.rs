@@ -429,12 +429,7 @@ fn reader(
 }
 /// The scratch limits in force: those the supervisor passed, else the configured ones.
 fn scratch_limits(passed: Option<(u64, u64)>) -> (u64, u64) {
-    passed.unwrap_or_else(|| {
-        (
-            Limit::ScratchBytes.configured(),
-            Limit::ScratchEntries.configured(),
-        )
-    })
+    passed.unwrap_or_else(crate::resource::configured_scratch)
 }
 
 fn scratch_exceeded(path: &std::path::Path, passed: Option<(u64, u64)>) -> io::Result<bool> {

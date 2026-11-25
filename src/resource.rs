@@ -17,6 +17,15 @@ pub fn limit(name: &str, default: u64) -> u64 {
 pub const MAX_EXTENSIONS: u32 = 2;
 pub const EXTENSION_FACTOR: u64 = 2;
 
+/// The scratch limits `(bytes, entries)` the guardian enforces when an attempt does not
+/// narrow or extend them: the single source the worker prompt states and the guardian checks.
+pub fn configured_scratch() -> (u64, u64) {
+    (
+        Limit::ScratchBytes.configured(),
+        Limit::ScratchEntries.configured(),
+    )
+}
+
 /// A storage budget the supervisor can diagnose, extend or escalate when it is breached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
