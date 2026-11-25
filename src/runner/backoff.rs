@@ -14,6 +14,7 @@ use std::{
 const RETRIES: u32 = 2;
 
 /// How a bounded retry is announced: what failed, and what the retry keeps.
+#[derive(Clone, Copy)]
 pub(super) struct Notice {
     pub(super) failed: &'static str,
     pub(super) retained: &'static str,

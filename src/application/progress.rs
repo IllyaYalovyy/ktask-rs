@@ -1,5 +1,10 @@
 //! Persisted progress within an attempt; a review finding is ordinary work.
-use super::{check_timeout::TimeoutDecision, execution::Run, *};
+use super::{execution::Run, *};
+
+/// A decision recorded in the same transaction as the progress that follows from it.
+pub(crate) trait Decision {
+    fn record(&self, tx: &Transaction<'_>, run: &Run) -> Result<()>;
+}
 
 pub const REPAIR_ROUNDS: i64 = 10;
 pub(crate) const BASELINE_FAILURE_NOTE: &str = "The starting checks failed before implementation. Repair their cause and complete the original task; baseline repair alone does not satisfy the goal.";
@@ -136,11 +141,12 @@ impl Service {
         self.save_workflow(run, progress, None)
     }
 
-    pub(crate) fn save_timeout_decision(
+    /// Saves the workflow together with the decision it follows, in one transaction.
+    pub(crate) fn save_decision(
         &mut self,
         run: &Run,
         progress: &Progress,
-        decision: TimeoutDecision<'_>,
+        decision: &dyn Decision,
     ) -> Result<()> {
         self.save_workflow(run, progress, Some(decision))
     }
@@ -149,7 +155,7 @@ impl Service {
         &mut self,
         run: &Run,
         progress: &Progress,
-        decision: Option<TimeoutDecision<'_>>,
+        decision: Option<&dyn Decision>,
     ) -> Result<()> {
         let tx = self
             .db

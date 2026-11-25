@@ -570,6 +570,27 @@ CREATE TABLE check_timeouts (
     CHECK ((extension_ms IS NOT NULL) = (decision IS 'extend'))
 ) STRICT;
 
+-- A storage limit that stopped its producer, and the remediation model's decision on it.
+CREATE TABLE resource_breaches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempt_id INTEGER NOT NULL REFERENCES attempts(id),
+    limit_name TEXT NOT NULL CHECK (limit_name IN ('scratch_bytes', 'scratch_entries', 'artifact_file_bytes', 'artifact_attempt_bytes', 'artifact_attempt_files', 'output_bytes', 'output_rows')),
+    configured INTEGER NOT NULL CHECK (configured > 0),
+    measured INTEGER NOT NULL CHECK (measured >= 0),
+    cause TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    report TEXT NOT NULL CHECK (length(trim(report)) > 0),
+    output_end INTEGER NOT NULL CHECK (output_end >= 0),
+    detected_at_ms INTEGER NOT NULL CHECK (detected_at_ms >= 0),
+    decision TEXT CHECK (decision IN ('repair', 'extend', 'escalate')),
+    reason TEXT CHECK (reason IS NULL OR length(trim(reason)) > 0),
+    extended_to INTEGER CHECK (extended_to > configured),
+    decided_at_ms INTEGER CHECK (decided_at_ms >= detected_at_ms),
+    CHECK ((decision IS NULL) = (reason IS NULL) AND (decision IS NULL) = (decided_at_ms IS NULL)),
+    CHECK ((extended_to IS NOT NULL) = (decision IS 'extend'))
+) STRICT;
+CREATE INDEX resource_breaches_attempt ON resource_breaches(attempt_id, limit_name);
+
 CREATE TABLE criterion_results (
     step_id INTEGER NOT NULL,
     task_id INTEGER NOT NULL,

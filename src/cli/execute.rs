@@ -883,6 +883,7 @@ fn stats(service: &mut Service) -> Result<Reply> {
     let usage = service.project_usage()?;
     let cost = usage.cost_microusd;
     let delivered = service.delivered_by_model()?;
+    let limits = service.resource_limit_stats()?;
     let mut text = format!(
         "Queue: {}\nHistory: {}\nSucceeded: {succeeded}\nAttempts: {}\nFailed attempts: {failed}\nActive: {}\nWaiting: {}\nProject usage: {}\n{}",
         snapshot.queue.len(),
@@ -907,8 +908,9 @@ fn stats(service: &mut Service) -> Result<Reply> {
             model.repair_rounds,
         ));
     }
+    text.push_str(&crate::application::resource_breach::limit_lines(&limits));
     Ok(Reply {
-        data: json!({"queue":snapshot.queue.len(),"history":snapshot.history.len(),"succeeded":succeeded,"attempts":timing.attempts,"failed_attempts":failed,"active_ms":active_ms,"waiting_ms":waiting_ms,"recorded_cost_microusd":cost,"usage":usage,"delivered_by_model":delivered}),
+        data: json!({"queue":snapshot.queue.len(),"history":snapshot.history.len(),"succeeded":succeeded,"attempts":timing.attempts,"failed_attempts":failed,"active_ms":active_ms,"waiting_ms":waiting_ms,"recorded_cost_microusd":cost,"usage":usage,"delivered_by_model":delivered,"resource_limits":limits}),
         text,
     })
 }

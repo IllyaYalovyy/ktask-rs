@@ -239,8 +239,7 @@ pub(super) fn run(service: &mut Service, launch: &Launch<'_>, begun: Begun) -> R
     // A transport error during a provider wait belongs to the same outage.
     let had_rate_wait = matches!(
         &result,
-        Ok(Outcome::Failed("transport", _)
-            | Outcome::CheckTimeoutDiagnosisUnavailable("transport", _))
+        Ok(Outcome::Failed("transport", _) | Outcome::DiagnosisUnavailable(_, "transport", _))
     ) && service.rate_waits(&run)? > 0;
     let outcome = settle_result(result, had_rate_wait);
     if !launch.queue
@@ -264,13 +263,14 @@ pub(super) fn run(service: &mut Service, launch: &Launch<'_>, begun: Begun) -> R
 
 fn settle_result(result: Result<Outcome>, had_rate_wait: bool) -> Outcome {
     match result {
-        Ok(
-            Outcome::Failed("transport", _)
-            | Outcome::CheckTimeoutDiagnosisUnavailable("transport", _),
-        ) if had_rate_wait => Outcome::RateLimit(None),
-        Ok(Outcome::CheckTimeoutDiagnosisUnavailable(category, message)) => {
+        Ok(Outcome::Failed("transport", _) | Outcome::DiagnosisUnavailable(_, "transport", _))
+            if had_rate_wait =>
+        {
+            Outcome::RateLimit(None)
+        }
+        Ok(Outcome::DiagnosisUnavailable(what, category, message)) => {
             Outcome::DeliveryBlocked(format!(
-                "Check timeout diagnosis unavailable ({category}): {message}. Restore the remediation provider, then Resume"
+                "{what} diagnosis unavailable ({category}): {message}. Restore the remediation provider, then Resume"
             ))
         }
         Ok(outcome) => outcome,
@@ -510,8 +510,8 @@ fn settle(
         Outcome::Passed(_)
         | Outcome::Changes { .. }
         | Outcome::CheckTimedOut
-        | Outcome::CheckTimeoutDecision(_)
-        | Outcome::CheckTimeoutDiagnosisUnavailable(_, _) => unreachable!(),
+        | Outcome::Diagnosis(_)
+        | Outcome::DiagnosisUnavailable(..) => unreachable!(),
     }
 }
 

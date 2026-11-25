@@ -16,9 +16,8 @@ use std::{
     path::Path,
 };
 
-const FILE_LIMIT: u64 = 128 * 1024 * 1024;
-const ATTEMPT_LIMIT: u64 = 1024 * 1024 * 1024;
-const COUNT_LIMIT: u64 = 4096;
+use super::resource_breach::effective_limit;
+use crate::resource::{Breach, Limit};
 
 fn budget_label(bytes: u64) -> String {
     if bytes.is_multiple_of(1024 * 1024) {
@@ -62,32 +61,72 @@ fn retained_bytes(tx: &Transaction<'_>, attempt: i64) -> Result<i64> {
     Ok(tx.query_row("SELECT (SELECT coalesce(sum(size_bytes),0) FROM artifacts WHERE attempt_id=?1 AND pruned_at_ms IS NULL) + (SELECT coalesce(sum(size_bytes),0) FROM artifact_reservations WHERE attempt_id=?1)", [attempt], |r| r.get(0))?)
 }
 
-fn require_budget(tx: &Transaction<'_>, attempt: i64, name: &str, size: u64) -> Result<()> {
-    let file_limit = crate::resource::limit("KTASK_ARTIFACT_FILE_BYTES", FILE_LIMIT);
-    let attempt_limit = crate::resource::limit("KTASK_ARTIFACT_ATTEMPT_BYTES", ATTEMPT_LIMIT);
-    let count_limit = crate::resource::limit("KTASK_ARTIFACT_ATTEMPT_FILES", COUNT_LIMIT);
-    require(
-        size <= file_limit,
-        &format!(
+/// A refused admission: the limit, what it was measured against, and the artifact that
+/// crossed it. Artifacts of one name pattern are one cause.
+fn exceeded(limit: Limit, configured: u64, measured: u64, name: &str, reason: String) -> Error {
+    Error::Breach(Box::new(Breach {
+        limit,
+        configured,
+        measured,
+        cause: crate::resource::normalized(name),
+        summary: String::new(),
+        reason,
+    }))
+}
+
+fn require_file_budget(
+    db: &rusqlite::Connection,
+    attempt: i64,
+    name: &str,
+    size: u64,
+) -> Result<()> {
+    let file_limit = effective_limit(db, attempt, Limit::ArtifactFileBytes)?;
+    if size <= file_limit {
+        return Ok(());
+    }
+    Err(exceeded(
+        Limit::ArtifactFileBytes,
+        file_limit,
+        size,
+        name,
+        format!(
             "Artifact {name} exceeds the {} per-artifact limit",
             budget_label(file_limit)
         ),
-    )?;
+    ))
+}
+
+fn require_budget(tx: &Transaction<'_>, attempt: i64, name: &str, size: u64) -> Result<()> {
+    require_file_budget(tx, attempt, name, size)?;
+    let attempt_limit = effective_limit(tx, attempt, Limit::ArtifactAttemptBytes)?;
+    let count_limit = effective_limit(tx, attempt, Limit::ArtifactAttemptFiles)?;
     let used = retained_bytes(tx, attempt)?;
-    require(
-        used.saturating_add(size as i64) <= attempt_limit as i64,
-        &format!(
-            "Artifact {name} exceeds the {} per-attempt artifact limit ({used} bytes already saved)",
-            budget_label(attempt_limit)
-        ),
-    )?;
+    let total = (used as u64).saturating_add(size);
+    if total > attempt_limit {
+        return Err(exceeded(
+            Limit::ArtifactAttemptBytes,
+            attempt_limit,
+            total,
+            name,
+            format!(
+                "Artifact {name} exceeds the {} per-attempt artifact limit ({used} bytes already saved)",
+                budget_label(attempt_limit)
+            ),
+        ));
+    }
     let count: i64 = tx.query_row("SELECT (SELECT count(*) FROM artifacts WHERE attempt_id=?1 AND pruned_at_ms IS NULL) + (SELECT count(*) FROM artifact_reservations WHERE attempt_id=?1)", [attempt], |r| r.get(0))?;
-    require(
-        count < count_limit as i64,
-        &format!(
-            "Artifact count limit reached ({count_limit} per attempt, including pending reservations)"
-        ),
-    )
+    if count as u64 >= count_limit {
+        return Err(exceeded(
+            Limit::ArtifactAttemptFiles,
+            count_limit,
+            count as u64 + 1,
+            name,
+            format!(
+                "Artifact count limit reached ({count_limit} per attempt, including pending reservations)"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 struct ArtifactTarget {
@@ -268,15 +307,8 @@ impl Service {
                 "Artifact {name}: only regular files directly in KTASK_ARTIFACT_DIR are supported"
             ),
         )?;
-        let file_limit = crate::resource::limit("KTASK_ARTIFACT_FILE_BYTES", FILE_LIMIT);
-        require(
-            metadata.len() <= file_limit,
-            &format!(
-                "Artifact {name} exceeds the {} per-artifact limit",
-                budget_label(file_limit)
-            ),
-        )?;
         let size = metadata.len();
+        require_file_budget(self.db.connection(), attempt, name, size)?;
         let mut hash = Sha256::new();
         let mut buffer = [0u8; 64 * 1024];
         let mut prefix = Vec::new();
@@ -746,7 +778,7 @@ mod tests {
         )?;
         assert_eq!(summary, summary2);
         // Finite storage budgets still reject oversized evidence before allocating memory.
-        fs::File::create(&source)?.set_len(FILE_LIMIT + 1)?;
+        fs::File::create(&source)?.set_len(Limit::ArtifactFileBytes.default_value() + 1)?;
         assert!(
             reopened
                 .publish_artifact(
@@ -762,7 +794,15 @@ mod tests {
         assert!(!folder.join("oversized").exists());
         let tx =
             Transaction::new_unchecked(reopened.db.connection(), TransactionBehavior::Immediate)?;
-        assert!(require_budget(&tx, run.attempt, "too-much", ATTEMPT_LIMIT).is_err());
+        assert!(
+            require_budget(
+                &tx,
+                run.attempt,
+                "too-much",
+                Limit::ArtifactAttemptBytes.default_value()
+            )
+            .is_err()
+        );
 
         Ok(())
     }

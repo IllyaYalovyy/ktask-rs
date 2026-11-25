@@ -931,7 +931,7 @@ impl Service {
             stage_root.clone(),
             guardian_lock,
         );
-        spec.provision_scratch = Some((limits.stage_bytes, limits.stage_entries));
+        spec.scratch_limits = Some((limits.stage_bytes, limits.stage_entries));
         spec.env = vec![
             ("ANDROID_HOME", sdk.clone()),
             ("ANDROID_SDK_ROOT", sdk.clone()),
@@ -1327,7 +1327,7 @@ fn probe_android_payload(
     spec.sandbox = Some(crate::runner::sandbox::Sandbox::for_installations(&[
         sdk.to_path_buf()
     ])?);
-    spec.provision_scratch = Some((64 * 1024 * 1024, 10_000));
+    spec.scratch_limits = Some((64 * 1024 * 1024, 10_000));
     let mut worker = crate::runner::process::Worker::spawn(&paths.executable, &spec)?;
     home.guardian_started = true;
     let started = Instant::now();

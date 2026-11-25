@@ -281,6 +281,7 @@ erDiagram
     attempts ||--o{ lens_reviews : "attempt_id"
     attempt_steps ||--o| lens_reviews : "step_id"
     attempt_steps ||--o| check_timeouts : "step_id"
+    attempts ||--o{ resource_breaches : "attempt_id"
     lens_reviews ||--o{ lens_review_findings : "attempt_id, repair_round, source_tree, ordinal"
     attempts ||--o| attempt_delivery : "attempt_id"
     attempts o|--o{ attempt_delivery : "handoff_claimed_by"
@@ -1188,6 +1189,31 @@ Human intervention requested during an attempt. Open has no answer/resolution; a
 - PK `(id)`.
 - FK `(attempt_id)` → `attempts(id)`.
 - Index `ix_questions_attempt`: `INDEX ix_questions_attempt ON questions(attempt_id, id)`.
+
+### resource_breaches
+
+A storage limit that stopped its producer in an attempt, and the remediation model's decision on it. An undecided row is diagnosed before more work; an `extend` row raises that one limit for its attempt, at most twice per limit. Stats count decisions per limit.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `id` | INTEGER | no | Stable row ID. |
+| `attempt_id` | INTEGER | no | Attempt whose producer was stopped. |
+| `limit_name` | TEXT | no | scratch_bytes, scratch_entries, artifact_file_bytes, artifact_attempt_bytes, artifact_attempt_files, output_bytes or output_rows. |
+| `configured` | INTEGER | no | Limit in effect when it was breached. |
+| `measured` | INTEGER | no | Use measured against that limit. |
+| `cause` | TEXT | no | Stable key of what filled the budget; digit runs are ignored. |
+| `summary` | TEXT | no | Bounded summary the remediation model read; may be empty. |
+| `report` | TEXT | no | The owner's text for the breach, the pause reason on escalation. |
+| `output_end` | INTEGER | no | Last output sequence of the attempt when the breach was recorded; the transcript the judge reads ends here. |
+| `detected_at_ms` | INTEGER | no | Time of the breach. |
+| `decision` | TEXT | yes | repair, extend or escalate. NULL until diagnosed. |
+| `reason` | TEXT | yes | Reason recorded with the decision. |
+| `extended_to` | INTEGER | yes | New effective limit of an extend decision. |
+| `decided_at_ms` | INTEGER | yes | Time of the decision. |
+
+- PK `(id)`.
+- FK `(attempt_id)` → `attempts(id)`.
+- Index `resource_breaches_attempt`: `INDEX resource_breaches_attempt ON resource_breaches(attempt_id, limit_name)`.
 
 ### review_lenses
 

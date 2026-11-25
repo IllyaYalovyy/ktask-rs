@@ -1,5 +1,9 @@
 //! Finite per-run storage budgets. Overrides are positive byte or entry counts.
-use std::{fs, io, os::unix::fs::MetadataExt, path::Path};
+use serde::{Deserialize, Serialize};
+use std::{fmt, fs, io, os::unix::fs::MetadataExt, path::Path};
+
+mod summary;
+pub use summary::summarize;
 
 pub fn limit(name: &str, default: u64) -> u64 {
     std::env::var(name)
@@ -7,6 +11,178 @@ pub fn limit(name: &str, default: u64) -> u64 {
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|&value| value > 0 && value <= i64::MAX as u64)
         .unwrap_or(default)
+}
+
+/// How often one limit may be raised for one attempt, each time by [`EXTENSION_FACTOR`].
+pub const MAX_EXTENSIONS: u32 = 2;
+pub const EXTENSION_FACTOR: u64 = 2;
+
+/// A storage budget the supervisor can diagnose, extend or escalate when it is breached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Limit {
+    ScratchBytes,
+    ScratchEntries,
+    ArtifactFileBytes,
+    ArtifactAttemptBytes,
+    ArtifactAttemptFiles,
+    OutputBytes,
+    OutputRows,
+}
+
+impl Limit {
+    pub const ALL: [Self; 7] = [
+        Self::ScratchBytes,
+        Self::ScratchEntries,
+        Self::ArtifactFileBytes,
+        Self::ArtifactAttemptBytes,
+        Self::ArtifactAttemptFiles,
+        Self::OutputBytes,
+        Self::OutputRows,
+    ];
+
+    /// The name recorded in events and statistics.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::ScratchBytes => "scratch_bytes",
+            Self::ScratchEntries => "scratch_entries",
+            Self::ArtifactFileBytes => "artifact_file_bytes",
+            Self::ArtifactAttemptBytes => "artifact_attempt_bytes",
+            Self::ArtifactAttemptFiles => "artifact_attempt_files",
+            Self::OutputBytes => "output_bytes",
+            Self::OutputRows => "output_rows",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|limit| limit.name() == name)
+    }
+
+    /// The environment variable that overrides the default.
+    pub const fn env(self) -> &'static str {
+        match self {
+            Self::ScratchBytes => "KTASK_SCRATCH_BYTES",
+            Self::ScratchEntries => "KTASK_SCRATCH_ENTRIES",
+            Self::ArtifactFileBytes => "KTASK_ARTIFACT_FILE_BYTES",
+            Self::ArtifactAttemptBytes => "KTASK_ARTIFACT_ATTEMPT_BYTES",
+            Self::ArtifactAttemptFiles => "KTASK_ARTIFACT_ATTEMPT_FILES",
+            Self::OutputBytes => "KTASK_OUTPUT_BYTES",
+            Self::OutputRows => "KTASK_OUTPUT_ROWS",
+        }
+    }
+
+    pub const fn default_value(self) -> u64 {
+        match self {
+            Self::ScratchBytes => 4 * 1024 * 1024 * 1024,
+            Self::ScratchEntries => 200_000,
+            Self::ArtifactFileBytes => 128 * 1024 * 1024,
+            Self::ArtifactAttemptBytes => 1024 * 1024 * 1024,
+            Self::ArtifactAttemptFiles => 4096,
+            Self::OutputBytes => 64 * 1024 * 1024,
+            Self::OutputRows => 100_000,
+        }
+    }
+
+    pub const fn is_bytes(self) -> bool {
+        matches!(
+            self,
+            Self::ScratchBytes
+                | Self::ArtifactFileBytes
+                | Self::ArtifactAttemptBytes
+                | Self::OutputBytes
+        )
+    }
+
+    pub const fn is_scratch(self) -> bool {
+        matches!(self, Self::ScratchBytes | Self::ScratchEntries)
+    }
+
+    /// The configured limit before any extension.
+    pub fn configured(self) -> u64 {
+        limit(self.env(), self.default_value())
+    }
+
+    /// The owner's ceiling for extensions: `<VARIABLE>_CEILING`, else four times the
+    /// configured limit, which is what two extensions reach.
+    pub fn ceiling(self) -> u64 {
+        let configured = self.configured();
+        limit(
+            &format!("{}_CEILING", self.env()),
+            configured.saturating_mul(EXTENSION_FACTOR.pow(MAX_EXTENSIONS)),
+        )
+        .max(configured)
+    }
+
+    /// The limit after `extensions` raises, never above the ceiling.
+    pub fn raised(self, extensions: u32) -> u64 {
+        self.configured()
+            .saturating_mul(EXTENSION_FACTOR.pow(extensions.min(MAX_EXTENSIONS)))
+            .min(self.ceiling())
+    }
+
+    /// Human text for a measured value: bytes or a count.
+    pub fn show(self, value: u64) -> String {
+        if self.is_bytes() {
+            format!("{value} bytes")
+        } else {
+            format!(
+                "{value} {}",
+                if self == Self::OutputRows {
+                    "rows"
+                } else {
+                    "entries"
+                }
+            )
+        }
+    }
+}
+
+impl fmt::Display for Limit {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        out.write_str(self.name())
+    }
+}
+
+/// A limit that stopped its producer: what was configured, what was measured, and what
+/// consumed the budget, for the remediation model to read before anything pauses.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Breach {
+    pub limit: Limit,
+    /// The limit in effect when it was breached.
+    pub configured: u64,
+    pub measured: u64,
+    /// A stable key for what filled the budget; a repeat with the same key is not a new cause.
+    pub cause: String,
+    /// A bounded description of what filled the budget; empty when none could be taken.
+    pub summary: String,
+    /// The owner's text: the pause reason when nothing can be decided automatically.
+    pub reason: String,
+}
+
+impl Breach {
+    pub fn with_summary(mut self, cause: String, summary: String) -> Self {
+        self.cause = cause;
+        self.summary = summary;
+        self
+    }
+}
+
+/// Replaces digit runs so that `build-17` and `build-18` name one cause.
+pub fn normalized(name: &str) -> String {
+    let mut out = String::new();
+    let mut digits = false;
+    for character in name.chars() {
+        if character.is_ascii_digit() {
+            if !digits {
+                out.push('#');
+            }
+            digits = true;
+        } else {
+            digits = false;
+            out.push(character);
+        }
+    }
+    out
 }
 
 /// Entries that vanish or cannot be inspected are skipped: a supervised process may create,

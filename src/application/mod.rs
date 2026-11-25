@@ -59,6 +59,7 @@ mod evidence_path;
 pub mod evidence_pin;
 mod model_validation;
 mod output_text;
+pub(crate) mod resource_breach;
 mod review_bundle;
 pub use evidence::{EvidenceCursor, EvidenceMatch, EvidenceSearch};
 pub mod categories;

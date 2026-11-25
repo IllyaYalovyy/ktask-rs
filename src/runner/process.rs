@@ -2,6 +2,7 @@
 //! stops the entire child process group before releasing its workspace/scratch leases.
 use crate::{
     application::Service,
+    resource::{Breach, Limit},
     runner::callback::{Capability, Server},
     scratch::Scratch,
     storage::{Database, Error, Result},
@@ -36,7 +37,7 @@ pub struct Invocation {
     #[serde(default)]
     pub unset_env: Vec<String>,
     #[serde(default)]
-    pub provision_scratch: Option<(u64, u64)>,
+    pub scratch_limits: Option<(u64, u64)>,
     pub cwd: PathBuf,
     pub prompt: String,
     pub schema: Option<serde_json::Value>,
@@ -65,7 +66,7 @@ impl Invocation {
             args,
             env: Vec::new(),
             unset_env: Vec::new(),
-            provision_scratch: None,
+            scratch_limits: None,
             cwd,
             prompt: String::new(),
             schema: None,
@@ -187,10 +188,20 @@ pub fn capture_probe(
 }
 #[derive(Serialize, Deserialize)]
 pub enum Message {
-    Output { stream: String, bytes: Vec<u8> },
-    Artifact { name: String, relative_path: String },
-    Exit { code: i32 },
+    Output {
+        stream: String,
+        bytes: Vec<u8>,
+    },
+    Artifact {
+        name: String,
+        relative_path: String,
+    },
+    Exit {
+        code: i32,
+    },
     Error(String),
+    /// A storage limit stopped the worker; the scratch summary was taken before cleanup.
+    Breach(Breach),
 }
 
 /// A guardian may finish cleanup while its supervisor is not draining stdout.
@@ -237,7 +248,7 @@ impl ResourceKind {
     fn incomplete_reason(self) -> &'static str {
         match self {
             Self::Scratch => {
-                "Resource limit: managed scratch exceeded; worker stopped and captured evidence retained, but guardian output delivery was incomplete. Raise the scratch limit or free capacity, then resume for fresh verification"
+                "Resource limit: managed scratch exceeded; worker stopped and its scratch deleted, and captured evidence retained, but guardian output delivery was incomplete. Raise the scratch limit, then resume for fresh verification"
             }
             Self::Artifact => {
                 "Resource limit: artifact evidence incomplete; worker stopped and captured evidence retained, but guardian output delivery was incomplete. Raise the artifact limit or free capacity, then resume for fresh verification"
@@ -416,17 +427,40 @@ fn reader(
         }
     })
 }
-fn scratch_error(
-    path: &std::path::Path,
-    provision: Option<(u64, u64)>,
-) -> io::Result<Option<String>> {
-    let (bytes, entries) = provision.unwrap_or_else(|| {
+/// The scratch limits in force: those the supervisor passed, else the configured ones.
+fn scratch_limits(passed: Option<(u64, u64)>) -> (u64, u64) {
+    passed.unwrap_or_else(|| {
         (
-            crate::resource::limit("KTASK_SCRATCH_BYTES", 4 * 1024 * 1024 * 1024),
-            crate::resource::limit("KTASK_SCRATCH_ENTRIES", 200_000),
+            Limit::ScratchBytes.configured(),
+            Limit::ScratchEntries.configured(),
         )
-    });
-    Ok(crate::resource::scratch_exceeded(path, bytes, entries)?.then(|| format!("Resource limit: managed scratch exceeded {bytes} bytes or {entries} entries; work and captured evidence retained. Raise the limit or free capacity, then resume")))
+    })
+}
+
+fn scratch_exceeded(path: &std::path::Path, passed: Option<(u64, u64)>) -> io::Result<bool> {
+    let (bytes, entries) = scratch_limits(passed);
+    crate::resource::scratch_exceeded(path, bytes, entries)
+}
+
+/// What filled a breached scratch directory. The worker is stopped; nothing is deleted yet.
+fn scratch_breach(path: &std::path::Path, passed: Option<(u64, u64)>) -> Breach {
+    let (byte_limit, entry_limit) = scratch_limits(passed);
+    let summary = crate::resource::summarize(path);
+    let (limit, configured, measured) = if summary.bytes > byte_limit {
+        (Limit::ScratchBytes, byte_limit, summary.bytes)
+    } else {
+        (Limit::ScratchEntries, entry_limit, summary.entries)
+    };
+    Breach {
+        limit,
+        configured,
+        measured,
+        cause: summary.cause(),
+        summary: summary.render(),
+        reason: format!(
+            "Resource limit: managed scratch exceeded {byte_limit} bytes or {entry_limit} entries; the guardian stopped the worker and deleted its scratch, and work and captured evidence are retained. Raise the scratch limit, then resume"
+        ),
+    }
 }
 
 fn android_runtime_error(root: Option<&std::path::Path>) -> io::Result<Option<String>> {
@@ -567,17 +601,19 @@ pub fn worker() -> Result<WorkerResult> {
     });
     let mut code = None;
     let mut disconnected = false;
-    let mut quota_error = None;
+    let mut quota = None;
     let mut last_scan = Instant::now();
     let mut pending_message = None;
     let mut blocked_since = None;
     while !disconnected || code.is_none() || pending_message.is_some() {
-        if quota_error.is_none() && last_scan.elapsed() >= Duration::from_millis(250) {
+        if quota.is_none() && last_scan.elapsed() >= Duration::from_millis(250) {
             last_scan = Instant::now();
-            if let Some(error) = scratch_error(scratch.path(), spec.provision_scratch)?
-                .or(android_runtime_error(android_runtime_root.as_deref())?)
-            {
-                quota_error = Some(error);
+            quota = capacity(
+                scratch.path(),
+                spec.scratch_limits,
+                android_runtime_root.as_deref(),
+            )?;
+            if quota.is_some() {
                 child.stop()?;
                 code.get_or_insert(130);
             }
@@ -593,7 +629,7 @@ pub fn worker() -> Result<WorkerResult> {
             child.stop()?;
         }
         if let Some(message) = pending_message.take()
-            && quota_error.is_none()
+            && quota.is_none()
         {
             match outbound.try_send(message) {
                 Ok(()) => blocked_since = None,
@@ -602,7 +638,7 @@ pub fn worker() -> Result<WorkerResult> {
                     if blocked_since.get_or_insert_with(Instant::now).elapsed()
                         >= Duration::from_secs(2)
                     {
-                        quota_error = Some("Resource limit: guardian output delivery stalled; captured evidence retained. Resume after restoring delivery capacity".into());
+                        quota = Some(Quota::Reason("Resource limit: guardian output delivery stalled; captured evidence retained. Resume after restoring delivery capacity".into()));
                         pending_message = None;
                         child.stop()?;
                         code.get_or_insert(130);
@@ -619,7 +655,7 @@ pub fn worker() -> Result<WorkerResult> {
         }
         match rx.recv_timeout(Duration::from_millis(25)) {
             Ok(message) => {
-                if quota_error.is_none() {
+                if quota.is_none() {
                     pending_message = Some(message);
                 }
             }
@@ -639,9 +675,12 @@ pub fn worker() -> Result<WorkerResult> {
     stderr
         .join()
         .map_err(|_| io::Error::other("stderr reader panicked"))?;
-    if quota_error.is_none() {
-        quota_error = scratch_error(scratch.path(), spec.provision_scratch)?
-            .or(android_runtime_error(android_runtime_root.as_deref())?);
+    if quota.is_none() {
+        quota = capacity(
+            scratch.path(),
+            spec.scratch_limits,
+            android_runtime_root.as_deref(),
+        )?;
     }
     let artifact_error = spec
         .artifact_target
@@ -649,21 +688,21 @@ pub fn worker() -> Result<WorkerResult> {
         .map(|target| archive_artifacts(&artifact_dir, target, &outbound))
         .transpose()
         .err();
+    // The scratch is summarized while it still exists: a breach is diagnosed from this.
+    let final_error = final_error(quota, scratch.path(), spec.scratch_limits, artifact_error);
     drop(callback);
     drop(android);
     scratch.close()?;
     lease.set_len(0)?;
     lease.sync_all()?;
-    if let Some(error) = quota_error.or_else(|| artifact_error.map(|error| {
-        let detail = match error { Error::Conflict(message) => message, other => other.to_string() };
-        if detail.contains(" limit") || detail.contains("No space left on device") || detail.contains("Disk quota exceeded") {
-            format!("Resource limit: artifact evidence incomplete: {detail}; work and captured evidence retained. Raise the limit or free capacity, then resume")
-        } else {
-            format!("Artifact evidence incomplete: {detail}; work and captured evidence retained")
-        }
-    })) {
-        let resource = ResourceKind::from_reason(&error);
-        return Ok(finish_delivery(outbound, delivered, Message::Error(error), resource));
+    if let Some(error) = final_error {
+        let resource = error.kind();
+        return Ok(finish_delivery(
+            outbound,
+            delivered,
+            error.message(),
+            resource,
+        ));
     }
     Ok(finish_delivery(
         outbound,
@@ -673,6 +712,93 @@ pub fn worker() -> Result<WorkerResult> {
         },
         ResourceKind::Delivery,
     ))
+}
+
+/// The capacity limit a worker has exceeded, if any.
+fn capacity(
+    scratch: &std::path::Path,
+    limits: Option<(u64, u64)>,
+    android_runtime: Option<&std::path::Path>,
+) -> io::Result<Option<Quota>> {
+    if scratch_exceeded(scratch, limits)? {
+        return Ok(Some(Quota::Scratch));
+    }
+    Ok(android_runtime_error(android_runtime)?.map(Quota::Reason))
+}
+
+/// What the guardian reports instead of an exit: a quota stop first, else an archive failure.
+fn final_error(
+    quota: Option<Quota>,
+    scratch: &std::path::Path,
+    limits: Option<(u64, u64)>,
+    artifacts: Option<Error>,
+) -> Option<Final> {
+    match quota {
+        Some(Quota::Scratch) => Some(Final::Breach(scratch_breach(scratch, limits))),
+        Some(Quota::Reason(reason)) => Some(Final::Text(reason)),
+        None => artifacts.map(|error| artifact_failure(error, scratch)),
+    }
+}
+
+/// Why the guardian stopped a worker for capacity.
+enum Quota {
+    Scratch,
+    Reason(String),
+}
+
+/// The guardian's last message when the work did not simply exit.
+enum Final {
+    Text(String),
+    Breach(Breach),
+}
+
+impl Final {
+    fn kind(&self) -> ResourceKind {
+        match self {
+            Self::Text(reason) => ResourceKind::from_reason(reason),
+            Self::Breach(breach) if breach.limit.is_scratch() => ResourceKind::Scratch,
+            Self::Breach(_) => ResourceKind::Artifact,
+        }
+    }
+
+    fn message(self) -> Message {
+        match self {
+            Self::Text(reason) => Message::Error(reason),
+            Self::Breach(breach) => Message::Breach(breach),
+        }
+    }
+}
+
+/// An artifact archive error as the guardian reports it. A limit breach also carries what
+/// filled the scratch it is about to delete.
+fn artifact_failure(error: Error, scratch: &std::path::Path) -> Final {
+    let detail = match &error {
+        Error::Conflict(message) => message.clone(),
+        Error::Breach(breach) => breach.reason.clone(),
+        other => other.to_string(),
+    };
+    let limited = detail.contains(" limit")
+        || detail.contains("No space left on device")
+        || detail.contains("Disk quota exceeded");
+    if !limited {
+        return Final::Text(format!(
+            "Artifact evidence incomplete: {detail}; work and captured evidence retained"
+        ));
+    }
+    let reason = format!(
+        "Resource limit: artifact evidence incomplete: {detail}; work and captured evidence retained. Raise the limit or free capacity, then resume"
+    );
+    match error {
+        Error::Breach(breach) => {
+            let summary = crate::resource::summarize(scratch);
+            Final::Breach(Breach {
+                reason,
+                summary: summary.render(),
+                ..*breach
+            })
+        }
+        _ => Final::Text(reason),
+    }
 }
 
 fn finish_delivery(
@@ -752,6 +878,7 @@ fn archive_artifacts(
     }
     entries.sort_by_key(|entry| entry.file_name());
     let mut errors = Vec::new();
+    let mut breach = None;
     if scan_overflow {
         errors.push(format!("Artifact directory exceeds the {scan_limit}-entry scan limit; remaining evidence was not archived"));
     }
@@ -791,18 +918,23 @@ fn archive_artifacts(
             }
             Err(error) => {
                 if errors.len() < 5 {
-                    errors.push(match error {
-                        Error::Conflict(message) => message,
+                    errors.push(match &error {
+                        Error::Conflict(message) => message.clone(),
+                        Error::Breach(breach) => breach.reason.clone(),
                         other => other.to_string(),
                     });
+                }
+                if let Error::Breach(first) = error {
+                    breach.get_or_insert(first);
                 }
             }
         }
     }
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(Error::Conflict(errors.join("; ")))
+    let reason = errors.join("; ");
+    match (errors.is_empty(), breach) {
+        (true, _) => Ok(()),
+        (false, Some(breach)) => Err(Error::Breach(Box::new(Breach { reason, ..*breach }))),
+        (false, None) => Err(Error::Conflict(reason)),
     }
 }
 
@@ -812,6 +944,8 @@ pub struct Worker {
     /// A message read ahead while collecting a batch of output.
     pending: Option<Message>,
     reader: Option<thread::JoinHandle<()>>,
+    /// The limit breach the guardian reported, for [`Self::failure`].
+    breach: Option<Breach>,
 }
 
 /// One step of a guardian's message stream, as [`Worker::receive`] reports it.
@@ -862,6 +996,7 @@ impl Worker {
             messages,
             pending: None,
             reader: Some(reader),
+            breach: None,
         };
         // Retain stdin in Child as the lifeline; Drop closes it before wait.
         let sent = serde_json::to_writer(&mut input, spec)
@@ -891,6 +1026,11 @@ impl Worker {
                 Received::Exited(code)
             }
             Ok(Message::Error(message)) => Received::Failed(message),
+            Ok(Message::Breach(breach)) => {
+                let reason = breach.reason.clone();
+                self.breach = Some(breach);
+                Received::Failed(reason)
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => Received::Idle,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 self.join()?;
@@ -918,9 +1058,12 @@ impl Worker {
     /// The error for a guardian that reported `message`: a partial final frame is a protocol
     /// error, but the guardian's exit status still carries a resource pause after cleanup.
     pub fn failure(&mut self, message: String) -> Error {
+        let breach = self.breach.take();
         match self.join() {
             Err(error) if super::resource_limit(&error).is_some() => error,
-            _ => Error::Conflict(message),
+            _ => breach.map_or(Error::Conflict(message), |breach| {
+                Error::Breach(Box::new(breach))
+            }),
         }
     }
     pub fn join(&mut self) -> Result<()> {

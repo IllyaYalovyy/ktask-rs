@@ -202,6 +202,23 @@ impl Service {
         })
     }
 
+    /// Whether `bytes` and `files` more would still leave the work reserve of the storage
+    /// budget free.
+    pub(crate) fn storage_admits(&self, bytes: u64, files: u64) -> Result<bool> {
+        probe_known_allocation(&self.db, self.project_id)?;
+        let usage = projected_allocation(&self.db)?;
+        let limits = instance_limits(self.db.connection())?;
+        Ok(!Reserve::Work.reached(
+            usage
+                .bytes
+                .saturating_add(bytes.min(i64::MAX as u64) as i64),
+            usage
+                .files
+                .saturating_add(files.min(i64::MAX as u64) as i64),
+            limits,
+        ))
+    }
+
     /// Retire idle leftover evidence pins before, never inside, a cleanup transaction.
     fn recover_pins(&self) -> Result<()> {
         super::evidence_pin::recover(self.db.connection(), self.db.state_dir())

@@ -1,43 +1,22 @@
 //! Diagnose a timed-out check before the supervisor can run it again.
 use super::{
     Context, Outcome,
-    backoff::{self, Notice},
+    backoff::Notice,
     checks::{Transcript, archive_transcript},
+    diagnosis::{self, Diagnosed, Inquiry, Judgment},
     failure_summary,
-    judge::read_only_turn,
-    turn::operational_failure,
 };
 use crate::{
     application::{
         Service,
         check_timeout::{CheckTimeout, TimeoutDecision},
         execution::Run,
-        progress::{Phase, Progress, REPAIR_ROUNDS},
-        prompt::{self, Turn},
-        stop::{CHECK_TIMEOUT_DIAGNOSIS_LIMIT, CHECK_TIMEOUT_STOP},
+        progress::{Progress, REPAIR_ROUNDS},
+        prompt::Turn,
+        stop::CHECK_TIMEOUT_STOP,
     },
     storage::Result,
 };
-use serde::Deserialize;
-use serde_json::{Value, json};
-
-#[derive(Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-pub(super) enum Judgment {
-    Repair { reason: String, plan: String },
-    Extend { reason: String },
-    Escalate { reason: String },
-}
-
-impl Judgment {
-    fn reason(&self) -> &str {
-        match self {
-            Self::Repair { reason, .. } | Self::Extend { reason } | Self::Escalate { reason } => {
-                reason.trim()
-            }
-        }
-    }
-}
 
 /// None continues the active attempt from the now-persisted workflow state.
 pub(super) fn resolve(
@@ -97,64 +76,26 @@ pub(super) fn resolve(
         ),
         service.answers(run)?,
     );
-    let packet = crate::scratch::Scratch::new(&ctx.paths.state.join("review-packets"))?;
-    let tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
-    let evidence = service.review_bundle(
-        run.attempt,
-        &ctx.paths.state,
-        packet.path(),
-        &tree,
-        &context,
-    )?;
-    let evidence = format!(
-        "{context}\n{evidence}\nResolved project tools: {}. Environment fingerprint: {}.\nRead/search with '{}' evidence FILE --offset 0 --limit 4096 [--search TEXT]; follow next_offset.",
-        ctx.tools.description,
-        ctx.tools.fingerprint,
-        ctx.paths.executable.display()
-    );
-    let category = run.effective_category();
-    let prompt = prompt::compose(
-        Turn::CheckTimeout,
-        &category,
-        &prompt::Task {
-            title: &run.definition.title,
-            goal: &run.definition.goal,
-            criteria: &run.definition.criteria,
-        },
-        &evidence,
-        None,
-    )?
-    .text();
-    let schema = schema(repair_available, max_extension.is_some());
-    let outcome = backoff::bounded(
+    let judgment = match diagnosis::diagnose(
         service,
         run,
         ctx,
-        Notice {
-            failed: "Check timeout diagnosis failed",
-            retained: "timed-out check and evidence retained",
+        &Inquiry {
+            turn: Turn::CheckTimeout,
+            context: &context,
+            names: ("read-only-check-timeout", "Diagnosing check timeout"),
+            notice: Notice {
+                failed: "Check timeout diagnosis failed",
+                retained: "timed-out check and evidence retained",
+            },
+            subject: "Check timeout",
+            report: &report,
+            repair_available,
+            extension_available: max_extension.is_some(),
         },
-        operational_failure,
-        |service, ctx| judge_once(service, run, ctx, &prompt, &schema),
-    )?;
-    if let Some(outcome) = ctx.deadline_outcome(run) {
-        return Ok(Some(outcome));
-    }
-    let judgment = match outcome {
-        Outcome::CheckTimeoutDecision(judgment) => judgment,
-        Outcome::Failed("timeout", message) => {
-            return Ok(Some(Outcome::Failed(
-                "timeout",
-                format!("{CHECK_TIMEOUT_DIAGNOSIS_LIMIT}: {message}\n{report}"),
-            )));
-        }
-        Outcome::Failed("configuration" | "agent", _) => return Ok(Some(outcome)),
-        Outcome::Failed(category, message) => {
-            return Ok(Some(Outcome::CheckTimeoutDiagnosisUnavailable(
-                category, message,
-            )));
-        }
-        other => return Ok(Some(other)),
+    )? {
+        Diagnosed::Judgment(judgment) => judgment,
+        Diagnosed::Stop(outcome) => return Ok(Some(outcome)),
     };
 
     let extension =
@@ -172,20 +113,13 @@ pub(super) fn resolve(
     let reason = judgment.reason();
     let (action, extension_ms, stop) = match &judgment {
         Judgment::Repair { plan, .. } => {
-            let baseline = progress.phase == Phase::Baseline;
-            super::cycle::fix_checks(
+            diagnosis::apply_repair(
                 service,
                 run,
                 progress,
+                reason,
                 &format!("{reason}\nAuthorized timeout repair plan:\n{plan}\n{report}"),
             )?;
-            if baseline {
-                progress.context.push('\n');
-                progress
-                    .context
-                    .push_str(crate::application::progress::BASELINE_FAILURE_NOTE);
-            }
-            progress.why = reason.lines().next().unwrap_or_default().to_owned();
             ("repair", None, None)
         }
         Judgment::Extend { .. } => {
@@ -200,10 +134,10 @@ pub(super) fn resolve(
         }
         Judgment::Escalate { .. } => ("escalate", None, Some(stopped(timeout, reason, &report))),
     };
-    service.save_timeout_decision(
+    service.save_decision(
         run,
         progress,
-        TimeoutDecision {
+        &TimeoutDecision {
             step: timeout.step,
             action,
             reason,
@@ -273,68 +207,4 @@ fn stopped(timeout: &CheckTimeout, reason: &str, report: &str) -> Outcome {
             timeout.name, timeout.timeout_ms,
         ),
     )
-}
-
-fn schema(repair_available: bool, extension_available: bool) -> Value {
-    let choice = |action| {
-        json!({
-            "type":"object","additionalProperties":false,"required":["action","reason"],
-            "properties":{"action":{"type":"string","enum":[action]},"reason":{"type":"string"}}
-        })
-    };
-    let mut alternatives = vec![choice("escalate")];
-    if extension_available {
-        alternatives.push(choice("extend"));
-    }
-    if repair_available {
-        alternatives.push(json!({
-            "type":"object","additionalProperties":false,"required":["action","reason","plan"],
-            "properties":{"action":{"type":"string","enum":["repair"]},"reason":{"type":"string"},"plan":{"type":"string"}}
-        }));
-    }
-    // A lone alternative is already an object schema.
-    let judgment = if alternatives.len() == 1 {
-        alternatives.remove(0)
-    } else {
-        json!({"anyOf":alternatives})
-    };
-    json!({"type":"object","additionalProperties":false,"required":["judgment"],"properties":{"judgment":judgment}})
-}
-
-fn judge_once(
-    service: &mut Service,
-    run: &Run,
-    ctx: &mut Context<'_>,
-    prompt: &str,
-    schema: &Value,
-) -> Result<Outcome> {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Response {
-        judgment: Judgment,
-    }
-
-    let (step, stream, outcome) = read_only_turn(
-        service,
-        run,
-        ctx,
-        ("read-only-check-timeout", "Diagnosing check timeout"),
-        (prompt.to_owned(), schema.clone()),
-    )?;
-    if let Some(outcome) = outcome {
-        return Ok(outcome);
-    }
-    if stream.completed
-        && !stream.failed
-        && let Ok(response) =
-            serde_json::from_str::<Response>(stream.last_message.as_deref().unwrap_or(""))
-        && !response.judgment.reason().is_empty()
-        && !matches!(&response.judgment, Judgment::Repair { plan, .. } if plan.trim().is_empty())
-    {
-        service.finish_step(&step, true, response.judgment.reason())?;
-        return Ok(Outcome::CheckTimeoutDecision(response.judgment));
-    }
-    let message = "Check timeout judge did not return a complete decision";
-    service.finish_step(&step, false, message)?;
-    Ok(Outcome::Failed("protocol", message.into()))
 }

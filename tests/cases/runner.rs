@@ -2749,6 +2749,377 @@ fn scratch_byte_pressure_reaps_worker_and_preserves_attempt() -> Result {
     Ok(())
 }
 
+/// One breach row of the first attempt: (limit, configured, measured, cause, summary,
+/// decision, reason, extended_to).
+type BreachRow = (
+    String,
+    i64,
+    i64,
+    String,
+    String,
+    String,
+    String,
+    Option<i64>,
+);
+
+fn breaches(f: &Fixture) -> Result<Vec<BreachRow>> {
+    let db = f.db()?;
+    let mut query = db.connection().prepare(
+        "SELECT limit_name,configured,measured,cause,summary,coalesce(decision,''),coalesce(reason,''),extended_to FROM resource_breaches ORDER BY id",
+    )?;
+    let rows = query
+        .query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+                r.get(7)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+fn repair_rounds(f: &Fixture) -> Result<i64> {
+    Ok(f.db()?.connection().query_row(
+        "SELECT coalesce((SELECT repair_round FROM attempt_progress WHERE attempt_id=1),0)",
+        [],
+        |r| r.get(0),
+    )?)
+}
+
+fn breach_events(f: &Fixture) -> Result<Vec<String>> {
+    let db = f.db()?;
+    let mut query = db
+        .connection()
+        .prepare("SELECT message FROM events WHERE kind='resource.breach' ORDER BY id")?;
+    Ok(query
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?)
+}
+
+fn breach_stat(f: &Fixture, limit: &str, decision: &str) -> Result<i64> {
+    let stats = f.ok(&["stats"])?;
+    let item = stats["resource_limits"]
+        .as_array()
+        .and_then(|all| all.iter().find(|item| item["limit"] == limit))
+        .ok_or("limit missing from stats")?;
+    Ok(item[decision].as_i64().ok_or("count missing")?)
+}
+
+/// A worker that fills its scratch (or the artifact count) is stopped at once, and the
+/// remediation model decides what follows from what it reads.
+fn breach_fixture(
+    mode: &str,
+    env: &[(&str, &str)],
+    judgment: Value,
+    once: bool,
+) -> Result<Fixture> {
+    breach_fixture_with(mode, env, &[judgment], once)
+}
+
+/// Like [`breach_fixture`], with an answer for each of the first diagnoses; the last repeats.
+fn breach_fixture_with(
+    mode: &str,
+    env: &[(&str, &str)],
+    judgments: &[Value],
+    once: bool,
+) -> Result<Fixture> {
+    let f = Fixture::new()?;
+    f.provider(mode)?;
+    for (index, judgment) in judgments.iter().enumerate() {
+        f.breach_judgment_at(index + 1, judgment.clone())?;
+    }
+    f.breach_judgment(judgments.last().expect("a judgment").clone())?;
+    if once {
+        fs::write(f.scratch.path().join("breach-once"), "")?;
+    }
+    f.add("Diagnose a storage limit breach")?;
+    let mut run = f.process();
+    for (name, value) in env {
+        run.env(name, value);
+    }
+    let output = run.args(["run", "--one"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    f.guardian_finished()?;
+    f.no_scratch()?;
+    Ok(f)
+}
+
+#[test]
+fn scratch_breach_repair_resumes_the_session_with_the_plan_and_counts_a_round() -> Result {
+    let plan = "Delete the copy of the project in TMPDIR and work in the worktree";
+    let f = breach_fixture(
+        "breach-scratch",
+        &[("KTASK_SCRATCH_BYTES", "524288")],
+        serde_json::json!({"action": "repair", "reason": "A second project copy fills TMPDIR", "plan": plan}),
+        true,
+    )?;
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "succeeded", "{task}");
+    assert_eq!(repair_rounds(&f)?, 1);
+    let rows = breaches(&f)?;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let (limit, configured, measured, cause, summary, decision, reason, extended) = &rows[0];
+    assert_eq!((limit.as_str(), *configured), ("scratch_bytes", 524_288));
+    assert!(*measured > 524_288, "{measured}");
+    assert_eq!(cause, "project-copy");
+    assert!(summary.contains("project-copy/src"), "{summary}");
+    assert!(
+        summary.contains("a.bin") || summary.contains("b.bin"),
+        "{summary}"
+    );
+    assert!(summary.contains("1 duplicate(s)"), "{summary}");
+    assert!(summary.len() <= 2048);
+    assert_eq!((decision.as_str(), *extended), ("repair", None));
+    assert_eq!(reason, "A second project copy fills TMPDIR");
+    // The judge read the summary; the executing session resumed with its plan.
+    let judged = fs::read_to_string(f.scratch.path().join("breach-judge-prompt"))?;
+    assert!(judged.contains("Largest directories"), "{judged}");
+    assert!(judged.contains("scratch_bytes"), "{judged}");
+    assert!(
+        judged.contains("BREACH-MARKER copying the project into TMPDIR"),
+        "the judge reads the stopped work's transcript: {judged}"
+    );
+    let repaired = fs::read_to_string(f.scratch.path().join("prompt-repair-worker"))?;
+    assert!(repaired.contains(plan), "{repaired}");
+    let events = breach_events(&f)?;
+    assert_eq!(events.len(), 1);
+    assert!(
+        events[0].contains("scratch_bytes")
+            && events[0].contains("repair")
+            && events[0].contains("A second project copy"),
+        "{events:?}"
+    );
+    assert_eq!(breach_stat(&f, "scratch_bytes", "repaired")?, 1);
+    assert_eq!(breach_stat(&f, "scratch_bytes", "extended")?, 0);
+    assert_eq!(breach_stat(&f, "scratch_bytes", "escalated")?, 0);
+    Ok(())
+}
+
+#[test]
+fn scratch_breach_extend_raises_the_limit_for_the_attempt_without_a_repair_round() -> Result {
+    let f = breach_fixture(
+        "breach-scratch",
+        &[("KTASK_SCRATCH_BYTES", "524288")],
+        serde_json::json!({"action": "extend", "reason": "The build output is legitimate"}),
+        true,
+    )?;
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "succeeded", "{task}");
+    assert_eq!(repair_rounds(&f)?, 0);
+    let rows = breaches(&f)?;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!((rows[0].5.as_str(), rows[0].7), ("extend", Some(1_048_576)));
+    assert!(breach_events(&f)?[0].contains("to 1048576"));
+    assert_eq!(breach_stat(&f, "scratch_bytes", "extended")?, 1);
+    Ok(())
+}
+
+#[test]
+fn scratch_breach_escalation_pauses_with_the_diagnosis_and_no_stale_advice() -> Result {
+    let f = breach_fixture(
+        "breach-scratch",
+        &[("KTASK_SCRATCH_BYTES", "524288")],
+        serde_json::json!({"action": "escalate", "reason": "The project copy is regenerated by a tool"}),
+        false,
+    )?;
+    let attempt = &f.ok(&["show", "1"])?["attempts"][0];
+    assert_eq!(attempt["state"], "paused", "{attempt}");
+    let report = attempt["report"].as_str().unwrap_or_default();
+    assert!(report.contains("managed scratch exceeded"), "{report}");
+    assert!(
+        report.contains("Diagnosis: The project copy is regenerated by a tool"),
+        "{report}"
+    );
+    // The guardian already freed the scratch: the owner is not asked to free capacity.
+    assert!(!report.contains("free capacity"), "{report}");
+    assert_eq!(breaches(&f)?[0].5, "escalate");
+    assert_eq!(breach_stat(&f, "scratch_bytes", "escalated")?, 1);
+    Ok(())
+}
+
+#[test]
+fn a_second_scratch_breach_for_the_same_cause_escalates_without_asking_again() -> Result {
+    let f = breach_fixture(
+        "breach-scratch",
+        &[("KTASK_SCRATCH_BYTES", "524288")],
+        serde_json::json!({"action": "repair", "reason": "Stop copying", "plan": "Do not copy the project"}),
+        false,
+    )?;
+    let rows = breaches(&f)?;
+    let decisions: Vec<_> = rows.iter().map(|row| row.5.as_str()).collect();
+    assert_eq!(decisions, ["repair", "escalate"], "{rows:?}");
+    assert!(
+        rows[1].6.contains("breached again for the same cause"),
+        "{rows:?}"
+    );
+    // Only the first breach was put to the remediation model.
+    let calls = fs::read_to_string(f.scratch.path().join("breach-judge-calls"))?;
+    assert_eq!(calls.lines().count(), 1, "{calls}");
+    assert_eq!(f.ok(&["show", "1"])?["attempts"][0]["state"], "paused");
+    Ok(())
+}
+
+#[test]
+fn a_limit_is_extended_at_most_twice_per_attempt_and_never_above_the_ceiling() -> Result {
+    let extend = serde_json::json!({"action": "extend", "reason": "Output is legitimate"});
+    let f = breach_fixture(
+        "breach-scratch-growing",
+        &[("KTASK_SCRATCH_BYTES", "300000")],
+        extend.clone(),
+        false,
+    )?;
+    let rows = breaches(&f)?;
+    let seen: Vec<_> = rows
+        .iter()
+        .map(|row| (row.1, row.5.as_str(), row.7))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            (300_000, "extend", Some(600_000)),
+            (600_000, "extend", Some(1_200_000)),
+            (1_200_000, "escalate", None),
+        ],
+        "{rows:?}"
+    );
+    assert!(
+        rows[2].6.contains("larger limit is unavailable"),
+        "{rows:?}"
+    );
+    assert_eq!(f.ok(&["show", "1"])?["attempts"][0]["state"], "paused");
+
+    // The owner's ceiling bounds the first extension and forbids the second.
+    let f = breach_fixture(
+        "breach-scratch-growing",
+        &[
+            ("KTASK_SCRATCH_BYTES", "300000"),
+            ("KTASK_SCRATCH_BYTES_CEILING", "500000"),
+        ],
+        extend,
+        false,
+    )?;
+    let rows = breaches(&f)?;
+    let seen: Vec<_> = rows
+        .iter()
+        .map(|row| (row.1, row.5.as_str(), row.7))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            (300_000, "extend", Some(500_000)),
+            (500_000, "escalate", None)
+        ],
+        "{rows:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn artifact_count_breach_is_repaired_extended_or_escalated_by_the_judge() -> Result {
+    let env = [("KTASK_ARTIFACT_ATTEMPT_FILES", "128")];
+    // The repaired attempt still has a full artifact budget: the next archive (a check
+    // transcript) is a second breach, for another cause, and is extended.
+    let repair = breach_fixture_with(
+        "breach-artifacts",
+        &env,
+        &[
+            serde_json::json!({"action": "repair", "reason": "Too many proof files", "plan": "Bundle the proof files into one archive"}),
+            serde_json::json!({"action": "extend", "reason": "Room for the check transcripts"}),
+        ],
+        true,
+    )?;
+    assert_eq!(repair.ok(&["show", "1"])?["status"], "succeeded");
+    assert_eq!(repair_rounds(&repair)?, 1);
+    let rows = breaches(&repair)?;
+    assert_eq!(
+        (
+            rows[0].0.as_str(),
+            rows[0].1,
+            rows[0].3.as_str(),
+            rows[0].5.as_str()
+        ),
+        ("artifact_attempt_files", 128, "proof-#", "repair")
+    );
+    assert_eq!(rows[1].5, "extend");
+    assert!(rows[0].4.contains("artifacts"), "{}", rows[0].4);
+    assert!(
+        fs::read_to_string(repair.scratch.path().join("breach-judge-prompt"))?
+            .contains("BREACH-MARKER writing proof files"),
+        "the judge reads the stopped work's transcript"
+    );
+    assert!(
+        fs::read_to_string(repair.scratch.path().join("prompt-repair-worker"))?
+            .contains("Bundle the proof files into one archive")
+    );
+    assert_eq!(
+        breach_stat(&repair, "artifact_attempt_files", "repaired")?,
+        1
+    );
+    assert_eq!(
+        breach_stat(&repair, "artifact_attempt_files", "extended")?,
+        1
+    );
+
+    let extend = breach_fixture(
+        "breach-artifacts",
+        &env,
+        serde_json::json!({"action": "extend", "reason": "The proof is legitimate"}),
+        true,
+    )?;
+    assert_eq!(extend.ok(&["show", "1"])?["status"], "succeeded");
+    assert_eq!(repair_rounds(&extend)?, 0);
+    assert_eq!(breaches(&extend)?[0].7, Some(256));
+    assert_eq!(
+        breach_stat(&extend, "artifact_attempt_files", "extended")?,
+        1
+    );
+
+    let escalate = breach_fixture(
+        "breach-artifacts",
+        &env,
+        serde_json::json!({"action": "escalate", "reason": "The worker floods evidence"}),
+        false,
+    )?;
+    let attempt = &escalate.ok(&["show", "1"])?["attempts"][0];
+    assert_eq!(attempt["state"], "paused");
+    assert!(
+        attempt["report"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Diagnosis: The worker floods evidence"),
+        "{attempt}"
+    );
+    assert_eq!(
+        breach_stat(&escalate, "artifact_attempt_files", "escalated")?,
+        1
+    );
+    Ok(())
+}
+
+#[test]
+fn a_detached_runner_survives_the_launcher_closing_its_stdout_pipe() -> Result {
+    let f = Fixture::new()?;
+    f.provider("normal")?;
+    f.add("Finish with a closed stdout")?;
+    let (reader, writer) = std::io::pipe()?;
+    drop(reader);
+    let output = f
+        .process()
+        .args(["run", "--one", "--notify"])
+        .stdout(writer)
+        .stderr(Stdio::piped())
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    Ok(())
+}
+
 fn scratch_measure(path: &Path) -> (u64, u64) {
     let mut bytes = 0_u64;
     let mut entries = 0_u64;
@@ -6105,6 +6476,13 @@ case "$prompt" in *"Fix what Context reports"*) repair=yes; cp "$HOME/packet-$mo
 [ -n "$session" ] || session="session-$model-$$"
 printf '{{"type":"thread.started","thread_id":"%s"}}\n' "$session"
 printf '%s\n' "$model" >> "$HOME/provider-invocations"
+case "$prompt" in *"Diagnose the storage limit breach"*)
+ [ -f "$HOME/breach-judge-prompt" ] || printf '%s' "$prompt" > "$HOME/breach-judge-prompt"
+ printf '%s\n' "$model" >> "$HOME/breach-judge-calls"
+ n=$(wc -l < "$HOME/breach-judge-calls")
+ if [ -f "$HOME/breach-judge-reply-$n" ]; then cat "$HOME/breach-judge-reply-$n"; else cat "$HOME/breach-judge-reply"; fi
+ exit 0;;
+esac
 if [ '{mode}' = check-timeout ] && [ "$model" = remediation ]; then
  transcript=$(sed -n '/"name":"build"/s/.*"path":"\([^"]*\)".*/\1/p' "$packet/artifacts.jsonl" | head -n 1)
  [ -n "$transcript" ] || exit 70
@@ -6220,6 +6598,34 @@ case '{mode}' in
   if [ "$model" = execution ]; then
    i=0; while [ "$i" -lt 400 ]; do : > "$KTASK_ARTIFACT_DIR/empty-$i"; i=$((i + 1)); done
    mkdir "$KTASK_ARTIFACT_DIR/nested"
+  fi;;
+ breach-scratch)
+  # Fills TMPDIR with a copy of "the project" (two identical files) unless a repair or an
+  # extension is expected to have fixed it: breach-once stops the flood after the first turn.
+  if [ "$model" = execution ] && {{ [ ! -f "$HOME/breach-flooded" ] || [ ! -f "$HOME/breach-once" ]; }}; then
+   touch "$HOME/breach-flooded"
+   printf 'BREACH-MARKER copying the project into TMPDIR\n' >&2
+   mkdir -p "$TMPDIR/project-copy/src"
+   head -c 400000 /dev/zero > "$TMPDIR/project-copy/src/a.bin"
+   cp "$TMPDIR/project-copy/src/a.bin" "$TMPDIR/project-copy/src/b.bin"
+   sleep 5
+  fi;;
+ breach-scratch-growing)
+  # Every turn fills a differently named directory with twice the bytes of the one before.
+  if [ "$model" = execution ] && [ "$repair" = no ]; then
+   n=0; [ ! -f "$HOME/breach-turns" ] || n=$(cat "$HOME/breach-turns")
+   printf '%s' "$((n + 1))" > "$HOME/breach-turns"
+   size=400000; k=0; while [ "$k" -lt "$n" ]; do size=$((size * 2)); k=$((k + 1)); done
+   name=$(printf 'alpha beta gamma delta' | cut -d' ' -f$((n + 1)))
+   mkdir -p "$TMPDIR/$name"
+   head -c "$size" /dev/zero > "$TMPDIR/$name/data.bin"
+   sleep 5
+  fi;;
+ breach-artifacts)
+  if [ "$model" = execution ] && {{ [ ! -f "$HOME/breach-flooded" ] || [ ! -f "$HOME/breach-once" ]; }}; then
+   touch "$HOME/breach-flooded"
+   printf 'BREACH-MARKER writing proof files\n' >&2
+   i=0; while [ "$i" -lt 200 ]; do : > "$KTASK_ARTIFACT_DIR/proof-$i"; i=$((i + 1)); done
   fi;;
  scratch-flood)
   if [ "$model" = execution ]; then
@@ -6450,6 +6856,32 @@ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":
 "##
         );
         support::write_executable(&self.scratch.path().join("bin/codex"), script)?;
+        if !self.scratch.path().join("breach-judge-reply").exists() {
+            self.breach_judgment(serde_json::json!({
+                "action": "escalate",
+                "reason": "Fixture escalation: the breach needs the owner",
+            }))?;
+        }
+        Ok(())
+    }
+    /// What the remediation model answers when asked to diagnose a storage-limit breach.
+    fn breach_judgment(&self, judgment: Value) -> Result {
+        self.breach_reply("breach-judge-reply", judgment)
+    }
+    /// The answer to the `n`th diagnosis (from 1); later ones use [`Self::breach_judgment`].
+    fn breach_judgment_at(&self, n: usize, judgment: Value) -> Result {
+        self.breach_reply(&format!("breach-judge-reply-{n}"), judgment)
+    }
+    fn breach_reply(&self, file: &str, judgment: Value) -> Result {
+        let response = serde_json::json!({ "judgment": judgment });
+        let message = serde_json::json!({
+            "type": "item.completed",
+            "item": { "type": "agent_message", "text": response.to_string() },
+        });
+        fs::write(
+            self.scratch.path().join(file),
+            format!("{message}\n{{\"type\":\"turn.completed\",\"usage\":{{}}}}\n"),
+        )?;
         Ok(())
     }
     fn timeout_judgment(&self, judgment: Value) -> Result {
@@ -7793,6 +8225,8 @@ fn assert_worker_prompt_rules(prompt: &str) {
         "ktask owns full checks, independent review, commit and delivery",
         "do not follow any manual check, review, commit or push loop",
         "leave out what you ran, untracked files, and what checks or reviewers will do next",
+        "Your TMPDIR may hold at most 4294967296 bytes and 200000 entries in total",
+        "Never build or copy a second copy of the project into TMPDIR",
     ] {
         assert!(prompt.contains(rule), "worker prompt missing: {rule}");
     }

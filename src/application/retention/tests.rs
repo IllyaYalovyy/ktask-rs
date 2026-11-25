@@ -2054,3 +2054,40 @@ fn housekeeping_skips_and_reports_a_non_conforming_artifact_path() -> Result<()>
     assert!(service.cleanup_storage(&preview).is_err());
     Ok(())
 }
+
+#[test]
+fn breach_transcript_is_bounded_and_ends_at_the_recorded_breach() -> Result<()> {
+    let (_sandbox, mut service, task) = closed_service()?;
+    let version = service.current_task()?.unwrap().version;
+    let run = service.begin_run(
+        VersionedTask { id: task, version },
+        "breach-transcript",
+        "fixture-base",
+        false,
+    )?;
+    for line in 0..4000 {
+        service.output(&run, "stdout", &format!("line {line}\n"))?;
+    }
+    service.record_breach(
+        &run,
+        &crate::resource::Breach {
+            limit: crate::resource::Limit::ScratchBytes,
+            configured: 1,
+            measured: 2,
+            cause: "copy".into(),
+            summary: String::new(),
+            reason: "Resource limit: test".into(),
+        },
+    )?;
+    service.output(&run, "stdout", "after the breach\n")?;
+
+    let breach = service.pending_breach(&run)?.expect("recorded breach");
+    let tail = service.output_tail(&run, breach.output_end, 1024)?;
+
+    assert!(tail.len() <= 1024, "{} bytes", tail.len());
+    assert!(tail.len() > 1000, "{} bytes", tail.len());
+    assert!(tail.ends_with("line 3999\n"), "{tail}");
+    assert!(!tail.contains("after the breach"));
+    assert_eq!(service.output_tail(&run, 0, 1024)?, "");
+    Ok(())
+}

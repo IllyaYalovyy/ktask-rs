@@ -290,7 +290,15 @@ pub(super) fn archive_transcript(
         &temporary,
         transcript.relative,
         transcript.tree,
-    ).map_err(|error| crate::storage::Error::Conflict(format!("Resource limit: check transcript evidence incomplete: {error}; captured output retained. Raise the limit or free capacity, then resume")))?;
+    ).map_err(|error| {
+        let reason = format!("Resource limit: check transcript evidence incomplete: {error}; captured output retained. Raise the limit or free capacity, then resume");
+        match error {
+            crate::storage::Error::Breach(breach) => {
+                crate::storage::Error::Breach(Box::new(crate::resource::Breach { reason, ..*breach }))
+            }
+            _ => crate::storage::Error::Conflict(reason),
+        }
+    })?;
     scratch.close().map_err(|error| {
         crate::storage::Error::Conflict(format!(
             "Cannot remove check transcript scratch after publication: {error}"

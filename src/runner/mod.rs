@@ -15,6 +15,7 @@ mod context;
 pub mod control;
 mod cycle;
 mod delivery;
+mod diagnosis;
 mod failure_summary;
 mod judge;
 mod lens;
@@ -26,6 +27,7 @@ mod queue;
 pub(crate) mod registration;
 pub mod remediation;
 mod reset;
+mod resource_breach;
 pub(crate) mod sandbox;
 mod session;
 pub mod setup;
@@ -62,8 +64,10 @@ enum Outcome {
         critical: bool,
     },
     CheckTimedOut,
-    CheckTimeoutDecision(check_timeout::Judgment),
-    CheckTimeoutDiagnosisUnavailable(&'static str, String),
+    /// A read-only judgment on a check timeout or a storage-limit breach.
+    Diagnosis(diagnosis::Judgment),
+    /// The judgment could not run: what was being diagnosed, why, and the failure message.
+    DiagnosisUnavailable(&'static str, &'static str, String),
     Paused,
     DeliveryBlocked(String),
     Question(String),
@@ -79,6 +83,7 @@ enum Outcome {
 fn resource_limit(error: &Error) -> Option<&str> {
     match error {
         Error::Conflict(reason) if reason.starts_with("Resource limit:") => Some(reason),
+        Error::Breach(breach) => Some(&breach.reason),
         _ => None,
     }
 }

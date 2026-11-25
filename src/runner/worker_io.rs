@@ -39,17 +39,18 @@ pub(super) fn execute(
         return Ok(Finish::Stopped(outcome));
     }
     let ai = stream.is_some();
-    let mut worker =
-        match Worker::spawn(&ctx.paths.executable, &with_evidence(spec, run, step, ctx)) {
-            Ok(worker) => worker,
-            Err(error) => {
-                ctx.persist_active_time(service, run)?;
-                return Ok(Finish::Stopped(Outcome::Failed(
-                    "environment",
-                    error.to_string(),
-                )));
-            }
-        };
+    let mut spec = with_evidence(spec, run, step, ctx);
+    spec.scratch_limits = Some(service.scratch_limits(run.attempt)?);
+    let mut worker = match Worker::spawn(&ctx.paths.executable, &spec) {
+        Ok(worker) => worker,
+        Err(error) => {
+            ctx.persist_active_time(service, run)?;
+            return Ok(Finish::Stopped(Outcome::Failed(
+                "environment",
+                error.to_string(),
+            )));
+        }
+    };
     let limit = Limit {
         started: Instant::now(),
         timeout,

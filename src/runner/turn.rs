@@ -246,6 +246,7 @@ fn answered_turn(
             &packet_context,
             &ctx.paths.executable,
             &ctx.workspace.root,
+            service.scratch_limits(run.attempt)?,
         )?,
     };
     let invocation = turn.invocation(service, run, ctx, step, prompt)?;

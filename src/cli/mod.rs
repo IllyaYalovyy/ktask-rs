@@ -45,7 +45,7 @@ impl Failure {
 impl From<storage::Error> for Failure {
     fn from(error: storage::Error) -> Self {
         let (status, code) = match &error {
-            storage::Error::Conflict(_) => (4, "conflict"),
+            storage::Error::Conflict(_) | storage::Error::Breach(_) => (4, "conflict"),
             storage::Error::Incompatible(_) => (1, "incompatible_database"),
             storage::Error::Io(_) => (1, "io"),
             storage::Error::Sql(_) => (1, "database"),
@@ -53,6 +53,7 @@ impl From<storage::Error> for Failure {
         // The code already names a conflict; its message is the reason alone.
         let message = match error {
             storage::Error::Conflict(message) => message,
+            storage::Error::Breach(breach) => breach.reason,
             other => other.to_string(),
         };
         Self {
@@ -674,13 +675,16 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
                 },
             )?
         };
-        return emit(
-            output::Reply {
-                data: json!({"message":message}),
-                text: format!("{message}\n"),
-            },
-            cli.json,
-        );
+        let reply = output::Reply {
+            data: json!({"message":message}),
+            text: format!("{message}\n"),
+        };
+        if *notify {
+            // A detached runner's launcher may be gone, its pipe closed; nobody waits for this.
+            let _ = emit(reply, cli.json);
+            return Ok(());
+        }
+        return emit(reply, cli.json);
     }
     if let Command::Breakdown { target, apply } = command {
         let task = service

@@ -1343,18 +1343,23 @@ impl Backend for StoredWorkspace {
     fn stats(&self, screen: &Screen) -> Result<Dialog, String> {
         let usage = self.service.project_usage().map_err(|e| e.to_string())?;
         let timing = self.service.project_timing().map_err(|e| e.to_string())?;
+        let limits = self
+            .service
+            .resource_limit_stats()
+            .map_err(|e| e.to_string())?;
         Ok(Dialog::new(
             DialogKind::Stats,
             "Project statistics · SQLite",
             &format!(
-                "Queue: {}\nHistory: {}\nAttempts: {} ({} failed/interrupted)\nActive time: {}\nWaiting time: {}\nProject usage: {}\nHuman tasks are marked done without AI attempts.",
+                "Queue: {}\nHistory: {}\nAttempts: {} ({} failed/interrupted)\nActive time: {}\nWaiting time: {}\nProject usage: {}\n{}Human tasks are marked done without AI attempts.",
                 screen.queue.len(),
                 screen.history.len(),
                 timing.attempts,
                 timing.failed,
                 domain::limits::elapsed(timing.active_ms),
                 domain::limits::elapsed(timing.waiting_ms),
-                usage.label()
+                usage.label(),
+                crate::application::resource_breach::limit_lines(&limits)
             ),
             vec![],
         ))

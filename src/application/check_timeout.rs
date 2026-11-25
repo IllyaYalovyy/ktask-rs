@@ -1,6 +1,7 @@
 //! An interrupted supervisor check and the decision that authorizes what follows it.
 use super::{
     execution::{Check, Run, Step},
+    progress::Decision,
     *,
 };
 
@@ -28,8 +29,8 @@ pub(crate) struct TimeoutDecision<'a> {
     pub extension_ms: Option<i64>,
 }
 
-impl TimeoutDecision<'_> {
-    pub(super) fn record(self, tx: &rusqlite::Transaction<'_>, run: &Run) -> Result<()> {
+impl Decision for TimeoutDecision<'_> {
+    fn record(&self, tx: &rusqlite::Transaction<'_>, run: &Run) -> Result<()> {
         require(
             tx.execute(
                 "UPDATE check_timeouts SET decision=?3,reason=?4,extension_ms=?5

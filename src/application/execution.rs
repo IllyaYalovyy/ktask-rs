@@ -2,6 +2,7 @@
 use super::commands::{allowed, labelled, reason_or};
 use super::lifecycle::Action;
 use super::{delivery::Stage, *};
+use crate::resource::{Breach, Limit};
 use crate::storage::{execution::StartAttempt, usage::TokenUsage};
 use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
 
@@ -26,8 +27,6 @@ pub(super) fn backfill_output_usage(db: &rusqlite::Connection) -> Result<()> {
 }
 
 fn reserve_output(tx: &Transaction<'_>, attempt: i64, bytes: u64, rows: u64) -> Result<()> {
-    let byte_limit = crate::resource::limit("KTASK_OUTPUT_BYTES", 64 * 1024 * 1024);
-    let row_limit = crate::resource::limit("KTASK_OUTPUT_ROWS", 100_000);
     // An attempt another binary recorded after this one opened has no counters yet.
     tx.execute(BACKFILL_OUTPUT_USAGE, [attempt])?;
     let (used_bytes, used_rows): (i64, i64) = tx.query_row(
@@ -35,14 +34,58 @@ fn reserve_output(tx: &Transaction<'_>, attempt: i64, bytes: u64, rows: u64) -> 
         [attempt],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    if (used_bytes as u64).saturating_add(bytes) > byte_limit
-        || (used_rows as u64).saturating_add(rows) > row_limit
-    {
-        return Err(Error::Conflict(format!(
+    let byte_limit = super::resource_breach::effective_limit(tx, attempt, Limit::OutputBytes)?;
+    let row_limit = super::resource_breach::effective_limit(tx, attempt, Limit::OutputRows)?;
+    let total_bytes = (used_bytes as u64).saturating_add(bytes);
+    let total_rows = (used_rows as u64).saturating_add(rows);
+    let (limit, configured, measured) = if total_bytes > byte_limit {
+        (Limit::OutputBytes, byte_limit, total_bytes)
+    } else if total_rows > row_limit {
+        (Limit::OutputRows, row_limit, total_rows)
+    } else {
+        return Ok(());
+    };
+    let (cause, summary) = output_diagnosis(tx, attempt)?;
+    Err(Error::Breach(Box::new(Breach {
+        limit,
+        configured,
+        measured,
+        cause,
+        summary,
+        reason: format!(
             "Resource limit: attempt output exceeds {byte_limit} bytes or {row_limit} rows; captured output retained. Raise the limit or free capacity, then resume"
-        )));
+        ),
+    })))
+}
+
+/// What filled an attempt's output: its totals per stream and the line it repeats most.
+fn output_diagnosis(tx: &Transaction<'_>, attempt: i64) -> Result<(String, String)> {
+    let mut text = String::from("Persisted output by stream:");
+    let mut streams = tx.prepare(
+        "SELECT stream,count(*),coalesce(sum(length(CAST(content AS BLOB))),0) FROM attempt_output WHERE attempt_id=?1 GROUP BY stream ORDER BY 3 DESC",
+    )?;
+    for row in streams.query_map([attempt], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, i64>(2)?,
+        ))
+    })? {
+        let (stream, rows, bytes) = row?;
+        text.push_str(&format!(" {stream} {rows} rows {bytes} bytes;"));
     }
-    Ok(())
+    let repeated: Option<(String, i64)> = tx
+        .query_row(
+            "SELECT substr(content,1,120),count(*) FROM attempt_output WHERE attempt_id=?1 GROUP BY 1 ORDER BY 2 DESC LIMIT 1",
+            [attempt],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((line, count)) = repeated else {
+        return Ok(("empty".into(), text));
+    };
+    text.push_str(&format!(" most repeated row ({count} times): {line:?}"));
+    Ok((crate::resource::normalized(&line), text))
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -695,6 +738,29 @@ impl Service {
             writer.write_all(row.get::<_, String>(0)?.as_bytes())?;
         }
         Ok(())
+    }
+    /// The last `cap` bytes at most of the attempt's output through sequence `end`, cut on a
+    /// character boundary. Rows are read newest first and never past what the cap needs.
+    pub(crate) fn output_tail(&self, run: &Run, end: i64, cap: usize) -> Result<String> {
+        let mut query = self.db.connection().prepare(
+            "SELECT content FROM attempt_output WHERE attempt_id=?1 AND sequence<=?2 ORDER BY sequence DESC",
+        )?;
+        let mut rows = query.query(params![run.attempt, end])?;
+        let (mut chunks, mut size) = (Vec::new(), 0);
+        while size < cap
+            && let Some(row) = rows.next()?
+        {
+            let chunk: String = row.get(0)?;
+            size += chunk.len();
+            chunks.push(chunk);
+        }
+        chunks.reverse();
+        let text = chunks.concat();
+        let mut start = text.len().saturating_sub(cap);
+        while !text.is_char_boundary(start) {
+            start += 1;
+        }
+        Ok(text[start..].to_owned())
     }
     pub fn active_time(&self, run: &Run, active_ms: i64) -> Result<()> {
         require(self.db.connection().execute("UPDATE attempts SET active_ms=?2 WHERE id=?1 AND execution_token=?3 AND state='running' AND active_ms<=?2", params![run.attempt,active_ms,run.token])? == 1, "Runner lost ownership of attempt")
@@ -1391,7 +1457,7 @@ impl Service {
 
 /// An attempt that stops running takes its unfinished steps and provider calls with it, so
 /// no record claims live work after its attempt ended. Finished steps stay as recorded.
-fn close_unfinished(
+pub(super) fn close_unfinished(
     tx: &Transaction<'_>,
     attempt: i64,
     now: i64,

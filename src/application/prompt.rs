@@ -23,6 +23,7 @@ pub enum Turn {
     Validation,
     Judge,
     CheckTimeout,
+    ResourceBreach,
 }
 
 impl Turn {
@@ -41,13 +42,19 @@ impl Turn {
             Self::Execution => &t.execution,
             Self::Review => &t.review,
             Self::Validation => &t.validation,
-            Self::Repair | Self::Judge | Self::CheckTimeout => &t.remediation,
+            Self::Repair | Self::Judge | Self::CheckTimeout | Self::ResourceBreach => {
+                &t.remediation
+            }
         }
     }
     fn reads_only(self) -> bool {
         matches!(
             self,
-            Self::Review | Self::Validation | Self::Judge | Self::CheckTimeout
+            Self::Review
+                | Self::Validation
+                | Self::Judge
+                | Self::CheckTimeout
+                | Self::ResourceBreach
         )
     }
 }
@@ -59,8 +66,11 @@ pub struct Task<'a> {
     pub criteria: &'a [String],
 }
 
-/// The worker's way to file a follow-up draft, for execution and repair turns.
+/// The worker's environment, for execution and repair turns: how to file a follow-up draft
+/// and the scratch limits its TMPDIR is held to.
 pub struct Callback<'a> {
+    /// Bytes and entries the guardian allows in the worker's TMPDIR.
+    pub scratch: (u64, u64),
     pub supervisor: &'a std::path::Path,
     pub project: &'a std::path::Path,
     pub token: &'a str,
@@ -97,14 +107,22 @@ const WORKER_VERDICT: &str = "Return complete when your change is done, with no 
 const JUDGE_VERDICT: &str = "The normal lifecycle is implement, review, fix, validate, with up to ten repair rounds inside one attempt. Return changes_requested for actionable findings, not failed. List every finding with severity critical or minor and a concrete description with location, trigger, consequence and correction. Critical means real harm to correctness, behavior, security or data, performance, or long-term maintenance, or an unmet mandatory acceptance criterion; minor means anything else, which is recorded but never costs a fix round. Never mark a mandatory criterion passed merely because the repair budget is spent. Empty findings plus complete means acceptance. Preserve minor findings in the record even when accepting them at the repair limit.";
 const WORKER_ENVIRONMENT: &str = "If you blame the environment for a failure, include a concrete reproduction and its observed error. Repository instructions (AGENTS.md, CLAUDE.md and similar files) govern scope, quality and evidence.";
 const WORKER_EVIDENCE: &str = "Do not review or validate your own work; independent judges do. Save deliberate evidence files directly in KTASK_ARTIFACT_DIR. Archive safeguards are separate from reviewer input (128 MiB per file, 1 GiB and 4096 files per attempt by default). In each criterion assessment cite the exact test/check, source file/line or artifact name proving it; report missing proof explicitly. Do not duplicate logs already recorded by a supervisor check. The guardian archives them before deleting scratch; judges can read the archived paths in Context.";
-fn worker_rules(checks: bool) -> String {
+/// The worker's scratch budget and what must not fill it.
+fn scratch_rule((bytes, entries): (u64, u64)) -> String {
+    format!(
+        "Your TMPDIR may hold at most {bytes} bytes and {entries} entries in total; the guardian stops the worker and deletes its TMPDIR beyond that. Never build or copy a second copy of the project into TMPDIR (no clone, worktree or copy of the project tree, and no separate build of it): work in the project directory and keep only small temporary files in TMPDIR."
+    )
+}
+
+fn worker_rules(checks: bool, scratch: (u64, u64)) -> String {
+    let scratch = scratch_rule(scratch);
     if checks {
         format!(
-            "After your turn the supervisor runs the project's full checks, records their transcripts and hands them to independent reviewers. Never claim that checks passed or that your work was accepted, even if a focused test passed. {WORKER_ENVIRONMENT} ktask owns full checks, independent review, commit and delivery: do not follow any manual check, review, commit or push loop prescribed in those files. Run only focused builds, lints and tests for what you change, including tests that start the project's own binaries in private sandboxes (that needs no permission). Run the full suite only to reproduce a failing supervisor check. {WORKER_EVIDENCE}"
+            "After your turn the supervisor runs the project's full checks, records their transcripts and hands them to independent reviewers. Never claim that checks passed or that your work was accepted, even if a focused test passed. {WORKER_ENVIRONMENT} ktask owns full checks, independent review, commit and delivery: do not follow any manual check, review, commit or push loop prescribed in those files. Run only focused builds, lints and tests for what you change, including tests that start the project's own binaries in private sandboxes (that needs no permission). Run the full suite only to reproduce a failing supervisor check. {scratch} {WORKER_EVIDENCE}"
         )
     } else {
         format!(
-            "The supervisor runs no project checks for this task. Do not run tests or builds of the project as proof of your work, and never ask for them. Independent reviewers judge the result against the goal and criteria. Never claim that your work was accepted. {WORKER_ENVIRONMENT} ktask owns independent review, commit and delivery: do not follow any manual check, review, commit or push loop prescribed in those files. {WORKER_EVIDENCE}"
+            "The supervisor runs no project checks for this task. Do not run tests or builds of the project as proof of your work, and never ask for them. Independent reviewers judge the result against the goal and criteria. Never claim that your work was accepted. {WORKER_ENVIRONMENT} ktask owns independent review, commit and delivery: do not follow any manual check, review, commit or push loop prescribed in those files. {scratch} {WORKER_EVIDENCE}"
         )
     }
 }
@@ -117,7 +135,12 @@ const REPAIR: &str = "Fix what Context reports in the current worktree: either t
 const JUDGE: &str = "You are the failure judge: a read-only senior engineer who decides what happens after a failed attempt. You cannot build, run tests or edit files, and you must not ask to; judge from the repository and the failure evidence. Before choosing, inspect the current working tree and verify each reported defect against current code: historical reports may predate committed or uncommitted repairs. Treat old findings as claims to check, not instructions to repeat. Prior failure-judge plans authorize repair scope; reconcile a scope-creep allegation with those plans before ordering removal of diagnostics. If the reported defect is already fixed, direct verification of the current implementation rather than undoing useful work or inventing another defect. Consider recorded answers before asking an already answered question. Cite current file/line evidence for remaining defects and distinguish unverified claims. Context holds the failure evidence. Return exactly one judgment:\n- repair: the task is right and the fix is within reach; give the next worker a concrete plan (what was wrong, what to change, where, how to prove it). Prefer this.\n- revise: the task definition itself is wrong, unclear, contradictory or too big; return replacement title, goal and criteria plus models: null for no changes, or an object with execution, review, validation and remediation keys. Set each unchanged role to null; each changed role needs provider, model and effort (null for default). Preserve the owner's intent and acceptance bar.\n- insert: prerequisite work is missing; return ordinary tasks to run before this one, each independently verifiable.\n- ask: only for a product decision that the owner alone can make. Permissions and sandbox limits are never questions. A missing local prerequisite uses the dependency wait and explicit recheck, not a judge question.\nHigh-level goals are expected: missing implementation detail alone is not a reason to revise, split, or ask. Preserve the full goal and acceptance bar; never weaken them to make a failure pass. The category's remediation guidance below sets the quality bar. The reason's first line is shown to the owner as this round's Why: in under 100 characters, say what is still wrong, never what you inspected or confirmed. Put the specific evidence and citations on the following lines.";
 
 /// The supervisor's fixed rules for a turn.
-pub fn rules(turn: Turn, checks: bool) -> String {
+pub fn rules(turn: Turn, checks: bool, scratch: (u64, u64)) -> String {
+    if turn == Turn::ResourceBreach {
+        return format!(
+            "{READ_ONLY} {COMMON} {EVIDENCE} Diagnose the storage limit breach from the summary of what filled the budget and the transcript. Cite concrete evidence for your decision. Return exactly one judgment. Choose repair when the worker caused the breach by something it can stop doing, such as keeping a second copy of the project or duplicate files in TMPDIR, and give the executing agent a concrete plan; the plan resumes its session and preserves the full task goal. Choose extend only when the use looks legitimate and the bounded larger limit is likely to suffice. Choose escalate when neither can help or an owner setting must change. The supervisor sets the limit. The decision choices and the limit available are in Context."
+        );
+    }
     if turn == Turn::CheckTimeout {
         return format!(
             "{READ_ONLY} {COMMON} {EVIDENCE} Diagnose the individual supervisor check timeout using the partial transcript and relevant current source. Cite concrete evidence for your decision. Return exactly one judgment. Choose repair when there is a specific project cause and give a concrete plan. Preserve the full task goal and every check. Choose extend only when the transcript shows useful progress and the bounded extra time is likely to suffice. Choose escalate when repair or more time cannot help, or an external runner setting must change. The supervisor sets the limit. The decision choices and available budget are in Context."
@@ -133,7 +156,7 @@ pub fn rules(turn: Turn, checks: bool) -> String {
             }
         );
     }
-    let worker = worker_rules(checks);
+    let worker = worker_rules(checks, scratch);
     let mut parts: Vec<&str> = Vec::new();
     if turn.reads_only() {
         parts.push(READ_ONLY);
@@ -210,12 +233,22 @@ pub fn compose(
     callback: Option<&Callback<'_>>,
 ) -> Result<Prompt> {
     let work = render_work(turn.template(category), category, task, context)?;
+    let scratch = callback.map_or_else(configured_scratch, |callback| callback.scratch);
     Ok(Prompt {
-        rules: rules(turn, category.checks),
+        rules: rules(turn, category.checks, scratch),
         category: format!("{} ({} scope)", category.name, category.scope.label()),
         work,
         callback: callback.map(callback_text).unwrap_or_default(),
     })
+}
+
+/// The scratch limits when no attempt narrows them: a preview, or a turn that runs nothing.
+fn configured_scratch() -> (u64, u64) {
+    use crate::resource::Limit;
+    (
+        Limit::ScratchBytes.configured(),
+        Limit::ScratchEntries.configured(),
+    )
 }
 
 /// What the supervisor adds to a review turn that runs through a lens.
@@ -237,7 +270,7 @@ pub fn compose_lens(
     Ok(Prompt {
         rules: format!(
             "{} {}",
-            rules(Turn::Review, category.checks),
+            rules(Turn::Review, category.checks, configured_scratch()),
             lens_rule(lens)
         ),
         category: format!(
@@ -292,7 +325,7 @@ pub fn preview(turn: Turn, category: &Category, task: &Task<'_>, example: bool) 
             Turn::Execution => "execution",
             Turn::Review => "review",
             Turn::Validation => "validation",
-            Turn::Repair | Turn::Judge | Turn::CheckTimeout => "remediation",
+            Turn::Repair | Turn::Judge | Turn::CheckTimeout | Turn::ResourceBreach => "remediation",
         },
         if example {
             "example task content"

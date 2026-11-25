@@ -2,6 +2,7 @@
 use super::{
     Context, Outcome, check_timeout, checks,
     judge::{judge, judge_attempt},
+    resource_breach,
     turn::ai,
 };
 use crate::{
@@ -39,17 +40,46 @@ pub(super) fn run(
     };
     service.save_progress(run, &progress)?;
     loop {
+        // A storage limit that stopped its producer is recorded, then diagnosed at the top
+        // of the next round before any more work.
+        match phases(service, run, ctx, checks, &mut progress) {
+            Err(Error::Breach(breach)) => service.record_breach(run, &breach)?,
+            result => return result,
+        }
+    }
+}
+
+fn phases(
+    service: &mut Service,
+    run: &Run,
+    ctx: &mut Context<'_>,
+    checks: &[Check],
+    progress: &mut Progress,
+) -> Result<Outcome> {
+    loop {
         if ctx.interrupted(service, run)? {
             return Ok(Outcome::Paused);
         }
         if let Some(wait) = ctx.environment_wait(service, run, "during the attempt")? {
             return Ok(wait);
         }
-        refresh_verified_proof(service, run, ctx, &mut progress)?;
+        refresh_verified_proof(service, run, ctx, progress)?;
+        if let Some(breach) = service.pending_breach(run)? {
+            match resource_breach::resolve(service, run, ctx, progress, &breach) {
+                Ok(Some(outcome)) => return Ok(outcome),
+                Ok(None) => continue,
+                Err(error) => {
+                    return Ok(Outcome::DeliveryBlocked(format!(
+                        "{}\nResource limit diagnosis could not continue: {error}; the breach is retained. Resume to retry diagnosis",
+                        breach.report
+                    )));
+                }
+            }
+        }
         if matches!(progress.phase, Phase::Baseline | Phase::Check)
             && let Some(timeout) = service.pending_check_timeout(run)?
         {
-            match check_timeout::resolve(service, run, ctx, &mut progress, &timeout) {
+            match check_timeout::resolve(service, run, ctx, progress, &timeout) {
                 Ok(Some(outcome)) => return Ok(outcome),
                 Ok(None) => continue,
                 Err(error) => {
@@ -88,7 +118,7 @@ pub(super) fn run(
             // otherwise it plans the live attempt's next fix round.
             Phase::Judge => {
                 let judged = service
-                    .exhausted_check_recovery(run, &progress)?
+                    .exhausted_check_recovery(run, progress)?
                     .unwrap_or(run.attempt);
                 judge_attempt(service, run, ctx, judged)?
             }
@@ -171,7 +201,7 @@ pub(super) fn run(
                         "Starting state verified: every check passes before work begins",
                     )?;
                     progress.phase = Phase::Implement;
-                    service.save_progress(run, &progress)?;
+                    service.save_progress(run, progress)?;
                     continue;
                 }
                 Outcome::Failed("check", report) | Outcome::Changes { report, .. } => {
@@ -179,12 +209,12 @@ pub(super) fn run(
                     // the provider or environment is unavailable. The worker receives
                     // both the failure and the original goal; acceptance still requires
                     // checks, review and validation of the combined change.
-                    fix_checks(service, run, &mut progress, &report)?;
+                    fix_checks(service, run, progress, &report)?;
                     progress.context.push('\n');
                     progress
                         .context
                         .push_str(crate::application::progress::BASELINE_FAILURE_NOTE);
-                    service.save_progress(run, &progress)?;
+                    service.save_progress(run, progress)?;
                     continue;
                 }
                 other => return Ok(other),
@@ -266,7 +296,7 @@ pub(super) fn run(
                         return Ok(unresolved(&report));
                     }
                 } else {
-                    request_fixes(service, run, &mut progress, &report)?;
+                    request_fixes(service, run, progress, &report)?;
                 }
             }
             // A failing check needs no judgment: its summary goes straight to the worker.
@@ -293,18 +323,18 @@ pub(super) fn run(
                     request_fixes(
                         service,
                         run,
-                        &mut progress,
+                        progress,
                         &format!(
                             "The same check failed {repeated} times on unchanged source. Diagnose why repairs made no progress, including external dependencies; do not repeat an ineffective fix.\n{report}"
                         ),
                     )?;
                 } else {
-                    fix_checks(service, run, &mut progress, &report)?;
+                    fix_checks(service, run, progress, &report)?;
                 }
             }
             other => return Ok(other),
         }
-        service.save_progress(run, &progress)?;
+        service.save_progress(run, progress)?;
     }
 }
 

@@ -183,8 +183,10 @@ fn run_inner(
             service.supervisor_continuing_queue()?;
         }
         if options.notify && !notified {
-            println!("ready");
-            std::io::stdout().flush()?;
+            // The launcher may have closed its end of this pipe already: a detached
+            // runner never depends on it, so a failed notification is no failure.
+            let mut stdout = std::io::stdout();
+            let _ = writeln!(stdout, "ready").and_then(|()| stdout.flush());
         }
         notified = true;
         match attempt::run(service, &launch, begun)? {

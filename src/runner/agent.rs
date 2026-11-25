@@ -370,9 +370,11 @@ pub fn prompt(
     context: &str,
     supervisor: &std::path::Path,
     project: &std::path::Path,
+    scratch: (u64, u64),
 ) -> Result<String> {
     let turn = Turn::parse(role);
     let callback = matches!(turn, Turn::Execution | Turn::Repair).then_some(Callback {
+        scratch,
         supervisor,
         project,
         token: &run.token,

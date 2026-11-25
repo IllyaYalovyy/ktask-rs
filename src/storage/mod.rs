@@ -24,6 +24,8 @@ pub enum Error {
     Sql(rusqlite::Error),
     Incompatible(String),
     Conflict(String),
+    /// A storage limit stopped its producer; the supervisor diagnoses it before pausing.
+    Breach(Box<crate::resource::Breach>),
 }
 
 impl fmt::Display for Error {
@@ -33,6 +35,7 @@ impl fmt::Display for Error {
             Self::Sql(error) => write!(out, "database: {error}"),
             Self::Incompatible(message) => write!(out, "incompatible database: {message}"),
             Self::Conflict(message) => write!(out, "command conflict: {message}"),
+            Self::Breach(breach) => write!(out, "command conflict: {}", breach.reason),
         }
     }
 }
@@ -42,7 +45,7 @@ impl std::error::Error for Error {
         match self {
             Self::Io(error) => Some(error),
             Self::Sql(error) => Some(error),
-            Self::Incompatible(_) | Self::Conflict(_) => None,
+            Self::Incompatible(_) | Self::Conflict(_) | Self::Breach(_) => None,
         }
     }
 }

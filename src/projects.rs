@@ -196,7 +196,7 @@ impl Hub {
             .ok_or("That project is no longer registered")?;
         if !row.project.root.is_dir() {
             return Err(format!(
-                "{}: folder {} is missing · restore it to open this project",
+                "{}: folder is missing · restore {} to open this project",
                 row.project.name,
                 row.project.root.display()
             ));

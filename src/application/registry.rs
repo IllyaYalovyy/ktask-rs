@@ -13,7 +13,8 @@ use std::{
 };
 
 /// Rows that belong to an attempt and carry no project of their own.
-const BY_ATTEMPT: [&str; 12] = [
+const BY_ATTEMPT: [&str; 13] = [
+    "resource_breaches",
     "attempt_delivery",
     "attempt_progress",
     "lens_review_findings",
