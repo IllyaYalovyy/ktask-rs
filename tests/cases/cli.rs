@@ -5,7 +5,7 @@ use std::{
     process::{Command, Output},
 };
 
-const DEV: &str = env!("CARGO_BIN_EXE_ktask-dev");
+pub(super) const DEV: &str = env!("CARGO_BIN_EXE_ktask-dev");
 const PROD: &str = env!("CARGO_BIN_EXE_ktask");
 
 fn complete_android_image_fixture(sdk: &Path, revision: &str) -> Result {
@@ -1394,7 +1394,7 @@ fn cli_rejects_hight_on_add_edit_defaults_and_import_without_writes() -> Result 
     assert_eq!(json(root, &["list"], 0)?["data"]["count"], 1);
     Ok(())
 }
-fn process(binary: &str, root: &Path) -> Command {
+pub(super) fn process(binary: &str, root: &Path) -> Command {
     let mut command = Command::new(binary);
     command
         .env_clear()
@@ -1411,7 +1411,7 @@ fn process(binary: &str, root: &Path) -> Command {
 fn run(root: &Path, args: &[&str]) -> std::io::Result<Output> {
     process(DEV, root).args(args).output()
 }
-fn json_result(output: Output, exit: i32) -> Result<Value> {
+pub(super) fn json_result(output: Output, exit: i32) -> Result<Value> {
     assert_eq!(
         output.status.code(),
         Some(exit),

@@ -2,7 +2,7 @@
 use super::{Service, VersionedTask, execution::Run, lifecycle, now_ms, require};
 use crate::instance::Paths;
 use crate::storage::{Error, Result};
-use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -29,6 +29,30 @@ pub struct Dependency {
     pub requirement: Requirement,
     pub state: String,
     pub observed: Option<String>,
+}
+
+pub(super) fn task_dependencies(
+    db: &Connection,
+    project: i64,
+    task: i64,
+) -> Result<Vec<Dependency>> {
+    let mut statement = db.prepare_cached("SELECT id,kind,item,required_version,scope,stage,reproduction,state,observed FROM task_requirements WHERE project_id=?1 AND task_id=?2 ORDER BY id")?;
+    let rows = statement.query_map(params![project, task], |r| {
+        Ok(Dependency {
+            id: r.get(0)?,
+            requirement: Requirement {
+                kind: r.get(1)?,
+                item: r.get(2)?,
+                version: r.get(3)?,
+                scope: r.get(4)?,
+                stage: r.get(5)?,
+                reproduction: r.get(6)?,
+            },
+            state: r.get(7)?,
+            observed: r.get(8)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -115,23 +139,7 @@ impl Service {
         Ok(())
     }
     pub fn dependencies(&self, task: i64) -> Result<Vec<Dependency>> {
-        let mut statement = self.db.connection().prepare("SELECT id,kind,item,required_version,scope,stage,reproduction,state,observed FROM task_requirements WHERE project_id=?1 AND task_id=?2 ORDER BY id")?;
-        let rows = statement.query_map(params![self.project_id, task], |r| {
-            Ok(Dependency {
-                id: r.get(0)?,
-                requirement: Requirement {
-                    kind: r.get(1)?,
-                    item: r.get(2)?,
-                    version: r.get(3)?,
-                    scope: r.get(4)?,
-                    stage: r.get(5)?,
-                    reproduction: r.get(6)?,
-                },
-                state: r.get(7)?,
-                observed: r.get(8)?,
-            })
-        })?;
-        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+        task_dependencies(self.db.connection(), self.project_id, task)
     }
 
     /// A declaration is allowed before the first run. A live worker uses the separate

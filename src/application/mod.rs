@@ -82,6 +82,7 @@ pub(crate) mod scoped;
 pub mod search;
 pub mod session;
 pub mod stop;
+pub(crate) mod task_query;
 pub mod usage_report;
 pub mod user_defaults;
 pub use queries::{Event, WaitingResume};

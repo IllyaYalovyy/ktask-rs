@@ -28,10 +28,10 @@ pub struct Cli {
     /// Unique name when add/import or the TUI registers a new project; checked otherwise.
     #[arg(long, global = true)]
     pub project_name: Option<String>,
-    /// Who makes the change, for attribution. AI callers must pass ai with --actor NAME.
-    #[arg(long, global = true, value_enum, default_value = "human")]
-    pub actor_kind: ActorKind,
-    /// Name recorded with changes, such as claude-code; defaults to owner.
+    /// Who makes the change, for attribution. Defaults to human for CLI commands and AI for MCP.
+    #[arg(long, global = true, value_enum)]
+    pub actor_kind: Option<ActorKind>,
+    /// Name recorded with changes, such as claude-code; defaults to owner for CLI and mcp for MCP.
     #[arg(long, global = true)]
     pub actor: Option<String>,
     /// Attempt capability for the restricted worker callback.
@@ -295,9 +295,11 @@ pub enum ActorKind {
     Human,
     Ai,
 }
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, Default, ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Kind {
     /// Run by AI agents.
+    #[default]
     Ai,
     /// Done by the owner and confirmed with ack.
     Human,
@@ -709,6 +711,8 @@ pub enum Command {
     },
     /// Show the current task like show; prints null when the queue is empty.
     Current,
+    /// Serve the registered --project over MCP on standard input/output.
+    Mcp,
     /// Add a task at the end of the queue (or --before ID). Ready unless --approval draft.
     ///
     /// Models and effort come from the project defaults (model-default) unless --model or

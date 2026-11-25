@@ -3,6 +3,7 @@ mod category;
 mod evidence;
 mod execute;
 mod lens;
+mod mcp;
 mod output;
 mod pause_all;
 mod profile;
@@ -409,13 +410,21 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         }
         service
     };
+    let mcp = matches!(command, Command::Mcp);
     service.set_actor(application::Actor {
-        kind: match cli.actor_kind {
-            args::ActorKind::Human => application::ActorKind::Human,
-            args::ActorKind::Ai => application::ActorKind::Ai,
+        kind: if mcp || matches!(cli.actor_kind, Some(args::ActorKind::Ai)) {
+            application::ActorKind::Ai
+        } else {
+            application::ActorKind::Human
         },
-        name: cli.actor.clone().unwrap_or_else(|| "owner".into()),
+        name: cli
+            .actor
+            .clone()
+            .unwrap_or_else(|| if mcp { "mcp" } else { "owner" }.into()),
     })?;
+    if mcp {
+        return mcp::serve(&mut service, instance.version()).map_err(Into::into);
+    }
     if let Command::Tool { action } = command {
         use args::ToolAction;
         let reply = match action {
@@ -870,7 +879,7 @@ fn validate(cli: &Cli) -> Result<()> {
     }
     if cli.worker_token.is_some()
         && (cli.actor.is_some()
-            || !matches!(cli.actor_kind, args::ActorKind::Human)
+            || matches!(cli.actor_kind, Some(args::ActorKind::Ai))
             || cli.project_name.is_some()
             || cli.paths
             || cli.demo)
@@ -914,7 +923,7 @@ fn validate(cli: &Cli) -> Result<()> {
             || cli.project.is_some()
             || cli.project_name.is_some()
             || cli.actor.is_some()
-            || matches!(cli.actor_kind, args::ActorKind::Ai))
+            || matches!(cli.actor_kind, Some(args::ActorKind::Ai)))
     {
         return Err(Failure::usage(
             "--demo opens only the isolated simulator; do not combine it with project/actor/JSON options",
@@ -922,13 +931,26 @@ fn validate(cli: &Cli) -> Result<()> {
     }
     if cli.command.is_none()
         && !cli.paths
-        && (cli.json || cli.actor.is_some() || matches!(cli.actor_kind, args::ActorKind::Ai))
+        && (cli.json || cli.actor.is_some() || matches!(cli.actor_kind, Some(args::ActorKind::Ai)))
     {
         return Err(Failure::usage(
             "JSON and actor options require a task command",
         ));
     }
-    if matches!(cli.actor_kind, args::ActorKind::Ai) && cli.actor.is_none() {
+    if matches!(cli.command, Some(Command::Mcp)) {
+        if !cli
+            .project
+            .as_deref()
+            .is_some_and(std::path::Path::is_absolute)
+        {
+            return Err(Failure::usage(
+                "mcp requires --project with an absolute registered path",
+            ));
+        }
+        if matches!(cli.actor_kind, Some(args::ActorKind::Human)) {
+            return Err(Failure::usage("mcp always records the actor as AI"));
+        }
+    } else if matches!(cli.actor_kind, Some(args::ActorKind::Ai)) && cli.actor.is_none() {
         return Err(Failure::usage("--actor-kind ai requires --actor NAME"));
     }
     if cli.actor.as_ref().is_some_and(|s| s.trim().is_empty())

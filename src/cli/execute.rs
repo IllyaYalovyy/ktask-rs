@@ -159,6 +159,28 @@ fn created(ids: Vec<i64>) -> Reply {
         data: json!({"action":"created","tasks":ids.iter().map(|id| json!({"id":id,"version":1})).collect::<Vec<_>>()}),
     }
 }
+
+pub(super) fn add(service: &mut Service, add: &Add) -> Result<Reply> {
+    let mut definition = Definition {
+        title: add.title.clone(),
+        goal: add.goal.clone(),
+        kind: kind(add.kind),
+        category: add.category.clone(),
+        lenses: add.lenses.selection(),
+        criteria: add.criterion.clone(),
+        models: service.defaults()?,
+        attempt_limit: Some(3),
+        timeout_ms: None,
+        stage_timeout_ms: None,
+    };
+    add.settings.apply(&mut definition)?;
+    Ok(created(service.create(
+        &[definition],
+        add.before,
+        matches!(add.approval, Approval::Ready),
+    )?))
+}
+
 /// Task summaries; `show` loads one task with its output.
 fn tasks(service: &mut Service, scope: Scope) -> Result<Vec<Task>> {
     let snapshot = service.snapshot_brief()?;
@@ -689,26 +711,8 @@ pub(super) fn command(
                 text: "No current task.\n".into(),
             }),
         },
-        Command::Add(add) => {
-            let mut d = Definition {
-                title: add.title.clone(),
-                goal: add.goal.clone(),
-                kind: kind(add.kind),
-                category: add.category.clone(),
-                lenses: add.lenses.selection(),
-                criteria: add.criterion.clone(),
-                models: service.defaults()?,
-                attempt_limit: Some(3),
-                timeout_ms: None,
-                stage_timeout_ms: None,
-            };
-            add.settings.apply(&mut d)?;
-            Ok(created(service.create(
-                &[d],
-                add.before,
-                matches!(add.approval, Approval::Ready),
-            )?))
-        }
+        Command::Add(input) => add(service, input),
+        Command::Mcp => unreachable!("stdio MCP dispatch"),
         Command::Evidence { .. } => unreachable!("read-only evidence dispatch"),
         Command::FollowUp { .. } | Command::DependencyRequest { .. } => {
             unreachable!("worker callback dispatch")

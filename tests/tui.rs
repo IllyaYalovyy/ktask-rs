@@ -12,6 +12,8 @@ mod configuration;
 mod isolation;
 #[path = "cases/lifecycle.rs"]
 mod lifecycle;
+#[path = "cases/mcp.rs"]
+mod mcp;
 #[path = "cases/persistence.rs"]
 mod persistence;
 #[path = "cases/profiles.rs"]

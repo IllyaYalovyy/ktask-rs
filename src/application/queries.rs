@@ -15,6 +15,7 @@ pub struct Event {
 }
 
 const TASK_COLUMNS: &str = "id, row_version, lifecycle, status, order_key, resolution_reason, attempts_used, resolved_by_kind || ': ' || resolved_by, origin_task_id, origin_attempt_id, counted_from, closed_at_ms";
+pub(super) const TASK_ORDER: &str = "CASE WHEN closed_at_ms IS NULL THEN 0 ELSE 1 END, CASE WHEN attempt_state = 'running' THEN 0 ELSE 1 END, closed_at_ms DESC, CASE WHEN closed_at_ms IS NOT NULL THEN id END DESC, order_key";
 pub struct WaitingResume {
     pub resume_at_ms: Option<i64>,
 }
@@ -733,10 +734,7 @@ impl Service {
     }
 
     pub fn latest_launch_issue(&self, task: i64) -> Result<Option<String>> {
-        self.db.connection().query_row(
-            "SELECT level,message FROM events WHERE project_id=?1 AND task_id=?2 AND kind='launch' ORDER BY id DESC LIMIT 1",
-            params![self.project_id, task], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-        ).optional().map(|value| value.and_then(|(level, message)| (level == "error").then_some(message))).map_err(Into::into)
+        latest_launch_issue(self.db.connection(), self.project_id, task)
     }
     pub fn failure_decisions(&self, task: i64) -> Result<String> {
         let mut evidence = String::new();
@@ -832,7 +830,7 @@ impl Service {
         let mut queue = Vec::new();
         let mut history = Vec::new();
         {
-            let mut stmt = tx.prepare_cached("SELECT id, row_version, lifecycle, status, order_key, resolution_reason, attempts_used, closed_at_ms, resolved_by_kind || ': ' || resolved_by, origin_task_id, origin_attempt_id, counted_from FROM task_details WHERE project_id = ?1 ORDER BY CASE WHEN closed_at_ms IS NULL THEN 0 ELSE 1 END, CASE WHEN attempt_state = 'running' THEN 0 ELSE 1 END, closed_at_ms DESC, CASE WHEN closed_at_ms IS NOT NULL THEN id END DESC, order_key")?;
+            let mut stmt = tx.prepare_cached(&format!("SELECT id, row_version, lifecycle, status, order_key, resolution_reason, attempts_used, closed_at_ms, resolved_by_kind || ': ' || resolved_by, origin_task_id, origin_attempt_id, counted_from FROM task_details WHERE project_id = ?1 ORDER BY {TASK_ORDER}"))?;
             let rows = stmt.query_map([self.project_id], |r| {
                 Ok((
                     Task {
@@ -892,6 +890,18 @@ impl Service {
     }
 }
 
+pub(super) fn latest_launch_issue(
+    db: &Connection,
+    project: i64,
+    task: i64,
+) -> Result<Option<String>> {
+    let event = db.query_row(
+        "SELECT level,message FROM events WHERE project_id=?1 AND task_id=?2 AND kind='launch' ORDER BY id DESC LIMIT 1",
+        params![project, task], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    ).optional()?;
+    Ok(event.and_then(|(level, message)| (level == "error").then_some(message)))
+}
+
 /// Move a nominal byte boundary backward to the start of a UTF-8 codepoint.
 /// Adjacent chunks then meet without replacement characters or duplicated bytes.
 fn utf8_boundary(file: &mut std::fs::File, mut position: u64) -> std::io::Result<u64> {
@@ -928,9 +938,32 @@ pub(super) fn retained_artifact_path(
 }
 
 pub(super) fn revisions(db: &Connection, task: i64) -> Result<Vec<Revision>> {
-    let mut stmt = db.prepare_cached("SELECT revision, lifecycle, title, goal, kind, attempt_limit, attempt_timeout_ms, coalesce(decided_by_kind, created_by_kind) || ': ' || coalesce(decided_by, created_by), stage_timeout_ms FROM task_revisions WHERE task_id = ?1 ORDER BY revision")?;
+    read_revisions(db, task, "", [task])
+}
+
+pub(super) fn selected_revisions(
+    db: &Connection,
+    task: i64,
+    selected: i64,
+    draft: Option<i64>,
+) -> Result<Vec<Revision>> {
+    read_revisions(
+        db,
+        task,
+        " AND revision IN (?2, ?3)",
+        params![task, selected, draft],
+    )
+}
+
+fn read_revisions(
+    db: &Connection,
+    task: i64,
+    filter: &str,
+    parameters: impl rusqlite::Params,
+) -> Result<Vec<Revision>> {
+    let mut stmt = db.prepare_cached(&format!("SELECT revision, lifecycle, title, goal, kind, attempt_limit, attempt_timeout_ms, coalesce(decided_by_kind, created_by_kind) || ': ' || coalesce(decided_by, created_by), stage_timeout_ms FROM task_revisions WHERE task_id = ?1{filter} ORDER BY revision"))?;
     let mut revisions = stmt
-        .query_map([task], |r| {
+        .query_map(parameters, |r| {
             Ok(Revision {
                 number: r.get(0)?,
                 lifecycle: r.get(1)?,

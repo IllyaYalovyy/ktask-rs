@@ -12,6 +12,7 @@ Requires Linux, Rust 1.97+, Git and a terminal. AI execution requires at least o
 agent CLI: Codex (tested with 0.163.0), Claude Code (`claude`, tested with 2.1.305) or OpenCode
 (`opencode`, tested with 1.19.3). Each role may use a different provider. Start with `cargo run --locked`; run checks with `make check`.
 To configure ktask, see [Configure ktask](#configure-ktask).
+To connect an interactive agent, see [MCP for Codex and Claude Code](#mcp-for-codex-and-claude-code).
 
 | Instance | Start | App directory under each XDG root |
 | --- | --- | --- |
@@ -734,3 +735,29 @@ cargo run --locked -- approve 1 --if-version 1
 
 `--paths --json` reports the absolute executable and isolated data roots. Future agent callbacks
 must use the supervisor's absolute executable, never a bare name resolved through `PATH`.
+
+## MCP for Codex and Claude Code
+
+Use `ktask mcp` to inspect one registered project and submit drafts from an interactive agent
+session. Copy the absolute executable path from `ktask --paths` and bind the server to the
+project's absolute directory. Run the Claude Code command from the project directory to scope
+its registration to that project. The Codex command adds a user-level entry that always points
+to the configured ktask project.
+
+```sh
+codex mcp add ktask -- /absolute/path/to/ktask --project /absolute/path/to/project --actor codex mcp
+claude mcp add --transport stdio ktask -- /absolute/path/to/ktask --project /absolute/path/to/project --actor claude-code mcp
+```
+
+| Tool | Use |
+| --- | --- |
+| `current` | Read the current task, including its state, available actions and latest attempt. |
+| `list` | Browse the queue in execution order or select `history` or `all`. Pass `next_offset` as `offset` to continue. |
+| `show` | Inspect a task by `id`, including its definition, version, and any newer draft. |
+| `events` | Read project events in ascending ID order. Pass `next_after` as `after` to continue. |
+| `add_draft` | Append a draft with `title`, `goal`, and `criteria`. The owner can review it in Current Task or Queue. |
+
+For example, ask “What is blocking the current task?” or “Draft a task to fix pagination, with
+a criterion that the last row stays visible.” Drafts are recorded as AI-authored using the
+configured `--actor` name, which defaults to `mcp`. Approvals and execution controls are available
+through the CLI and TUI.
