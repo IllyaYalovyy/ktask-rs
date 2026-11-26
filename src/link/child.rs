@@ -1,7 +1,9 @@
-//! The child side: dial the parent over SSH, report this instance's projects, and keep the
-//! connection up. Nothing the parent sends can change anything here.
+//! The child side: dial the parent over SSH, report this instance's projects, run the
+//! commands it sends, and keep the connection up. Only this connection, to the configured
+//! parent, ever carries a command.
 use super::{
     Config, Files,
+    execute::Executor,
     protocol::{
         self, FromChild, FromParent, HEARTBEAT, Hello, Lines, MAX_MESSAGE, PROTOCOL, SILENCE,
         VERSION,
@@ -16,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     io,
     process::{Child, Command, Stdio},
-    sync::mpsc::{self, Receiver, RecvTimeoutError},
+    sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError},
     thread,
     time::{Duration, Instant},
 };
@@ -56,6 +58,7 @@ struct Link<'a> {
     config: Config,
     status: Status,
     database: Option<Database>,
+    executor: Executor,
 }
 
 /// Stays linked to the configured parent until stopped or the parent is cleared. An
@@ -76,6 +79,7 @@ pub(super) fn run(
         config,
         status,
         database: None,
+        executor: Executor::new(paths.executable.clone(), files.state.clone()),
     };
     let mut delay = FIRST_RETRY;
     let mut logged = String::new();
@@ -87,7 +91,7 @@ pub(super) fn run(
     );
     while !stopped() {
         match super::load(files) {
-            Ok(Some(config)) if config != link.config => {
+            Ok(Some(config)) if !config.same_link(&link.config) => {
                 link.status = previous_status(files, &config);
                 link.config = config;
                 delay = FIRST_RETRY;
@@ -156,7 +160,8 @@ impl Link<'_> {
     }
 
     fn reconfigured(&self) -> bool {
-        super::load(self.files).is_ok_and(|config| config.as_ref() != Some(&self.config))
+        super::load(self.files)
+            .is_ok_and(|config| !config.is_some_and(|config| config.same_link(&self.config)))
     }
 
     fn wait(&self, delay: Duration) {
@@ -209,6 +214,8 @@ impl Link<'_> {
         let mut polled: Option<Instant> = None;
         let mut checked = Instant::now();
         let mut sent: Option<Vec<Summary>> = None;
+        // Answers of this connection's commands; one that outlasts it is dropped.
+        let (answers, answered) = mpsc::channel();
         loop {
             if (self.stopped)() {
                 return End::Stopped;
@@ -219,7 +226,16 @@ impl Link<'_> {
                     return End::Reconfigured;
                 }
             }
-            match ssh.lines.recv_timeout(TICK) {
+            // One piece at a time, so that a long answer starves neither side.
+            let wait = match answered.try_recv() {
+                Ok((id, part)) => {
+                    // A broken pipe shows up as the end of the stream.
+                    let _ = ssh.send(&FromChild::Reply { id, part });
+                    Duration::ZERO
+                }
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => TICK,
+            };
+            match ssh.lines.recv_timeout(wait) {
                 Ok(Ok(line)) => {
                     heard = Instant::now();
                     match serde_json::from_slice(&line) {
@@ -237,6 +253,13 @@ impl Link<'_> {
                             reason,
                             incompatible,
                         }) => return failed(reason, incompatible, welcomed),
+                        Ok(FromParent::Command { id, args }) if welcomed => {
+                            self.executor.start(&self.config.parent, id, args, &answers);
+                        }
+                        Ok(FromParent::Command { .. }) => {
+                            let error = "the parent sent a command before its welcome";
+                            return failed(error.into(), false, welcomed);
+                        }
                         Ok(FromParent::Heartbeat) => {}
                         Err(error) => {
                             return failed(

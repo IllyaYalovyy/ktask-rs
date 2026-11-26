@@ -18,6 +18,8 @@ mod isolation;
 mod lifecycle;
 #[path = "cases/link.rs"]
 mod link;
+#[path = "cases/link_control.rs"]
+mod link_control;
 #[path = "cases/mcp.rs"]
 mod mcp;
 #[path = "cases/persistence.rs"]

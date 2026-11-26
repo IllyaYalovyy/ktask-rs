@@ -313,6 +313,21 @@ impl Service {
         tx.commit()?;
         Ok(ids)
     }
+    /// Notes in the project's events that a linked parent asked for a change, naming the
+    /// actor, so that commands which record no author of their own, such as run and pause,
+    /// stay attributed too.
+    pub fn record_remote_request(&mut self, request: &str, task: Option<i64>) -> Result<()> {
+        let message = format!(
+            "{request} requested by {} {}",
+            self.actor.kind.as_str(),
+            self.actor.name
+        );
+        self.db.connection().execute(
+            "INSERT INTO events(project_id,task_id,occurred_at_ms,kind,level,message) VALUES (?1,(SELECT id FROM tasks WHERE id=?2 AND project_id=?1),?3,'remote.request','info',?4)",
+            params![self.project_id, task, now_ms(), message],
+        )?;
+        Ok(())
+    }
     /// Atomic batch command, also used for imports. No partially imported queue on failure.
     pub fn create(
         &mut self,

@@ -15,7 +15,7 @@ use std::{
 };
 
 /// Raised whenever a message changes. Parent and child must agree on it and on the version.
-pub(crate) const PROTOCOL: u64 = 1;
+pub(crate) const PROTOCOL: u64 = 2;
 pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The largest message either side accepts.
 pub(crate) const MAX_MESSAGE: usize = 4 << 20;
@@ -23,6 +23,12 @@ pub(crate) const MAX_MESSAGE: usize = 4 << 20;
 pub(crate) const HEARTBEAT: Duration = Duration::from_secs(5);
 /// A side that has heard nothing for this long drops the connection.
 pub(crate) const SILENCE: Duration = Duration::from_secs(20);
+/// Commands one child runs at once; a foreground run is one for as long as it takes.
+pub(crate) const MAX_COMMANDS: usize = 32;
+/// The most output one forwarded command may return.
+pub(crate) const MAX_OUTPUT: usize = 64 << 20;
+/// The output one message carries; JSON escaping stays within `MAX_MESSAGE`.
+pub(crate) const CHUNK: usize = 256 << 10;
 
 const MAX_NAME: usize = 256;
 const MAX_ROOT: usize = 4096;
@@ -38,7 +44,32 @@ pub(crate) enum FromChild {
     Projects {
         projects: Vec<Summary>,
     },
+    /// A piece of the answer to the parent's command `id`.
+    Reply {
+        id: u64,
+        part: Part,
+    },
     Heartbeat,
+}
+
+/// The answer to a forwarded command, in order; every kind but output ends it.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Part {
+    Stdout(String),
+    Stderr(String),
+    /// The command ended with this exit status.
+    Exit(u8),
+    /// The command was killed, so what it changed is unknown.
+    Interrupted,
+    /// The command was not started.
+    Refused(String),
+}
+
+impl Part {
+    pub fn last(&self) -> bool {
+        !matches!(self, Self::Stdout(_) | Self::Stderr(_))
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -64,6 +95,12 @@ pub(crate) enum FromParent {
         /// The two sides run different versions or protocols.
         #[serde(default)]
         incompatible: bool,
+    },
+    /// A ktask command line for the child to run as its own. The child decides whether it
+    /// accepts it; the parent's word is not enough.
+    Command {
+        id: u64,
+        args: Vec<String>,
     },
     Heartbeat,
 }

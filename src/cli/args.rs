@@ -25,6 +25,14 @@ pub struct Cli {
     /// data root.
     #[arg(long, global = true)]
     pub project: Option<PathBuf>,
+    /// Run a task command on this linked child host, with --project as the project's ID or
+    /// name there: list, current, show, events, add, edit, approve, reject, run, pause,
+    /// stop, restart, done, cancel, answer or stats.
+    #[arg(id = "on_host", long = "host", global = true, value_name = "NAME")]
+    pub host: Option<String>,
+    /// Set by link run on a child: the command arrived from this configured parent.
+    #[arg(long, global = true, hide = true)]
+    pub from_parent: Option<String>,
     /// Unique name when add, import, settings-import or the TUI registers a new project;
     /// checked otherwise.
     #[arg(long, global = true)]
@@ -455,6 +463,16 @@ pub enum LinkAction {
     Run,
     /// On the parent: the only command a child runs over SSH; pipes it to link run.
     Accept,
+    /// On a child: show, or set with on|off, whether the parent may change tasks here.
+    ///
+    /// On after link parent. Off makes the link read-only: the parent can still run list,
+    /// current, show, events and stats with --host, and every other command is refused. It
+    /// applies to the next command, without restarting link run.
+    Control {
+        /// on or off; without it the setting is only shown.
+        #[arg(value_enum)]
+        state: Option<Switch>,
+    },
     /// On the parent: remove a disconnected host and its listed projects.
     Forget {
         /// Host name as listed by projects or link status.
@@ -648,10 +666,11 @@ pub enum Command {
     /// (null for local) and "online" to every project.
     Projects,
     /// Link hosts over SSH: a child keeps one connection to a parent, which lists its
-    /// projects read-only.
+    /// projects and runs task commands on them with --host.
     ///
     /// Authentication and encryption are the hosts' SSH keys and known_hosts. Nothing is
-    /// linked until a child names its parent and link run runs on both.
+    /// linked until a child names its parent and link run runs on both. The TUI shows
+    /// remote projects read-only.
     Link {
         #[command(subcommand)]
         action: LinkAction,

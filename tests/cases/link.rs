@@ -17,6 +17,8 @@ use std::{
 
 const DEV: &str = env!("CARGO_BIN_EXE_ktask-dev");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The link protocol of this build.
+pub(super) const PROTOCOL: u64 = 2;
 
 fn definition(title: &str) -> Definition {
     Definition {
@@ -34,19 +36,19 @@ fn definition(title: &str) -> Definition {
 }
 
 /// One computer: its own home and XDG roots.
-struct Host {
-    dir: PathBuf,
+pub(super) struct Host {
+    pub(super) dir: PathBuf,
 }
 
 impl Host {
-    fn new(root: &Path, name: &str) -> Result<Self> {
+    pub(super) fn new(root: &Path, name: &str) -> Result<Self> {
         let dir = root.join(name);
         fs::create_dir_all(dir.join("bin"))?;
         Ok(Self { dir })
     }
 
     /// A child whose `ssh` reaches `parent` as me@parent, unless `unreachable` exists.
-    fn child(root: &Path, name: &str, parent: &Host) -> Result<Self> {
+    pub(super) fn child(root: &Path, name: &str, parent: &Host) -> Result<Self> {
         let child = Self::new(root, name)?;
         let parent = parent.dir.display();
         child.transport(&format!(
@@ -68,11 +70,11 @@ exec env -i HOME='{parent}' XDG_CONFIG_HOME='{parent}/config' XDG_STATE_HOME='{p
         Ok(child)
     }
 
-    fn transport(&self, script: &str) -> Result {
+    pub(super) fn transport(&self, script: &str) -> Result {
         support::write_executable(&self.dir.join("bin/ssh"), script)
     }
 
-    fn command(&self) -> Command {
+    pub(super) fn command(&self) -> Command {
         let mut command = Command::new(DEV);
         let dir = &self.dir;
         command
@@ -93,7 +95,7 @@ exec env -i HOME='{parent}' XDG_CONFIG_HOME='{parent}/config' XDG_STATE_HOME='{p
     }
 
     /// Runs a command expecting `status`; returns stdout.
-    fn run(&self, args: &[&str], status: i32) -> Result<String> {
+    pub(super) fn run(&self, args: &[&str], status: i32) -> Result<String> {
         let output = self.command().args(args).output()?;
         let text = format!(
             "{}{}",
@@ -104,25 +106,25 @@ exec env -i HOME='{parent}' XDG_CONFIG_HOME='{parent}/config' XDG_STATE_HOME='{p
         Ok(String::from_utf8(output.stdout)?)
     }
 
-    fn ok(&self, args: &[&str]) -> Result<Value> {
+    pub(super) fn ok(&self, args: &[&str]) -> Result<Value> {
         let mut with_json = vec!["--json"];
         with_json.extend(args);
         let reply: Value = serde_json::from_str(&self.run(&with_json, 0)?)?;
         Ok(reply["data"].clone())
     }
 
-    fn status(&self) -> Result<Value> {
+    pub(super) fn status(&self) -> Result<Value> {
         self.ok(&["link", "status"])
     }
 
-    fn projects(&self) -> Result<Vec<Value>> {
+    pub(super) fn projects(&self) -> Result<Vec<Value>> {
         Ok(self.ok(&["projects"])?["projects"]
             .as_array()
             .ok_or("projects array")?
             .clone())
     }
 
-    fn project(&self, name: &str) -> Result<Service> {
+    pub(super) fn project(&self, name: &str) -> Result<Service> {
         let folder = self.dir.join(name);
         fs::create_dir_all(&folder)?;
         Ok(Service::open(
@@ -132,7 +134,7 @@ exec env -i HOME='{parent}' XDG_CONFIG_HOME='{parent}/config' XDG_STATE_HOME='{p
         )?)
     }
 
-    fn link_run(&self) -> Result<Linked> {
+    pub(super) fn link_run(&self) -> Result<Linked> {
         let log = self.dir.join("link.log");
         let process = self
             .command()
@@ -145,14 +147,22 @@ exec env -i HOME='{parent}' XDG_CONFIG_HOME='{parent}/config' XDG_STATE_HOME='{p
     }
 
     /// Until the listing is as wanted.
-    fn listing(&self, what: &str, wanted: impl Fn(&[Value]) -> bool) -> Result<Vec<Value>> {
+    pub(super) fn listing(
+        &self,
+        what: &str,
+        wanted: impl Fn(&[Value]) -> bool,
+    ) -> Result<Vec<Value>> {
         support::eventually(what, || {
             let projects = self.projects()?;
             Ok(wanted(&projects).then_some(projects))
         })
     }
 
-    fn until_status(&self, what: &str, wanted: impl Fn(&Value) -> bool) -> Result<Value> {
+    pub(super) fn until_status(
+        &self,
+        what: &str,
+        wanted: impl Fn(&Value) -> bool,
+    ) -> Result<Value> {
         support::eventually(what, || {
             let status = self.status()?;
             Ok(wanted(&status).then_some(status))
@@ -161,8 +171,8 @@ exec env -i HOME='{parent}' XDG_CONFIG_HOME='{parent}/config' XDG_STATE_HOME='{p
 }
 
 /// A `ktask link run`, stopped with SIGTERM as systemd would.
-struct Linked {
-    process: Child,
+pub(super) struct Linked {
+    pub(super) process: Child,
     log: PathBuf,
 }
 
@@ -181,7 +191,7 @@ impl Linked {
         Ok(())
     }
 
-    fn stop(mut self) -> Result {
+    pub(super) fn stop(mut self) -> Result {
         nix::sys::signal::kill(
             nix::unistd::Pid::from_raw(self.process.id() as i32),
             nix::sys::signal::Signal::SIGTERM,
@@ -220,7 +230,7 @@ fn find<'a>(projects: &'a [Value], name: &str, host: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("{name}@{host} in {projects:#?}"))
 }
 
-fn all_online(projects: &[Value], count: usize) -> bool {
+pub(super) fn all_online(projects: &[Value], count: usize) -> bool {
     projects.len() == count && projects.iter().all(|p| p["online"] == true)
 }
 
@@ -269,12 +279,14 @@ fn an_unconfigured_instance_is_unchanged_and_a_parent_is_saved_and_cleared() -> 
     assert_eq!(child["name"], "devbox");
     assert_eq!(child["connected"], false);
     assert_eq!(child["running"], false);
+    assert_eq!(child["control"], true);
     assert!(child["last_contact_ms"].is_null() && child["last_error"].is_null());
     let text = host.run(&["link", "status"], 0)?;
     println!("STATUS CONFIGURED CHILD\n{text}");
     for line in [
         "role\tchild",
         "peer\tme@parent",
+        "control\ton",
         "connected\tno",
         "last contact\tnever",
         "last error\t-",
@@ -504,13 +516,13 @@ fn children_appear_change_live_go_offline_and_return() -> Result {
 }
 
 /// A raw connection through `link accept`, as a child of any version would make it.
-struct Raw {
-    process: Child,
+pub(super) struct Raw {
+    pub(super) process: Child,
     replies: BufReader<std::process::ChildStdout>,
 }
 
 impl Raw {
-    fn open(parent: &Host) -> Result<Self> {
+    pub(super) fn open(parent: &Host) -> Result<Self> {
         let mut process = parent
             .command()
             .args(["link", "accept"])
@@ -523,24 +535,24 @@ impl Raw {
     }
 
     /// The parent may close while a large message is still being written.
-    fn write(&mut self, data: &[u8]) {
+    pub(super) fn write(&mut self, data: &[u8]) {
         if let Some(input) = &mut self.process.stdin {
             let _ = input.write_all(data).and_then(|()| input.flush());
         }
     }
 
-    fn say(&mut self, message: Value) {
+    pub(super) fn say(&mut self, message: Value) {
         self.write(format!("{message}\n").as_bytes());
     }
 
-    fn reply(&mut self) -> Result<Value> {
+    pub(super) fn reply(&mut self) -> Result<Value> {
         let mut line = String::new();
         self.replies.read_line(&mut line)?;
         Ok(serde_json::from_str(&line)?)
     }
 
     /// The parent closes the connection, which ends `link accept`.
-    fn closed(mut self) -> Result {
+    pub(super) fn closed(mut self) -> Result {
         let mut rest = String::new();
         self.replies.read_to_string(&mut rest)?;
         self.process.wait()?;
@@ -548,7 +560,7 @@ impl Raw {
     }
 }
 
-fn hello(host: &str, protocol: u64, version: &str) -> Value {
+pub(super) fn hello(host: &str, protocol: u64, version: &str) -> Value {
     json!({"type":"hello","protocol":protocol,"version":version,"host":host,"id":"raw"})
 }
 
@@ -560,7 +572,7 @@ fn peer<'a>(status: &'a Value, host: &str) -> Option<&'a Value> {
 }
 
 fn incompatible_children_are_listed_as_such(parent: &Host) -> Result {
-    for (host, protocol, version) in [("older", 1, "0.0.1"), ("newer", 99, VERSION)] {
+    for (host, protocol, version) in [("older", PROTOCOL, "0.0.1"), ("newer", 99, VERSION)] {
         let mut raw = Raw::open(parent)?;
         raw.say(hello(host, protocol, version));
         let reply = raw.reply()?;
@@ -568,7 +580,9 @@ fn incompatible_children_are_listed_as_such(parent: &Host) -> Result {
         assert_eq!(reply["type"], "reject");
         assert_eq!(reply["incompatible"], true);
         let reason = reply["reason"].as_str().ok_or("reason")?;
-        assert!(reason.contains(&format!("the parent runs ktask {VERSION} (protocol 1)")));
+        assert!(reason.contains(&format!(
+            "the parent runs ktask {VERSION} (protocol {PROTOCOL})"
+        )));
         assert!(reason.contains(&format!("the child ktask {version} (protocol {protocol})")));
         raw.closed()?;
         let status = parent.status()?;
@@ -627,7 +641,7 @@ fn a_bad_message_closes_only_its_connection(parent: &Host) -> Result {
         ("oversized", oversized, "oversized message"),
     ] {
         let mut raw = Raw::open(parent)?;
-        raw.say(hello(case, 1, VERSION));
+        raw.say(hello(case, PROTOCOL, VERSION));
         assert_eq!(raw.reply()?["type"], "welcome");
         raw.say(json!({"type":"projects","projects":[project(7)]}));
         parent.listing("raw project", |p| {
@@ -714,7 +728,7 @@ fn mismatched_and_bad_connections_are_reported_and_harm_no_other() -> Result {
 
     // A second computer cannot take the name of a connected one.
     let mut raw = Raw::open(&parent)?;
-    raw.say(hello("good", 1, VERSION));
+    raw.say(hello("good", PROTOCOL, VERSION));
     let reply = raw.reply()?;
     assert!(
         reply["reason"]
@@ -898,7 +912,7 @@ fn incompatible_hosts(parent: &Host) -> Result {
     // The hub may still be starting; until then link accept refuses.
     let mut linked = support::eventually("the hub welcomes", || {
         let mut raw = Raw::open(parent)?;
-        raw.say(hello("kept", 1, VERSION));
+        raw.say(hello("kept", PROTOCOL, VERSION));
         if raw.reply()?["type"] == "welcome" {
             return Ok(Some(raw));
         }
@@ -914,7 +928,7 @@ fn incompatible_hosts(parent: &Host) -> Result {
     parent.listing("kept project", |p| p.iter().any(|p| p["host"] == "kept"))?;
     drop(linked.process.stdin.take());
     linked.closed()?;
-    for (host, protocol, version) in [("kept", 99, VERSION), ("older", 1, "0.0.1")] {
+    for (host, protocol, version) in [("kept", 99, VERSION), ("older", PROTOCOL, "0.0.1")] {
         let mut raw = Raw::open(parent)?;
         raw.say(hello(host, protocol, version));
         assert_eq!(raw.reply()?["incompatible"], true, "{host}");
@@ -931,7 +945,8 @@ fn assert_incompatible_details(screen: &str, host: &str, child: &str) {
         "{screen}"
     );
     assert!(pane.contains("last contact "), "{screen}");
-    let reason = format!("the parent runs ktask {VERSION} (protocol 1), the child {child}");
+    let reason =
+        format!("the parent runs ktask {VERSION} (protocol {PROTOCOL}), the child {child}");
     assert!(pane.contains(&reason), "{reason}\n{screen}");
     for absent in ["[Enter Open]", "[m Move]", "[D Delete]", "[f Fix]"] {
         assert!(!screen.contains(absent), "{absent}\n{screen}");
@@ -974,7 +989,7 @@ fn projects_screen_lists_incompatible_hosts_by_keyboard_and_mouse() -> Result {
                     4,
                     "(no projects)",
                     "older",
-                    "ktask 0.0.1 (protocol 1)".into(),
+                    format!("ktask 0.0.1 (protocol {PROTOCOL})"),
                 ),
             ] {
                 if mouse {

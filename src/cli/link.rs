@@ -1,7 +1,7 @@
 //! `ktask link` and the project list, which includes what linked hosts reported.
 use super::{
     Failure, Result,
-    args::LinkAction,
+    args::{LinkAction, Switch},
     emit,
     output::{self, Reply},
 };
@@ -46,6 +46,7 @@ pub(super) fn run(instance: Instance, action: &LinkAction, json_output: bool) ->
             }
         }
         LinkAction::Status => status(&paths)?,
+        LinkAction::Control { state } => control(&paths, *state)?,
         LinkAction::Forget { host } => match link::forget(&paths, host)? {
             Forgotten::Removed => Reply {
                 text: format!("Forgot host {host}\n"),
@@ -61,6 +62,24 @@ pub(super) fn run(instance: Instance, action: &LinkAction, json_output: bool) ->
     emit(reply, json_output)
 }
 
+fn control(paths: &Paths, state: Option<Switch>) -> Result<Reply> {
+    let allow = state.map(|state| matches!(state, Switch::On));
+    let config = link::control(paths, allow)?.ok_or_else(|| {
+        crate::storage::Error::Conflict(
+            "No parent is configured; control applies to a child (ktask link parent)".into(),
+        )
+    })?;
+    let parent = output::safe(&config.parent);
+    Ok(Reply {
+        text: if config.control {
+            format!("Control on: {parent} can run task commands here\n")
+        } else {
+            format!("Control off: the link to {parent} is read-only\n")
+        },
+        data: json!({"control": config.control, "parent": config.parent}),
+    })
+}
+
 fn contact(ms: Option<i64>) -> String {
     ms.map_or("never".into(), |ms| clock::format_local(ms, now_ms()))
 }
@@ -73,9 +92,14 @@ fn status(paths: &Paths) -> Result<Reply> {
     let mut text = format!("role\t{}\n", report.role);
     if report.name.is_some() {
         text.push_str(&format!(
-            "peer\t{}\nname\t{}\n",
+            "peer\t{}\nname\t{}\ncontrol\t{}\n",
             or_dash(&report.peer),
-            or_dash(&report.name)
+            or_dash(&report.name),
+            if report.control == Some(false) {
+                "off"
+            } else {
+                "on"
+            }
         ));
     } else if report.peers.is_empty() {
         text.push_str("peer\t-\n");

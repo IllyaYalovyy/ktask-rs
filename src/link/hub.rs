@@ -1,10 +1,11 @@
 //! The parent side: one hub process holds every child connection and records what each child
 //! last reported. Children reach it only through `link accept`, on a socket of their own;
-//! the local TUI and CLI read it through another.
+//! the local TUI and CLI read it, and send commands to a child, through another.
 use super::{
     Files,
     protocol::{
-        self, FromChild, FromParent, Hello, Lines, MAX_MESSAGE, PROTOCOL, SILENCE, VERSION,
+        self, FromChild, FromParent, HEARTBEAT, Hello, Lines, MAX_COMMANDS, MAX_MESSAGE,
+        MAX_OUTPUT, PROTOCOL, Part, SILENCE, VERSION,
     },
 };
 use crate::{
@@ -20,8 +21,9 @@ use std::{
     os::unix::net::{UnixListener, UnixStream},
     path::Path,
     sync::{
-        Arc, Mutex, MutexGuard,
+        Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicU64, AtomicUsize, Ordering},
+        mpsc::{self, Receiver, RecvTimeoutError, Sender},
     },
     thread,
     time::{Duration, Instant},
@@ -55,6 +57,11 @@ pub(crate) struct HostRecord {
 enum Request {
     List,
     Forget(String),
+    /// A ktask command line for the child of this name.
+    Run {
+        host: String,
+        args: Vec<String>,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -64,6 +71,14 @@ enum Answer {
     Unknown,
     Connected,
     Failed(String),
+    Offline,
+    Incompatible(String),
+    /// A piece of a forwarded command's answer.
+    Part(Part),
+    /// The command has not ended; the hub still waits for it.
+    Waiting,
+    /// The child's connection ended before the command's answer did.
+    Lost,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -72,9 +87,26 @@ pub(crate) enum Forgotten {
     Unknown,
 }
 
+/// Writes to one child, shared by its connection and the commands forwarded to it.
+type Writer = Arc<Mutex<UnixStream>>;
+
+/// A forwarded command whose answer is not complete.
+struct Pending {
+    parts: Sender<Part>,
+    /// The output it may still send.
+    allowance: usize,
+}
+
+/// A child's current connection. Dropping it ends every pending command as lost.
 struct Live {
     generation: u64,
     stream: UnixStream,
+    writer: Writer,
+    pending: BTreeMap<u64, Pending>,
+}
+
+fn locked(writer: &Writer) -> MutexGuard<'_, UnixStream> {
+    writer.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 struct Host {
@@ -86,15 +118,14 @@ struct Hub {
     files: Files,
     hosts: Mutex<BTreeMap<String, Host>>,
     generations: AtomicU64,
+    commands: AtomicU64,
     connections: AtomicUsize,
 }
 
 impl Hub {
     fn hosts(&self) -> MutexGuard<'_, BTreeMap<String, Host>> {
         // A panicking connection thread must not stop the others.
-        self.hosts
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.hosts.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn save(&self, record: &HostRecord) {
@@ -125,6 +156,7 @@ impl Hub {
         &self,
         hello: &Hello,
         stream: &UnixStream,
+        writer: &Writer,
     ) -> std::result::Result<u64, (String, bool)> {
         let mut hosts = self.hosts();
         let previous = hosts.get(&hello.host);
@@ -161,9 +193,11 @@ impl Hub {
         };
         self.save(&record);
         let generation = self.generations.fetch_add(1, Ordering::Relaxed);
-        let live = reason.is_none().then_some(Live {
+        let live = reason.is_none().then(|| Live {
             generation,
             stream: copy,
+            writer: Arc::clone(writer),
+            pending: BTreeMap::new(),
         });
         // A reconnecting child replaces its own half-open connection.
         if let Some(Host {
@@ -194,6 +228,86 @@ impl Hub {
         }
         entry.record.last_contact_ms = now_ms();
         self.save(&entry.record);
+        true
+    }
+
+    /// Sends a command to a connected child; its answer arrives on the receiver, which
+    /// closes without a last part if the connection ends first.
+    fn forward(
+        &self,
+        host: &str,
+        args: Vec<String>,
+    ) -> std::result::Result<Receiver<Part>, Answer> {
+        let id = self.commands.fetch_add(1, Ordering::Relaxed);
+        let (parts, answer) = mpsc::channel();
+        let writer = {
+            let mut hosts = self.hosts();
+            let entry = hosts.get_mut(host).ok_or(Answer::Unknown)?;
+            if entry.record.incompatible {
+                let reason = entry.record.last_error.clone().unwrap_or_default();
+                return Err(Answer::Incompatible(reason));
+            }
+            let live = entry.live.as_mut().ok_or(Answer::Offline)?;
+            if live.pending.len() >= MAX_COMMANDS {
+                return Err(Answer::Part(Part::Refused(format!(
+                    "{host} already has {MAX_COMMANDS} commands waiting"
+                ))));
+            }
+            let allowance = MAX_OUTPUT;
+            live.pending.insert(id, Pending { parts, allowance });
+            Arc::clone(&live.writer)
+        };
+        let sent = protocol::send(&mut *locked(&writer), &FromParent::Command { id, args });
+        match sent {
+            Ok(()) => {}
+            // Nothing was written, so the connection is sound and the child heard nothing.
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                self.abandon(host, id);
+                return Err(Answer::Part(Part::Refused(
+                    "the command line is too long for the link".into(),
+                )));
+            }
+            // Part of it may have arrived: end the connection, which reports it lost.
+            Err(_) => {
+                let _ = locked(&writer).shutdown(Shutdown::Both);
+            }
+        }
+        Ok(answer)
+    }
+
+    fn abandon(&self, host: &str, id: u64) {
+        if let Some(live) = self.hosts().get_mut(host).and_then(|e| e.live.as_mut()) {
+            live.pending.remove(&id);
+        }
+    }
+
+    /// Passes a piece of an answer to whoever waits for it. One that is too long is dropped,
+    /// which reports it lost.
+    fn reply(&self, host: &str, generation: u64, id: u64, part: Part) -> bool {
+        let mut hosts = self.hosts();
+        let Some(live) = hosts
+            .get_mut(host)
+            .and_then(|entry| entry.live.as_mut())
+            .filter(|live| live.generation == generation)
+        else {
+            return false;
+        };
+        let Some(pending) = live.pending.get_mut(&id) else {
+            return true;
+        };
+        let length = match &part {
+            Part::Stdout(text) | Part::Stderr(text) => text.len(),
+            _ => 0,
+        };
+        let last = part.last();
+        let Some(left) = pending.allowance.checked_sub(length) else {
+            live.pending.remove(&id);
+            return true;
+        };
+        pending.allowance = left;
+        if pending.parts.send(part).is_err() || last {
+            live.pending.remove(&id);
+        }
         true
     }
 
@@ -244,6 +358,7 @@ pub(super) fn serve(files: Files, stopped: &dyn Fn() -> bool) -> Result<()> {
         files,
         hosts: Mutex::new(hosts),
         generations: AtomicU64::new(0),
+        commands: AtomicU64::new(0),
         connections: AtomicUsize::new(0),
     });
     for host in hub.hosts().values() {
@@ -339,7 +454,10 @@ fn serve_child(hub: &Hub, stream: UnixStream) -> io::Result<()> {
         Ok(hello) => hello,
         Err(reason) => return reject(&mut output, reason, false),
     };
-    let generation = match hub.admit(&hello, &stream) {
+    let writer = Arc::new(Mutex::new(output.try_clone()?));
+    // Held until the welcome is out, so that no command can overtake it.
+    let held = locked(&writer);
+    let generation = match hub.admit(&hello, &stream, &writer) {
         Ok(generation) => generation,
         Err((reason, incompatible)) => {
             let reason = format!("{}: {reason}", hello.host);
@@ -347,7 +465,7 @@ fn serve_child(hub: &Hub, stream: UnixStream) -> io::Result<()> {
         }
     };
     note!("ktask link: {} connected", hello.host);
-    let reason = converse(hub, &hello.host, generation, &mut lines, &mut output);
+    let reason = converse(hub, &hello.host, generation, &mut lines, held, &writer);
     hub.disconnected(&hello.host, generation, &reason);
     let _ = stream.shutdown(Shutdown::Both);
     Ok(())
@@ -359,15 +477,17 @@ fn converse(
     host: &str,
     generation: u64,
     lines: &mut Lines<UnixStream>,
-    output: &mut UnixStream,
+    mut output: MutexGuard<'_, UnixStream>,
+    writer: &Writer,
 ) -> String {
     let welcome = FromParent::Welcome {
         protocol: PROTOCOL,
         version: VERSION.into(),
     };
-    if let Err(error) = protocol::send(output, &welcome) {
+    if let Err(error) = protocol::send(&mut *output, &welcome) {
         return error.to_string();
     }
+    drop(output);
     loop {
         let message = receive(lines, SILENCE).and_then(|line| {
             serde_json::from_slice::<FromChild>(&line)
@@ -379,13 +499,19 @@ fn converse(
                 Err(reason) => return reason,
             },
             Ok(FromChild::Heartbeat) => (None, true),
+            Ok(FromChild::Reply { id, part }) => {
+                if !hub.reply(host, generation, id, part) {
+                    return "replaced by a newer connection".into();
+                }
+                continue;
+            }
             Ok(FromChild::Hello(_)) => return "malformed message: second hello".into(),
             Err(reason) => return reason,
         };
         if !hub.apply(host, generation, projects) {
             return "replaced by a newer connection".into();
         }
-        if answer && let Err(error) = protocol::send(output, &FromParent::Heartbeat) {
+        if answer && let Err(error) = protocol::send(&mut *locked(writer), &FromParent::Heartbeat) {
             return error.to_string();
         }
     }
@@ -395,10 +521,16 @@ fn serve_reader(hub: &Hub, stream: UnixStream) -> io::Result<()> {
     stream.set_read_timeout(Some(READER_PATIENCE))?;
     stream.set_write_timeout(Some(READER_PATIENCE))?;
     let mut output = stream.try_clone()?;
-    let Some(line) = Lines::new(stream, 64 * 1024).next_line()? else {
+    let Some(line) = Lines::new(stream, MAX_MESSAGE).next_line()? else {
         return Ok(());
     };
     let answer = match serde_json::from_slice(&line).map_err(io::Error::other)? {
+        Request::Run { host, args } => {
+            return match hub.forward(&host, args) {
+                Ok(answer) => stream_answer(&mut output, &answer),
+                Err(answer) => protocol::send(&mut output, &answer),
+            };
+        }
         Request::List => Answer::Hosts(
             hub.hosts()
                 .values()
@@ -413,19 +545,118 @@ fn serve_reader(hub: &Hub, stream: UnixStream) -> io::Result<()> {
     output.write_all(&line)
 }
 
-/// Asks the running hub; None when none runs.
-fn ask(files: &Files, request: &Request) -> Result<Option<Answer>> {
-    let mut stream = match protocol::connect(&files.runtime, READERS) {
-        Ok(stream) => stream,
+/// Writes a forwarded command's answer as it arrives, saying every so often that it is
+/// still coming. A reader that left ends only the waiting, never the command.
+fn stream_answer(output: &mut UnixStream, parts: &Receiver<Part>) -> io::Result<()> {
+    loop {
+        let (answer, last) = match parts.recv_timeout(HEARTBEAT) {
+            Ok(part) => {
+                let last = part.last();
+                (Answer::Part(part), last)
+            }
+            Err(RecvTimeoutError::Timeout) => (Answer::Waiting, false),
+            Err(RecvTimeoutError::Disconnected) => (Answer::Lost, true),
+        };
+        protocol::send(output, &answer)?;
+        if last {
+            return Ok(());
+        }
+    }
+}
+
+/// How a forwarded command ended, as the parent's CLI sees it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Called {
+    /// The command ran on the child; its output and exit status.
+    Ran {
+        stdout: String,
+        stderr: String,
+        status: u8,
+    },
+    /// Nothing was sent: no host of this name has ever linked.
+    Unknown,
+    /// Nothing was sent: the host is not connected.
+    Offline(String),
+    /// Nothing was sent: the host runs another ktask.
+    Incompatible(String),
+    /// The child was reached and did not start it.
+    Refused(String),
+    /// It was sent and no complete answer came: it may or may not have run.
+    Lost,
+}
+
+/// Runs a command line on `host` through the running hub, once.
+pub(super) fn call(files: &Files, host: &str, args: Vec<String>) -> Result<Called> {
+    let Some(mut stream) = connect(files)? else {
+        return Ok(Called::Offline("ktask link run is not running here".into()));
+    };
+    stream.set_write_timeout(Some(READER_PATIENCE))?;
+    stream.set_read_timeout(Some(SILENCE))?;
+    let request = Request::Run {
+        host: host.to_owned(),
+        args,
+    };
+    match protocol::send(&mut stream, &request) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+            return Ok(Called::Refused(
+                "the command line is too long for the link".into(),
+            ));
+        }
+        // The hub acts only on a whole line, which it did not get.
+        Err(error) => return Ok(Called::Offline(format!("the link hub: {error}"))),
+    }
+    Ok(collect(stream))
+}
+
+/// Reads one answer. Anything that cuts it short leaves the outcome unknown.
+fn collect(stream: UnixStream) -> Called {
+    let mut lines = Lines::new(stream, MAX_MESSAGE);
+    let (mut stdout, mut stderr) = (String::new(), String::new());
+    loop {
+        let Ok(Some(line)) = lines.next_line() else {
+            return Called::Lost;
+        };
+        match serde_json::from_slice(&line) {
+            Ok(Answer::Waiting) => {}
+            Ok(Answer::Part(Part::Stdout(text))) => stdout.push_str(&text),
+            Ok(Answer::Part(Part::Stderr(text))) => stderr.push_str(&text),
+            Ok(Answer::Part(Part::Exit(status))) => {
+                return Called::Ran {
+                    stdout,
+                    stderr,
+                    status,
+                };
+            }
+            Ok(Answer::Part(Part::Refused(reason))) => return Called::Refused(reason),
+            Ok(Answer::Unknown) => return Called::Unknown,
+            Ok(Answer::Offline) => return Called::Offline("it is not connected".into()),
+            Ok(Answer::Incompatible(reason)) => return Called::Incompatible(reason),
+            _ => return Called::Lost,
+        }
+    }
+}
+
+/// A connection to the running hub; None when none runs.
+fn connect(files: &Files) -> Result<Option<UnixStream>> {
+    match protocol::connect(&files.runtime, READERS) {
+        Ok(stream) => Ok(Some(stream)),
         Err(error)
             if matches!(
                 error.kind(),
                 io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
             ) =>
         {
-            return Ok(None);
+            Ok(None)
         }
-        Err(error) => return Err(error.into()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Asks the running hub; None when none runs.
+fn ask(files: &Files, request: &Request) -> Result<Option<Answer>> {
+    let Some(mut stream) = connect(files)? else {
+        return Ok(None);
     };
     let unanswered = |error: String| {
         Error::Conflict(format!(
@@ -499,7 +730,7 @@ pub(super) fn forget(files: &Files, host: &str) -> Result<Forgotten> {
             "{host} is connected; stop ktask link run there (or ktask link parent --clear), then forget it"
         ))),
         Some(Answer::Failed(error)) => Err(Error::Conflict(error)),
-        Some(Answer::Hosts(_)) => Err(Error::Conflict(
+        Some(_) => Err(Error::Conflict(
             "Unexpected answer from the link hub; restart ktask link run".into(),
         )),
         None => match fs::remove_file(files.record(host)) {

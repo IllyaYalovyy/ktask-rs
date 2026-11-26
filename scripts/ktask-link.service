@@ -7,6 +7,9 @@ Description=ktask RS remote link
 
 [Service]
 ExecStart=%h/.cargo/bin/ktask link run
+# Stopping the link must not kill runs its parent started on this computer. Agents those
+# runs call must be found on the service's PATH (systemctl --user edit, Environment=PATH=...).
+KillMode=process
 # A clean exit (ktask shutdown, a cleared parent, systemctl stop) stays stopped.
 Restart=on-failure
 RestartSec=5

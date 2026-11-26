@@ -9,6 +9,7 @@ mod mcp;
 mod output;
 mod pause_all;
 mod profile;
+mod remote;
 pub(crate) mod repair;
 
 use crate::{
@@ -108,7 +109,7 @@ pub fn launch(instance: Instance) -> ExitCode {
         .name(crate::PRODUCT)
         .bin_name(instance.name())
         .version(instance.version());
-    let matches = match command.try_get_matches_from(arguments) {
+    let matches = match command.try_get_matches_from(arguments.clone()) {
         Ok(matches) => matches,
         Err(error) if !error.use_stderr() => {
             return match error.print() {
@@ -125,7 +126,7 @@ pub fn launch(instance: Instance) -> ExitCode {
         Ok(cli) => cli,
         Err(error) => return report(Failure::usage(error.to_string()), requested_json),
     };
-    match run(instance, &cli) {
+    match run(instance, &cli, &arguments) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => report(error, cli.json),
     }
@@ -257,7 +258,18 @@ fn actor(cli: &Cli) -> application::Actor {
     }
 }
 
-fn run(instance: Instance, cli: &Cli) -> Result<()> {
+fn run(instance: Instance, cli: &Cli, arguments: &[std::ffi::OsString]) -> Result<()> {
+    // A command from a parent is admitted before anything it names is touched; the host it
+    // was addressed to is this one.
+    let admitted = match &cli.from_parent {
+        Some(parent) => Some(remote::admit(instance, cli, parent)?),
+        None => None,
+    };
+    if admitted.is_none()
+        && let Some(host) = &cli.host
+    {
+        return remote::send(instance, cli, host, arguments);
+    }
     if let Some(Command::Evidence {
         file,
         offset,
@@ -322,7 +334,10 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         Some(Command::Mcp) => return mcp::serve(mcp_host(instance, cli)?).map_err(Into::into),
         _ => {}
     }
-    let root = cli.project.clone().map_or_else(std::env::current_dir, Ok)?;
+    let root = match &admitted {
+        Some(admitted) => admitted.root.clone(),
+        None => cli.project.clone().map_or_else(std::env::current_dir, Ok)?,
+    };
     let Some(command) = &cli.command else {
         if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
             return Err(Failure::usage(
@@ -430,21 +445,23 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         );
     }
     let paths = instance.paths()?;
-    let creates_project = matches!(
-        command,
-        Command::Add(_)
-            | Command::Import { preview: false, .. }
-            | Command::CheckSet { .. }
-            | Command::ModelDefault { .. }
-            | Command::Defaults { .. }
-            | Command::Profile { .. }
-            | Command::Category { .. }
-            | Command::Lens { .. }
-            | Command::Init { .. }
-            | Command::Tool {
-                action: args::ToolAction::Register { .. }
-            }
-    );
+    // A parent's command never registers a project here.
+    let creates_project = admitted.is_none()
+        && matches!(
+            command,
+            Command::Add(_)
+                | Command::Import { preview: false, .. }
+                | Command::CheckSet { .. }
+                | Command::ModelDefault { .. }
+                | Command::Defaults { .. }
+                | Command::Profile { .. }
+                | Command::Category { .. }
+                | Command::Lens { .. }
+                | Command::Init { .. }
+                | Command::Tool {
+                    action: args::ToolAction::Register { .. }
+                }
+        );
     let mut service = if creates_project {
         // Validate the source before registering a project for an import that cannot succeed.
         if let Command::Import { file, .. } = command {
@@ -469,17 +486,27 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         }
         service
     };
-    let actor = actor(cli);
+    let mut actor = actor(cli);
+    if let Some(admitted) = &admitted {
+        admitted.attribute(&mut actor);
+    }
     service.set_actor(actor.clone())?;
+    if let Some(admitted) = &admitted
+        && admitted.request.change
+    {
+        service.record_remote_request(&admitted.summary(), admitted.request.task)?;
+    }
     if let Command::Agent { action } = command {
         return emit(agent::run(&mut service, &paths, actor, action)?, cli.json);
     }
     if let Command::Tool { action } = command {
         return emit(execute::tool(&mut service, &paths, action)?, cli.json);
     }
-    if service
-        .pending_control()?
-        .is_some_and(|control| !control.completed)
+    // Recovering an interrupted control changes the project, which a read-only link may not.
+    if admitted.as_ref().is_none_or(|admitted| admitted.control)
+        && service
+            .pending_control()?
+            .is_some_and(|control| !control.completed)
         && !crate::runner::supervisor_alive(&service)?
     {
         crate::runner::control::finish_pending(&mut service)?;

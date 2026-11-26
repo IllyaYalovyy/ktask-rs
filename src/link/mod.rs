@@ -1,15 +1,16 @@
 //! Remote link: a child instance keeps one SSH connection to a parent instance, which lists
-//! the child's projects beside its own. Presence and read-only state only.
+//! the child's projects beside its own and sends task commands for the child to run.
 //!
 //! The child runs `ssh PARENT ktask link accept`, so authentication and encryption are the
 //! hosts' SSH keys and `known_hosts`. On the parent `link accept` only pipes that channel
 //! into the hub, which `link run` serves on sockets below the runtime directory.
 mod child;
+mod execute;
 pub(crate) mod fleet;
 mod hub;
 mod protocol;
 
-pub(crate) use hub::{Forgotten, HostRecord};
+pub(crate) use hub::{Called, Forgotten, HostRecord};
 
 use crate::{
     instance::{Instance, Paths},
@@ -94,6 +95,39 @@ pub(crate) struct Config {
     /// The name the parent lists this computer's projects under.
     pub name: String,
     id: String,
+    /// Whether the parent may change anything here, or only read.
+    #[serde(default = "allowed")]
+    pub control: bool,
+}
+
+const fn allowed() -> bool {
+    true
+}
+
+impl Config {
+    /// Whether a connection made for `other` still serves this configuration.
+    fn same_link(&self, other: &Self) -> bool {
+        (&self.parent, &self.name, &self.id) == (&other.parent, &other.name, &other.id)
+    }
+}
+
+/// The configured parent, if this instance is a child.
+pub(crate) fn config(paths: &Paths) -> Result<Option<Config>> {
+    load(&Files::new(paths))
+}
+
+/// Shows, or sets, whether the configured parent may change anything here; None without a
+/// parent.
+pub(crate) fn control(paths: &Paths, allow: Option<bool>) -> Result<Option<Config>> {
+    let files = Files::new(paths);
+    let Some(mut config) = load(&files)? else {
+        return Ok(None);
+    };
+    if let Some(allow) = allow {
+        config.control = allow;
+        write_json(&files.config, &config)?;
+    }
+    Ok(Some(config))
 }
 
 fn load(files: &Files) -> Result<Option<Config>> {
@@ -165,6 +199,8 @@ pub(crate) fn configure(paths: &Paths, parent: &str, name: Option<&str>) -> Resu
     };
     protocol::check_host(&name)
         .map_err(|error| Error::Conflict(format!("{error}; pass --name NAME")))?;
+    // Naming the parent again never turns control back on by itself.
+    let control = previous.as_ref().is_none_or(|previous| previous.control);
     let id = match previous {
         Some(previous) => previous.id,
         None => {
@@ -177,6 +213,7 @@ pub(crate) fn configure(paths: &Paths, parent: &str, name: Option<&str>) -> Resu
         parent: parent.to_owned(),
         name,
         id,
+        control,
     };
     write_json(&files.config, &config)?;
     Ok(config)
@@ -259,6 +296,39 @@ pub(crate) fn shutdown(paths: &Paths, deadline: Instant) -> Result<bool> {
     Ok(true)
 }
 
+/// Runs a task command on a linked host, once.
+pub(crate) fn call(paths: &Paths, host: &str, args: Vec<String>) -> Result<Called> {
+    let files = Files::new(paths);
+    let hosts = match hub::hosts(&files) {
+        Ok(hosts) => hosts,
+        // A hub that does not answer reaches no host.
+        Err(Error::Conflict(why)) => return Ok(Called::Offline(why)),
+        Err(error) => return Err(error),
+    };
+    let Some(record) = hosts.into_iter().find(|record| record.host == host) else {
+        return Ok(Called::Unknown);
+    };
+    // An incompatible host is never connected, so this names the better reason first.
+    if record.incompatible {
+        return Ok(Called::Incompatible(record.last_error.unwrap_or_default()));
+    }
+    if !record.online {
+        return Ok(Called::Offline(format!(
+            "last contact {}",
+            crate::clock::format_local(record.last_contact_ms, crate::application::now_ms())
+        )));
+    }
+    // A hub started before an upgrade still links the children of its own version.
+    if record.protocol != protocol::PROTOCOL || record.version != protocol::VERSION {
+        return Ok(Called::Incompatible(format!(
+            "it runs ktask {} and this is ktask {}; restart ktask link run here",
+            record.version,
+            protocol::VERSION
+        )));
+    }
+    hub::call(&files, host, args)
+}
+
 pub(crate) fn accept(paths: &Paths) -> Result<()> {
     hub::relay(&Files::new(paths))
 }
@@ -293,6 +363,9 @@ pub(crate) struct Report {
     /// A child's configured parent and the name it gives itself.
     pub peer: Option<String>,
     pub name: Option<String>,
+    /// Whether a child's parent may change tasks there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub control: Option<bool>,
     pub connected: bool,
     pub incompatible: bool,
     pub last_contact_ms: Option<i64>,
@@ -314,6 +387,7 @@ pub(crate) fn report(paths: &Paths) -> Result<Report> {
             running,
             peer: Some(config.parent),
             name: Some(config.name),
+            control: Some(config.control),
             connected: running && status.connected,
             incompatible: status.incompatible,
             last_contact_ms: status.last_contact_ms,
@@ -342,6 +416,7 @@ pub(crate) fn report(paths: &Paths) -> Result<Report> {
         running,
         peer: None,
         name: None,
+        control: None,
         connected: peers.iter().any(|peer| peer.connected),
         incompatible: peers.iter().any(|peer| peer.incompatible),
         last_contact_ms: peers.iter().map(|peer| peer.last_contact_ms).max(),
