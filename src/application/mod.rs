@@ -96,7 +96,7 @@ pub mod transfer;
 
 use crate::storage::{Database, Error, Result};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
@@ -104,7 +104,7 @@ use std::{
 
 pub const ROLES: [&str; 4] = ["execution", "review", "validation", "remediation"];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     Ai,

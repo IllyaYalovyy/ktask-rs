@@ -1,0 +1,15 @@
+# systemd user unit for `ktask link run`, on a child and on its parent.
+# Install:  cp scripts/ktask-link.service ~/.config/systemd/user/
+#           systemctl --user daemon-reload && systemctl --user enable --now ktask-link
+# ExecStart assumes `make install` put ktask in ~/.cargo/bin; edit it otherwise.
+[Unit]
+Description=ktask RS remote link
+
+[Service]
+ExecStart=%h/.cargo/bin/ktask link run
+# A clean exit (ktask shutdown, a cleared parent, systemctl stop) stays stopped.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -482,7 +482,7 @@ impl App {
             .hub
             .rows
             .iter()
-            .find(|row| row.project.id == id)
+            .find(|row| row.key == id)
             .map_or_else(|| self.project_name.clone(), |row| row.project.name.clone());
         Some((id, name))
     }

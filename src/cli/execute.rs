@@ -571,6 +571,7 @@ pub(super) fn command(
         Command::Pause { all: true }
         | Command::Shutdown
         | Command::Projects
+        | Command::Link { .. }
         | Command::ProjectMove { .. }
         | Command::ProjectDelete { .. } => {
             unreachable!("global commands")

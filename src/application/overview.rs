@@ -2,10 +2,11 @@
 //! project: the Projects screen and `ktask projects` both list from here.
 use super::{Kind, lifecycle::State};
 use crate::storage::{Database, Result};
+use serde::{Deserialize, Serialize};
 use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
 
 /// The first unfinished task of a project in execution order.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CurrentTask {
     pub id: i64,
     pub title: String,
@@ -25,7 +26,8 @@ pub struct Project {
 }
 
 /// What a project asks of its owner, derived from its current task and runner.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Attention {
     /// The project root is no longer a directory.
     Missing,
@@ -78,14 +80,51 @@ impl Project {
 
     /// The row's state as the owner reads it.
     pub fn state_label(&self, runner_alive: bool) -> &'static str {
-        match (self.attention(runner_alive), &self.current) {
-            (Attention::Missing, _) => "Missing folder",
-            (Attention::Idle, _) | (_, None) => "Idle",
-            (Attention::Running, _) => "Running",
-            (Attention::Ready, _) => "Ready",
-            (Attention::Paused, Some(task)) if task.state == State::Running => "Runner stopped",
-            (Attention::NeedsOwner, Some(task)) if task.state == State::Pending => "Your task",
-            (_, Some(task)) => task.state.label(),
+        self.attention(runner_alive)
+            .label(self.current.as_ref().map(|task| task.state))
+    }
+}
+
+impl Attention {
+    /// The state as the owner reads it, given the state of the current task.
+    pub fn label(self, current: Option<State>) -> &'static str {
+        match (self, current) {
+            (Self::Missing, _) => "Missing folder",
+            (Self::Idle, _) | (_, None) => "Idle",
+            (Self::Running, _) => "Running",
+            (Self::Ready, _) => "Ready",
+            (Self::Paused, Some(State::Running)) => "Runner stopped",
+            (Self::NeedsOwner, Some(State::Pending)) => "Your task",
+            (_, Some(state)) => state.label(),
+        }
+    }
+}
+
+/// One project as `ktask --json projects` reports it and as a linked child sends it to its
+/// parent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Summary {
+    pub id: i64,
+    pub name: String,
+    pub root: String,
+    pub state: Attention,
+    pub runner_alive: bool,
+    pub queued: i64,
+    pub finished: i64,
+    pub current: Option<CurrentTask>,
+}
+
+impl Summary {
+    pub fn of(project: &Project, runner_alive: bool) -> Self {
+        Self {
+            id: project.id,
+            name: project.name.clone(),
+            root: project.root.to_string_lossy().into_owned(),
+            state: project.attention(runner_alive),
+            runner_alive,
+            queued: project.queued,
+            finished: project.finished,
+            current: project.current.clone(),
         }
     }
 }

@@ -164,6 +164,7 @@ fn scope(command: &Command) -> Scope {
             Refused("a fix never deletes or moves a project")
         }
         Command::Projects => Refused("a fix works on its own project only"),
+        Command::Link { .. } => Refused("linking hosts is the owner's setup"),
         Command::Shutdown | Command::Pause { all: true } => {
             Refused("a fix never shuts ktask down or touches other projects")
         }

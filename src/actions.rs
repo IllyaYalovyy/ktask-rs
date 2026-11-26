@@ -87,7 +87,9 @@ impl App {
                 matches!(self.view, View::Queue | View::History)
             }
             Action::OpenProject | Action::MoveProject | Action::DeleteProject => {
-                self.view == View::Projects && self.hub.selected.is_some()
+                self.view == View::Projects
+                    && self.hub.selected.is_some()
+                    && self.hub.selected_remote().is_none()
             }
             Action::RegisterProject => {
                 self.view == View::Projects && self.hub.unregistered.is_some()
@@ -96,6 +98,7 @@ impl App {
                 // From a report, "b" returns to the form of the same project.
                 self.view == View::Current
                     || self.view == View::Projects
+                        && self.hub.selected_remote().is_none()
                         && (self.hub.selected.is_some() || !self.hub.stored())
             }
             _ => true,
@@ -106,6 +109,20 @@ impl App {
     fn unavailable_message(&self, action: Action) -> String {
         const ELSEWHERE: &str =
             "Unavailable here · only the current task can execute; History offers Copy to queue";
+        if self.view == View::Projects
+            && matches!(
+                action,
+                Action::OpenProject
+                    | Action::MoveProject
+                    | Action::DeleteProject
+                    | Action::Investigate
+                    | Action::Fix
+            )
+            && let Some(row) = self.hub.selected_remote()
+        {
+            let host = row.host_label();
+            return format!("Read-only here: this project is on {host} · manage it there");
+        }
         let step = match action {
             Action::Run => self
                 .current()

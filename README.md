@@ -13,6 +13,7 @@ agent CLI: Codex (tested with 0.163.0), Claude Code (`claude`, tested with 2.1.3
 (`opencode`, tested with 1.19.3). Each role may use a different provider. Start with `cargo run --locked`; run checks with `make check`.
 To configure ktask, see [Configure ktask](#configure-ktask).
 To connect an interactive agent, see [MCP for Codex and Claude Code](#mcp-for-codex-and-claude-code).
+To oversee several computers from one, see [Link hosts](#link-hosts).
 
 | Instance | Start | App directory under each XDG root |
 | --- | --- | --- |
@@ -857,6 +858,84 @@ command yet.
 stashes changed, the verification outcome with before and after, and what remains. A stopped,
 timed out or over-budget fix keeps the steps already applied and leaves the runner paused.
 `ktask shutdown` stops running fixes.
+
+## Link hosts
+
+One computer, the **parent**, can list the projects of other computers, its **children**. A
+child dials out over SSH (`ssh PARENT ktask link accept`), keeps that one connection and
+reconnects by itself, so it needs no address the parent can reach. Authentication and
+encryption are your SSH keys and `known_hosts`; ktask adds no cryptography and opens no TCP
+port. The link is presence and read-only state: nothing can be run, changed or opened on
+another host through it. Nothing is linked until you set it up, and every computer must run
+the same ktask version.
+
+**1. A key that can only link.** On each child create a key without a passphrase (the
+service cannot type one), and give the parent an alias in `~/.ssh/config`:
+
+```sh
+ssh-keygen -t ed25519 -N '' -f ~/.ssh/ktask_link
+cat >> ~/.ssh/config <<'END'
+Host ktask-parent
+    HostName parent.example.net
+    User me
+    IdentityFile ~/.ssh/ktask_link
+    IdentitiesOnly yes
+END
+```
+
+**2. Restrict it on the parent.** Add the child's `~/.ssh/ktask_link.pub` to the parent's
+`~/.ssh/authorized_keys` as one line, with the full path of the parent's `ktask`:
+
+```
+command="/home/me/.cargo/bin/ktask link accept",restrict ssh-ed25519 AAAA... ktask-link@devbox
+```
+
+`command=` makes sshd run `ktask link accept` whatever the child asks for, and `restrict`
+refuses a terminal and any port, agent or X11 forwarding. That key therefore gets no shell and
+nothing but `link accept`, which only pipes the connection into the parent's hub. Without the
+restriction the key is an ordinary login key. Connect once by hand (`ssh ktask-parent`) to
+verify and record the parent's host key; the link never accepts an unknown one by itself.
+
+**3. Name the parent and run the link.** On each child:
+
+```sh
+ktask link parent ktask-parent        # --name NAME lists it under another name
+```
+
+Then run `ktask link run` on the parent and on every child. It stays in the foreground; use
+the shipped [systemd user unit](scripts/ktask-link.service) to keep it running:
+
+```sh
+cp scripts/ktask-link.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now ktask-link
+loginctl enable-linger                # keep it running while you are logged out
+journalctl --user -u ktask-link       # what it connected to, or why not
+```
+
+With a parent configured `link run` dials it; without one it serves children, and that is the
+parent. It retries after any failure, waiting from 1 up to 30 seconds. Changes reach the
+parent within two seconds; both sides send a heartbeat every 5 seconds and drop a connection
+that is silent for 20.
+
+**What you see.** The parent's **Projects** screen and `ktask projects` show one list sorted
+by name then host: local projects marked `local`, the others with their host name, with state,
+queue size and current task. The header counts include connected hosts. A disconnected host's
+projects stay listed as **Offline** with the time of last contact until
+`ktask link forget HOST`. Remote rows are read-only. Project and task IDs are per host:
+`ktask --json projects` adds `host` (null for local) and `online` to every project, remote
+offline ones also `last_contact_ms`, and `hosts` lists the linked computers.
+
+**Check and undo.** `ktask link status` (`--json`) reports the role, peer, whether it is
+connected, the last contact and the last error. `ktask link parent --clear` unlinks a child
+and ends its `link run`. A host of another ktask version or link protocol is listed as
+**Incompatible**, with both versions named on both sides, until they match. `ktask shutdown`
+also stops `link run`; start the service again after an upgrade.
+
+The command the child asks for is `ktask link accept` (`ktask-dev link accept` from the
+development instance), so without the `command=` line `ktask` must be on the `PATH` of the
+parent's non-interactive SSH shell. `link accept` finds the hub below `XDG_RUNTIME_DIR`, which
+SSH logins and user services share on a standard systemd system.
 
 ## Task CLI
 

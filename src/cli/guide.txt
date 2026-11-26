@@ -85,6 +85,7 @@ TYPICAL SESSION
   ktask pause --all                    # pause all project runners in ktask and ktask-dev
   ktask shutdown                       # pause all runners and close TUIs for upgrade
   ktask --json projects                # every project: state, queue size, current task
+  ktask --json link status             # linked hosts; see LINKED HOSTS
   ktask project-move ID DIR            # the project now lives in DIR; ktask moves no files
   ktask project-delete ID --confirm NAME   # DANGER: permanent; the folder is not touched
   ktask --json stop 12                 # back to Pending; changes stashed; run starts afresh
@@ -92,6 +93,18 @@ TYPICAL SESSION
   Foreground run (no --background) blocks until the queue is done or something needs
   the owner, then prints why it stopped. A detached runner logs to
   <state>/runner-<project id>.log (see --paths).
+
+LINKED HOSTS (a parent lists its children's projects; read-only)
+  Owner setup: on a child, ktask link parent USER@HOST (--clear removes it); then keep
+  ktask link run running on the child and on the parent. The child connects with
+  ssh HOST ktask link accept; keys and known_hosts are SSH's. Restrict the child's key on
+  the parent with command="/abs/ktask link accept",restrict in authorized_keys.
+  ktask --json link status  data: role (none, child, parent), running, peer, name,
+  connected, incompatible, last_contact_ms, last_error, peers (a parent's children).
+  ktask --json projects     every project has host (null = this computer) and online;
+  data.hosts lists linked hosts. Project and task IDs are per host: always read id together
+  with host. No ktask command acts on another host's project or task.
+  ktask link forget HOST removes a disconnected host from the list.
 
 MOVING A PROJECT TO ANOTHER COMPUTER
   Code travels with Git; tasks and settings travel as two files. History, attempts,
@@ -153,7 +166,8 @@ MCP SERVER (one registration serves every project of the instance)
   ktask mcp serves stdio from any directory, creates no storage and registers no project.
   Each call opens its project afresh. Tools: projects (the fields of ktask --json projects);
   current, list, show, events (read) and add_draft (an AI-attributed draft; the only change).
-  Those five take an optional project: an ID or an absolute folder from projects. Without it
+  Those five take an optional project of this computer (host null): an ID or an absolute
+  folder from projects. Without it
   they use the --project pin, else the registered project containing the working directory;
   otherwise they fail naming the projects tool. Results carry project {id, name}. --project
   ABSDIR before mcp pins the server to that project and refuses calls naming another.

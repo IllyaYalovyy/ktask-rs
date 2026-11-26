@@ -134,7 +134,7 @@ impl Tool {
         let text = json!({"type":"string","minLength":1,"pattern":"\\S"});
         let (description, mut properties, required) = match self {
             Self::Projects => (
-                "List every project of this ktask instance with its state, queue size and current task.",
+                "List every project of this ktask instance and of its linked hosts with its state, queue size and current task. host is null for this computer; project and task IDs are per host, and the other tools act only on this computer's projects.",
                 json!({}),
                 json!([]),
             ),

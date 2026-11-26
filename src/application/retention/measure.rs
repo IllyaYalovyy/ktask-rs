@@ -177,11 +177,16 @@ impl Walk {
         let mut buffer = [std::mem::MaybeUninit::uninit(); 8192];
         let mut listing = rustix::fs::RawDir::new(directory, &mut buffer);
         while *budget > 0 {
-            let Some(entry) = listing.next() else {
-                self.frames.pop();
-                return Ok(true);
+            let entry = match listing.next() {
+                Some(Ok(entry)) => entry,
+                // The end, or the directory was removed after it was opened (Linux then
+                // reports ENOENT): either way it holds nothing more.
+                None | Some(Err(rustix::io::Errno::NOENT)) => {
+                    self.frames.pop();
+                    return Ok(true);
+                }
+                Some(Err(error)) => return Err(Error::Io(error.into())),
             };
-            let entry = entry.map_err(|error| Error::Io(error.into()))?;
             let name = entry.file_name().to_bytes();
             self.frames[depth].offset = entry.next_entry_cookie() as i64;
             if name == b"." || name == b".." {
@@ -383,5 +388,30 @@ pub(super) fn bounded_allocation_scan(db: &Database) -> Result<ScanProgress> {
         Ok(ScanProgress::Settled)
     } else {
         Ok(ScanProgress::Contended)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Other projects create and delete directories, such as review packets, while the
+    /// instance is measured.
+    #[test]
+    fn a_directory_removed_while_it_is_listed_holds_nothing_more() -> Result<()> {
+        let root = tempfile::tempdir_in(std::env::temp_dir())?;
+        let removed = root.path().join("removed");
+        std::fs::create_dir(&removed)?;
+        let mut walk = Walk::start(&File::open(root.path())?)?;
+        walk.frames.push(ScanFrame {
+            name: b"removed".to_vec(),
+            offset: 0,
+        });
+        let listing = File::open(&removed)?;
+        std::fs::remove_dir(&removed)?;
+        let mut budget = usize::MAX;
+        assert!(walk.list(1, &listing, &mut budget)?);
+        assert_eq!(walk.frames.len(), 1, "the walk continues with its parent");
+        Ok(())
     }
 }

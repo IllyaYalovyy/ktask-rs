@@ -4,6 +4,7 @@ mod category;
 mod evidence;
 mod execute;
 mod lens;
+mod link;
 mod mcp;
 mod output;
 mod pause_all;
@@ -17,6 +18,7 @@ use crate::{
 };
 use args::{Cli, Command};
 use clap::{CommandFactory, FromArgMatches};
+use link::projects;
 use serde_json::json;
 use std::{
     io::{self, IsTerminal, Write},
@@ -169,57 +171,6 @@ fn emit(reply: output::Reply, json_output: bool) -> Result<()> {
     })
 }
 
-/// `ktask projects`: every registered project, without selecting or registering one.
-/// Every project of the instance; an instance without a database has none.
-fn projects(paths: &crate::instance::Paths) -> Result<output::Reply> {
-    let listed = match Database::open_existing(paths)? {
-        Some(db) => crate::runner::registration::listed(paths, &db)?,
-        None => Vec::new(),
-    };
-    let mut text = String::new();
-    let mut data = Vec::new();
-    for (project, alive) in &listed {
-        let attention = project.attention(*alive).name();
-        let current = project.current.as_ref();
-        text.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\n",
-            project.id,
-            attention,
-            project.queued,
-            output::safe(&project.name),
-            output::safe(&project.root.to_string_lossy()),
-            current.map_or("-".into(), |task| format!(
-                "#{} {} · {}",
-                task.id,
-                task.state.label(),
-                output::safe(&task.title)
-            )),
-        ));
-        data.push(json!({
-            "id": project.id,
-            "name": project.name,
-            "root": project.root.to_string_lossy(),
-            "state": attention,
-            "runner_alive": alive,
-            "queued": project.queued,
-            "finished": project.finished,
-            "current": current.map(|task| json!({
-                "id": task.id,
-                "title": task.title,
-                "kind": task.kind.as_str(),
-                "state": task.state,
-            })),
-        }));
-    }
-    if listed.is_empty() {
-        text.push_str("No projects.\n");
-    }
-    Ok(output::Reply {
-        data: json!({"projects": data, "count": listed.len()}),
-        text,
-    })
-}
-
 /// The instance database for a project command that must not create storage.
 fn registry_database(paths: &crate::instance::Paths, id: i64) -> Result<Database> {
     Database::open_existing(paths)?.ok_or_else(|| {
@@ -361,6 +312,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         Some(Command::Pause { all: true }) => return emit(pause_all::run(false)?, cli.json),
         Some(Command::Shutdown) => return emit(pause_all::run(true)?, cli.json),
         Some(Command::Projects) => return emit(projects(&instance.paths()?)?, cli.json),
+        Some(Command::Link { ref action }) => return link::run(instance, action, cli.json),
         Some(Command::ProjectMove { id, ref folder }) => {
             return emit(project_move(instance, id, folder)?, cli.json);
         }
@@ -849,13 +801,14 @@ fn validate(cli: &Cli) -> Result<()> {
         Some(
             Command::Shutdown
                 | Command::Projects
+                | Command::Link { .. }
                 | Command::ProjectMove { .. }
                 | Command::ProjectDelete { .. }
         )
     ) && (cli.project.is_some() || cli.project_name.is_some())
     {
         return Err(Failure::usage(
-            "shutdown, projects, project-move and project-delete take no --project; name the project by ID",
+            "shutdown, projects, link, project-move and project-delete take no --project; name the project by ID",
         ));
     }
     if (cli.paths || cli.demo) && cli.command.is_some() {

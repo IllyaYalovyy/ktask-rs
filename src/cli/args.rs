@@ -432,6 +432,37 @@ pub enum Switch {
 }
 
 #[derive(Subcommand)]
+pub enum LinkAction {
+    /// On a child: save the parent this computer reports to, or --clear it.
+    Parent {
+        /// SSH destination of the parent: user@host or a Host alias from ~/.ssh/config.
+        #[arg(required_unless_present = "clear")]
+        destination: Option<String>,
+        /// Forget the parent; a running link run then exits.
+        #[arg(long, conflicts_with = "destination")]
+        clear: bool,
+        /// Name the parent lists this computer under; defaults to its host name.
+        #[arg(long, conflicts_with = "clear")]
+        name: Option<String>,
+    },
+    /// Show the role, peer, whether it is connected, last contact and last error.
+    Status,
+    /// Stay linked in the foreground, as a systemd user service would run it.
+    ///
+    /// With a parent configured it dials ssh PARENT ktask link accept, sends this
+    /// computer's projects and their changes, and reconnects after any failure. Without
+    /// one it is the parent: it holds the children's connections.
+    Run,
+    /// On the parent: the only command a child runs over SSH; pipes it to link run.
+    Accept,
+    /// On the parent: remove a disconnected host and its listed projects.
+    Forget {
+        /// Host name as listed by projects or link status.
+        host: String,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum Command {
     /// Inspect, register and bind reusable tools in this explicit instance.
     Tool {
@@ -601,14 +632,30 @@ pub enum Command {
         #[arg(long, conflicts_with_all = ["project", "project_name"])]
         all: bool,
     },
-    /// Pause every runner and close the TUIs in both ktask instances for an upgrade.
+    /// Pause every runner, close the TUIs and stop link run in both ktask instances for an
+    /// upgrade.
     Shutdown,
     /// List every registered project of this instance, from any working directory.
     ///
     /// Each line: ID, state, unfinished tasks, name, root, then the current task. States:
     /// running, needs_owner (approval, answer, prerequisite, failure or Human task), paused,
     /// ready, idle, missing (the root is no longer a directory). Never registers a project.
+    ///
+    /// On a parent that has heard from a child (see link), the list is one for all hosts,
+    /// sorted by name then host, and each line ends with the host ("local" for this
+    /// computer). A disconnected host's projects show offline or incompatible and end with
+    /// the time of last contact. Project and task IDs are per host. --json adds "host"
+    /// (null for local) and "online" to every project.
     Projects,
+    /// Link hosts over SSH: a child keeps one connection to a parent, which lists its
+    /// projects read-only.
+    ///
+    /// Authentication and encryption are the hosts' SSH keys and known_hosts. Nothing is
+    /// linked until a child names its parent and link run runs on both.
+    Link {
+        #[command(subcommand)]
+        action: LinkAction,
+    },
     /// Point a registered project at another folder; its tasks and history follow it.
     ///
     /// ktask moves no files: move or clone the repository first. Refused while the

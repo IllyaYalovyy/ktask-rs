@@ -6568,11 +6568,13 @@ if [ '{mode}' = android-transport ] || [ '{mode}' = android-transport-cancel ]; 
   profile='{{"type":"external","network":"restricted"}}'
   codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- sh -c 'mkdir -p "$ANDROID_AVD_HOME/fixture.avd"' || exit 52
   codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- emulator -avd fixture -port "$KTASK_EMULATOR_PORT" || exit 53
-  i=0; while [ ! -f "$KTASK_ANDROID_RUNTIME_ROOT/listening" ] && [ "$i" -lt 100 ]; do i=$((i+1)); sleep .02; done
+  # Like support::PATIENCE, these waits only end a hang: giving up on a slow start fails
+  # the turn, and its retry reaches the API sentinel a second time.
+  i=0; while [ ! -f "$KTASK_ANDROID_RUNTIME_ROOT/listening" ] && [ "$i" -lt 3000 ]; do i=$((i+1)); sleep .02; done
   [ -f "$KTASK_ANDROID_RUNTIME_ROOT/listening" ] || exit 54
   cat "$KTASK_ANDROID_RUNTIME_ROOT/emulator.pid" > "$HOME/android-emulator-pid"
   printf '%s' "$KTASK_ANDROID_RUNTIME_ROOT" > "$HOME/android-runtime-path"
-  i=0; while [ ! -f "$HOME/android-emulator-pid-captured" ] && [ "$i" -lt 100 ]; do i=$((i+1)); sleep .02; done
+  i=0; while [ ! -f "$HOME/android-emulator-pid-captured" ] && [ "$i" -lt 3000 ]; do i=$((i+1)); sleep .02; done
   [ -f "$HOME/android-emulator-pid-captured" ] || exit 61
   codex-linux-sandbox --sandbox-policy-cwd "$PWD" --permission-profile "$profile" -- adb get-state > "$HOME/android-owned-state" || exit 55
   mkdir -p app
@@ -13514,13 +13516,23 @@ fn review_converges_after_nine_repairs_with_a_single_attempt_budget() -> Result 
     Ok(())
 }
 
+/// How the last of a test's check launches ends.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LastLaunch {
+    Passes,
+    Fails,
+    /// The task's time limit is running out: it can end a backoff, or the launch it
+    /// catches, which then records the limit instead of the launch error.
+    MayExpire,
+}
+
 /// Read persisted failures and their independently retained supervisor transcripts.
 /// `failed` bounds the failed launches: the retry schedule runs on wall-clock time, so how
 /// many fail before a test intervenes can vary.
 fn assert_check_launch_records(
     f: &Fixture,
     failed: std::ops::RangeInclusive<usize>,
-    passed: bool,
+    last: LastLaunch,
 ) -> Result<Vec<i64>> {
     let db = f.db()?;
     let records = db.connection().prepare(
@@ -13530,6 +13542,7 @@ fn assert_check_launch_records(
         r.get::<_, Option<i32>>(3)?, r.get::<_, i64>(4)?, r.get::<_, String>(5)?,
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
     println!("CHECK LAUNCH RECORDS {records:#?}");
+    let passed = last == LastLaunch::Passes;
     let failed_count = records.len() - usize::from(passed);
     assert!(
         failed.contains(&failed_count),
@@ -13541,7 +13554,11 @@ fn assert_check_launch_records(
         if index < failed {
             assert_eq!(state, "failed");
             assert_eq!(*code, None, "failed launch never executes the check");
-            assert!(report.contains("Permission denied"), "{report}");
+            let expired = last == LastLaunch::MayExpire
+                && index > 0
+                && index + 1 == failed
+                && report.starts_with("Active time limit reached");
+            assert!(expired || report.contains("Permission denied"), "{report}");
         } else {
             assert_eq!(state, "succeeded");
             assert_eq!(*code, Some(0));
@@ -13602,7 +13619,7 @@ fn real_tui_check_launch_failure_recovers_same_attempt_and_continues_queue() -> 
         assert_eq!(first["attempts_used"], 1);
         assert_eq!(first["attempts"].as_array().unwrap().len(), 1);
         assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
-        let launches = assert_check_launch_records(&f, 1..=2, true)?;
+        let launches = assert_check_launch_records(&f, 1..=2, LastLaunch::Passes)?;
         for (pause, pair) in [1000, 2000].iter().zip(launches.windows(2)) {
             assert!(pair[1] - pair[0] >= *pause, "backoff skipped: {launches:?}");
         }
@@ -13663,7 +13680,7 @@ fn real_tui_check_launch_failure_exhausts_three_launches_and_blocks_queue() -> R
         let second = f.ok(&["show", "2"])?;
         assert_eq!(second["status"], "ready");
         assert!(second["attempts"].as_array().unwrap().is_empty());
-        let launches = assert_check_launch_records(&f, 3..=3, false)?;
+        let launches = assert_check_launch_records(&f, 3..=3, LastLaunch::Fails)?;
         assert!(
             launches[1] - launches[0] >= 1000,
             "1s backoff skipped: {launches:?}"
@@ -13687,7 +13704,7 @@ fn real_tui_check_launch_failure_exhausts_three_launches_and_blocks_queue() -> R
                 .contains("EXECUTION STOPPED")
                 && s.contains("Permission denied"))?
         );
-        assert_check_launch_records(&f, 3..=3, false)?;
+        assert_check_launch_records(&f, 3..=3, LastLaunch::Fails)?;
         reopened.send("q")?;
         reopened.finish()?;
         f.launch_workers_reaped()?;
@@ -13741,14 +13758,14 @@ fn real_tui_check_launch_failure_pause_cancels_backoff_and_resumes_same_attempt(
         assert_eq!(first["attempts_used"], 0);
         assert_eq!(first["attempts"].as_array().unwrap().len(), 1);
         // Another backoff can end before Pause lands; none may start after it.
-        let before = assert_check_launch_records(&f, failures..=2, false)?;
+        let before = assert_check_launch_records(&f, failures..=2, LastLaunch::Fails)?;
         let failures = before.len();
         f.launch_workers_reaped()?;
         f.supervisor_stopped()?;
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
         thread::sleep(Duration::from_millis(2200));
         assert_eq!(
-            assert_check_launch_records(&f, failures..=failures, false)?,
+            assert_check_launch_records(&f, failures..=failures, LastLaunch::Fails)?,
             before
         );
         assert_eq!(f.ok(&["show", "1"])?["status"], "paused");
@@ -13787,7 +13804,7 @@ fn real_tui_check_launch_failure_pause_cancels_backoff_and_resumes_same_attempt(
         println!(
             "CHECK LAUNCH RESUMED ACTIVE TIME {paused_active} -> {resumed_active}; 2200ms pause excluded"
         );
-        assert_check_launch_records(&f, failures..=failures, true)?;
+        assert_check_launch_records(&f, failures..=failures, LastLaunch::Passes)?;
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
             "execution\nreview\nvalidation\nexecution\nreview\nvalidation\n"
@@ -13851,7 +13868,7 @@ fn real_tui_check_launch_backoff_deadline_survives_restart_and_retry_restarts_th
             failed["attempts_used"], 1,
             "task deadline is an agent failure"
         );
-        let launches = assert_check_launch_records(&f, 1..=2, false)?;
+        let launches = assert_check_launch_records(&f, 1..=2, LastLaunch::MayExpire)?;
         assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,

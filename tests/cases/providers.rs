@@ -292,8 +292,15 @@ fn claude_question_pause_and_resume_keep_one_attempt_and_its_session() -> Result
     f.agent("claude", CLAUDE, "slow")?;
     f.add("Pause me")?;
     let mut run = Running(f.process().arg("run").stdout(Stdio::null()).spawn()?);
-    f.state("running")?;
-    thread::sleep(Duration::from_millis(200));
+    // A resume has a session to reuse only once the supervisor has recorded it.
+    support::eventually("the execution session is recorded", || {
+        let recorded: i64 = f.db()?.connection().query_row(
+            "SELECT count(*) FROM ai_sessions WHERE role='execution' AND provider_session_id LIKE 'claude-execution-%'",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok((recorded == 1).then_some(()))
+    })?;
     f.ok(&["pause"])?;
     run.0.wait()?;
     f.state("paused")?;

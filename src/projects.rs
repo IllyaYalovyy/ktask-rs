@@ -1,23 +1,21 @@
 //! Every project of this instance in one terminal: the Projects screen's list, and the
 //! workspaces opened from it. One project is open at a time; the others keep their screen
 //! (view, selection, scroll) parked until reopened. Each project still owns its queue and
-//! its background supervisor.
+//! its background supervisor. Projects of linked hosts are listed beside them, read-only.
 use crate::{
     app::{Action, App, Screen, View},
-    application::{
-        Service,
-        overview::{Attention, Project},
-        registry,
-    },
+    application::{Service, overview::Attention, registry},
     backend::Backend,
     dialog::{Dialog, DialogKind, Field},
     instance::{Instance, Paths},
+    link::{self, HostRecord, fleet},
     persistent::StoredWorkspace,
     storage::Database,
 };
 use ratatui::{crossterm::event::KeyCode, widgets::ListState};
 use std::{
     collections::BTreeMap,
+    ops::Deref,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -28,13 +26,16 @@ pub(crate) const CONFIRM_NAME: &str = "Type the project name to delete it";
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Row {
-    pub project: Project,
-    pub runner_alive: bool,
+    /// A local project's ID. Remote IDs are per host, so a remote row gets a negative
+    /// number of this terminal's own.
+    pub key: i64,
+    entry: fleet::Entry,
 }
 
-impl Row {
-    pub fn attention(&self) -> Attention {
-        self.project.attention(self.runner_alive)
+impl Deref for Row {
+    type Target = fleet::Entry;
+    fn deref(&self) -> &fleet::Entry {
+        &self.entry
     }
 }
 
@@ -57,6 +58,11 @@ pub(crate) struct Hub {
     target: Option<i64>,
     /// Why the last refresh failed; the list then shows what it had.
     pub error: Option<String>,
+    /// Some host is linked, so every row names its host.
+    pub linked: bool,
+    /// What the linked hosts last reported, kept while the hub cannot be asked.
+    hosts: Vec<HostRecord>,
+    remote_keys: BTreeMap<(String, i64), i64>,
     source: Option<Source>,
     parked: BTreeMap<i64, Workspace>,
     refreshed: Instant,
@@ -73,6 +79,9 @@ impl Hub {
             unregistered: None,
             target: None,
             error: None,
+            linked: false,
+            hosts: Vec::new(),
+            remote_keys: BTreeMap::new(),
             source: None,
             parked: BTreeMap::new(),
             refreshed: Instant::now(),
@@ -108,29 +117,47 @@ impl Hub {
             return false;
         };
         let listed = crate::runner::registration::listed(&source.paths, &source.db);
+        let (hosts, link_error) = match link::hosts(&source.paths) {
+            Ok(hosts) => (hosts, None),
+            Err(error) => (self.hosts.clone(), Some(error.to_string())),
+        };
         let (rows, error) = match listed {
-            Ok(listed) => (
-                listed
+            Ok(listed) => {
+                let rows = fleet::merge(listed, &hosts)
                     .into_iter()
-                    .map(|(project, runner_alive)| Row {
-                        project,
-                        runner_alive,
-                    })
-                    .collect(),
-                None,
-            ),
+                    .map(|entry| self.row(entry))
+                    .collect();
+                (rows, link_error)
+            }
             Err(error) => (self.rows.clone(), Some(error.to_string())),
         };
-        let changed = rows != self.rows || error != self.error;
+        let linked = !hosts.is_empty();
+        let changed = rows != self.rows || error != self.error || linked != self.linked;
         self.rows = rows;
         self.error = error;
+        self.linked = linked;
+        self.hosts = hosts;
         if self.position().is_none() {
             self.selected = self
                 .active
-                .filter(|id| self.rows.iter().any(|row| row.project.id == *id))
-                .or_else(|| self.rows.first().map(|row| row.project.id));
+                .filter(|id| self.rows.iter().any(|row| row.key == *id))
+                .or_else(|| self.rows.first().map(|row| row.key));
         }
         changed
+    }
+
+    fn row(&mut self, entry: fleet::Entry) -> Row {
+        let key = match entry.host() {
+            None => entry.project.id,
+            Some(host) => {
+                let next = -(self.remote_keys.len() as i64) - 1;
+                *self
+                    .remote_keys
+                    .entry((host.to_owned(), entry.project.id))
+                    .or_insert(next)
+            }
+        };
+        Row { key, entry }
     }
 
     /// Refreshes on a timer, faster while the list is on screen.
@@ -151,19 +178,33 @@ impl Hub {
     pub fn position(&self) -> Option<usize> {
         self.rows
             .iter()
-            .position(|row| Some(row.project.id) == self.selected)
+            .position(|row| Some(row.key) == self.selected)
     }
 
     pub fn selected_row(&self) -> Option<&Row> {
         self.position().map(|index| &self.rows[index])
     }
 
-    /// Projects with a live runner, and projects whose current task waits for the owner.
+    /// The selected row when it is another host's, which can only be read here.
+    pub fn selected_remote(&self) -> Option<&Row> {
+        self.selected_row().filter(|row| row.remote.is_some())
+    }
+
+    /// Listed projects, without the rows that only stand for a host.
+    pub fn project_count(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| !row.remote.as_ref().is_some_and(|r| r.placeholder))
+            .count()
+    }
+
+    /// Projects with a live runner, and projects whose current task waits for the owner,
+    /// on this computer and on connected hosts.
     pub fn counts(&self) -> (usize, usize) {
         let count = |wanted| {
             self.rows
                 .iter()
-                .filter(|row| row.attention() == wanted)
+                .filter(|row| row.online() && row.attention() == wanted)
                 .count()
         };
         (count(Attention::Running), count(Attention::NeedsOwner))
@@ -181,7 +222,7 @@ impl Hub {
             KeyCode::End | KeyCode::Char('G') => last,
             _ => return,
         };
-        self.selected = self.rows.get(next).map(|row| row.project.id);
+        self.selected = self.rows.get(next).map(|row| row.key);
     }
 
     /// The parked workspace of `id`, or a newly opened one.
@@ -192,7 +233,7 @@ impl Hub {
         let row = self
             .rows
             .iter()
-            .find(|row| row.project.id == id)
+            .find(|row| row.key == id && row.remote.is_none())
             .ok_or("That project is no longer registered")?;
         if !row.project.root.is_dir() {
             return Err(format!(
