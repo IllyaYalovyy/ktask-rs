@@ -176,12 +176,16 @@ pub fn import(path: &Path) -> Result<Vec<Definition>> {
         std::str::from_utf8(&data).map_err(|_| Error::Conflict("Import must be UTF-8".into()))?;
     decode(text)
 }
-/// Same-directory atomic replacement; no truncation, no leftover temporary file on failure.
 pub fn export(path: &Path, data: &str, expected: Option<&[u8]>) -> Result<()> {
     require(
         path.extension().is_some_and(|s| s == "tsv"),
         "Export destination must end in .tsv",
     )?;
+    replace(path, data, expected)
+}
+/// Same-directory atomic replacement; no truncation, no leftover temporary file on failure.
+/// An existing destination is replaced only when it still holds `expected`.
+pub fn replace(path: &Path, data: &str, expected: Option<&[u8]>) -> Result<()> {
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())

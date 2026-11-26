@@ -38,6 +38,19 @@ pub enum DialogKind {
         expected: Vec<u8>,
     },
     Export,
+    SettingsExport,
+    SettingsOverwrite {
+        path: String,
+        expected: Vec<u8>,
+    },
+    SettingsImport,
+    /// The file read and what its preview showed; Apply imports exactly that.
+    SettingsPreview {
+        data: Vec<u8>,
+        report: Box<crate::application::settings::Report>,
+    },
+    /// A settings file read from the simulator's in-memory files.
+    DemoSettingsPreview(Box<crate::application::settings::SettingsFile>),
     Overwrite {
         path: String,
         data: String,

@@ -294,6 +294,18 @@ fn mcp_host(instance: Instance, cli: &Cli) -> Result<mcp::Host> {
     })
 }
 
+/// Who a CLI command records its changes as.
+fn actor(cli: &Cli) -> application::Actor {
+    application::Actor {
+        kind: if matches!(cli.actor_kind, Some(args::ActorKind::Ai)) {
+            application::ActorKind::Ai
+        } else {
+            application::ActorKind::Human
+        },
+        name: cli.actor.clone().unwrap_or_else(|| "owner".into()),
+    }
+}
+
 fn run(instance: Instance, cli: &Cli) -> Result<()> {
     if let Some(Command::Evidence {
         file,
@@ -422,6 +434,26 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         let paths = instance.paths()?;
         return emit(execute::cache(&paths, &root, action.as_ref())?, cli.json);
     }
+    // Import registers the folder inside its own transaction, and its preview registers
+    // nothing, so neither opens the project first.
+    if let Command::SettingsImport { file, preview } = command {
+        let data = application::transfer::read(file)?;
+        let actor = actor(cli);
+        let paths = instance.paths()?;
+        let request = application::settings::Request {
+            paths: &paths,
+            folder: &root,
+            name: cli.project_name.as_deref(),
+            actor: &actor,
+            data: &data,
+        };
+        let report = if *preview {
+            request.preview()?
+        } else {
+            request.import()?
+        };
+        return emit(execute::settings_report(&report), cli.json);
+    }
     // Preview is file validation only: no project registration or database initialization.
     if let Command::Import {
         file,
@@ -485,14 +517,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         }
         service
     };
-    let actor = application::Actor {
-        kind: if matches!(cli.actor_kind, Some(args::ActorKind::Ai)) {
-            application::ActorKind::Ai
-        } else {
-            application::ActorKind::Human
-        },
-        name: cli.actor.clone().unwrap_or_else(|| "owner".into()),
-    };
+    let actor = actor(cli);
     service.set_actor(actor.clone())?;
     if let Command::Agent { action } = command {
         return emit(agent::run(&mut service, &paths, actor, action)?, cli.json);

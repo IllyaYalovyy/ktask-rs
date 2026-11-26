@@ -50,7 +50,7 @@ impl<E: Layered + 'static> Table<E> {
             .optional()?)
     }
 
-    fn stored_all(&self, db: &Connection, project: Option<i64>) -> Result<Vec<E>> {
+    pub fn stored_all(&self, db: &Connection, project: Option<i64>) -> Result<Vec<E>> {
         let (scope, filter) = layer(project);
         let mut statement = db.prepare(&format!(
             "SELECT {} FROM {} WHERE {filter} ORDER BY name",

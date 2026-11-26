@@ -25,7 +25,8 @@ pub struct Cli {
     /// data root.
     #[arg(long, global = true)]
     pub project: Option<PathBuf>,
-    /// Unique name when add/import or the TUI registers a new project; checked otherwise.
+    /// Unique name when add, import, settings-import or the TUI registers a new project;
+    /// checked otherwise.
     #[arg(long, global = true)]
     pub project_name: Option<String>,
     /// Who makes the change, for attribution. Defaults to human for CLI commands and AI for MCP.
@@ -926,6 +927,42 @@ pub enum Command {
         /// Explicit permission to replace an existing regular file.
         #[arg(long)]
         overwrite: bool,
+    },
+    /// Write this project's settings to one file, to move the project to another computer.
+    ///
+    /// Settings are everything configured that is not a task: checks, role models, profiles,
+    /// custom categories and lenses with the default lenses, delivery, retention, agent
+    /// report and fix limits, agent network, baseline checks, provisioning mode and
+    /// preferences, plus what the project shares with the instance: user defaults, user
+    /// categories and lenses, and build cache limits. Paths inside the project are written
+    /// relative to its root. History, attempts, evidence, usage and cost are not part of
+    /// the file, nor are installed tools, tool registrations and credentials; export tasks
+    /// with `export`. Only reads, so it works while the runner is running.
+    SettingsExport {
+        /// Destination file, a readable, versioned JSON document. Keep it outside the
+        /// project: an untracked file stops the next run.
+        file: PathBuf,
+        /// Explicit permission to replace an existing regular file.
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Apply a settings file to the project of --project or the current directory.
+    ///
+    /// Registers the folder, which must be the root of a Git repository, when it is not a
+    /// project yet. Applies everything or nothing. Replaces the settings the file names and
+    /// keeps the rest; tasks and history are never touched, and existing tasks keep their
+    /// revisions. Paths are resolved against this folder; absolute paths outside the project
+    /// are kept and listed for you to confirm. Settings marked "shared" apply to every
+    /// project of the instance. Changing what a running attempt uses (checks, delivery,
+    /// agent network, baseline checks, run mode, planner approval, retention, provisioning)
+    /// requires the runner to be paused.
+    SettingsImport {
+        /// File written by settings-export.
+        file: PathBuf,
+        /// Print what would be added, changed or left, the folder, the rewritten paths and
+        /// the missing tools and models, without changing anything.
+        #[arg(long)]
+        preview: bool,
     },
     /// Read events (progress, results, waits, changes) in ascending ID order.
     ///

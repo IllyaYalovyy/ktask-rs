@@ -128,6 +128,55 @@ impl Default for InvestigationLimits {
     }
 }
 
+pub(super) fn read_investigation_limits(
+    db: &rusqlite::Connection,
+    project: i64,
+) -> Result<InvestigationLimits> {
+    Ok(db
+        .query_row(
+            "SELECT row_version,time_limit_ms,cost_limit_microusd FROM project_investigation_limits WHERE project_id=?1",
+            [project],
+            |r| {
+                Ok(InvestigationLimits {
+                    version: r.get(0)?,
+                    time_limit_ms: r.get(1)?,
+                    cost_limit_microusd: r.get(2)?,
+                })
+            },
+        )
+        .optional()?
+        .unwrap_or_default())
+}
+
+/// Stores the report and fix limits together under the version they share.
+pub(super) fn write_agent_limits(
+    db: &rusqlite::Connection,
+    project: i64,
+    report: &InvestigationLimits,
+    fix: &InvestigationLimits,
+    version: i64,
+) -> Result<()> {
+    db.execute(
+        "INSERT INTO project_investigation_limits(project_id,row_version,time_limit_ms,cost_limit_microusd,fix_time_limit_ms,fix_cost_limit_microusd) VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(project_id) DO UPDATE SET row_version=excluded.row_version,time_limit_ms=excluded.time_limit_ms,cost_limit_microusd=excluded.cost_limit_microusd,fix_time_limit_ms=excluded.fix_time_limit_ms,fix_cost_limit_microusd=excluded.fix_cost_limit_microusd",
+        params![project, version, report.time_limit_ms, report.cost_limit_microusd, fix.time_limit_ms, fix.cost_limit_microusd],
+    )?;
+    Ok(())
+}
+
+pub(super) fn validate_investigation_limits(
+    time_limit_ms: i64,
+    cost_limit_microusd: i64,
+) -> Result<()> {
+    require(
+        (1000..=86_400_000).contains(&time_limit_ms),
+        "Investigation time limit must be from 1 second to 24 hours",
+    )?;
+    require(
+        (10_000..=1_000_000_000).contains(&cost_limit_microusd),
+        "Investigation cost limit must be from 0.01 to 1000 USD",
+    )
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Reference {
     pub kind: ReferenceKind,
@@ -262,22 +311,7 @@ impl Service {
     }
 
     pub fn investigation_limits(&self) -> Result<InvestigationLimits> {
-        Ok(self
-            .db
-            .connection()
-            .query_row(
-                "SELECT row_version,time_limit_ms,cost_limit_microusd FROM project_investigation_limits WHERE project_id=?1",
-                [self.project_id],
-                |r| {
-                    Ok(InvestigationLimits {
-                        version: r.get(0)?,
-                        time_limit_ms: r.get(1)?,
-                        cost_limit_microusd: r.get(2)?,
-                    })
-                },
-            )
-            .optional()?
-            .unwrap_or_default())
+        read_investigation_limits(self.db.connection(), self.project_id)
     }
 
     /// Replaces the limits later investigations start with; `expected` is the version read.
@@ -287,14 +321,7 @@ impl Service {
         time_limit_ms: i64,
         cost_limit_microusd: i64,
     ) -> Result<InvestigationLimits> {
-        require(
-            (1000..=86_400_000).contains(&time_limit_ms),
-            "Investigation time limit must be from 1 second to 24 hours",
-        )?;
-        require(
-            (10_000..=1_000_000_000).contains(&cost_limit_microusd),
-            "Investigation cost limit must be from 0.01 to 1000 USD",
-        )?;
+        validate_investigation_limits(time_limit_ms, cost_limit_microusd)?;
         let tx = self
             .db
             .connection_mut()

@@ -28,7 +28,7 @@ impl Policy {
     }
 }
 
-pub(super) fn policy(db: &Connection, project: i64) -> Result<Policy> {
+pub(in crate::application) fn policy(db: &Connection, project: i64) -> Result<Policy> {
     Ok(db
         .query_row(
             "SELECT r.days,coalesce(l.max_bytes,?2),coalesce(l.max_files,?3),r.version FROM project_retention r LEFT JOIN project_storage_limits l ON l.project_id=r.project_id WHERE r.project_id=?1",
@@ -49,6 +49,32 @@ pub(super) fn policy(db: &Connection, project: i64) -> Result<Policy> {
             max_files: DEFAULT_MAX_FILES,
             version: 0,
         }))
+}
+
+pub(in crate::application) fn validate_policy(policy: Policy) -> Result<()> {
+    require(
+        (0..=365000).contains(&policy.days),
+        "Retention days must be between 0 and 365000",
+    )?;
+    require(
+        (1_048_576..=1_099_511_627_776).contains(&policy.max_bytes),
+        "Storage bytes must be between 1 MiB and 1 TiB",
+    )?;
+    require(
+        (16..=10_000_000).contains(&policy.max_files),
+        "Storage files must be between 16 and 10000000",
+    )
+}
+
+/// Stores `policy`, with its version, as the project's retention and storage limits.
+pub(in crate::application) fn write_policy(
+    db: &Connection,
+    project: i64,
+    policy: Policy,
+) -> Result<()> {
+    db.execute("INSERT INTO project_retention(project_id,days,version) VALUES (?1,?2,?3) ON CONFLICT(project_id) DO UPDATE SET days=excluded.days,version=excluded.version", params![project, policy.days, policy.version])?;
+    db.execute("INSERT INTO project_storage_limits(project_id,max_bytes,max_files) VALUES (?1,?2,?3) ON CONFLICT(project_id) DO UPDATE SET max_bytes=excluded.max_bytes,max_files=excluded.max_files", params![project,policy.max_bytes,policy.max_files])?;
+    Ok(())
 }
 
 /// The instance shares one allocation, so the smallest project limit binds every project.
@@ -114,18 +140,13 @@ impl Service {
         max_bytes: i64,
         max_files: i64,
     ) -> Result<Policy> {
-        require(
-            (0..=365000).contains(&days),
-            "Retention days must be between 0 and 365000",
-        )?;
-        require(
-            (1_048_576..=1_099_511_627_776).contains(&max_bytes),
-            "Storage bytes must be between 1 MiB and 1 TiB",
-        )?;
-        require(
-            (16..=10_000_000).contains(&max_files),
-            "Storage files must be between 16 and 10000000",
-        )?;
+        let mut next = Policy {
+            days,
+            max_bytes,
+            max_files,
+            version: expected.version,
+        };
+        validate_policy(next)?;
         let tx = self
             .db
             .connection_mut()
@@ -134,14 +155,8 @@ impl Service {
             policy(&tx, self.project_id)? == expected,
             "Retention changed elsewhere; reopen and retry",
         )?;
-        let next = Policy {
-            days,
-            max_bytes,
-            max_files,
-            version: expected.version + 1,
-        };
-        tx.execute("INSERT INTO project_retention(project_id,days,version) VALUES (?1,?2,?3) ON CONFLICT(project_id) DO UPDATE SET days=excluded.days,version=excluded.version", params![self.project_id, days, next.version])?;
-        tx.execute("INSERT INTO project_storage_limits(project_id,max_bytes,max_files) VALUES (?1,?2,?3) ON CONFLICT(project_id) DO UPDATE SET max_bytes=excluded.max_bytes,max_files=excluded.max_files", params![self.project_id,max_bytes,max_files])?;
+        next.version += 1;
+        write_policy(&tx, self.project_id, next)?;
         tx.commit()?;
         Ok(next)
     }

@@ -1,11 +1,14 @@
 //! What a project needs before it can run tasks, and a check command guessed from its files.
 use super::{provider::Provider, sandbox};
 use crate::{
-    application::{ROLES, Service, configuration::MODEL_ROLES},
+    application::{
+        ModelConfig, ROLES, Service,
+        configuration::{MODEL_ROLES, ProjectCheck},
+    },
     storage::Result,
 };
 use serde::Serialize;
-use std::{fs, path::Path};
+use std::{collections::BTreeMap, fs, path::Path};
 
 #[derive(Debug, Serialize)]
 pub struct Problem {
@@ -110,6 +113,76 @@ pub fn problems(service: &Service) -> Result<Vec<Problem>> {
     Ok(problems)
 }
 
+/// Words a shell runs itself, so no program on this computer is needed for them.
+const SHELL_WORDS: [&str; 15] = [
+    "!", "(", ".", "[", "case", "cd", "echo", "eval", "exec", "exit", "export", "for", "if", "set",
+    "test",
+];
+
+/// The programs settings need that this computer lacks: the CLI of every provider `models`
+/// names (each with where it is used), the first program of every enabled check and the
+/// read-only sandbox.
+pub(crate) fn missing_on_host(
+    root: &Path,
+    models: &[(String, ModelConfig)],
+    checks: &[ProjectCheck],
+) -> Vec<String> {
+    let mut providers: BTreeMap<&str, (Provider, Vec<String>)> = BTreeMap::new();
+    for (used_for, model) in models {
+        if let Ok(provider) = Provider::of(model) {
+            providers
+                .entry(provider.name())
+                .or_insert_with(|| (provider, Vec::new()))
+                .1
+                .push(format!("{used_for} {}", model.identifier()));
+        }
+    }
+    let mut missing: Vec<String> = providers
+        .into_values()
+        .filter(|(provider, _)| provider.executable().is_err())
+        .map(|(provider, uses)| {
+            format!(
+                "{} CLI ({}) is not on PATH, so these models cannot run: {}",
+                provider.label(),
+                provider.name(),
+                uses.join(", ")
+            )
+        })
+        .collect();
+    for check in checks.iter().filter(|check| check.enabled) {
+        if let Some(program) = first_program(&check.command) {
+            let found = if program.contains('/') {
+                root.join(&check.directory).join(program).is_file()
+            } else {
+                super::executable(program).is_ok()
+            };
+            if !found {
+                missing.push(format!(
+                    "program {program} of check {} was not found",
+                    check.name
+                ));
+            }
+        }
+    }
+    if let Err(error) = sandbox::available() {
+        missing.push(format!("read-only sandbox (bwrap): {error}"));
+    }
+    missing
+}
+
+/// The program a check command starts with, past any variable assignments; None when the
+/// shell itself runs that word or only a variable names it.
+fn first_program(command: &str) -> Option<&str> {
+    let word = command
+        .split_whitespace()
+        .find(|word| !word.contains('=') || word.starts_with(['"', '\'', '/']))?;
+    let program = word.trim_matches(['"', '\'', ';']);
+    (!SHELL_WORDS.contains(&program)
+        && !program.is_empty()
+        && !program.starts_with(['$', '(', '{']))
+    .then_some(program)
+}
+
 /// A check command for the project at `root`, and the file it was inferred from.
 pub fn detect_check(root: &Path) -> Option<(String, &'static str)> {
     let read = |name: &str| fs::read_to_string(root.join(name)).ok();
@@ -182,8 +255,23 @@ fn python_check(root: &Path) -> Option<(String, &'static str)> {
 
 #[cfg(test)]
 mod tests {
-    use super::detect_check;
+    use super::{detect_check, first_program};
     use std::fs;
+
+    #[test]
+    fn the_first_program_of_a_check_command_is_what_the_host_must_have() {
+        for (command, program) in [
+            ("make check", Some("make")),
+            ("RUST_LOG=debug cargo test", Some("cargo")),
+            ("/opt/lint/run.sh --all", Some("/opt/lint/run.sh")),
+            ("./scripts/check.sh;", Some("./scripts/check.sh")),
+            ("test -f result.txt", None),
+            ("cd web && npm test", None),
+            ("$RUNNER --all", None),
+        ] {
+            assert_eq!(first_program(command), program, "{command}");
+        }
+    }
 
     /// Files a project holds: name and content.
     type Files = &'static [(&'static str, &'static str)];

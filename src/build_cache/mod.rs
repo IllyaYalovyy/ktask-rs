@@ -27,7 +27,7 @@ use std::{
 };
 
 const MARKER: &str = ".ktask-cache-owner";
-const POLICY_FILE: &str = "build-cache.json";
+pub(crate) const POLICY_FILE: &str = "build-cache.json";
 const REGISTRY: &str = "owned-caches";
 const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n";
 

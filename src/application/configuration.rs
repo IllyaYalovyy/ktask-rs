@@ -154,6 +154,67 @@ pub(super) fn delivery(db: &Connection, project: i64) -> Result<DeliveryConfig> 
         .optional()?
         .unwrap_or_default())
 }
+pub(super) fn validate_delivery(value: &DeliveryConfig) -> Result<()> {
+    require(
+        matches!(value.mode.as_str(), "local" | "direct" | "pr"),
+        "Delivery mode must be local, direct or pr",
+    )?;
+    require(
+        valid_ref_component(&value.remote) && !value.remote.contains('/'),
+        "Remote must be a Git remote name",
+    )?;
+    require(
+        valid_ref_component(&value.base_branch),
+        "Base branch must be a valid branch name",
+    )
+}
+/// Delivery is fixed while an attempt or a queue session is live.
+pub(super) fn require_delivery_idle(db: &Connection, project: i64) -> Result<()> {
+    require(!db.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE project_id=?1 AND state IN ('running','paused','waiting'))", [project], |r| r.get::<_, bool>(0))?, "Cannot change delivery during a live attempt")?;
+    require(!db.query_row("SELECT EXISTS(SELECT 1 FROM execution_sessions WHERE project_id=?1 AND state IN ('running','resume_requested'))", [project], |r| r.get::<_, bool>(0))?, "Cannot change delivery during a live queue session")
+}
+pub(super) fn require_checks_idle(db: &Connection, project: i64) -> Result<()> {
+    require(!db.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE project_id=?1 AND state IN ('running','paused','waiting'))", [project], |r| r.get::<_, bool>(0))?, "Cannot change checks during a live attempt")
+}
+/// A check needs its parts and a working directory that exists inside the project at `root`.
+pub(super) fn validate_check(root: &std::path::Path, value: &ProjectCheck) -> Result<()> {
+    require(
+        !value.name.trim().is_empty() && !value.command.trim().is_empty() && value.timeout_ms > 0,
+        "Check needs a name, command and positive timeout",
+    )?;
+    let directory = std::path::Path::new(&value.directory);
+    require(
+        !value.directory.trim().is_empty()
+            && !directory.is_absolute()
+            && !directory
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir)),
+        "Check directory must be relative within the project",
+    )?;
+    require(
+        root.join(directory).canonicalize()?.starts_with(root) && root.join(directory).is_dir(),
+        "Check directory must exist within the project",
+    )
+}
+/// Updates the check `value.id` names, or adds a new one.
+pub(super) fn write_check(db: &Connection, project: i64, value: &ProjectCheck) -> Result<()> {
+    if let Some(id) = value.id {
+        require(db.execute("UPDATE project_checks SET name=?3,command=?4,working_directory=?5,timeout_ms=?6,enabled=?7 WHERE project_id=?1 AND id=?2", params![project,id,value.name,value.command,value.directory,value.timeout_ms,value.enabled])? == 1, "Check no longer exists")?;
+    } else {
+        db.execute("INSERT INTO project_checks(project_id,name,command,working_directory,timeout_ms,enabled) VALUES (?1,?2,?3,?4,?5,?6)", params![project,value.name,value.command,value.directory,value.timeout_ms,value.enabled])?;
+    }
+    Ok(())
+}
+/// Sets this project's own model for `role`.
+pub(super) fn write_override(
+    db: &Connection,
+    project: i64,
+    role: &str,
+    model: &ModelConfig,
+) -> Result<()> {
+    db.execute("INSERT INTO project_models(project_id,role,provider,model,effort) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(project_id,role) DO UPDATE SET provider=excluded.provider,model=excluded.model,effort=excluded.effort", params![project,role,model.provider,model.model,model.effort])?;
+    Ok(())
+}
 /// Stores `value` as delivery version `version`; the branch and owned tip survive only when
 /// mode, remote and base branch are unchanged.
 pub(super) fn write_delivery(
@@ -174,24 +235,12 @@ impl Service {
         expected: &DeliveryConfig,
         value: &DeliveryConfig,
     ) -> Result<DeliveryConfig> {
-        require(
-            matches!(value.mode.as_str(), "local" | "direct" | "pr"),
-            "Delivery mode must be local, direct or pr",
-        )?;
-        require(
-            valid_ref_component(&value.remote) && !value.remote.contains('/'),
-            "Remote must be a Git remote name",
-        )?;
-        require(
-            valid_ref_component(&value.base_branch),
-            "Base branch must be a valid branch name",
-        )?;
+        validate_delivery(value)?;
         let tx = self
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        require(!tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE project_id=?1 AND state IN ('running','paused','waiting'))", [self.project_id], |r| r.get::<_, bool>(0))?, "Cannot change delivery during a live attempt")?;
-        require(!tx.query_row("SELECT EXISTS(SELECT 1 FROM execution_sessions WHERE project_id=?1 AND state IN ('running','resume_requested'))", [self.project_id], |r| r.get::<_, bool>(0))?, "Cannot change delivery during a live queue session")?;
+        require_delivery_idle(&tx, self.project_id)?;
         let current = delivery(&tx, self.project_id)?;
         require(
             &current == expected,
@@ -297,7 +346,7 @@ impl Service {
         )?;
         for (role, model) in MODEL_ROLES.iter().zip(values) {
             if let Some(model) = model {
-                tx.execute("INSERT INTO project_models(project_id,role,provider,model,effort) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(project_id,role) DO UPDATE SET provider=excluded.provider,model=excluded.model,effort=excluded.effort", params![self.project_id,role,model.provider,model.model,model.effort])?;
+                write_override(&tx, self.project_id, role, model)?;
             } else {
                 tx.execute(
                     "DELETE FROM project_models WHERE project_id=?1 AND role=?2",
@@ -309,34 +358,12 @@ impl Service {
         Ok(())
     }
     pub fn save_check(&mut self, expected: &[ProjectCheck], value: &ProjectCheck) -> Result<()> {
-        require(
-            !value.name.trim().is_empty()
-                && !value.command.trim().is_empty()
-                && value.timeout_ms > 0,
-            "Check needs a name, command and positive timeout",
-        )?;
-        let directory = std::path::Path::new(&value.directory);
-        require(
-            !value.directory.trim().is_empty()
-                && !directory.is_absolute()
-                && !directory
-                    .components()
-                    .any(|c| matches!(c, std::path::Component::ParentDir)),
-            "Check directory must be relative within the project",
-        )?;
-        require(
-            self.project_root()?
-                .join(directory)
-                .canonicalize()?
-                .starts_with(self.project_root()?)
-                && self.project_root()?.join(directory).is_dir(),
-            "Check directory must exist within the project",
-        )?;
+        validate_check(&self.project_root()?, value)?;
         let tx = self
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        require(!tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE project_id=?1 AND state IN ('running','paused','waiting'))", [self.project_id], |r| r.get::<_, bool>(0))?, "Cannot change checks during a live attempt")?;
+        require_checks_idle(&tx, self.project_id)?;
         require(
             checks(&tx, self.project_id)? == expected,
             "Checks changed elsewhere; cancel and reopen this form",
@@ -347,11 +374,7 @@ impl Service {
                 .any(|c| c.name == value.name && c.id != value.id),
             "A check with this name already exists",
         )?;
-        if let Some(id) = value.id {
-            require(tx.execute("UPDATE project_checks SET name=?3,command=?4,working_directory=?5,timeout_ms=?6,enabled=?7 WHERE project_id=?1 AND id=?2", params![self.project_id,id,value.name,value.command,value.directory,value.timeout_ms,value.enabled])? == 1, "Check no longer exists")?;
-        } else {
-            tx.execute("INSERT INTO project_checks(project_id,name,command,working_directory,timeout_ms,enabled) VALUES (?1,?2,?3,?4,?5,?6)", params![self.project_id,value.name,value.command,value.directory,value.timeout_ms,value.enabled])?;
-        }
+        write_check(&tx, self.project_id, value)?;
         tx.commit()?;
         Ok(())
     }

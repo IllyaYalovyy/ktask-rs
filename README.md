@@ -415,6 +415,67 @@ these" to save them globally). Each project keeps its own queue, checks and mode
 the same instance database, and has its own supervisor: several projects run at the same time,
 each with its own TUI or CLI, and pausing one leaves the others running.
 
+## Move a project to another computer
+
+A project moves as two files: its tasks (`export`) and its settings (`settings-export`). Code
+travels with Git. History, attempts, evidence, usage and cost stay on the old computer.
+
+On the old computer, in the project folder, write both files **outside** the repository (an
+untracked file stops the next run):
+
+```sh
+ktask settings-export ../app-settings.json
+ktask export ../app-tasks.tsv            # --scope all also exports finished definitions
+```
+
+On the new computer:
+
+1. **Clone** the repository, in any folder, and copy the two files over:
+   `git clone URL ~/code/app && cd ~/code/app`. Set the Git commit identity there.
+2. **Import settings.** Preview first, then apply:
+
+   ```sh
+   ktask settings-import ../app-settings.json --preview
+   ktask settings-import ../app-settings.json
+   ```
+
+   Import registers the folder as a project when it is not one yet. The preview shows every
+   setting that would be added, changed or left as it is, the folder, the paths rewritten to
+   it, absolute paths outside the project for you to confirm, and the programs, provider CLIs
+   and tool bindings that are missing here. Install and sign in to those, and register tools
+   again with `ktask tool register` / `bind`.
+3. **Import tasks**, then run: `ktask import ../app-tasks.tsv && ktask run`. Import settings
+   first: tasks name the custom categories and lenses the settings bring.
+
+What the settings file carries:
+
+- **The project:** checks (in order, including disabled ones), role models, the selected
+  profile, project categories and lenses, default lenses, delivery, retention and storage
+  limits, agent report and fix limits, agent network, baseline checks, provisioning mode and
+  preferences (mouse, run mode, planner approval).
+- **Shared by every project of the instance** (import marks these `shared`): user defaults and
+  user models, all profiles, user categories and lenses, and build cache limits. Importing
+  them on a computer with other projects changes what those inherit; check the preview.
+- **Not carried:** tasks and their history, the project name (the new folder's name, or
+  `--project-name`), installed tools, tool registrations and bindings (only their names and
+  versions, to report what is missing), license consents, credentials and Git remotes.
+
+It is one readable, versioned JSON file. Paths inside the project are written as
+`${KTASK_PROJECT_ROOT}` and resolved against the importing folder; the recorded source folder
+is informational and never used. `settings-export` refuses to replace a file without
+`--overwrite` and only reads, so it works while the runner is running. `settings-import`
+applies everything or nothing; it refuses a malformed file, a file of a newer format and a
+folder that is not the root of a Git repository. It replaces the settings the file names and
+keeps all others: it never deletes tasks, history or settings absent from the file, existing
+tasks keep their revisions, and importing the same file twice changes nothing. When it would
+change what a running attempt uses (checks, delivery, agent network, baseline checks, run
+mode, planner approval, retention or provisioning), pause the runner first (`ktask pause`);
+changed checks or delivery also need the attempt to be over, as with `check-set` and `delivery`.
+
+In the TUI, Configuration → **E Export settings** and **o Import settings** (keyboard or mouse)
+do the same; Import shows the preview before **Apply**. In `--demo` they use in-memory files
+(`/demo/settings.json`).
+
 ## Task kinds
 
 A task is one of three kinds. **AI** (default) is code work: the project checks run on the clean
@@ -837,9 +898,14 @@ cargo run --locked -- approve 1 --if-version 1
 - Files: `import tasks.tsv --preview` validates without touching storage. Import commits a batch;
   `--before ID` controls placement. `export tasks.tsv --scope all` refuses replacement unless
   `--overwrite` is explicit. Definitions only, not history backups.
+- Settings: `settings-export FILE [--overwrite]` and `settings-import FILE [--preview]` move
+  everything configured that is not a task (see Move a project to another computer). JSON
+  export lists `written`; import and preview report `changes`, `rewritten`, `outside` and
+  `missing`.
 - Selection: `--project DIR` selects a canonical project root without changing instance identity.
   Read commands do not register projects or create absent databases; missing projects return 3.
-  Add/import (or the TUI) register a project. `--project-name NAME` resolves a new-root name collision.
+  Add, import, settings-import (or the TUI) register a project. `--project-name NAME` resolves a
+  new-root name collision.
 - Concurrency: agents should pass `--if-version N` from list/show for every existing-task mutation.
   Without it, the command reads the latest version and still guards its transaction. A conflict
   never silently retries. Successful mutations return committed ID/version receipts; reread for state.

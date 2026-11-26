@@ -345,7 +345,9 @@ impl App {
             | Action::BuildCache
             | Action::Tools
             | Action::Import
-            | Action::Export => match self.backend.open(&mut self.screen, action) {
+            | Action::Export
+            | Action::ExportSettings
+            | Action::ImportSettings => match self.backend.open(&mut self.screen, action) {
                 Ok(Some(dialog)) => self.dialog = Some(dialog),
                 Ok(None) => {}
                 Err(error) => self.message(error),

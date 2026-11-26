@@ -294,6 +294,78 @@ fn read_finding(row: &rusqlite::Row<'_>) -> rusqlite::Result<Finding> {
     })
 }
 
+/// Updates `existing`, or adds `lens` to the project's own layer or, with no project,
+/// to the user scope.
+fn write(
+    db: &Connection,
+    project: Option<i64>,
+    existing: Option<&Entry>,
+    lens: &Lens,
+    now: i64,
+) -> Result<()> {
+    match existing {
+        Some(found) => db.execute(
+            "UPDATE review_lenses SET description=?3, instructions=?4, row_version=row_version+1, updated_at_ms=?5 WHERE name=?2 AND ((?1 IS NULL AND project_id IS NULL) OR project_id=?1)",
+            params![project, found.lens.name, lens.description.trim(), lens.instructions, now],
+        )?,
+        None => db.execute(
+            "INSERT INTO review_lenses(project_id, name, description, instructions, created_at_ms, updated_at_ms) VALUES (?1,?2,?3,?4,?5,?5)",
+            params![project, lens.name, lens.description.trim(), lens.instructions, now],
+        )?,
+    };
+    Ok(())
+}
+
+/// The lenses stored for one project, or in the user scope with `None`.
+pub(super) fn stored(db: &Connection, project: Option<i64>) -> Result<Vec<Lens>> {
+    Ok(TABLE
+        .stored_all(db, project)?
+        .into_iter()
+        .map(|entry| entry.lens)
+        .collect())
+}
+
+/// Creates or replaces `lens` in one layer under the caller's transaction.
+pub(super) fn put(db: &Connection, project: Option<i64>, lens: &Lens) -> Result<()> {
+    lens.validate()?;
+    let existing = TABLE.stored(db, project, &lens.name)?;
+    write(db, project, existing.as_ref(), lens, now_ms())
+}
+
+/// Replaces the project's default selection with the canonical spelling of `names`, each of
+/// which must resolve; the caller owns the transaction.
+pub(super) fn write_defaults(
+    db: &Connection,
+    project: i64,
+    names: &[String],
+) -> Result<Vec<String>> {
+    check_selection(names)?;
+    let mut canonical = Vec::new();
+    for name in names {
+        let entry = resolve(db, project, name)?.ok_or_else(|| {
+            Error::Conflict(format!(
+                "Unknown review lens {name}; list them with `ktask lens list`"
+            ))
+        })?;
+        canonical.push(entry.lens.name);
+    }
+    db.execute(
+        "DELETE FROM project_lens_defaults WHERE project_id = ?1",
+        [project],
+    )?;
+    for (index, name) in canonical.iter().enumerate() {
+        db.execute(
+            "INSERT INTO project_lens_defaults(project_id, ordinal, lens) VALUES (?1,?2,?3)",
+            params![project, index as i64 + 1, name],
+        )?;
+    }
+    Ok(canonical)
+}
+
+pub(super) fn defaults_of(db: &Connection, project: i64) -> Result<Vec<String>> {
+    default_names(db, project)
+}
+
 impl Service {
     /// Every lens this project can choose, by name, each from the layer that wins.
     pub fn lenses(&self) -> Result<Vec<Entry>> {
@@ -320,19 +392,7 @@ impl Service {
             scope,
             &lens.name,
             expected,
-            |tx, project, existing, now| {
-                match existing {
-                    Some(found) => tx.execute(
-                        "UPDATE review_lenses SET description=?3, instructions=?4, row_version=row_version+1, updated_at_ms=?5 WHERE name=?2 AND ((?1 IS NULL AND project_id IS NULL) OR project_id=?1)",
-                        params![project, found.lens.name, lens.description.trim(), lens.instructions, now],
-                    )?,
-                    None => tx.execute(
-                        "INSERT INTO review_lenses(project_id, name, description, instructions, created_at_ms, updated_at_ms) VALUES (?1,?2,?3,?4,?5,?5)",
-                        params![project, lens.name, lens.description.trim(), lens.instructions, now],
-                    )?,
-                };
-                Ok(())
-            },
+            |tx, project, existing, now| write(tx, project, existing, lens, now),
         )
     }
 
@@ -371,25 +431,7 @@ impl Service {
             default_names(&tx, project)? == expected,
             "The default review lenses changed elsewhere; read them again before retrying",
         )?;
-        let mut canonical = Vec::new();
-        for name in &names {
-            let entry = resolve(&tx, project, name)?.ok_or_else(|| {
-                Error::Conflict(format!(
-                    "Unknown review lens {name}; list them with `ktask lens list`"
-                ))
-            })?;
-            canonical.push(entry.lens.name);
-        }
-        tx.execute(
-            "DELETE FROM project_lens_defaults WHERE project_id = ?1",
-            [project],
-        )?;
-        for (index, name) in canonical.iter().enumerate() {
-            tx.execute(
-                "INSERT INTO project_lens_defaults(project_id, ordinal, lens) VALUES (?1,?2,?3)",
-                params![project, index as i64 + 1, name],
-            )?;
-        }
+        let canonical = write_defaults(&tx, project, &names)?;
         tx.commit()?;
         Ok(canonical)
     }

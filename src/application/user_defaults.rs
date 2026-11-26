@@ -59,6 +59,17 @@ pub fn on_off(value: bool) -> &'static str {
     if value { "on" } else { "off" }
 }
 
+pub(super) fn validate_user_defaults(value: &UserDefaults) -> Result<()> {
+    require(
+        matches!(value.delivery_mode.as_str(), "local" | "direct" | "pr"),
+        "Delivery mode must be local, direct or pr",
+    )?;
+    require(
+        value.check_timeout_ms > 0,
+        "Check timeout must be a positive number of milliseconds",
+    )
+}
+
 pub(super) fn read_user_defaults(db: &Connection) -> Result<UserDefaults> {
     Ok(db
         .query_row(
@@ -90,13 +101,17 @@ pub(super) fn advance_version(tx: &Connection) -> Result<()> {
     write_user_defaults(tx, next_version(current.version)?, &current)
 }
 
-fn next_version(version: i64) -> Result<i64> {
+pub(super) fn next_version(version: i64) -> Result<i64> {
     version
         .checked_add(1)
         .ok_or_else(|| Error::Conflict("User defaults version exhausted".into()))
 }
 
-fn write_user_defaults(tx: &Connection, version: i64, value: &UserDefaults) -> Result<()> {
+pub(super) fn write_user_defaults(
+    tx: &Connection,
+    version: i64,
+    value: &UserDefaults,
+) -> Result<()> {
     let profile: Option<i64> = match &value.default_profile {
         Some(name) => Some(
             tx.query_row("SELECT id FROM model_profiles WHERE name=?1", [name], |r| {
@@ -182,14 +197,7 @@ impl Service {
         value: &UserDefaults,
         models: Option<&configuration::Defaults>,
     ) -> Result<UserDefaults> {
-        require(
-            matches!(value.delivery_mode.as_str(), "local" | "direct" | "pr"),
-            "Delivery mode must be local, direct or pr",
-        )?;
-        require(
-            value.check_timeout_ms > 0,
-            "Check timeout must be a positive number of milliseconds",
-        )?;
+        validate_user_defaults(value)?;
         for (role, model) in MODEL_ROLES.iter().zip(models.into_iter().flatten()) {
             if let Some(model) = model {
                 self.validate_model(role, model)?;

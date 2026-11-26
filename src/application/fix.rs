@@ -160,6 +160,41 @@ pub(crate) struct Ending<'a> {
     pub continued: bool,
 }
 
+pub(super) fn read_fix_limits(
+    db: &rusqlite::Connection,
+    project: i64,
+) -> Result<InvestigationLimits> {
+    Ok(db
+        .query_row(
+            "SELECT row_version,fix_time_limit_ms,fix_cost_limit_microusd FROM project_investigation_limits WHERE project_id=?1",
+            [project],
+            |r| {
+                Ok(InvestigationLimits {
+                    version: r.get(0)?,
+                    time_limit_ms: r.get(1)?,
+                    cost_limit_microusd: r.get(2)?,
+                })
+            },
+        )
+        .optional()?
+        .unwrap_or(InvestigationLimits {
+            version: 0,
+            time_limit_ms: 30 * 60 * 1000,
+            cost_limit_microusd: 5_000_000,
+        }))
+}
+
+pub(super) fn validate_fix_limits(time_limit_ms: i64, cost_limit_microusd: i64) -> Result<()> {
+    require(
+        (1000..=86_400_000).contains(&time_limit_ms),
+        "Fix time limit must be from 1 second to 24 hours",
+    )?;
+    require(
+        (10_000..=1_000_000_000).contains(&cost_limit_microusd),
+        "Fix cost limit must be from 0.01 to 1000 USD",
+    )
+}
+
 fn present(text: &str) -> Option<String> {
     (!text.trim().is_empty()).then(|| clip(text, ENTRY_CHARS))
 }
@@ -167,26 +202,7 @@ fn present(text: &str) -> Option<String> {
 impl Service {
     /// The time and cost later fixes may use; shares its version with the report limits.
     pub fn fix_limits(&self) -> Result<InvestigationLimits> {
-        Ok(self
-            .db
-            .connection()
-            .query_row(
-                "SELECT row_version,fix_time_limit_ms,fix_cost_limit_microusd FROM project_investigation_limits WHERE project_id=?1",
-                [self.project_id],
-                |r| {
-                    Ok(InvestigationLimits {
-                        version: r.get(0)?,
-                        time_limit_ms: r.get(1)?,
-                        cost_limit_microusd: r.get(2)?,
-                    })
-                },
-            )
-            .optional()?
-            .unwrap_or(InvestigationLimits {
-                version: 0,
-                time_limit_ms: 30 * 60 * 1000,
-                cost_limit_microusd: 5_000_000,
-            }))
+        read_fix_limits(self.db.connection(), self.project_id)
     }
 
     /// Replaces the limits later fixes start with; `expected` is the version read.
@@ -196,14 +212,7 @@ impl Service {
         time_limit_ms: i64,
         cost_limit_microusd: i64,
     ) -> Result<InvestigationLimits> {
-        require(
-            (1000..=86_400_000).contains(&time_limit_ms),
-            "Fix time limit must be from 1 second to 24 hours",
-        )?;
-        require(
-            (10_000..=1_000_000_000).contains(&cost_limit_microusd),
-            "Fix cost limit must be from 0.01 to 1000 USD",
-        )?;
+        validate_fix_limits(time_limit_ms, cost_limit_microusd)?;
         let report = self.investigation_limits()?;
         let tx = self
             .db

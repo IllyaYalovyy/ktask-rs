@@ -76,6 +76,10 @@ pub enum Action {
     Events,
     Import,
     Export,
+    /// Write this project's settings to a file.
+    ExportSettings,
+    /// Preview and apply a settings file.
+    ImportSettings,
     Inspect,
     InspectSection(usize),
     Filter,
@@ -709,6 +713,8 @@ impl App {
                     KeyCode::Char('t') => Action::Tools,
                     KeyCode::Char('g') => Action::Delivery,
                     KeyCode::Char('i') => Action::ReportLimits,
+                    KeyCode::Char('E') => Action::ExportSettings,
+                    KeyCode::Char('o') => Action::ImportSettings,
                     KeyCode::Enter | KeyCode::Char('e') => return Some(Action::Configure),
                     _ => return None,
                 };

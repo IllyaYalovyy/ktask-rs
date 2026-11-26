@@ -100,6 +100,8 @@ pub fn files() -> BTreeMap<String, String> {
     BTreeMap::from([
         ("/demo/import.tsv".into(), "AI\tImported check\tVerify the imported task\tChecks pass\nHuman\tImported review\tReview the result\tPerson approves".into()),
         ("/demo/invalid.tsv".into(), "invalid task data".into()),
+        ("/demo/settings.json".into(), r#"{"format":"ktask-settings","version":1,"project":{"preferences":{"mouse":true,"run_mode":"single","planner_approval":"review_required"}}}"#.into()),
+        ("/demo/settings-newer.json".into(), r#"{"format":"ktask-settings","version":2}"#.into()),
         ("/demo/existing.tsv".into(), "AI\tExisting task\tKeep until overwrite confirmed\tCheck passes".into()),
     ])
 }

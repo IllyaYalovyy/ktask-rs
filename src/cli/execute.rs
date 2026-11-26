@@ -4,7 +4,7 @@ use super::{
     output::{self, Reply},
 };
 use crate::application::{
-    self as app, Definition, ModelConfig, Service, Task, VersionedTask, transfer,
+    self as app, Definition, ModelConfig, Service, Task, VersionedTask, settings, transfer,
 };
 use serde_json::json;
 
@@ -324,6 +324,58 @@ fn remaining_setup(
         ));
     }
     remaining
+}
+
+/// What an export destination holds now: replacing an existing file needs --overwrite.
+fn destination(file: &std::path::Path, overwrite: bool) -> Result<Option<Vec<u8>>> {
+    if !file.try_exists()? {
+        return Ok(None);
+    }
+    if !overwrite {
+        return Err(crate::storage::Error::Conflict(
+            "Destination exists; use --overwrite to replace it".into(),
+        )
+        .into());
+    }
+    Ok(Some(transfer::read(file)?))
+}
+
+fn settings_export(
+    service: &mut Service,
+    paths: &crate::instance::Paths,
+    file: &std::path::Path,
+    overwrite: bool,
+) -> Result<Reply> {
+    let expected = destination(file, overwrite)?;
+    let export = service.export_settings(paths)?;
+    transfer::replace(file, &export.text, expected.as_deref())?;
+    Ok(Reply {
+        data: json!({"path":file,"format":settings::FORMAT,"version":settings::VERSION,"written":export.written}),
+        text: format!(
+            "Exported {} settings to {}\n{}",
+            export.written.len(),
+            output::safe(&file.to_string_lossy()),
+            export
+                .written
+                .iter()
+                .map(|entry| format!(
+                    "{}\n",
+                    output::safe(&crate::presentation::settings_line(entry))
+                ))
+                .collect::<String>()
+        ),
+    })
+}
+
+/// A settings import or its preview, one line per setting.
+pub(super) fn settings_report(report: &settings::Report) -> Reply {
+    Reply {
+        data: json!(report),
+        text: crate::presentation::settings_report(report)
+            .iter()
+            .map(|line| format!("{}\n", output::safe(line)))
+            .collect(),
+    }
 }
 
 /// The defaults new projects start with, and this project's values beside them.
@@ -759,17 +811,7 @@ pub(super) fn command(
                 .map(|t| t.definition().definition.clone())
                 .collect::<Vec<_>>();
             let data = transfer::encode(&definitions)?;
-            let expected = if file.try_exists()? {
-                if !overwrite {
-                    return Err(crate::storage::Error::Conflict(
-                        "Destination exists; use --overwrite to replace it".into(),
-                    )
-                    .into());
-                }
-                Some(transfer::read(file)?)
-            } else {
-                None
-            };
+            let expected = destination(file, *overwrite)?;
             transfer::export(file, &data, expected.as_deref())?;
             Ok(Reply {
                 data: json!({"path":file,"count":definitions.len()}),
@@ -780,6 +822,10 @@ pub(super) fn command(
                 ),
             })
         }
+        Command::SettingsExport { file, overwrite } => {
+            settings_export(service, paths, file, *overwrite)
+        }
+        Command::SettingsImport { .. } => unreachable!("settings import dispatch"),
         Command::Events { after, limit } => {
             let events = service.events_after(*after, *limit)?;
             Ok(Reply {

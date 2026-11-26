@@ -69,6 +69,15 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// can queue for seconds; it waits rather than failing its attempt.
 pub const BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// An empty instance held in memory, for reading what a first command would find without
+/// creating storage.
+pub(crate) fn empty_instance() -> Result<Connection> {
+    let mut connection = Connection::open_in_memory()?;
+    migrations::apply(&mut connection, migrations::ALL)?;
+    connection.pragma_update(None, "foreign_keys", true)?;
+    Ok(connection)
+}
+
 pub struct Database {
     connection: Connection,
     state_dir: fs::File,

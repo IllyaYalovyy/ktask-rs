@@ -56,7 +56,8 @@ impl Scope {
 }
 
 /// One template per role.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Templates {
     pub execution: String,
     pub review: String,
@@ -350,6 +351,45 @@ pub(super) fn pinned(
     Ok(found.or_else(|| Category::for_kind(kind)))
 }
 
+/// Updates `existing`, or adds `category` to the project's own layer or, with no
+/// project, to the user scope.
+fn write(
+    db: &Connection,
+    project: Option<i64>,
+    existing: Option<&Entry>,
+    category: &Category,
+    now: i64,
+) -> Result<()> {
+    let t = &category.templates;
+    match existing {
+        Some(found) => db.execute(
+            "UPDATE work_categories SET description=?3, run_checks=?4, execution_template=?5, review_template=?6, validation_template=?7, remediation_template=?8, row_version=row_version+1, updated_at_ms=?9 WHERE name=?2 AND ((?1 IS NULL AND project_id IS NULL) OR project_id=?1)",
+            params![project, found.category.name, category.description.trim(), category.checks, t.execution, t.review, t.validation, t.remediation, now],
+        )?,
+        None => db.execute(
+            "INSERT INTO work_categories(project_id, name, description, run_checks, execution_template, review_template, validation_template, remediation_template, created_at_ms, updated_at_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)",
+            params![project, category.name, category.description.trim(), category.checks, t.execution, t.review, t.validation, t.remediation, now],
+        )?,
+    };
+    Ok(())
+}
+
+/// The categories stored for one project, or in the user scope with `None`.
+pub(super) fn stored(db: &Connection, project: Option<i64>) -> Result<Vec<Category>> {
+    Ok(TABLE
+        .stored_all(db, project)?
+        .into_iter()
+        .map(|entry| entry.category)
+        .collect())
+}
+
+/// Creates or replaces `category` in one layer under the caller's transaction.
+pub(super) fn put(db: &Connection, project: Option<i64>, category: &Category) -> Result<()> {
+    category.validate()?;
+    let existing = TABLE.stored(db, project, &category.name)?;
+    write(db, project, existing.as_ref(), category, now_ms())
+}
+
 impl Service {
     /// Every category this project can choose, by name, each from the layer that wins.
     pub fn categories(&self) -> Result<Vec<Entry>> {
@@ -375,26 +415,13 @@ impl Service {
         category: &Category,
     ) -> Result<Entry> {
         category.validate()?;
-        let t = &category.templates;
         TABLE.save(
             self.db.connection_mut(),
             self.project_id,
             scope,
             &category.name,
             expected,
-            |tx, project, existing, now| {
-                match existing {
-                    Some(found) => tx.execute(
-                        "UPDATE work_categories SET description=?3, run_checks=?4, execution_template=?5, review_template=?6, validation_template=?7, remediation_template=?8, row_version=row_version+1, updated_at_ms=?9 WHERE name=?2 AND ((?1 IS NULL AND project_id IS NULL) OR project_id=?1)",
-                        params![project, found.category.name, category.description.trim(), category.checks, t.execution, t.review, t.validation, t.remediation, now],
-                    )?,
-                    None => tx.execute(
-                        "INSERT INTO work_categories(project_id, name, description, run_checks, execution_template, review_template, validation_template, remediation_template, created_at_ms, updated_at_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)",
-                        params![project, category.name, category.description.trim(), category.checks, t.execution, t.review, t.validation, t.remediation, now],
-                    )?,
-                };
-                Ok(())
-            },
+            |tx, project, existing, now| write(tx, project, existing, category, now),
         )
     }
 

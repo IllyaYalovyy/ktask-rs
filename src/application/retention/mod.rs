@@ -32,6 +32,7 @@ use database::{Reclamation, free_pages};
 use measure::{Allocation, ScanProgress, allocation, bounded_allocation_scan};
 pub use policy::Policy;
 use policy::{Reserve, instance_limits};
+pub(super) use policy::{policy, validate_policy, write_policy};
 #[cfg(test)]
 use {
     admission::{admission_generation, settle_scan},

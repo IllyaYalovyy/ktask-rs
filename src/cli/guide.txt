@@ -3,7 +3,8 @@ GUIDE FOR SCRIPTS AND AI AGENTS
 
 CONCEPTS
   Project    A Git repository, identified by its directory (--project, default: cwd).
-             init, add, import, check-set and model-default register it on first use;
+             init, add, import, settings-import, check-set and model-default register it on
+             first use;
              every other command fails with exit 3 until it is registered. Each project
              has its own queue and supervisor; several projects run at the same time.
   Instance   ktask and ktask-dev keep separate databases; --paths prints them. The working
@@ -91,6 +92,26 @@ TYPICAL SESSION
   Foreground run (no --background) blocks until the queue is done or something needs
   the owner, then prints why it stopped. A detached runner logs to
   <state>/runner-<project id>.log (see --paths).
+
+MOVING A PROJECT TO ANOTHER COMPUTER
+  Code travels with Git; tasks and settings travel as two files. History, attempts,
+  evidence, usage and cost stay behind. On the old computer, writing outside the repository:
+      ktask settings-export ../app-settings.json    # add --overwrite to replace a file
+      ktask export ../app-tasks.tsv                 # --scope all for finished ones too
+  On the new computer, in this order:
+    1. git clone URL DIR && cd DIR                 any folder; set user.name and user.email
+    2. ktask settings-import ../app-settings.json --preview     changes nothing
+       ktask settings-import ../app-settings.json               registers DIR if needed
+    3. ktask import ../app-tasks.tsv               then ktask run
+  Settings: checks, role models, profiles, custom categories and lenses, default lenses,
+  delivery, retention, limits, network, baseline checks, provisioning mode and preferences,
+  plus the instance's shared user defaults, user categories and lenses, profiles and build
+  cache limits (marked "shared": they reach every project of the instance). Never copied:
+  installed tools, tool registrations, credentials. Paths inside the project are stored
+  relative to its root; absolute paths outside it are kept and listed to confirm. Import is
+  all or nothing, keeps settings the file does not name, never touches tasks or history, and
+  repeating it changes nothing. Exit 4: malformed or newer file, not a Git repository root,
+  an invalid value, or a live runner or attempt using what would change (ktask pause).
 
 AGENT REPORTS (what happened, why, and how to fix it)
   ktask --json agent report                          # explain the project and current task

@@ -151,8 +151,19 @@ fn profile_by_id(db: &Connection, id: i64) -> Result<Option<Profile>> {
     profile_where(db, "id", id)
 }
 
-fn profile_by_name(db: &Connection, name: &str) -> Result<Option<Profile>> {
+pub(super) fn profile_by_name(db: &Connection, name: &str) -> Result<Option<Profile>> {
     profile_where(db, "name", name.trim())
+}
+
+/// Every profile, by name.
+pub(super) fn all(db: &Connection) -> Result<Vec<Profile>> {
+    let ids: Vec<i64> = db
+        .prepare("SELECT id FROM model_profiles ORDER BY name")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    ids.into_iter()
+        .map(|id| Ok(profile_by_id(db, id)?.expect("listed profile exists")))
+        .collect()
 }
 
 fn usage(db: &Connection, id: i64) -> Result<Usage> {
@@ -243,7 +254,7 @@ fn running(mut resolved: Vec<Effective>) -> Vec<Effective> {
     resolved
 }
 
-fn valid_name(name: &str) -> Result<&str> {
+pub(super) fn valid_name(name: &str) -> Result<&str> {
     let name = name.trim();
     require(!name.is_empty(), "Profile name is required")?;
     require(
@@ -274,14 +285,7 @@ impl Service {
 
     /// Every profile, by name.
     pub fn profiles(&self) -> Result<Vec<Profile>> {
-        let db = self.db.connection();
-        let ids: Vec<i64> = db
-            .prepare("SELECT id FROM model_profiles ORDER BY name")?
-            .query_map([], |r| r.get(0))?
-            .collect::<rusqlite::Result<_>>()?;
-        ids.into_iter()
-            .map(|id| Ok(profile_by_id(db, id)?.expect("listed profile exists")))
-            .collect()
+        all(self.db.connection())
     }
 
     /// The profile named `name`, ignoring case.
@@ -476,7 +480,7 @@ impl Service {
     }
 }
 
-fn write_roles(tx: &Transaction<'_>, id: i64, models: &Defaults) -> Result<()> {
+pub(super) fn write_roles(tx: &Transaction<'_>, id: i64, models: &Defaults) -> Result<()> {
     for (role, model) in MODEL_ROLES.iter().zip(models) {
         if let Some(model) = model {
             tx.execute(

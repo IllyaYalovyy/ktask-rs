@@ -6312,6 +6312,8 @@ mod delivery;
 mod lenses;
 #[path = "providers.rs"]
 mod providers;
+#[path = "settings.rs"]
+mod settings;
 struct Fixture {
     scratch: support::Sandbox,
     root: PathBuf,

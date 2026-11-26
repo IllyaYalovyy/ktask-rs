@@ -157,6 +157,9 @@ fn scope(command: &Command) -> Scope {
         Command::Import { .. } | Command::Export { .. } => {
             Refused("importing and exporting task files is not part of a fix")
         }
+        Command::SettingsExport { .. } | Command::SettingsImport { .. } => {
+            Refused("exporting and importing settings, shared ones included, is not part of a fix")
+        }
         Command::ProjectDelete { .. } | Command::ProjectMove { .. } => {
             Refused("a fix never deletes or moves a project")
         }

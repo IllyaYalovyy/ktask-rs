@@ -228,7 +228,7 @@ impl StoredWorkspace {
             .ok_or_else(|| "Task no longer exists in this view".into())
     }
 
-    fn committed(&mut self, screen: &mut Screen, message: &str) {
+    pub(crate) fn committed(&mut self, screen: &mut Screen, message: &str) {
         match self.reload(screen) {
             Ok(()) => screen.message(message),
             Err(error) => screen.message(format!("Saved to SQLite, but refresh failed: {error}")),
@@ -1051,7 +1051,12 @@ impl StoredWorkspace {
             | DialogKind::BuildCache(_)
             | DialogKind::BuildCacheConfirm(_)
             | DialogKind::Tools
-            | DialogKind::ToolPreview => {
+            | DialogKind::ToolPreview
+            | DialogKind::SettingsExport
+            | DialogKind::SettingsOverwrite { .. }
+            | DialogKind::SettingsImport
+            | DialogKind::SettingsPreview { .. }
+            | DialogKind::DemoSettingsPreview(_) => {
                 return Err("Simulation is available only with --demo".into());
             }
         }
@@ -1247,6 +1252,7 @@ impl Backend for StoredWorkspace {
             | Action::Storage
             | Action::BuildCache
             | Action::Tools => Some(self.open_project_config(screen, action)?),
+            Action::ExportSettings | Action::ImportSettings => Some(self.open_settings(action)?),
             Action::Breakdown => Some(self.propose_breakdown(screen)?),
             Action::Add | Action::Insert | Action::Edit => Some(self.task_form(screen, action)),
             Action::Move => {
@@ -1314,6 +1320,15 @@ impl Backend for StoredWorkspace {
                 | DialogKind::ToolPreview
         ) {
             return self.save_project_config(screen, dialog);
+        }
+        if matches!(
+            dialog.kind,
+            DialogKind::SettingsExport
+                | DialogKind::SettingsOverwrite { .. }
+                | DialogKind::SettingsImport
+                | DialogKind::SettingsPreview { .. }
+        ) {
+            return self.save_settings(screen, dialog);
         }
         let readonly = dialog.read_only();
         let exporting = matches!(
@@ -1511,7 +1526,7 @@ impl Backend for StoredWorkspace {
         }
         let delivery = self.service.delivery_config().unwrap_or_default();
         format!(
-            "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup; b for build caches.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\nDelivery: {} via {}/{}\nDependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing. CLI require declares prerequisites before a task starts.\n\nDefaults apply to new tasks; existing revisions stay pinned.\nu User defaults: what new projects start with; preview and apply them here.\nf Profiles: named role models to reuse; select one here or as the new-project default.\nw Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art; override per project.\nL Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default selection.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.\ni Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.",
+            "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup; b for build caches.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\nDelivery: {} via {}/{}\nDependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing. CLI require declares prerequisites before a task starts.\n\nDefaults apply to new tasks; existing revisions stay pinned.\nu User defaults: what new projects start with; preview and apply them here.\nf Profiles: named role models to reuse; select one here or as the new-project default.\nw Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art; override per project.\nL Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default selection.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.\ni Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.\nE Export settings and o Import settings move this project's settings to another computer.",
             screen.project_name,
             if screen.mouse_enabled {
                 "Enabled"
@@ -1548,6 +1563,8 @@ impl Backend for StoredWorkspace {
             ("b Build cache", Action::BuildCache),
             ("t Tools", Action::Tools),
             ("i Report limits", Action::ReportLimits),
+            ("E Export settings", Action::ExportSettings),
+            ("o Import settings", Action::ImportSettings),
             ("e Preferences", Action::Configure),
             ("Esc Back", Action::Back),
         ]

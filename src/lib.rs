@@ -37,6 +37,7 @@ pub(crate) mod resource;
 pub mod runner;
 pub mod scratch;
 mod selection;
+mod settings_ui;
 pub mod storage;
 mod ui;
 

@@ -1,12 +1,16 @@
 //! The `--demo` workspace: fixtures and a simulated runner in memory. It never opens SQLite.
 use crate::{
     app::{Action, Catalog, EvidenceSection, Screen, View},
+    application::{
+        preferences::{Continuation, PlannerApproval},
+        settings::{PreferenceValues, Report, SettingsFile, compare},
+    },
     backend::{Backend, Column, EvidenceAt},
     dialog::{Dialog, DialogKind, Field},
     forms, mock,
     presentation::{
         Attempt, Kind, ROLES, RevisionState, Status, Task, TaskAction, badge, budget, duration,
-        model_label, money,
+        model_label, money, settings_report,
     },
 };
 use std::{
@@ -506,15 +510,55 @@ impl DemoWorkspace {
             .map(|t| export_task(t))
             .collect::<Vec<_>>()
             .join("\n");
+        self.write_virtual_file(screen, dialog, path, data)
+    }
+
+    /// The session settings a settings file can carry.
+    fn session_settings(&self, screen: &Screen) -> SettingsFile {
+        let mut settings = SettingsFile::new();
+        settings.project.preferences = PreferenceValues {
+            mouse: Some(screen.mouse_enabled),
+            run_mode: Some(if screen.auto_advance {
+                Continuation::Queue
+            } else {
+                Continuation::Single
+            }),
+            planner_approval: Some(if self.review_required {
+                PlannerApproval::ReviewRequired
+            } else {
+                PlannerApproval::Automatic
+            }),
+        };
+        settings
+    }
+
+    /// Export to a virtual file; Ok(false) asks to confirm an overwrite first.
+    fn export_settings(
+        &mut self,
+        screen: &mut Screen,
+        dialog: &mut Dialog,
+    ) -> Result<bool, String> {
+        let path = dialog.get(forms::DESTINATION).to_owned();
+        if !path.starts_with("/demo/") || !path.ends_with(".json") {
+            return Err("Use a virtual path /demo/<name>.json; no real files are written".into());
+        }
+        let data = self.session_settings(screen).encode();
+        self.write_virtual_file(screen, dialog, path, data)
+    }
+
+    fn write_virtual_file(
+        &mut self,
+        screen: &mut Screen,
+        dialog: &mut Dialog,
+        path: String,
+        data: String,
+    ) -> Result<bool, String> {
         if self.files.contains_key(&path) {
-            dialog.kind = DialogKind::Overwrite {
-                path: path.clone(),
-                data,
-            };
             dialog.title = "Overwrite mock file?".into();
             dialog.body = format!(
                 "{path} already exists.\nConfirm replaces it; cancel preserves its contents."
             );
+            dialog.kind = DialogKind::Overwrite { path, data };
             dialog.fields.clear();
             dialog.error.clear();
             return Ok(false);
@@ -522,6 +566,46 @@ impl DemoWorkspace {
         self.files.insert(path.clone(), data);
         screen.record(format!("Exported to {path} · in memory, NOT disk"));
         Ok(true)
+    }
+
+    fn preview_settings(&self, screen: &Screen, dialog: &mut Dialog) -> Result<bool, String> {
+        let data = self
+            .files
+            .get(dialog.get(forms::SOURCE))
+            .ok_or("Mock file not found · try /demo/settings.json")?;
+        let settings = SettingsFile::decode(data.as_bytes()).map_err(|e| e.to_string())?;
+        let report = Report {
+            applied: false,
+            folder: "/demo/project".into(),
+            project: "demo (simulated)".into(),
+            registers_project: false,
+            changes: compare(&settings, &self.session_settings(screen)),
+            rewritten: Vec::new(),
+            outside: Vec::new(),
+            missing: Vec::new(),
+            blocked: None,
+        };
+        dialog.title = "Import settings preview · simulated".into();
+        dialog.body = settings_report(&report).join("\n");
+        dialog.kind = DialogKind::DemoSettingsPreview(Box::new(settings));
+        dialog.fields.clear();
+        dialog.focus = 0;
+        dialog.scroll = 0;
+        dialog.error.clear();
+        Ok(false)
+    }
+
+    fn import_settings_file(&mut self, screen: &mut Screen, settings: &SettingsFile) {
+        let values = &settings.project.preferences;
+        screen.mouse_enabled = values.mouse.unwrap_or(screen.mouse_enabled);
+        if let Some(mode) = values.run_mode {
+            screen.auto_advance = mode == Continuation::Queue;
+        }
+        if let Some(approval) = values.planner_approval {
+            self.review_required = approval == PlannerApproval::ReviewRequired;
+        }
+        screen.record("Settings imported · simulated session only");
+        screen.message("Settings imported · simulated session only");
     }
 
     /// Apply the session settings; a dataset change asks to confirm the reset first.
@@ -736,6 +820,18 @@ impl Backend for DemoWorkspace {
                 "All tasks, models, runs, and files are simulated.",
             )),
             Action::Configure => Some(self.config_form(screen)),
+            Action::ExportSettings => Some(Dialog::new(
+                DialogKind::SettingsExport,
+                "Export settings · in-memory demo files",
+                "Writes the session's settings to the virtual file shelf, NOT disk.\nUse the destination in Import settings to read it back.",
+                vec![Field::text(forms::DESTINATION, "/demo/my-settings.json")],
+            )),
+            Action::ImportSettings => Some(Dialog::new(
+                DialogKind::SettingsImport,
+                "Import settings · in-memory demo files",
+                "Available: /demo/settings.json (valid), /demo/settings-newer.json\nA preview shows every setting before anything changes.",
+                vec![Field::text(forms::SOURCE, "/demo/settings.json")],
+            )),
             Action::Import => Some(Dialog::new(
                 DialogKind::Import,
                 "Import · in-memory demo files",
@@ -817,6 +913,11 @@ impl Backend for DemoWorkspace {
                 screen.record(format!("Imported {count} tasks · simulated files only"));
             }
             DialogKind::Export => return self.export(screen, dialog),
+            DialogKind::SettingsExport => return self.export_settings(screen, dialog),
+            DialogKind::SettingsImport => return self.preview_settings(screen, dialog),
+            DialogKind::DemoSettingsPreview(settings) => {
+                self.import_settings_file(screen, &settings)
+            }
             DialogKind::Overwrite { path, data } => {
                 self.files.insert(path.clone(), data);
                 screen.record(format!("Exported to {path} · overwrite confirmed (mock)"));
@@ -860,7 +961,9 @@ impl Backend for DemoWorkspace {
             | DialogKind::Tools
             | DialogKind::ToolPreview
             | DialogKind::StoredImport(_)
-            | DialogKind::FileOverwrite { .. } => {
+            | DialogKind::FileOverwrite { .. }
+            | DialogKind::SettingsOverwrite { .. }
+            | DialogKind::SettingsPreview { .. } => {
                 return Err("Disk operations require SQLite mode".into());
             }
         }
@@ -1026,6 +1129,8 @@ impl Backend for DemoWorkspace {
         vec![
             ("e Configure", Action::Configure),
             ("i Report limits", Action::ReportLimits),
+            ("E Export settings", Action::ExportSettings),
+            ("o Import settings", Action::ImportSettings),
             ("Esc Back", Action::Back),
             ("S Stats", Action::Stats),
         ]

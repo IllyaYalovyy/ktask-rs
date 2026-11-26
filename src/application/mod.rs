@@ -85,6 +85,7 @@ pub mod retention;
 pub(crate) mod scoped;
 pub mod search;
 pub mod session;
+pub mod settings;
 pub mod stop;
 pub(crate) mod task_query;
 pub mod usage_report;
@@ -94,7 +95,7 @@ pub mod tools;
 pub mod transfer;
 
 use crate::storage::{Database, Error, Result};
-use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::Serialize;
 use std::{
     path::Path,
@@ -549,43 +550,7 @@ impl Service {
             )?;
             project
         } else {
-            let default_name = root
-                .file_name()
-                .unwrap_or(root.as_os_str())
-                .to_string_lossy();
-            let name = name.unwrap_or(&default_name).trim();
-            require(!name.is_empty(), "Project name is required")?;
-            let taken: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM projects WHERE name = ?1)",
-                [name],
-                |r| r.get(0),
-            )?;
-            require(
-                !taken,
-                "Project name already exists; use --project-name with a unique name",
-            )?;
-            let user = user_defaults::read_user_defaults(&tx)?;
-            tx.execute(
-                "INSERT INTO projects(name, root_path, created_at_ms, check_before_task, agent_network, initial_continuation, initial_planner_approval, profile_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, (SELECT default_profile_id FROM user_defaults WHERE id = 1))",
-                params![
-                    name,
-                    bytes,
-                    now_ms(),
-                    user.check_before_task,
-                    user.agent_network,
-                    user.continuation.name(),
-                    user.planner_approval.name()
-                ],
-            )?;
-            let id = tx.last_insert_rowid();
-            // Only the mode is inherited; the remote and branch are this project's own.
-            if user.delivery_mode != configuration::DeliveryConfig::default().mode {
-                tx.execute(
-                    "INSERT INTO project_delivery(project_id,mode) VALUES (?1,?2)",
-                    params![id, user.delivery_mode],
-                )?;
-            }
-            (id, name.to_owned())
+            register(&tx, &root, name)?
         };
         tx.commit()?;
         let service = Self {
@@ -620,6 +585,49 @@ impl Service {
         Ok(version != self.observed_data_version)
     }
 }
+
+/// Adds the folder `root` (canonical) as a project that starts with the user defaults; the
+/// caller owns the transaction. Returns the new project's id and name.
+fn register(tx: &Connection, root: &Path, name: Option<&str>) -> Result<(i64, String)> {
+    let default_name = root
+        .file_name()
+        .unwrap_or(root.as_os_str())
+        .to_string_lossy();
+    let name = name.unwrap_or(&default_name).trim();
+    require(!name.is_empty(), "Project name is required")?;
+    let taken: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM projects WHERE name = ?1)",
+        [name],
+        |r| r.get(0),
+    )?;
+    require(
+        !taken,
+        "Project name already exists; use --project-name with a unique name",
+    )?;
+    let user = user_defaults::read_user_defaults(tx)?;
+    tx.execute(
+        "INSERT INTO projects(name, root_path, created_at_ms, check_before_task, agent_network, initial_continuation, initial_planner_approval, profile_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, (SELECT default_profile_id FROM user_defaults WHERE id = 1))",
+        params![
+            name,
+            root.as_os_str().as_encoded_bytes(),
+            now_ms(),
+            user.check_before_task,
+            user.agent_network,
+            user.continuation.name(),
+            user.planner_approval.name()
+        ],
+    )?;
+    let id = tx.last_insert_rowid();
+    // Only the mode is inherited; the remote and branch are this project's own.
+    if user.delivery_mode != configuration::DeliveryConfig::default().mode {
+        tx.execute(
+            "INSERT INTO project_delivery(project_id,mode) VALUES (?1,?2)",
+            params![id, user.delivery_mode],
+        )?;
+    }
+    Ok((id, name.to_owned()))
+}
+
 pub(crate) fn require(condition: bool, message: &str) -> Result<()> {
     if condition {
         Ok(())
