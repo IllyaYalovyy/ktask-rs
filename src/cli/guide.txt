@@ -35,10 +35,13 @@ CONCEPTS
              blocks later tasks until it is retried, stopped or marked done.
   Version    Every task has a version that each change increments. Pass --if-version N,
              with N from show/list, so a change fails with exit 4 if the task moved on.
+  Report     An agent report (agent report) is an owner-started, read-only investigation of
+             the project. It is not a task and changes nothing. See AGENT REPORTS.
   Roles      execution, review, validation and remediation; every task needs all four.
              Each role uses its configured model; the same model may serve multiple roles.
              Review and validation still run independently with read-only access.
-             planning (project default only) is used by breakdown. Models are written
+             planning (project default only) is used by breakdown, operator (project default
+             only; unset, the remediation model) by agent reports. Models are written
              PROVIDER/MODEL: codex/gpt-6-sol, claude/sonnet, opencode/VENDOR/MODEL. A bare
              "claude" means claude/sonnet. Providers: codex, claude or opencode.
 
@@ -86,6 +89,21 @@ TYPICAL SESSION
   Foreground run (no --background) blocks until the queue is done or something needs
   the owner, then prints why it stopped. A detached runner logs to
   <state>/runner-<project id>.log (see --paths).
+
+AGENT REPORTS (what happened, why, and how to fix it)
+  ktask --json agent report                          # explain the project and current task
+  ktask --json agent report --task 12 'Why did it fail?'   # returns {"id":...} at once
+  ktask --json agent show 3     # state, progress, then the report; poll while "running"
+  ktask --json agent stop 3     # ends it, reaps its processes, keeps what it had found
+  ktask --json agent list       # newest first
+  ktask agent limits --time-limit-ms 900000 --cost-limit-usd 2
+  States: running, finished, failed, timed_out, over_budget, stopped. Only finished has
+  data.investigation.report (what_happened, cause, ktask_defect, references, fix_steps);
+  the others have reason and progress, and are not reports. One runs per project: a second
+  request exits 4 naming the running ID. It works whatever the runner does and changes no
+  file, task, attempt or setting; fix steps are proposals that nothing applies. The cost
+  limit ends Claude Code and OpenCode reports; Codex reports no cost, so only the time
+  limit bounds it.
 
 MCP SERVER (one registration serves every project of the instance)
   codex mcp add ktask -- /abs/ktask --actor codex mcp

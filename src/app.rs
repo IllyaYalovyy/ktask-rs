@@ -107,6 +107,14 @@ pub enum Action {
     Storage,
     BuildCache,
     Tools,
+    /// Start an agent report on this project, or read past ones.
+    Investigate,
+    /// Stop the running report on screen.
+    ReportStop,
+    /// Show the next older (positive) or newer report.
+    ReportStep(i32),
+    /// Time and cost limits of agent reports.
+    ReportLimits,
     /// Open the project selected on the Projects screen.
     OpenProject,
     /// Offer to add the folder the TUI started in as a project.
@@ -262,6 +270,7 @@ pub struct App {
     pub backend: Box<dyn Backend>,
     pub(crate) screen: Screen,
     pub(crate) hub: crate::projects::Hub,
+    pub(crate) reports: crate::report_ui::Reports,
 }
 
 /// Screens read and change view state through `App`; workspace commands go to `backend`.
@@ -287,6 +296,7 @@ impl App {
             backend: Box::new(backend),
             screen,
             hub: crate::projects::Hub::demo(),
+            reports: crate::report_ui::Reports::new(),
         }
     }
     #[cfg(test)]
@@ -297,6 +307,7 @@ impl App {
             backend: Box::new(backend),
             screen,
             hub: crate::projects::Hub::demo(),
+            reports: crate::report_ui::Reports::new(),
         }
     }
     /// `unregistered`: the folder the TUI started in when it is not a project. It then
@@ -317,6 +328,7 @@ impl App {
             backend: Box::new(backend),
             screen,
             hub,
+            reports: crate::report_ui::Reports::new(),
         })
     }
 }
@@ -637,6 +649,7 @@ impl App {
                 KeyCode::Char('e') => Some(Action::Edit),
                 KeyCode::Char('b') => Some(Action::Breakdown),
                 KeyCode::Char('t') => self.enabled(Action::Tools).then_some(Action::Tools),
+                KeyCode::Char('i') => Some(Action::Investigate),
                 KeyCode::Enter => Some(Action::Inspect),
                 KeyCode::End | KeyCode::Char('G') => Some(Action::Follow),
                 _ => {
@@ -684,6 +697,7 @@ impl App {
                     KeyCode::Char('b') => Action::BuildCache,
                     KeyCode::Char('t') => Action::Tools,
                     KeyCode::Char('g') => Action::Delivery,
+                    KeyCode::Char('i') => Action::ReportLimits,
                     KeyCode::Enter | KeyCode::Char('e') => return Some(Action::Configure),
                     _ => return None,
                 };
@@ -698,6 +712,7 @@ impl App {
                 KeyCode::Char('n') => Some(Action::RegisterProject),
                 KeyCode::Char('m') => Some(Action::MoveProject),
                 KeyCode::Char('D') => Some(Action::DeleteProject),
+                KeyCode::Char('i') => Some(Action::Investigate),
                 _ => {
                     self.navigate_projects(code);
                     None
@@ -733,6 +748,9 @@ impl App {
             return;
         }
         if self.inspect_key(key) {
+            return;
+        }
+        if self.report_key(key.code) {
             return;
         }
         if key.code == KeyCode::Esc || (readonly && matches!(key.code, KeyCode::Char('q' | '?'))) {
@@ -1004,6 +1022,7 @@ impl App {
     }
     pub fn tick(&mut self) -> bool {
         let changed = self.backend.tick(&mut self.screen);
-        self.tick_projects() || changed
+        let reports = self.tick_reports();
+        self.tick_projects() || changed || reports
     }
 }

@@ -1,4 +1,5 @@
 //! Terminal read models. Persistent projections are read-only; demo mutations stay in demo mode.
+pub mod report_text;
 pub mod task_text;
 
 use std::time::Instant;

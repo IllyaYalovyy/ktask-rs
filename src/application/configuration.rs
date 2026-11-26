@@ -39,14 +39,17 @@ fn valid_ref_component(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-'))
 }
 
-pub const MODEL_ROLES: [&str; 5] = [
+/// The roles a project, profile or user default can set a model for: planning (breakdown),
+/// the four task roles and the operator, which writes agent reports.
+pub const MODEL_ROLES: [&str; 6] = [
     "planning",
     "execution",
     "review",
     "validation",
     "remediation",
+    super::investigation::OPERATOR_ROLE,
 ];
-pub type Defaults = [Option<ModelConfig>; 5];
+pub type Defaults = [Option<ModelConfig>; 6];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectCheck {
@@ -206,9 +209,12 @@ impl Service {
         })
     }
     /// The models a task defined now starts with, resolved through the project override,
-    /// the selected profile and the user defaults.
+    /// the selected profile and the user defaults. A role no layer sets stays unset.
     pub fn project_defaults(&self) -> Result<Defaults> {
-        Ok(profiles::effective_models(&self.effective_models()?))
+        Ok(profiles::effective_models(&profiles::resolve(
+            self.db.connection(),
+            Some(self.project_id),
+        )?))
     }
     /// Only this project's own overrides; an unset role inherits.
     pub fn project_overrides(&self) -> Result<Defaults> {

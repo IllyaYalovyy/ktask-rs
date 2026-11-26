@@ -41,6 +41,11 @@ pub(super) fn execute(
     let ai = stream.is_some();
     let mut spec = with_evidence(spec, run, step, ctx);
     spec.scratch_limits = Some(service.scratch_limits(run.attempt)?);
+    // A check's timeout is for its command, which only the guardian can time exactly. An
+    // agent's stage limit stays here.
+    if !ai {
+        spec.time_limit_ms = timeout.map(i64::unsigned_abs);
+    }
     let mut worker = match Worker::spawn(&ctx.paths.executable, &spec) {
         Ok(worker) => worker,
         Err(error) => {
@@ -53,8 +58,7 @@ pub(super) fn execute(
     };
     let limit = Limit {
         started: Instant::now(),
-        timeout,
-        ai,
+        stage_ms: timeout.filter(|_| ai),
     };
     let mut sink = Sink::new(stream);
     let mut interrupted = None;
@@ -78,7 +82,12 @@ pub(super) fn execute(
             Received::Exited(code) => {
                 sink.finish(service, run)?;
                 ctx.persist_active_time(service, run)?;
-                return Ok(interrupted.map_or(Finish::Exited(code), Finish::Stopped));
+                let ended = if worker.timed_out() {
+                    Finish::Stopped(Outcome::CheckTimedOut)
+                } else {
+                    Finish::Exited(code)
+                };
+                return Ok(interrupted.map_or(ended, Finish::Stopped));
             }
             Received::Failed(message) => return Err(worker.failure(message)),
             Received::Disconnected => {
@@ -126,9 +135,8 @@ fn with_evidence(spec: &Invocation, run: &Run, step: &Step, ctx: &Context<'_>) -
 /// The limits a running worker is held to, besides Pause and Stop.
 struct Limit {
     started: Instant,
-    /// The stage limit of an AI turn, or a check's own timeout.
-    timeout: Option<i64>,
-    ai: bool,
+    /// The stage limit of an AI turn.
+    stage_ms: Option<i64>,
 }
 
 impl Limit {
@@ -144,21 +152,17 @@ impl Limit {
             return Ok(Some(outcome));
         }
         if let Some(limit) = self
-            .timeout
+            .stage_ms
             .filter(|&n| self.started.elapsed().as_millis() >= n as u128)
         {
-            return Ok(Some(if self.ai {
-                Outcome::Failed(
-                    "timeout",
-                    format!(
-                        "{}: the agent ran {} without returning a result; work and transcript retained",
-                        crate::application::stop::STAGE_LIMIT,
-                        crate::application::limits::label(Some(limit))
-                    ),
-                )
-            } else {
-                Outcome::CheckTimedOut
-            }));
+            return Ok(Some(Outcome::Failed(
+                "timeout",
+                format!(
+                    "{}: the agent ran {} without returning a result; work and transcript retained",
+                    crate::application::stop::STAGE_LIMIT,
+                    crate::application::limits::label(Some(limit))
+                ),
+            )));
         }
         Ok(None)
     }

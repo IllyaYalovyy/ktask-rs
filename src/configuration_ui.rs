@@ -833,7 +833,7 @@ impl StoredWorkspace {
         Ok(true)
     }
 }
-/// Provider/model and effort fields for the five roles.
+/// Provider/model and effort fields for every model role.
 pub(crate) fn model_fields(values: &Defaults) -> Vec<Field> {
     MODEL_ROLES
         .iter()

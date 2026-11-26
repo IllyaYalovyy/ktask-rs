@@ -72,7 +72,12 @@ impl Launch {
         provider: Provider,
         executable: &std::path::Path,
     ) -> Result<()> {
-        let command = format!("{} evidence", executable.display());
+        self.allow_command(provider, &format!("{} evidence *", executable.display()))
+    }
+
+    /// Adds one shell command pattern to a read-only turn's tool policy. Codex needs none:
+    /// its read-only sandbox bounds every command.
+    pub(super) fn allow_command(&mut self, provider: Provider, command: &str) -> Result<()> {
         match provider {
             Provider::Claude => {
                 let index = self
@@ -80,7 +85,7 @@ impl Launch {
                     .iter()
                     .position(|a| a == "--allowedTools")
                     .ok_or_else(|| Error::Conflict("Missing read-only tool policy".into()))?;
-                self.args.insert(index + 1, format!("Bash({command} *)"));
+                self.args.insert(index + 1, format!("Bash({command})"));
             }
             Provider::OpenCode => {
                 let (_, policy) = self
@@ -90,7 +95,7 @@ impl Launch {
                     .ok_or_else(|| Error::Conflict("Missing read-only tool policy".into()))?;
                 let mut value: Value =
                     serde_json::from_str(policy).map_err(|e| Error::Conflict(e.to_string()))?;
-                value["bash"][format!("{command} *")] = Value::String("allow".into());
+                value["bash"][command] = Value::String("allow".into());
                 *policy = value.to_string();
             }
             Provider::Codex => {}

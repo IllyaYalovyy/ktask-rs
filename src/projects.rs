@@ -436,6 +436,9 @@ impl App {
             controls.push(("m Move", Action::MoveProject));
             controls.push(("D Delete", Action::DeleteProject));
         }
+        if self.hub.selected_row().is_some() || !self.hub.stored() {
+            controls.push(("i Investigate", Action::Investigate));
+        }
         controls
     }
 }

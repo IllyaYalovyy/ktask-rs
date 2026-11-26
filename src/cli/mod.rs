@@ -1,3 +1,4 @@
+mod agent;
 mod args;
 mod category;
 mod evidence;
@@ -465,14 +466,18 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         }
         service
     };
-    service.set_actor(application::Actor {
+    let actor = application::Actor {
         kind: if matches!(cli.actor_kind, Some(args::ActorKind::Ai)) {
             application::ActorKind::Ai
         } else {
             application::ActorKind::Human
         },
         name: cli.actor.clone().unwrap_or_else(|| "owner".into()),
-    })?;
+    };
+    service.set_actor(actor.clone())?;
+    if let Command::Agent { action } = command {
+        return emit(agent::run(&mut service, &paths, actor, action)?, cli.json);
+    }
     if let Command::Tool { action } = command {
         use args::ToolAction;
         let reply = match action {

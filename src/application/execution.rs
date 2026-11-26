@@ -530,7 +530,7 @@ impl Service {
         new_projects: bool,
     ) -> Result<()> {
         require(
-            ROLES.contains(&role) || role == "planning",
+            configuration::MODEL_ROLES.contains(&role),
             "Unknown model role",
         )?;
         self.validate_model(role, model)?;

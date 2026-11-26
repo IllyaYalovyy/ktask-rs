@@ -86,6 +86,68 @@ pub enum CacheAction {
 }
 
 #[derive(Subcommand)]
+pub enum AgentAction {
+    /// Start an investigation in the background and print its ID at once.
+    ///
+    /// Without QUESTION it explains the current state of the project and of its current
+    /// task. One investigation runs per project; a second request exits 4 naming the
+    /// running one. Read the result with agent show ID.
+    Report {
+        /// Ask about this task; defaults to the current task.
+        #[arg(long, value_parser = positive)]
+        task: Option<i64>,
+        /// What to find out, as one quoted argument.
+        #[arg(value_parser = nonempty)]
+        question: Option<String>,
+    },
+    /// End a running investigation, reap its processes and keep what it had found.
+    Stop {
+        /// Investigation ID.
+        #[arg(value_parser = positive)]
+        id: i64,
+    },
+    /// List this project's investigations, newest first.
+    List,
+    /// Show one investigation: its report, or why it ended and what it had found.
+    Show {
+        /// Investigation ID.
+        #[arg(value_parser = positive)]
+        id: i64,
+    },
+    /// Show or change the time and cost one investigation may use (default 15 min, $2).
+    ///
+    /// The cost limit ends an investigation whose provider reports a higher cost: Claude
+    /// Code also enforces it itself, OpenCode reports cost per step, and Codex reports no
+    /// cost, so only the time limit bounds a Codex investigation. Investigations that
+    /// already run keep the limits they started with.
+    Limits {
+        /// Time one investigation may take, in milliseconds.
+        #[arg(long, value_parser = positive)]
+        time_limit_ms: Option<i64>,
+        /// Cost one investigation may use, in US dollars (0.01 to 1000).
+        #[arg(long, value_parser = usd)]
+        cost_limit_usd: Option<Usd>,
+        /// Reject a stale edit of the limits.
+        #[arg(long)]
+        if_version: Option<i64>,
+    },
+}
+
+/// US dollars as millionths.
+#[derive(Clone, Copy, Debug)]
+pub struct Usd(pub i64);
+
+fn usd(text: &str) -> Result<Usd, String> {
+    let value: f64 = text
+        .parse()
+        .map_err(|_| "expected an amount in US dollars, such as 2.50".to_owned())?;
+    if !value.is_finite() || !(0.01..=1000.0).contains(&value) {
+        return Err("expected an amount from 0.01 to 1000 US dollars".into());
+    }
+    Ok(Usd((value * 1_000_000.0).round() as i64))
+}
+
+#[derive(Subcommand)]
 pub enum ToolAction {
     /// Show this instance's registered generations and this project's bindings.
     List,
@@ -190,7 +252,7 @@ pub enum ProfileAction {
     },
     /// Create a profile from role models, or from this project's effective models.
     ///
-    /// Roles: planning, execution, review, validation, remediation. Models are written
+    /// Roles: planning, execution, review, validation, remediation, operator. Models are written
     /// ROLE=PROVIDER/MODEL with the providers and model names the provider CLI accepts; ktask
     /// checks the shape and effort spelling, never that a model exists. --from-project copies
     /// every effective model of this project, so a profile can capture the Claude/high
@@ -281,7 +343,7 @@ pub enum ProfileAction {
     },
     /// Clear this project's own model overrides so the roles inherit again.
     Inherit {
-        /// Roles to clear: planning, execution, review, validation or remediation.
+        /// Roles to clear: planning, execution, review, validation, remediation or operator.
         #[arg(value_parser = model_role)]
         roles: Vec<usize>,
         /// Clear every role.
@@ -351,7 +413,7 @@ pub enum Command {
     },
     /// Show or change the settings every new project starts with; --apply applies them here.
     ///
-    /// Saved once per user and instance, next to model-default --new-projects (the five role
+    /// Saved once per user and instance, next to model-default --new-projects (the role
     /// models and effort). Only a project registered later inherits them; an existing project
     /// keeps its settings until --apply, and tasks and attempts keep their pinned inputs.
     /// Output lists, per setting, this project's value and what the defaults would set; the
@@ -624,10 +686,11 @@ pub enum Command {
     Checks,
     /// Set the project's default model for a role; only tasks added later use it.
     ///
-    /// Roles: planning (used by breakdown), execution, review, validation, remediation.
+    /// Roles: planning (used by breakdown), execution, review, validation, remediation,
+    /// operator (agent reports; unset, it uses the remediation model).
     /// To change existing tasks, use edit --model ROLE=PROVIDER/MODEL.
     ModelDefault {
-        /// planning, execution, review, validation or remediation.
+        /// planning, execution, review, validation, remediation or operator.
         #[arg(value_parser=nonempty)]
         role: String,
         /// codex, claude or opencode.
@@ -713,6 +776,19 @@ pub enum Command {
     Current,
     /// Serve every project of this instance over MCP on standard input/output (--project pins one).
     Mcp,
+    /// Have a read-only agent investigate this project and report what happened.
+    ///
+    /// An agent report is started by the owner and changes nothing: no file, task, attempt
+    /// or setting. The agent runs on this host in a read-only sandbox with its own TMPDIR,
+    /// under the time and cost limits of agent limits, with the operator model (model-default
+    /// operator; unset, the remediation model). It reads ktask's records of the project, the
+    /// project folder and Git state, and may probe the host. It works whether the runner is
+    /// running, paused, failed or absent, and never touches a live attempt. The finished
+    /// report states what happened, the cause with its references and proposed fix steps.
+    Agent {
+        #[command(subcommand)]
+        action: AgentAction,
+    },
     /// Add a task at the end of the queue (or --before ID). Ready unless --approval draft.
     ///
     /// Models and effort come from the project defaults (model-default) unless --model or
@@ -1040,7 +1116,9 @@ fn model_role(s: &str) -> Result<usize, String> {
     crate::application::configuration::MODEL_ROLES
         .iter()
         .position(|r| *r == s)
-        .ok_or_else(|| "expected planning, execution, review, validation or remediation".into())
+        .ok_or_else(|| {
+            "expected planning, execution, review, validation, remediation or operator".into()
+        })
 }
 fn profile_model(s: &str) -> Result<ProfileModel, String> {
     let (r, value) = s.split_once('=').ok_or("expected ROLE=PROVIDER/MODEL")?;

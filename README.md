@@ -299,7 +299,8 @@ keep separate settings.
 ### 1. Global configuration
 
 **Role models.** A task needs `execution`, `review`, `validation` and `remediation` models;
-`planning` is used only by `breakdown`. `--provider` is `codex`, `claude` or `opencode`; `--model`
+`planning` is used only by `breakdown`, and `operator` only by [agent reports](#agent-reports)
+(unset, they use the remediation model). `--provider` is `codex`, `claude` or `opencode`; `--model`
 is optional for `claude` (Sonnet); `--effort` is optional. Any role may use any provider.
 
 ```sh
@@ -677,6 +678,50 @@ KTASK_LIVE_MODEL=gpt-6-sol KTASK_LIVE_JUDGE_MODEL=gpt-6-astra \
 This runs two consecutive tasks in a second disposable project with the real provider,
 checks their commits and distinct model roles, verifies the first project's queue is untouched,
 and inspects the completed queue through mouse and keyboard terminal interactions.
+
+## Agent reports
+
+When something went wrong, ask ktask to investigate instead of logging in and prompting an AI to
+read logs. An agent report is owner-started, separate from the automatic failure judge, and wider
+in scope. It changes nothing: no file, task, attempt or setting, and it never disturbs a live
+attempt or its workspace, whether the runner is running, paused, failed or absent.
+
+```sh
+ktask agent report                                  # explain the project and its current task
+ktask agent report --task 7 "Why did the check fail twice?"   # prints the report ID at once
+ktask agent show 3                                  # progress while running, then the report
+ktask agent stop 3                                  # end it and reap its processes
+ktask --json agent list
+ktask agent limits --time-limit-ms 600000 --cost-limit-usd 1.50
+ktask model-default operator --provider claude --model opus   # default: the remediation model
+```
+
+In the TUI press **i** (or click **[i Investigate]**) on Current Task, or on Projects for the
+selected project. Type an optional question and task ID and apply: progress appears live. Esc
+closes the view and the investigation goes on; **s** stops it. To read past reports choose one in
+the Report field; **[** and **]** page through them. Limits are in Configuration → **i Report
+limits**. `--demo` shows simulated reports and starts no agent.
+
+- **What it reads.** A snapshot of ktask's records for the project (tasks, revisions, attempts,
+  events, evidence, runner log, configuration, checks, delivery, dependency waits), the project
+  folder and its Git state, and read-only host probes (tool versions, disk space, processes).
+- **Sandbox.** It runs on the project's host in bubblewrap with its own scratch `TMPDIR`; the
+  project, its Git metadata, ktask's state and configuration, bound tools and other registered
+  projects are mounted read-only, and the provider's read-only tool policy applies. The rest of
+  the host is guarded by that policy, as for review and validation.
+- **Limits.** One investigation per project; a second is refused naming the running one. Default
+  15 minutes and 2 USD. The time limit applies to every provider. The cost limit ends a Claude
+  Code (`--max-budget-usd`) or OpenCode report; **Codex reports no cost**, so only the time limit
+  bounds a Codex investigation, and the record says so.
+- **The report.** What happened; then the cause, with the events, attempts, evidence and log lines
+  that show it (a cited event, attempt or step that does not exist is marked); then proposed fix
+  steps, each a ktask action, configuration change, repository change, host change or owner-only
+  decision. When the cause is a defect in ktask itself the report says so, and steps that cannot
+  repair it are marked as workarounds. Nothing is applied.
+- **Records.** SQLite keeps question, requester, model, progress, token usage and cost, and
+  deletes them with their project. One that failed, timed out, passed its cost limit or was
+  stopped is recorded as such with what it had found, never as a finished report.
+  `ktask shutdown` stops running investigations. Remote access is not part of this command yet.
 
 ## Task CLI
 

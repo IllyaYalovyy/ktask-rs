@@ -241,6 +241,12 @@ erDiagram
     projects ||--o| project_retention : "project_id"
     projects ||--o| project_storage_limits : "project_id"
     projects ||--o{ evidence_pins : "project_id"
+    projects ||--o{ investigations : "project_id"
+    tasks o|--o{ investigations : "task_id, project_id"
+    investigations ||--o{ investigation_progress : "investigation_id"
+    investigations ||--o{ investigation_references : "investigation_id"
+    investigations ||--o{ investigation_fix_steps : "investigation_id"
+    projects ||--o| project_investigation_limits : "project_id"
     projects ||--o| evidence_sweep : "project_id"
     projects ||--o| instance_runner_log_baselines : "project_id"
     projects ||--o| execution_sessions : "project_id"
@@ -634,7 +640,7 @@ The user-wide model defaults, the lowest layer of role resolution. Every project
 
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
-| `role` | TEXT | no | planning, execution, review, validation, remediation. |
+| `role` | TEXT | no | planning, execution, review, validation, remediation, operator. |
 | `provider` | TEXT | no | Provider/adapter identifier; never a credential. |
 | `model` | TEXT | no | Explicit model identifier. |
 | `effort` | TEXT | yes | Provider-supported effort; NULL means no effort setting. |
@@ -814,6 +820,103 @@ baselines, including across rotation and restart.
 | `known_files` | INTEGER | no | Last measured file and directory count among those fixed entries. |
 
 - PK `(id)`.
+
+### investigations
+
+One agent report: an owner-started, read-only investigation of a project. It is not a task and never changes one. A running row belongs to the investigator process holding the project's investigation lease; a row left running by a process that is gone is recorded as failed by the next command that reads or starts reports. Only a finished row has a report.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `id` | INTEGER | no | Stable row ID, shown to the owner. |
+| `project_id` | INTEGER | no | Investigated project. |
+| `task_id` | INTEGER | yes | Task the owner asked about; NULL looks at the project and its current task. |
+| `question` | TEXT | yes | The owner's question; NULL explains the current state. |
+| `requester_kind` | TEXT | no | human or ai. |
+| `requester` | TEXT | no | Actor name; attribution, not authentication. |
+| `provider` | TEXT | no | Operator model provider. |
+| `model` | TEXT | no | Operator model at the start. |
+| `effort` | TEXT | yes | Reasoning effort; NULL means none. |
+| `state` | TEXT | no | running, finished, failed, timed_out, over_budget or stopped. |
+| `time_limit_ms` | INTEGER | no | Time limit in force. |
+| `cost_limit_microusd` | INTEGER | no | Cost limit in force. |
+| `stop_requested_by` | TEXT | yes | Who asked it to stop. |
+| `started_at_ms` | INTEGER | no | Start time. |
+| `finished_at_ms` | INTEGER | yes | End time; NULL while running. |
+| `reason` | TEXT | yes | Why it ended without a report. |
+| `input_tokens` | INTEGER | yes | Uncached input tokens; NULL when unreported. |
+| `cache_read_tokens` | INTEGER | yes | Cached input read. |
+| `cache_write_tokens` | INTEGER | yes | Input written to cache. |
+| `output_tokens` | INTEGER | yes | Output tokens. |
+| `cost_microusd` | INTEGER | yes | Provider-reported cost; NULL when unreported. |
+| `what_happened` | TEXT | yes | Report: what happened. |
+| `cause` | TEXT | yes | Report: the cause. |
+| `ktask_defect` | TEXT | yes | Report: the defect, when the cause is in ktask itself. |
+
+- PK `(id)`.
+- FK `(project_id)` → `projects(id)`.
+- FK `(task_id, project_id)` → `tasks(id, project_id)`.
+- Index `ux_investigations_running`: one running investigation per project.
+- Index `ix_investigations_project`: `INDEX ix_investigations_project ON investigations(project_id, id)`.
+
+### investigation_progress
+
+What an investigation did and found while it ran, kept however it ended. At most 500 entries; tool activity stops at 400 so late findings are kept.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `investigation_id` | INTEGER | no | Owning investigation. |
+| `sequence` | INTEGER | no | Order, from 1. |
+| `recorded_at_ms` | INTEGER | no | Time recorded. |
+| `kind` | TEXT | no | status, finding (an agent message) or activity (tool use). |
+| `message` | TEXT | no | Bounded text. |
+
+- PK `(investigation_id, sequence)`.
+- FK `(investigation_id)` → `investigations(id)`.
+
+### investigation_references
+
+The events, attempts, steps, evidence, log lines, files and probes a finished report cites for its cause.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `investigation_id` | INTEGER | no | Owning investigation. |
+| `ordinal` | INTEGER | no | Order, from 1. |
+| `kind` | TEXT | no | event, attempt, step, evidence, log, file or command. |
+| `target` | TEXT | no | What is cited. |
+| `detail` | TEXT | no | What it shows. |
+| `verified` | INTEGER | yes | For event, attempt and step: whether it exists in the project; NULL not checked. |
+
+- PK `(investigation_id, ordinal)`.
+- FK `(investigation_id)` → `investigations(id)`.
+
+### investigation_fix_steps
+
+The proposed fix of a finished report, in order. ktask applies none of it.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `investigation_id` | INTEGER | no | Owning investigation. |
+| `ordinal` | INTEGER | no | Order, from 1. |
+| `class` | TEXT | no | ktask_action, configuration, repository, host or owner. |
+| `action` | TEXT | no | The proposed step. |
+| `workaround` | INTEGER | no | 1 when it gets around the problem without repairing it. |
+
+- PK `(investigation_id, ordinal)`.
+- FK `(investigation_id)` → `investigations(id)`.
+
+### project_investigation_limits
+
+Time and cost one agent report of a project may use. A missing row means 15 minutes and 2 USD.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `project_id` | INTEGER | no | Owning project. |
+| `row_version` | INTEGER | no | Guards concurrent edits. |
+| `time_limit_ms` | INTEGER | no | From 1 second to 24 hours. |
+| `cost_limit_microusd` | INTEGER | no | From 0.01 to 1000 USD. |
+
+- PK `(project_id)`.
+- FK `(project_id)` → `projects(id)`.
 
 ### lens_review_findings
 
@@ -1087,7 +1190,7 @@ The roles one profile sets. A role without a row inherits the user defaults.
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
 | `profile_id` | INTEGER | no | Owning profile; deleting a profile deletes its roles first. |
-| `role` | TEXT | no | planning, execution, review, validation, remediation. |
+| `role` | TEXT | no | planning, execution, review, validation, remediation, operator. |
 | `provider` | TEXT | no | Provider/adapter identifier; never a credential. |
 | `model` | TEXT | no | Explicit model identifier, chosen by the owner. |
 | `effort` | TEXT | yes | Provider-supported effort; NULL means no effort setting. |
@@ -1116,7 +1219,7 @@ A project's own model overrides, the layer above its selected profile. A role wi
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
 | `project_id` | INTEGER | no | Owning project. |
-| `role` | TEXT | no | planning, execution, review, validation, remediation. |
+| `role` | TEXT | no | planning, execution, review, validation, remediation, operator. |
 | `provider` | TEXT | no | Provider/adapter identifier; never a credential. |
 | `model` | TEXT | no | Explicit model identifier. |
 | `effort` | TEXT | yes | Provider-supported effort; NULL means no effort setting, not an invented sentinel. |

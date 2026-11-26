@@ -31,6 +31,7 @@ mod profile_ui;
 mod projection;
 mod projects;
 mod readiness;
+mod report_ui;
 pub(crate) mod resource;
 pub mod runner;
 pub mod scratch;
@@ -95,6 +96,13 @@ pub fn launch(instance: instance::Instance) -> std::process::ExitCode {
                 std::process::ExitCode::FAILURE
             }
         };
+    }
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|a| a == "__investigate")
+    {
+        let project = std::env::args().nth(2).unwrap_or_default();
+        return runner::investigate::main(instance, &project);
     }
     if std::env::args_os()
         .nth(1)

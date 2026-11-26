@@ -92,6 +92,12 @@ impl App {
             Action::RegisterProject => {
                 self.view == View::Projects && self.hub.unregistered.is_some()
             }
+            Action::Investigate => {
+                // From a report, "b" returns to the form of the same project.
+                self.view == View::Current
+                    || self.view == View::Projects
+                        && (self.hub.selected.is_some() || !self.hub.stored())
+            }
             _ => true,
         }
     }
@@ -247,6 +253,10 @@ impl App {
             Action::RegisterProject => self.register_form(),
             Action::MoveProject => self.move_form(),
             Action::DeleteProject => self.delete_form(),
+            Action::Investigate => self.open_reports(),
+            Action::ReportStop => self.stop_report(),
+            Action::ReportStep(delta) => self.step_report(delta),
+            Action::ReportLimits => self.report_limits_form(),
             Action::PreviousAttempt | Action::NextAttempt => {
                 self.change_attempt(matches!(action, Action::NextAttempt))
             }
@@ -857,10 +867,24 @@ impl App {
         let Some(mut dialog) = self.dialog.take() else {
             return;
         };
+        if matches!(dialog.kind, DialogKind::Reports) {
+            // The form gives way to the report it started or chose.
+            match self.apply_reports(&dialog) {
+                Ok(view) => self.dialog = Some(view),
+                Err(error) => {
+                    dialog.error = error;
+                    self.dialog = Some(dialog);
+                }
+            }
+            return;
+        }
         let applied = match dialog.kind {
             DialogKind::RegisterProject => self.register_project(&dialog).map(|()| true),
             DialogKind::MoveProject => self.move_project(&dialog).map(|()| true),
             DialogKind::DeleteProject => self.delete_project(&dialog).map(|()| true),
+            DialogKind::ReportLimits(version) => {
+                self.apply_report_limits(&dialog, version).map(|()| true)
+            }
             _ => self.backend.apply(&mut self.screen, &mut dialog),
         };
         match applied {

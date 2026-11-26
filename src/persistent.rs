@@ -1014,10 +1014,13 @@ impl StoredWorkspace {
             DialogKind::Help
             | DialogKind::Stats
             | DialogKind::Events
-            // The Projects screen applies these: they act on projects, not on this one's tasks.
+            // The application applies these: they act on projects, not on this one's tasks.
             | DialogKind::RegisterProject
             | DialogKind::MoveProject
             | DialogKind::DeleteProject
+            | DialogKind::Reports
+            | DialogKind::Report { .. }
+            | DialogKind::ReportLimits(_)
             | DialogKind::Inspect { .. } => return Ok(true),
             DialogKind::Readiness
             | DialogKind::Config
@@ -1505,7 +1508,7 @@ impl Backend for StoredWorkspace {
         }
         let delivery = self.service.delivery_config().unwrap_or_default();
         format!(
-            "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup; b for build caches.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\nDelivery: {} via {}/{}\nDependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing. CLI require declares prerequisites before a task starts.\n\nDefaults apply to new tasks; existing revisions stay pinned.\nu User defaults: what new projects start with; preview and apply them here.\nf Profiles: named role models to reuse; select one here or as the new-project default.\nw Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art; override per project.\nL Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default selection.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
+            "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup; b for build caches.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\nDelivery: {} via {}/{}\nDependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing. CLI require declares prerequisites before a task starts.\n\nDefaults apply to new tasks; existing revisions stay pinned.\nu User defaults: what new projects start with; preview and apply them here.\nf Profiles: named role models to reuse; select one here or as the new-project default.\nw Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art; override per project.\nL Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default selection.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.\ni Report limits: time and cost of agent reports; their model is the operator role in m Defaults.",
             screen.project_name,
             if screen.mouse_enabled {
                 "Enabled"
@@ -1541,6 +1544,7 @@ impl Backend for StoredWorkspace {
             ("k Storage", Action::Storage),
             ("b Build cache", Action::BuildCache),
             ("t Tools", Action::Tools),
+            ("i Report limits", Action::ReportLimits),
             ("e Preferences", Action::Configure),
             ("Esc Back", Action::Back),
         ]

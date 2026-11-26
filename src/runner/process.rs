@@ -38,6 +38,10 @@ pub struct Invocation {
     pub unset_env: Vec<String>,
     #[serde(default)]
     pub scratch_limits: Option<(u64, u64)>,
+    /// How long the command itself may run. The guardian times it from its start to its
+    /// exit, so the guardian's own start-up and cleanup are never charged to it.
+    #[serde(default)]
+    pub time_limit_ms: Option<u64>,
     pub cwd: PathBuf,
     pub prompt: String,
     pub schema: Option<serde_json::Value>,
@@ -67,6 +71,7 @@ impl Invocation {
             env: Vec::new(),
             unset_env: Vec::new(),
             scratch_limits: None,
+            time_limit_ms: None,
             cwd,
             prompt: String::new(),
             schema: None,
@@ -198,6 +203,9 @@ pub enum Message {
     },
     Exit {
         code: i32,
+        /// The guardian stopped the command at its time limit.
+        #[serde(default)]
+        timed_out: bool,
     },
     Error(String),
     /// A storage limit stopped the worker; the scratch summary was taken before cleanup.
@@ -563,6 +571,10 @@ pub fn worker() -> Result<WorkerResult> {
         command.arg("--output-schema").arg(path);
     }
     let mut child = Group(command.spawn()?);
+    let deadline = spec
+        .time_limit_ms
+        .and_then(|limit| Instant::now().checked_add(Duration::from_millis(limit)));
+    let mut timed_out = false;
     let mut child_input = child.0.stdin.take().expect("piped stdin");
     let android_runtime_root = spec
         .env
@@ -622,6 +634,12 @@ pub fn worker() -> Result<WorkerResult> {
         {
             code = Some(status.code().unwrap_or(130));
             child.stop()?;
+        }
+        // After the exit check: a command that has already ended was in time.
+        if code.is_none() && deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            timed_out = true;
+            child.stop()?;
+            code = Some(130);
         }
         if let Some(message) = pending_message.take()
             && quota.is_none()
@@ -704,6 +722,7 @@ pub fn worker() -> Result<WorkerResult> {
         delivered,
         Message::Exit {
             code: code.unwrap_or(130),
+            timed_out,
         },
         ResourceKind::Delivery,
     ))
@@ -941,6 +960,7 @@ pub struct Worker {
     reader: Option<thread::JoinHandle<()>>,
     /// The limit breach the guardian reported, for [`Self::failure`].
     breach: Option<Breach>,
+    timed_out: bool,
 }
 
 /// One step of a guardian's message stream, as [`Worker::receive`] reports it.
@@ -992,6 +1012,7 @@ impl Worker {
             pending: None,
             reader: Some(reader),
             breach: None,
+            timed_out: false,
         };
         // Retain stdin in Child as the lifeline; Drop closes it before wait.
         let sent = serde_json::to_writer(&mut input, spec)
@@ -1016,7 +1037,8 @@ impl Worker {
         Ok(match message {
             Ok(Message::Output { stream, bytes }) => Received::Output { stream, bytes },
             Ok(Message::Artifact { .. }) => Received::Artifact,
-            Ok(Message::Exit { code }) => {
+            Ok(Message::Exit { code, timed_out }) => {
+                self.timed_out = timed_out;
                 self.join()?;
                 Received::Exited(code)
             }
@@ -1032,6 +1054,12 @@ impl Worker {
                 Received::Disconnected
             }
         })
+    }
+
+    /// Whether the command the guardian reported as [`Received::Exited`] was stopped at its
+    /// [`Invocation::time_limit_ms`].
+    pub fn timed_out(&self) -> bool {
+        self.timed_out
     }
 
     /// Output already queued behind the last message, without waiting. Any other message

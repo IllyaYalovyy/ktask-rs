@@ -12846,6 +12846,107 @@ fn check_timeout_cannot_extend_twice_or_extend_the_task_deadline() -> Result {
 }
 
 #[test]
+fn a_check_that_finished_in_time_passes_however_long_ktask_takes_to_record_it() -> Result {
+    let f = Fixture::new()?;
+    f.provider("normal")?;
+    f.add("Verify within the limit")?;
+    // After the check exits, the guardian fingerprints the workspace to attribute its
+    // evidence. A slow clean filter holds that up for longer than the check's whole limit.
+    let git = |args: &[&str]| -> Result {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&f.root)
+            .args(args)
+            .output()?;
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        Ok(())
+    };
+    fs::write(f.root.join("slow.txt"), "tracked\n")?;
+    fs::write(
+        f.root.join(".git/info/attributes"),
+        "slow.txt filter=slow\n",
+    )?;
+    git(&["add", "-f", "slow.txt"])?;
+    git(&["commit", "-qm", "slow file"])?;
+    git(&[
+        "config",
+        "filter.slow.clean",
+        "if [ -f \"$HOME/slow-git\" ]; then touch \"$HOME/filter-ran\"; sleep 3; fi; cat",
+    ])?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        "touch \"$HOME/slow-git\" slow.txt",
+        "--timeout-ms",
+        "2000",
+    ])?;
+    let output = f.process().args(["run", "--one"]).output()?;
+    assert!(output.status.success(), "{output:?}");
+    assert!(f.scratch.path().join("filter-ran").exists());
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(
+        task["status"],
+        "succeeded",
+        "{} {}",
+        String::from_utf8_lossy(&output.stdout),
+        task["attempts"][0]["logs"]
+    );
+    let timeouts: i64 =
+        f.db()?
+            .connection()
+            .query_row("SELECT count(*) FROM check_timeouts", [], |r| r.get(0))?;
+    assert_eq!(timeouts, 0);
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn a_guardian_times_its_command_from_the_commands_own_start() -> Result {
+    let f = Fixture::new()?;
+    let worker_lock = f.root.join(".git/ktask-worker.lock");
+    for (command, limit_ms, timed_out) in [("true", 2000, false), ("sleep 30", 200, true)] {
+        // A status check's shared lock keeps the guardian from starting for longer than
+        // either limit.
+        let status_check = fs::File::create(&worker_lock)?;
+        status_check.lock_shared()?;
+        let spec = serde_json::json!({
+            "executable": "/bin/sh",
+            "args": ["-c", command],
+            "time_limit_ms": limit_ms,
+            "cwd": f.root,
+            "prompt": "",
+            "schema": null,
+            "scratch_root": f.scratch.path().join("timed-scratch"),
+            "worker_lock": worker_lock,
+            "callback": null,
+        });
+        let mut child = f
+            .process()
+            .arg("__worker")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+        let input = child.stdin.as_mut().ok_or("guardian stdin")?;
+        serde_json::to_writer(&mut *input, &spec)?;
+        std::io::Write::write_all(input, b"\n")?;
+        thread::sleep(Duration::from_millis(2500));
+        status_check.unlock()?;
+        // Its stdin stays open while it runs: closing it would stop the command.
+        let mut reply = String::new();
+        std::io::BufRead::read_line(
+            &mut std::io::BufReader::new(child.stdout.take().ok_or("guardian stdout")?),
+            &mut reply,
+        )?;
+        assert!(child.wait()?.success());
+        let reply: Value = serde_json::from_str(&reply)?;
+        assert_eq!(reply["Exit"]["timed_out"], timed_out, "{command}: {reply}");
+    }
+    f.guardian_finished()?;
+    Ok(())
+}
+
+#[test]
 fn check_timeout_resume_archives_retained_output_before_any_check_rerun() -> Result {
     let f = Fixture::new()?;
     f.provider("check-timeout")?;

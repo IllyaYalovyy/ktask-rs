@@ -300,7 +300,7 @@ fn real_configuration_forms_mouse_keyboard_restart_and_validation() -> Result {
                 t.send("\t")?;
             }
             t.send("high")?;
-            if !mouse && i < 4 {
+            if !mouse && i + 1 < MODEL_ROLES.len() {
                 t.send("\t")?;
             }
             let (model, effort) = (format!("codex/{role}"), format!("{role} effort"));
@@ -601,7 +601,8 @@ fn a_new_project_is_set_up_from_readiness_and_later_projects_start_with_its_defa
             t.screen(&label, |s| field(s, &label).contains(model))?;
         }
         // Clicking a choice's label cycles it; the keyboard moves there and presses Space.
-        activate(&mut t, mouse, "\t\t ", "New projects")?;
+        // Past the remediation effort and both operator fields.
+        activate(&mut t, mouse, "\t\t\t\t ", "New projects")?;
         screen(&t, "< Start with these >")?;
         apply(&mut t, mouse)?;
         let saved = at(&project)?.project_defaults()?;
@@ -691,8 +692,8 @@ fn new_projects_inherit_user_defaults_and_existing_ones_change_only_when_applied
         (early_prefs.continuation, early_prefs.planner_approval),
         (Continuation::Queue, PlannerApproval::Automatic)
     );
-    // One save sets every reusable setting and all five claude/high models.
-    let models: [Option<ModelConfig>; 5] = std::array::from_fn(|_| claude("opus"));
+    // One save sets every reusable setting and every role's claude/high model.
+    let models: Defaults = std::array::from_fn(|_| claude("opus"));
     let expected = early.user_defaults()?;
     let value = user_values(&expected);
     let saved = early.save_new_project_setup(&expected, &value, &models)?;
@@ -875,13 +876,7 @@ fn real_user_defaults_form_saves_previews_and_applies_with_keyboard_and_mouse() 
             Ok(dfield(&t.current_screen(), label).to_owned())
         };
         if mouse {
-            for role in [
-                "planning",
-                "execution",
-                "review",
-                "validation",
-                "remediation",
-            ] {
+            for role in MODEL_ROLES {
                 t.click(&format!("{role} provider/model"))?;
                 t.send("\x01claude/opus")?;
                 t.click(&format!("{role} effort"))?;
@@ -896,7 +891,7 @@ fn real_user_defaults_form_saves_previews_and_applies_with_keyboard_and_mouse() 
             t.click_after("Mode", "< Local >")?;
             t.click_after("After saving", "< Only save >")?;
         } else {
-            for _ in 0..5 {
+            for _ in MODEL_ROLES {
                 t.send("\x01claude/opus\t\x01high\t")?;
             }
             t.send(" \t \t\x0145000\t \t \t \t ")?; // network, baseline, timeout, run, planner, delivery
@@ -1136,7 +1131,7 @@ fn stale_user_defaults_never_overwrite_newer_models_from_any_writer() -> Result 
         ),
         (
             "project models: start with these",
-            |s, v| s.merge_new_project_defaults(&[None, v[1].clone(), None, None, None]),
+            |s, v| s.merge_new_project_defaults(&[None, v[1].clone(), None, None, None, None]),
             {
                 let mut values = effort(2, "low");
                 values[1] = claude("sonnet");
@@ -1268,7 +1263,7 @@ fn real_stale_user_defaults_form_keeps_a_newer_model_with_keyboard_and_mouse() -
             if mouse {
                 t.click("Timeout (ms)")?;
             } else {
-                t.send(&"\t".repeat(12))?;
+                t.send(&"\t".repeat(14))?;
             }
             t.send(&format!("\x01{value}"))?;
             t.screen("timeout edited", |s| {

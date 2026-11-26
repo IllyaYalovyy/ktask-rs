@@ -829,6 +829,9 @@ impl Backend for DemoWorkspace {
             | DialogKind::RegisterProject
             | DialogKind::MoveProject
             | DialogKind::DeleteProject
+            | DialogKind::Reports
+            | DialogKind::Report { .. }
+            | DialogKind::ReportLimits(_)
             | DialogKind::Inspect { .. } => {}
             DialogKind::BreakdownPending | DialogKind::BreakdownReview { .. } => {
                 return Err("Persistent proposal is unavailable in demo mode".into());
@@ -1019,6 +1022,7 @@ impl Backend for DemoWorkspace {
     fn config_controls(&self) -> Vec<(&'static str, Action)> {
         vec![
             ("e Configure", Action::Configure),
+            ("i Report limits", Action::ReportLimits),
             ("Esc Back", Action::Back),
             ("S Stats", Action::Stats),
         ]

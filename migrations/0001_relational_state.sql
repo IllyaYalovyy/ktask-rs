@@ -13,7 +13,7 @@ CREATE TABLE model_profiles (
 
 CREATE TABLE model_profile_roles (
     profile_id INTEGER NOT NULL REFERENCES model_profiles(id),
-    role TEXT NOT NULL CHECK (role IN ('planning', 'execution', 'review', 'validation', 'remediation')),
+    role TEXT NOT NULL CHECK (role IN ('planning', 'execution', 'review', 'validation', 'remediation', 'operator')),
     provider TEXT NOT NULL CHECK (length(trim(provider)) > 0),
     model TEXT NOT NULL CHECK (length(trim(model)) > 0),
     effort TEXT CHECK (length(trim(effort)) > 0),
@@ -130,7 +130,7 @@ CREATE TABLE pending_controls (
 -- never followed through a mutable reference.
 CREATE TABLE project_models (
     project_id INTEGER NOT NULL REFERENCES projects(id),
-    role TEXT NOT NULL CHECK (role IN ('planning', 'execution', 'review', 'validation', 'remediation')),
+    role TEXT NOT NULL CHECK (role IN ('planning', 'execution', 'review', 'validation', 'remediation', 'operator')),
     provider TEXT NOT NULL CHECK (length(trim(provider)) > 0),
     model TEXT NOT NULL CHECK (length(trim(model)) > 0),
     effort TEXT CHECK (length(trim(effort)) > 0),
@@ -188,7 +188,7 @@ CREATE TABLE project_lens_defaults (
 
 -- The user-wide model defaults, the lowest layer every project inherits.
 CREATE TABLE default_models (
-    role TEXT PRIMARY KEY CHECK (role IN ('planning', 'execution', 'review', 'validation', 'remediation')),
+    role TEXT PRIMARY KEY CHECK (role IN ('planning', 'execution', 'review', 'validation', 'remediation', 'operator')),
     provider TEXT NOT NULL CHECK (length(trim(provider)) > 0),
     model TEXT NOT NULL CHECK (length(trim(model)) > 0),
     effort TEXT CHECK (length(trim(effort)) > 0)
@@ -863,6 +863,90 @@ CREATE TRIGGER evidence_sweep_policy_changed AFTER UPDATE OF days,version ON pro
 BEGIN
     UPDATE evidence_sweep SET dirty=1 WHERE project_id=NEW.project_id;
 END;
+
+-- Owner-started, read-only investigations of one project ("agent reports"). They are not
+-- tasks: nothing about a task, revision or attempt ever changes because of one. A running
+-- row is owned by the investigator process holding the project's investigation lease.
+CREATE TABLE investigations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    -- The task the owner pointed at; NULL looks at the project and its current task.
+    task_id INTEGER,
+    question TEXT CHECK (question IS NULL OR length(trim(question)) > 0),
+    requester_kind TEXT NOT NULL CHECK (requester_kind IN ('human', 'ai')),
+    requester TEXT NOT NULL CHECK (length(trim(requester)) > 0),
+    provider TEXT NOT NULL CHECK (length(trim(provider)) > 0),
+    model TEXT NOT NULL CHECK (length(trim(model)) > 0),
+    effort TEXT CHECK (length(trim(effort)) > 0),
+    state TEXT NOT NULL CHECK (state IN ('running', 'finished', 'failed', 'timed_out', 'over_budget', 'stopped')),
+    -- The limits in force when it started.
+    time_limit_ms INTEGER NOT NULL CHECK (time_limit_ms > 0),
+    cost_limit_microusd INTEGER NOT NULL CHECK (cost_limit_microusd > 0),
+    stop_requested_by TEXT CHECK (length(trim(stop_requested_by)) > 0),
+    started_at_ms INTEGER NOT NULL CHECK (started_at_ms >= 0),
+    finished_at_ms INTEGER CHECK (finished_at_ms >= started_at_ms),
+    -- Why it ended without a report.
+    reason TEXT CHECK (length(trim(reason)) > 0),
+    -- Uncached input, as for model_calls. NULL means the provider reported nothing.
+    input_tokens INTEGER CHECK (input_tokens >= 0),
+    cache_read_tokens INTEGER CHECK (cache_read_tokens >= 0),
+    cache_write_tokens INTEGER CHECK (cache_write_tokens >= 0),
+    output_tokens INTEGER CHECK (output_tokens >= 0),
+    cost_microusd INTEGER CHECK (cost_microusd >= 0),
+    -- The report; only a finished investigation has one.
+    what_happened TEXT CHECK (length(trim(what_happened)) > 0),
+    cause TEXT CHECK (length(trim(cause)) > 0),
+    ktask_defect TEXT CHECK (length(trim(ktask_defect)) > 0),
+    FOREIGN KEY (task_id, project_id) REFERENCES tasks(id, project_id),
+    CHECK ((state = 'running') = (finished_at_ms IS NULL)),
+    CHECK ((state = 'finished') = (what_happened IS NOT NULL)),
+    CHECK ((state = 'finished') = (cause IS NOT NULL)),
+    CHECK (state = 'finished' OR ktask_defect IS NULL),
+    CHECK ((state IN ('running', 'finished')) = (reason IS NULL))
+) STRICT;
+CREATE UNIQUE INDEX ux_investigations_running ON investigations(project_id) WHERE state = 'running';
+CREATE INDEX ix_investigations_project ON investigations(project_id, id);
+
+-- What an investigation did and found while it ran; kept however it ended.
+CREATE TABLE investigation_progress (
+    investigation_id INTEGER NOT NULL REFERENCES investigations(id),
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    recorded_at_ms INTEGER NOT NULL CHECK (recorded_at_ms >= 0),
+    kind TEXT NOT NULL CHECK (kind IN ('status', 'finding', 'activity')),
+    message TEXT NOT NULL CHECK (length(trim(message)) > 0),
+    PRIMARY KEY (investigation_id, sequence)
+) WITHOUT ROWID, STRICT;
+
+-- The records, evidence and log lines a finished report cites for its cause.
+CREATE TABLE investigation_references (
+    investigation_id INTEGER NOT NULL REFERENCES investigations(id),
+    ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+    kind TEXT NOT NULL CHECK (kind IN ('event', 'attempt', 'step', 'evidence', 'log', 'file', 'command')),
+    target TEXT NOT NULL CHECK (length(trim(target)) > 0),
+    detail TEXT NOT NULL CHECK (length(trim(detail)) > 0),
+    -- Whether the cited event, attempt or step exists in the project; NULL: not checked.
+    verified INTEGER CHECK (verified IN (0, 1)),
+    PRIMARY KEY (investigation_id, ordinal)
+) WITHOUT ROWID, STRICT;
+
+-- The proposed fix of a finished report, in order. Nothing here is ever applied by ktask.
+CREATE TABLE investigation_fix_steps (
+    investigation_id INTEGER NOT NULL REFERENCES investigations(id),
+    ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+    class TEXT NOT NULL CHECK (class IN ('ktask_action', 'configuration', 'repository', 'host', 'owner')),
+    action TEXT NOT NULL CHECK (length(trim(action)) > 0),
+    -- A step that gets around a problem without repairing it.
+    workaround INTEGER NOT NULL CHECK (workaround IN (0, 1)),
+    PRIMARY KEY (investigation_id, ordinal)
+) WITHOUT ROWID, STRICT;
+
+-- Time and cost one investigation of this project may use. A missing row means the defaults.
+CREATE TABLE project_investigation_limits (
+    project_id INTEGER PRIMARY KEY REFERENCES projects(id),
+    row_version INTEGER NOT NULL CHECK (row_version > 0),
+    time_limit_ms INTEGER NOT NULL CHECK (time_limit_ms BETWEEN 1000 AND 86400000),
+    cost_limit_microusd INTEGER NOT NULL CHECK (cost_limit_microusd BETWEEN 10000 AND 1000000000)
+) STRICT;
 
 CREATE INDEX ix_tasks_history ON tasks(project_id, closed_at_ms DESC, id DESC);
 CREATE INDEX ix_tasks_origin ON tasks(origin_task_id, order_key) WHERE origin_task_id IS NOT NULL;

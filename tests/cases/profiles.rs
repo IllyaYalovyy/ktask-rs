@@ -76,7 +76,7 @@ fn layers_resolve_in_documented_order_and_clearing_an_override_inherits_again() 
     let user = service.user_defaults()?;
     let user_models = all("codex", "user-model", Some("low"));
     service.save_new_project_setup(&user, &user, &user_models)?;
-    assert_eq!(sources(&service)?, ["user defaults"; 5]);
+    assert_eq!(sources(&service)?, ["user defaults"; 6]);
 
     // The Anthropic profile captures what the project uses now, Claude with high effort.
     service.save_project_overrides(
@@ -119,7 +119,7 @@ fn layers_resolve_in_documented_order_and_clearing_an_override_inherits_again() 
     // Another selection and no selection change the effective values immediately.
     service.select_profile(Some("Anthropic"))?;
     assert_eq!(service.project_defaults()?, anthropic.models);
-    assert_eq!(sources(&service)?, ["profile Anthropic"; 5]);
+    assert_eq!(sources(&service)?, ["profile Anthropic"; 6]);
     service.select_profile(None)?;
     assert_eq!(service.project_defaults()?, user_models);
     assert_eq!(openai.version, 1);
@@ -150,7 +150,7 @@ fn a_new_project_selects_the_default_profile_and_inherits_without_copying() -> R
         second.project_defaults()?,
         all("opencode", "vendor/qwen", None)
     );
-    assert_eq!(sources(&second)?, ["profile Qwen"; 5]);
+    assert_eq!(sources(&second)?, ["profile Qwen"; 6]);
     // Editing the profile reaches the inheriting project without any per-project repetition.
     let qwen = second.profile("Qwen")?.unwrap();
     second.save_profile(&qwen, "Qwen", &all("opencode", "vendor/qwen-2", None))?;
@@ -162,7 +162,10 @@ fn a_new_project_selects_the_default_profile_and_inherits_without_copying() -> R
         first.new_project_effective()?[1].model,
         model("opencode", "vendor/qwen-2", None)
     );
-    assert_eq!(first.project_defaults()?, [None, None, None, None, None]);
+    assert_eq!(
+        first.project_defaults()?,
+        [None, None, None, None, None, None]
+    );
 
     // Applying the user defaults makes an existing project select the default profile and
     // keep every model that no new project value supplies.
@@ -704,7 +707,7 @@ impl Flow {
                 .iter()
                 .all(Option::is_none)
         );
-        assert_eq!(sources(&self.service)?, ["profile Anthropic"; 5]);
+        assert_eq!(sources(&self.service)?, ["profile Anthropic"; 6]);
         Ok(())
     }
 
@@ -782,7 +785,7 @@ impl Flow {
         assert_eq!(self.service.selected_profile()?, None);
         assert_eq!(
             self.service.project_defaults()?,
-            [None, None, None, None, None]
+            [None, None, None, None, None, None]
         );
 
         self.open_list("Anthropic v1")?;

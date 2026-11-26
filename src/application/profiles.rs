@@ -31,6 +31,8 @@ pub enum Source {
     UserDefaults,
     Profile(String),
     Project,
+    /// The operator role, unset in every layer, runs the remediation model.
+    Remediation,
 }
 
 impl Source {
@@ -40,6 +42,7 @@ impl Source {
             Self::UserDefaults => "user defaults".into(),
             Self::Profile(name) => format!("profile {name}"),
             Self::Project => "project override".into(),
+            Self::Remediation => "remediation model".into(),
         }
     }
 }
@@ -221,6 +224,25 @@ pub(super) fn resolve(db: &Connection, project: Option<i64>) -> Result<Vec<Effec
         .collect())
 }
 
+/// What each role runs: an operator that no layer sets runs the remediation model. Only
+/// for reading; what the layers store comes from [`resolve`], so the fallback is never
+/// copied into a profile or project as a model of its own.
+fn running(mut resolved: Vec<Effective>) -> Vec<Effective> {
+    let remediation = resolved
+        .iter()
+        .find(|row| row.role == "remediation")
+        .and_then(|row| row.model.clone());
+    if let Some(operator) = resolved
+        .iter_mut()
+        .find(|row| row.role == super::investigation::OPERATOR_ROLE && row.model.is_none())
+        && remediation.is_some()
+    {
+        operator.model = remediation;
+        operator.source = Source::Remediation;
+    }
+    resolved
+}
+
 fn valid_name(name: &str) -> Result<&str> {
     let name = name.trim();
     require(!name.is_empty(), "Profile name is required")?;
@@ -286,12 +308,12 @@ impl Service {
 
     /// This project's models with their source layer, in [`MODEL_ROLES`] order.
     pub fn effective_models(&self) -> Result<Vec<Effective>> {
-        resolve(self.db.connection(), Some(self.project_id))
+        resolve(self.db.connection(), Some(self.project_id)).map(running)
     }
 
     /// What a project registered now would get.
     pub fn new_project_effective(&self) -> Result<Vec<Effective>> {
-        resolve(self.db.connection(), None)
+        resolve(self.db.connection(), None).map(running)
     }
 
     /// Creates a profile from the given role models, each checked like any model setting.

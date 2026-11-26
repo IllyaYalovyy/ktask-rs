@@ -22,6 +22,10 @@ fn hint(dialog: &Dialog, has_position: bool) -> &str {
         "Alt-Up/Down: position · Ctrl-S: apply · Esc: cancel"
     } else if matches!(dialog.kind, DialogKind::Inspect { .. }) {
         "[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t artifacts"
+    } else if matches!(dialog.kind, DialogKind::Report { running: true, .. }) {
+        "s stop · [ ] older/newer · b reports · Esc: close, it keeps running"
+    } else if matches!(dialog.kind, DialogKind::Report { .. }) {
+        "[ ] older/newer · b reports · Wheel / PgUp / PgDn: scroll · Esc: close"
     } else if dialog.read_only() {
         "Wheel / PgUp / PgDn: scroll · Esc: close"
     } else if matches!(dialog.kind, DialogKind::StorageConfirm(_)) {
@@ -177,6 +181,21 @@ fn controls(app: &App, dialog: &Dialog, has_position: bool) -> Vec<(&'static str
     }
     if matches!(dialog.kind, DialogKind::Readiness) {
         return readiness_controls(app);
+    }
+    if let DialogKind::Report { running, .. } = dialog.kind {
+        let mut controls = vec![("Copy", Action::Copy)];
+        if running {
+            controls.push(("s Stop", Action::ReportStop));
+        }
+        controls.extend([
+            ("Older", Action::ReportStep(1)),
+            ("Newer", Action::ReportStep(-1)),
+            ("b Reports", Action::Investigate),
+            ("Up", Action::Scroll(-8)),
+            ("Down", Action::Scroll(8)),
+            ("Close", Action::Cancel),
+        ]);
+        return controls;
     }
     let mut controls = if matches!(dialog.kind, DialogKind::BreakdownPending) {
         vec![("Cancel", Action::Cancel)]

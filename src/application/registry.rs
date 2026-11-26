@@ -3,7 +3,7 @@
 use super::{require, retention};
 use crate::{
     instance::Paths,
-    runner::registration,
+    runner::{investigate, registration},
     storage::{Database, Error, Result},
 };
 use rusqlite::{OptionalExtension, TransactionBehavior};
@@ -39,7 +39,15 @@ const BY_TASK: [&str; 7] = [
     "task_revisions",
     "task_lifecycle_events",
 ];
-const BY_PROJECT: [&str; 25] = [
+/// Rows that belong to an investigation and carry no project of their own.
+const BY_INVESTIGATION: [&str; 3] = [
+    "investigation_progress",
+    "investigation_references",
+    "investigation_fix_steps",
+];
+const BY_PROJECT: [&str; 27] = [
+    "investigations",
+    "project_investigation_limits",
     "pending_controls",
     "events",
     "model_calls",
@@ -94,9 +102,11 @@ fn named(db: &Database, id: i64) -> Result<(String, PathBuf)> {
         .ok_or_else(|| Error::Conflict(format!("Project {id} is not registered")))
 }
 
-/// Holds the project's runner and provisioning locks, so nothing starts meanwhile.
+/// Holds the project's runner, investigation and provisioning locks, so nothing starts
+/// meanwhile.
 struct Idle {
     _runner: registration::Claim,
+    _investigation: fs::File,
     _provision: Option<fs::File>,
 }
 
@@ -104,6 +114,11 @@ fn idle(db: &Database, paths: &Paths, id: i64, name: &str) -> Result<Idle> {
     let runner = registration::claim(paths, id)?.ok_or_else(|| {
         Error::Conflict(format!(
             "{name} has a live runner · pause it first (ktask pause)"
+        ))
+    })?;
+    let investigation = investigate::claim(paths, id)?.ok_or_else(|| {
+        Error::Conflict(format!(
+            "An agent report is being written for {name} · stop it first (ktask agent stop ID)"
         ))
     })?;
     let provision = match fs::File::open(provision_file(paths, id, "lock")) {
@@ -128,6 +143,7 @@ fn idle(db: &Database, paths: &Paths, id: i64, name: &str) -> Result<Idle> {
     )?;
     Ok(Idle {
         _runner: runner,
+        _investigation: investigation,
         _provision: provision,
     })
 }
@@ -220,6 +236,12 @@ pub fn remove(db: &mut Database, paths: &Paths, id: i64, confirm: &str) -> Resul
             [id],
         )?;
     }
+    for table in BY_INVESTIGATION {
+        tx.execute(
+            &format!("DELETE FROM {table} WHERE investigation_id IN (SELECT id FROM investigations WHERE project_id = ?1)"),
+            [id],
+        )?;
+    }
     for table in BY_PROJECT {
         tx.execute(&format!("DELETE FROM {table} WHERE project_id = ?1"), [id])?;
     }
@@ -291,7 +313,10 @@ fn remove_files(paths: &Paths, id: i64, attempts: &[i64]) -> Vec<String> {
         provision_file(paths, id, "lock"),
         paths.config.join(format!("project-{id}.json")),
         paths.cache.join("project-runtime").join(id.to_string()),
-    ] {
+    ]
+    .into_iter()
+    .chain(investigate::files(paths, id))
+    {
         discard(&path, &mut leftovers);
     }
     leftovers

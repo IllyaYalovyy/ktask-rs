@@ -76,6 +76,15 @@ pub enum DialogKind {
     Help,
     Stats,
     Events,
+    /// Start an agent report or pick a past one.
+    Reports,
+    /// One agent report, followed while it runs.
+    Report {
+        id: i64,
+        running: bool,
+    },
+    /// The limits form, at the version it was read.
+    ReportLimits(i64),
     Inspect {
         id: usize,
         attempt: usize,
@@ -286,6 +295,7 @@ impl Dialog {
                 | DialogKind::Help
                 | DialogKind::Stats
                 | DialogKind::Events
+                | DialogKind::Report { .. }
                 | DialogKind::Inspect { .. }
         )
     }

@@ -226,7 +226,9 @@ fn init(
     let models: Vec<(&str, Option<ModelConfig>)> = app::configuration::MODEL_ROLES
         .iter()
         .copied()
-        .zip(service.project_defaults()?)
+        .zip(crate::application::profiles::effective_models(
+            &service.effective_models()?,
+        ))
         .collect();
     let network = service.agent_network()?;
     let verify_first = service.check_before_task()?;
@@ -713,6 +715,7 @@ pub(super) fn command(
         },
         Command::Add(input) => add(service, input),
         Command::Mcp => unreachable!("stdio MCP dispatch"),
+        Command::Agent { .. } => unreachable!("agent report dispatch"),
         Command::Evidence { .. } => unreachable!("read-only evidence dispatch"),
         Command::FollowUp { .. } | Command::DependencyRequest { .. } => {
             unreachable!("worker callback dispatch")

@@ -164,7 +164,7 @@ impl Service {
         self.save_defaults(expected, value, None)
     }
 
-    /// Saves the settings and the five role models in one transaction under the settings
+    /// Saves the settings and the role models in one transaction under the settings
     /// version, which every models writer also advances: a form opened before any of
     /// those writes is rejected and nothing changes.
     pub fn save_new_project_setup(

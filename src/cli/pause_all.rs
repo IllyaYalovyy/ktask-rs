@@ -2,7 +2,7 @@ use super::{Failure, Result, output};
 use crate::{
     application::Service,
     instance::{Instance, Paths, TuiShutdown},
-    runner::{control, registration, workspace::Workspace},
+    runner::{control, investigate, registration, workspace::Workspace},
     storage::Database,
 };
 use serde_json::json;
@@ -65,6 +65,37 @@ fn service(project: &Project<'_>) -> Result<Service> {
     let db = Database::open_existing(project.paths)?
         .ok_or_else(|| Failure::missing("Registered project database disappeared"))?;
     Ok(Service::registered(db, project.id, project.name.clone())?)
+}
+
+/// An upgrade also ends agent reports still being written; what it ended.
+fn end_investigations(
+    projects: &[Project<'_>],
+    errors: &mut Vec<Failure>,
+) -> Vec<serde_json::Value> {
+    let mut ended = Vec::new();
+    for project in projects {
+        match end_investigation(project) {
+            Ok(Some(id)) => ended.push(json!({
+                "instance": project.instance.name(),
+                "project": project.root.to_string_lossy(),
+                "id": id,
+            })),
+            Ok(None) => {}
+            Err(error) => errors.push(context(error, project.instance, Some(&project.root))),
+        }
+    }
+    ended
+}
+
+/// The ID of the report it ended, if one was being written.
+fn end_investigation(project: &Project<'_>) -> Result<Option<i64>> {
+    let mut service = service(project)?;
+    investigate::settle(&mut service, project.paths)?;
+    let Some(id) = service.running_investigation()? else {
+        return Ok(None);
+    };
+    investigate::stop(&mut service, project.paths, id)?;
+    Ok(Some(id))
 }
 
 fn request<'a>(project: &'a Project<'a>, mut service: Service, lease: File) -> Result<Target<'a>> {
@@ -195,6 +226,11 @@ pub(super) fn run(shutdown: bool) -> Result<output::Reply> {
             "id": target.task,
         }));
     }
+    let investigations = if shutdown {
+        end_investigations(&candidates, &mut errors)
+    } else {
+        Vec::new()
+    };
     if !errors.is_empty() {
         let message = errors
             .iter()
@@ -207,16 +243,22 @@ pub(super) fn run(shutdown: bool) -> Result<output::Reply> {
         });
     }
     let count = runners.len();
+    let ended = if investigations.is_empty() {
+        String::new()
+    } else {
+        format!(" Stopped {} agent report(s).", investigations.len())
+    };
     let text = match (shutdown, count) {
-        (true, _) => format!("Shutdown complete. Paused {count} runner(s).\n"),
+        (true, _) => format!("Shutdown complete. Paused {count} runner(s).{ended}\n"),
         (false, 0) => "Nothing is running\n".into(),
         (false, _) => format!("Paused {count} runner(s). Run resumes each project.\n"),
     };
     let action = if shutdown { "shutdown" } else { "paused" };
-    Ok(output::Reply {
-        data: json!({"action":action,"count":count,"runners":runners}),
-        text,
-    })
+    let mut data = json!({"action":action,"count":count,"runners":runners});
+    if !investigations.is_empty() {
+        data["investigations"] = json!(investigations);
+    }
+    Ok(output::Reply { data, text })
 }
 
 fn context(mut error: Failure, instance: Instance, root: Option<&Path>) -> Failure {
