@@ -455,12 +455,15 @@ impl Terminal {
     }
 
     pub fn selected_at(&self, col: usize, row: usize) -> bool {
+        self.background_at(col, row, (255, 210, 111))
+    }
+    pub fn background_at(&self, col: usize, row: usize, (r, g, b): (u8, u8, u8)) -> bool {
         self.parser
             .lock()
             .unwrap()
             .screen()
             .cell(row as u16, col as u16)
-            .is_some_and(|cell| cell.bgcolor() == vt100::Color::Rgb(255, 210, 111))
+            .is_some_and(|cell| cell.bgcolor() == vt100::Color::Rgb(r, g, b))
     }
     pub fn mouse_capture(&self) -> bool {
         self.parser.lock().unwrap().screen().mouse_protocol_mode() != vt100::MouseProtocolMode::None

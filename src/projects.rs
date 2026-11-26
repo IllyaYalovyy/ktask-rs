@@ -420,7 +420,7 @@ impl App {
         self.screen.reconcile();
         let name = self.project_name.clone();
         self.message(format!(
-            "Opened {name} · 6 Projects lists every project; runs continue in the background"
+            "Opened {name} · 0 Projects lists every project; runs continue in the background"
         ));
     }
 

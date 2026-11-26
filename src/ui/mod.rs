@@ -88,7 +88,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     );
     let mut x = tabs.x;
     for (n, view) in View::ALL.iter().enumerate() {
-        let label = format!(" {} {} ", n + 1, view.label());
+        let label = format!(" {n} {} ", view.label());
         let rect = Rect::new(x, tabs.y, label.len() as u16, 1);
         frame.render_widget(
             Paragraph::new(label).style(if app.view == *view {

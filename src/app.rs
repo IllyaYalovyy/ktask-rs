@@ -13,31 +13,32 @@ use std::{collections::BTreeMap, time::Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum View {
+    /// Every project of this instance; the other screens show the open one.
+    Projects,
     Current,
     Queue,
     History,
     Config,
     About,
-    /// Every project of this instance; the other screens show the open one.
-    Projects,
 }
 impl View {
+    /// Tab order; a screen's position is the digit key that opens it.
     pub const ALL: [Self; 6] = [
+        Self::Projects,
         Self::Current,
         Self::Queue,
         Self::History,
         Self::Config,
         Self::About,
-        Self::Projects,
     ];
     pub fn label(self) -> &'static str {
         match self {
+            Self::Projects => "Projects",
             Self::Current => "Current",
             Self::Queue => "Queue",
             Self::History => "History",
             Self::Config => "Config",
             Self::About => "About",
-            Self::Projects => "Projects",
         }
     }
 }
@@ -588,8 +589,8 @@ impl App {
         let action = match key.code {
             KeyCode::Char('q') => Some(Action::Quit),
             KeyCode::Char('?') => Some(Action::Help),
-            KeyCode::Char(ch @ '1'..='6') => {
-                Some(Action::View(View::ALL[(ch as u8 - b'1') as usize]))
+            KeyCode::Char(ch @ '0'..='5') => {
+                Some(Action::View(View::ALL[(ch as u8 - b'0') as usize]))
             }
             KeyCode::Tab | KeyCode::BackTab => {
                 let n = View::ALL.iter().position(|v| *v == self.view).unwrap_or(0);

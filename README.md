@@ -99,9 +99,9 @@ the next launch reclaims abandoned scratch directories; ownership locks protect 
 Tests use private homes and app roots under `$TMPDIR/ktask-test-scratch/` (system temporary
 directory when unset), cleaned on success or panic. The next test reclaims crash debris.
 
-The TUI opens **Current Task**, with separate **Queue**, **History**, **Configuration**,
-**About** and **Projects** screens. Normal startup opens real SQLite tasks for the current
-directory. **Projects** lists every project of the instance with its state, queue size and
+The TUI opens **Current Task**, with separate **Projects**, **Queue**, **History**,
+**Configuration** and **About** screens. Normal startup opens real SQLite tasks for the
+current directory. **Projects** lists every project of the instance with its state, queue size and
 current task; Enter opens one in the same terminal, and each project keeps its own queue,
 background runner and place on screen. Started in a directory that is not a project, while
 other projects exist, the TUI opens **Projects** and registers nothing until **n Add this
@@ -118,8 +118,9 @@ A new project starts empty; changes save immediately, including after a forced e
 The project name defaults to the directory name. For a new directory with a name already in
 use, launch with `--project-name UNIQUE_NAME`. Each instance retains its own database.
 
-Click tabs, rows, buttons, and form fields; use the wheel to scroll. `1`–`6` or `Tab`
-switches screens; `j/k`, arrows, `PgUp/PgDn`, and `Home/End` navigate. `?` shows shortcuts.
+Click tabs, rows, buttons, and form fields; use the wheel to scroll. `0`–`5` or `Tab`
+switches screens (`0` is **Projects**); `j/k`, arrows, `PgUp/PgDn`, and `Home/End`
+navigate. `?` shows shortcuts.
 
 **Current Task** leads with the situation: one line says what is happening and which action it
 calls for, and the action bar lists that action first. An open question from the worker gets its

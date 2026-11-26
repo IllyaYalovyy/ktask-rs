@@ -95,9 +95,9 @@ fn projects_screen_lists_live_states_and_switches_projects_by_keyboard_and_mouse
         t.screen("alpha queue selection", |s| s.contains("Queue · 4 / 110"))?;
 
         if mouse {
-            t.click("6 Projects")?;
+            t.click("0 Projects")?;
         } else {
-            t.send("6")?;
+            t.send("0")?;
         }
         let listed = t.screen("projects listed", |s| {
             s.contains("Projects · 4 registered · 0 running · 1 need you")
@@ -151,9 +151,9 @@ fn projects_screen_lists_live_states_and_switches_projects_by_keyboard_and_mouse
         println!("OPENED ANOTHER PROJECT mouse={mouse}\n{beta}");
 
         if mouse {
-            t.click("6 Projects")?;
+            t.click("0 Projects")?;
         } else {
-            t.send("6")?;
+            t.send("0")?;
         }
         t.screen("back on projects", |s| {
             row(s, "beta-lib").contains("* beta-lib")
@@ -249,7 +249,7 @@ fn starting_outside_a_project_opens_projects_and_adds_the_folder_only_on_request
             .collect();
         assert_eq!(names, ["alpha-app", "fresh-folder"]);
 
-        t.send("6")?;
+        t.send("0")?;
         let listed = t.screen("both listed", |s| {
             s.contains("Projects · 2 registered")
                 && row(s, "fresh-folder").contains("* fresh-folder")
@@ -351,6 +351,106 @@ fn projects_command_lists_every_project_without_registering_the_folder() -> Resu
     Ok(())
 }
 
+/// Every tab in order: its label, which is also its digit key, and text only its screen shows.
+const TABS: [(&str, &str); 6] = [
+    ("0 Projects", "Projects · 2 registered"),
+    ("1 Current", "Task brief"),
+    ("2 Queue", "Queue · 1 / 1"),
+    ("3 History", "History · 1 / 1"),
+    ("4 Config", "╭ Config "),
+    ("5 About", "╭ About "),
+];
+
+/// The tab bar names exactly the screens of `TABS` and highlights only `active`.
+fn assert_tab_bar(t: &Terminal, screen: &str, active: usize) {
+    let bar = screen.lines().nth(1).unwrap_or("");
+    assert_eq!(
+        bar.trim(),
+        TABS.map(|(label, _)| label).join("   "),
+        "{screen}"
+    );
+    for (n, (label, _)) in TABS.iter().enumerate() {
+        let column = bar[..bar.find(label).unwrap()].chars().count();
+        // The accent colour marks the active tab.
+        assert_eq!(
+            t.background_at(column, 1, (94, 218, 210)),
+            n == active,
+            "{label}\n{screen}"
+        );
+    }
+}
+
+#[test]
+fn projects_is_screen_zero_and_the_first_tab_by_keyboard_and_mouse() -> Result {
+    for (columns, rows) in [(110, 30), (70, 22)] {
+        for mouse in [false, true] {
+            let sandbox = support::sandbox()?;
+            let root = sandbox.path();
+            let mut alpha = project(root, "alpha-app")?;
+            let ids = alpha.create(
+                &[definition("Finished task"), definition("Waiting task")],
+                None,
+                true,
+            )?;
+            alpha.mark_done(
+                VersionedTask {
+                    id: ids[0],
+                    version: 1,
+                },
+                "fixture history",
+            )?;
+            project(root, "beta-lib")?;
+            let mut t = Terminal::open_project(DEV, root, &root.join("alpha-app"), columns, rows)?;
+            let started = t.screen("startup opens Current", |s| s.contains(TABS[1].1))?;
+            println!("{columns}x{rows} mouse={mouse} STARTUP\n{started}");
+            assert_tab_bar(&t, &started, 1);
+
+            for n in [0, 1, 2, 3, 4, 5, 0] {
+                let (label, marker) = TABS[n];
+                if mouse {
+                    t.click(label)?;
+                } else {
+                    t.send(&label[..1])?;
+                }
+                let shown = t.screen(label, |s| s.contains(marker))?;
+                println!("{columns}x{rows} mouse={mouse} {label}\n{shown}");
+                assert_tab_bar(&t, &shown, n);
+            }
+
+            if !mouse {
+                // Keys are handled in order, so had 6 opened any screen, the Tab or
+                // Shift-Tab after it would not reach this screen's neighbour.
+                for (key, order) in [("\t", [1, 2, 3, 4, 5, 0]), ("\x1b[Z", [5, 4, 3, 2, 1, 0])] {
+                    for n in order {
+                        let (label, marker) = TABS[n];
+                        t.send(&format!("6{key}"))?;
+                        let shown = t.screen(&format!("6 then {key:?} to {label}"), |s| {
+                            s.contains(marker)
+                        })?;
+                        assert_tab_bar(&t, &shown, n);
+                    }
+                }
+                t.send("6")?;
+                let ignored =
+                    t.still("6 on Projects changes nothing", |s| s.contains(TABS[0].1))?;
+                println!("{columns}x{rows} AFTER KEY 6\n{ignored}");
+                assert_tab_bar(&t, &ignored, 0);
+                t.send("?")?;
+                let help = t.screen("help names the screens", |s| s.contains("Keyboard help"))?;
+                println!("{columns}x{rows} HELP\n{help}");
+                assert!(
+                    help.contains("0 Projects  1 Current  2 Queue  3 History  4 Config  5 About")
+                );
+                t.send("\x1b")?;
+                t.screen("help closed", |s| !s.contains("Keyboard help"))?;
+            }
+            t.send("q")?;
+            t.finish()?;
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn projects_fit_the_smallest_terminal_and_the_simulator_lists_no_real_project() -> Result {
     let sandbox = support::sandbox()?;
@@ -359,7 +459,7 @@ fn projects_fit_the_smallest_terminal_and_the_simulator_lists_no_real_project() 
     project(root, "a-project-with-a-name-longer-than-its-column")?;
     let mut t = Terminal::open_project(DEV, root, &root.join("beta-lib"), 70, 22)?;
     t.screen("beta current", |s| s.contains("/ beta-lib"))?;
-    // Shift-Tab from the first screen wraps to the last one.
+    // Shift-Tab from Current reaches Projects, the first tab.
     t.send("\x1b[Z")?;
     let narrow = t.screen("projects at 70 x 22", |s| {
         s.contains("Projects · 5 registered") && row(s, "gamma-docs").contains("Idle")
@@ -376,7 +476,7 @@ fn projects_fit_the_smallest_terminal_and_the_simulator_lists_no_real_project() 
     t.wheel(false, column as u16, line as u16)?;
     t.screen("and back", |s| s.contains("Projects · 2 / 5"))?;
     t.send("\t")?;
-    t.screen("Tab wraps to Current", |s| {
+    t.screen("Tab returns to Current", |s| {
         s.contains("Current #221 · Needs approval") && s.contains("Pending revision")
     })?;
     t.send("q")?;
@@ -384,7 +484,7 @@ fn projects_fit_the_smallest_terminal_and_the_simulator_lists_no_real_project() 
 
     let mut demo = Terminal::open_at(DEV, root, 70, 22)?;
     demo.screen("demo", |s| s.contains("MOCK DATA"))?;
-    demo.click("6 Projects")?;
+    demo.click("0 Projects")?;
     let simulated = demo.screen("demo projects", |s| {
         s.contains("The simulator has one mock workspace")
     })?;
@@ -394,6 +494,10 @@ fn projects_fit_the_smallest_terminal_and_the_simulator_lists_no_real_project() 
     demo.send("1")?;
     demo.screen("demo current", |s| {
         !s.contains("The simulator has one mock workspace")
+    })?;
+    demo.send("0")?;
+    demo.screen("demo projects by key", |s| {
+        s.contains("The simulator has one mock workspace")
     })?;
     demo.send("q")?;
     demo.finish()?;
