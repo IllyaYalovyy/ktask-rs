@@ -115,6 +115,12 @@ pub enum Action {
     ReportStep(i32),
     /// Time and cost limits of agent reports.
     ReportLimits,
+    /// Prepare an agent fix of this project, or read past ones.
+    Fix,
+    /// Stop the running fix on screen.
+    FixStop,
+    /// Show the next older (positive) or newer fix.
+    FixStep(i32),
     /// Open the project selected on the Projects screen.
     OpenProject,
     /// Offer to add the folder the TUI started in as a project.
@@ -271,6 +277,7 @@ pub struct App {
     pub(crate) screen: Screen,
     pub(crate) hub: crate::projects::Hub,
     pub(crate) reports: crate::report_ui::Reports,
+    pub(crate) fixes: crate::fix_ui::Fixes,
 }
 
 /// Screens read and change view state through `App`; workspace commands go to `backend`.
@@ -297,6 +304,7 @@ impl App {
             screen,
             hub: crate::projects::Hub::demo(),
             reports: crate::report_ui::Reports::new(),
+            fixes: crate::fix_ui::Fixes::new(),
         }
     }
     #[cfg(test)]
@@ -308,6 +316,7 @@ impl App {
             screen,
             hub: crate::projects::Hub::demo(),
             reports: crate::report_ui::Reports::new(),
+            fixes: crate::fix_ui::Fixes::new(),
         }
     }
     /// `unregistered`: the folder the TUI started in when it is not a project. It then
@@ -329,6 +338,7 @@ impl App {
             screen,
             hub,
             reports: crate::report_ui::Reports::new(),
+            fixes: crate::fix_ui::Fixes::new(),
         })
     }
 }
@@ -650,6 +660,7 @@ impl App {
                 KeyCode::Char('b') => Some(Action::Breakdown),
                 KeyCode::Char('t') => self.enabled(Action::Tools).then_some(Action::Tools),
                 KeyCode::Char('i') => Some(Action::Investigate),
+                KeyCode::Char('f') => Some(Action::Fix),
                 KeyCode::Enter => Some(Action::Inspect),
                 KeyCode::End | KeyCode::Char('G') => Some(Action::Follow),
                 _ => {
@@ -713,6 +724,7 @@ impl App {
                 KeyCode::Char('m') => Some(Action::MoveProject),
                 KeyCode::Char('D') => Some(Action::DeleteProject),
                 KeyCode::Char('i') => Some(Action::Investigate),
+                KeyCode::Char('f') => Some(Action::Fix),
                 _ => {
                     self.navigate_projects(code);
                     None
@@ -750,7 +762,7 @@ impl App {
         if self.inspect_key(key) {
             return;
         }
-        if self.report_key(key.code) {
+        if self.report_key(key.code) || self.fix_key(key.code) {
             return;
         }
         if key.code == KeyCode::Esc || (readonly && matches!(key.code, KeyCode::Char('q' | '?'))) {
@@ -1023,6 +1035,7 @@ impl App {
     pub fn tick(&mut self) -> bool {
         let changed = self.backend.tick(&mut self.screen);
         let reports = self.tick_reports();
-        self.tick_projects() || changed || reports
+        let fixes = self.tick_fixes();
+        self.tick_projects() || changed || reports || fixes
     }
 }

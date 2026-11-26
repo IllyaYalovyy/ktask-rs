@@ -2,7 +2,7 @@
 use crate::application::investigation::{Investigation, InvestigationState, ProgressKind, Report};
 
 /// Agent and host text with every control character but newlines made visible.
-fn clean(text: &str) -> String {
+pub(super) fn clean(text: &str) -> String {
     text.trim()
         .chars()
         .flat_map(|c| match c {
@@ -14,7 +14,7 @@ fn clean(text: &str) -> String {
         .collect()
 }
 
-fn one_line(text: &str) -> String {
+pub(super) fn one_line(text: &str) -> String {
     clean(text).replace('\n', " ")
 }
 
@@ -44,7 +44,7 @@ pub fn summary(investigation: &Investigation, now_ms: i64) -> String {
     )
 }
 
-fn facts(investigation: &Investigation, now_ms: i64) -> String {
+pub(super) fn facts(investigation: &Investigation, now_ms: i64) -> String {
     let elapsed = investigation
         .finished_at_ms
         .unwrap_or(now_ms)
@@ -140,7 +140,7 @@ fn report_text(report: &Report) -> String {
     text
 }
 
-fn progress_text(investigation: &Investigation) -> String {
+pub(super) fn progress_text(investigation: &Investigation) -> String {
     investigation
         .progress
         .iter()

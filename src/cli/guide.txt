@@ -37,11 +37,13 @@ CONCEPTS
              with N from show/list, so a change fails with exit 4 if the task moved on.
   Report     An agent report (agent report) is an owner-started, read-only investigation of
              the project. It is not a task and changes nothing. See AGENT REPORTS.
+  Fix        An agent fix (agent fix) is an owner-started repair of the project that records
+             every change. See AGENT FIXES.
   Roles      execution, review, validation and remediation; every task needs all four.
              Each role uses its configured model; the same model may serve multiple roles.
              Review and validation still run independently with read-only access.
              planning (project default only) is used by breakdown, operator (project default
-             only; unset, the remediation model) by agent reports. Models are written
+             only; unset, the remediation model) by agent reports and fixes. Models are written
              PROVIDER/MODEL: codex/gpt-6-sol, claude/sonnet, opencode/VENDOR/MODEL. A bare
              "claude" means claude/sonnet. Providers: codex, claude or opencode.
 
@@ -104,6 +106,25 @@ AGENT REPORTS (what happened, why, and how to fix it)
   file, task, attempt or setting; fix steps are proposals that nothing applies. The cost
   limit ends Claude Code and OpenCode reports; Codex reports no cost, so only the time
   limit bounds it.
+
+AGENT FIXES (repair one project on request; only the owner starts it: no --actor-kind ai)
+  ktask --json agent fix --report 3                  # a finished report of this project
+  ktask --json agent fix 'Correct the build check' --resume   # returns {"id":...} at once
+  ktask --json agent fix --report 3 --dry-run        # data.plan: the steps; changes nothing
+  ktask --json agent show 4     # data.investigation (state) and data.fix (record)
+  ktask --json agent stop 4     # ends it and reaps its processes; the runner stays paused
+  ktask agent limits --fix-time-limit-ms 1800000 --fix-cost-limit-usd 5
+  Exit 4: another fix or report runs, or the report is unfinished, another project's or not
+  a report. The fix pauses the runner and waits for it, stashes work no task owns, repeats
+  checks, requirements and the agent's named commands before and after, and records
+  data.fix.steps, changes, probes and verification. States: running, finished (verified;
+  only this is Done), unverified, failed, timed_out, over_budget, stopped. --resume
+  continues the queue only when finished.
+  Scope: ktask commands for this project, the project folder and Git without discarding
+  work, and the account's setup. Never: project delete or move, other projects, shutdown,
+  done, cancel, supersede, approval unless the instruction says "approve #ID", settings
+  shared between projects, privileges, product code (added as tasks). Refused steps are
+  listed with status refused. Its changes are recorded as actor "agent fix #N" (AI).
 
 MCP SERVER (one registration serves every project of the instance)
   codex mcp add ktask -- /abs/ktask --actor codex mcp

@@ -92,7 +92,7 @@ impl App {
             Action::RegisterProject => {
                 self.view == View::Projects && self.hub.unregistered.is_some()
             }
-            Action::Investigate => {
+            Action::Investigate | Action::Fix => {
                 // From a report, "b" returns to the form of the same project.
                 self.view == View::Current
                     || self.view == View::Projects
@@ -257,6 +257,9 @@ impl App {
             Action::ReportStop => self.stop_report(),
             Action::ReportStep(delta) => self.step_report(delta),
             Action::ReportLimits => self.report_limits_form(),
+            Action::Fix => self.open_fixes(),
+            Action::FixStop => self.stop_fix(),
+            Action::FixStep(delta) => self.step_fix(delta),
             Action::PreviousAttempt | Action::NextAttempt => {
                 self.change_attempt(matches!(action, Action::NextAttempt))
             }
@@ -867,10 +870,17 @@ impl App {
         let Some(mut dialog) = self.dialog.take() else {
             return;
         };
-        if matches!(dialog.kind, DialogKind::Reports) {
+        let follows = match &dialog.kind {
             // The form gives way to the report it started or chose.
-            match self.apply_reports(&dialog) {
-                Ok(view) => self.dialog = Some(view),
+            DialogKind::Reports => Some(self.apply_reports(&dialog)),
+            // The fix form asks for confirmation, which then shows the fix.
+            DialogKind::Fixes => Some(self.apply_fixes(&dialog)),
+            DialogKind::FixConfirm(request) => Some(self.confirm_fix(request)),
+            _ => None,
+        };
+        if let Some(next) = follows {
+            match next {
+                Ok(next) => self.dialog = Some(next),
                 Err(error) => {
                     dialog.error = error;
                     self.dialog = Some(dialog);

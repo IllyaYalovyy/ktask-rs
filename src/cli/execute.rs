@@ -715,9 +715,9 @@ pub(super) fn command(
         },
         Command::Add(input) => add(service, input),
         Command::Mcp => unreachable!("stdio MCP dispatch"),
-        Command::Agent { .. } => unreachable!("agent report dispatch"),
+        Command::Agent { .. } => unreachable!("agent report and fix dispatch"),
         Command::Evidence { .. } => unreachable!("read-only evidence dispatch"),
-        Command::FollowUp { .. } | Command::DependencyRequest { .. } => {
+        Command::FollowUp { .. } | Command::DependencyRequest { .. } | Command::InFix { .. } => {
             unreachable!("worker callback dispatch")
         }
         Command::Edit {
@@ -915,6 +915,164 @@ fn stats(service: &mut Service) -> Result<Reply> {
     Ok(Reply {
         data: json!({"queue":snapshot.queue.len(),"history":snapshot.history.len(),"succeeded":succeeded,"attempts":timing.attempts,"failed_attempts":failed,"active_ms":active_ms,"waiting_ms":waiting_ms,"recorded_cost_microusd":cost,"usage":usage,"delivered_by_model":delivered,"resource_limits":limits}),
         text,
+    })
+}
+
+/// `tool` and its actions.
+pub(super) fn tool(
+    service: &mut Service,
+    paths: &crate::instance::Paths,
+    action: &ToolAction,
+) -> Result<Reply> {
+    Ok(match action {
+        ToolAction::ProvisionPlan { recipe, source } => {
+            let plan = service.provision_plan(paths, recipe, *source)?;
+            Reply {
+                text: format!(
+                    "{}\n",
+                    serde_json::to_string_pretty(&plan).expect("plan JSON")
+                ),
+                data: json!({"plan":plan}),
+            }
+        }
+        ToolAction::ProvisionMode { mode } => {
+            let enabled = matches!(mode, ProvisionMode::Automatic);
+            service.set_provision_enabled(enabled)?;
+            Reply {
+                text: format!(
+                    "provisioning mode: {}\n",
+                    if enabled { "automatic" } else { "manual" }
+                ),
+                data: json!({"mode":if enabled { "automatic" } else { "manual" }}),
+            }
+        }
+        ToolAction::ProvisionConsent { recipe, source } => {
+            service.consent_to_provision(recipe, *source)?;
+            Reply {
+                text: format!("recorded human license consent for {recipe}\n"),
+                data: json!({"action":"consented","recipe":recipe}),
+            }
+        }
+        ToolAction::ProvisionInstall { recipe, source } => {
+            let waiting = service.provision_target()?;
+            let id = service.provision_android(paths, recipe, *source)?;
+            let (rechecked, resumed) =
+                crate::runner::continue_after_provision(service, paths, waiting)?;
+            Reply {
+                text: format!(
+                    "published and bound Android SDK generation #{id}; dependency rechecked: {rechecked}; resumed: {resumed}\n"
+                ),
+                data: json!({"action":"provisioned","id":id,"rechecked":rechecked,"resumed":resumed}),
+            }
+        }
+        ToolAction::ProvisionStatus => {
+            let status = service.provision_status(paths)?;
+            Reply {
+                text: format!(
+                    "{}\n",
+                    serde_json::to_string_pretty(&status).expect("status JSON")
+                ),
+                data: json!({"status":status}),
+            }
+        }
+        ToolAction::ProvisionCancel => {
+            service.cancel_provision(paths)?;
+            Reply {
+                text: "provisioning cancellation requested\n".into(),
+                data: json!({"action":"cancellation_requested"}),
+            }
+        }
+        ToolAction::List => {
+            let tools = service.tools()?;
+            Reply {
+                data: json!({"tools":tools}),
+                text: tools
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "#{} v{} {} {} {} {} {} {} {} {}\n",
+                            t.id,
+                            t.row_version,
+                            t.name,
+                            t.version,
+                            t.platform,
+                            t.architecture,
+                            t.path.display(),
+                            t.provenance,
+                            if t.ready {
+                                "ready"
+                            } else {
+                                "changed or missing"
+                            },
+                            t.binding_version
+                                .map_or(String::new(), |v| format!("bound v{v}"))
+                        )
+                    })
+                    .collect(),
+            }
+        }
+        ToolAction::Register {
+            name,
+            version,
+            platform,
+            architecture,
+            path,
+            components,
+            managed,
+        } => {
+            let id = service.register_tool(
+                paths,
+                &app::tools::Registration {
+                    name,
+                    version,
+                    platform,
+                    architecture,
+                    components,
+                    path,
+                    managed: *managed,
+                },
+            )?;
+            Reply {
+                data: json!({"action":"registered","id":id}),
+                text: format!("registered generation #{id}\n"),
+            }
+        }
+        ToolAction::Bind {
+            name,
+            generation,
+            if_version,
+        } => {
+            let version = service.bind_tool(name, *generation, *if_version)?;
+            Reply {
+                data: json!({"action":"bound","name":name,"generation":generation,"version":version}),
+                text: format!("bound {name} to #{generation} v{version}\n"),
+            }
+        }
+        ToolAction::Unbind { name, if_version } => {
+            service.unbind_tool(name, *if_version)?;
+            Reply {
+                data: json!({"action":"unbound","name":name}),
+                text: format!("unbound {name}\n"),
+            }
+        }
+        ToolAction::Refresh {
+            generation,
+            version,
+            components,
+            if_version,
+        } => {
+            let row_version = service.refresh_external_tool(
+                paths,
+                *generation,
+                *if_version,
+                version,
+                components,
+            )?;
+            Reply {
+                data: json!({"action":"refreshed","id":generation,"version":row_version}),
+                text: format!("refreshed generation #{generation} v{row_version}\n"),
+            }
+        }
     })
 }
 

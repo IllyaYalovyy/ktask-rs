@@ -19,6 +19,15 @@
   fix round shows a one-line why. Persist phase and the ten-repair-round limit across
   pause/resume. After ten rounds the failure judge decides. Preserve historical failed records.
 
+- Agent fix (`ktask agent fix`, `runner::fix`) is the one owner-started way an agent repairs a
+  project; ktask never starts it and it does not replace automatic remediation. It pauses the
+  runner through the state machine before touching anything, runs one per project and never
+  beside a report. It may use ktask commands for that project (`cli::repair` is the scope),
+  repair the folder and Git without discarding work, and change the ktask user's account. Never
+  project delete/move, other projects, shutdown, task done/cancel, unasked approval, shared
+  settings, privileges, or product code (queue a task). Its changes are an AI actor's, naming
+  the fix; refused steps are listed as left for the owner; only a repeated failure that now
+  passes is done.
 - Normal TUI tasks are now persistent. The owner authorized SQLite wiring through shared
   application commands. Keep deterministic execution/AI fixtures isolated behind `--demo`;
   never execute them against a real project or open its database in demo mode.

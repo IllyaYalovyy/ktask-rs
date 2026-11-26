@@ -23,10 +23,12 @@ pub const SUPPORTED: &str = "codex, claude or opencode";
 
 /// What a turn may do to the workspace. Only execution (and its repair turns) writes;
 /// review, validation and every judge are read-only, because judges never run anything.
+/// An agent fix repairs the project and the account's host inside ktask's own sandbox.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Access {
     ReadOnly,
     Write,
+    Repair,
 }
 
 impl Access {

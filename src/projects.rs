@@ -438,6 +438,7 @@ impl App {
         }
         if self.hub.selected_row().is_some() || !self.hub.stored() {
             controls.push(("i Investigate", Action::Investigate));
+            controls.push(("f Fix", Action::Fix));
         }
         controls
     }

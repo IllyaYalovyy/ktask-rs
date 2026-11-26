@@ -27,7 +27,7 @@ pub(super) fn launch(
     // Without --auto, `run` rejects every permission request that is not allowed outright.
     let env = match access {
         Access::ReadOnly => vec![("OPENCODE_PERMISSION".into(), read_only().to_string())],
-        Access::Write => {
+        Access::Write | Access::Repair => {
             args.push("--auto".into());
             Vec::new()
         }

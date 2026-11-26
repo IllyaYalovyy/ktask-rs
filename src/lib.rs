@@ -21,6 +21,7 @@ pub(crate) mod clock;
 mod configuration_ui;
 mod demo;
 mod dialog;
+mod fix_ui;
 mod forms;
 pub mod instance;
 mod lens_ui;
@@ -103,6 +104,13 @@ pub fn launch(instance: instance::Instance) -> std::process::ExitCode {
     {
         let project = std::env::args().nth(2).unwrap_or_default();
         return runner::investigate::main(instance, &project);
+    }
+    if std::env::args_os().nth(1).is_some_and(|a| a == "__fix") {
+        let project = std::env::args().nth(2).unwrap_or_default();
+        return runner::fix::main(instance, &project);
+    }
+    if std::env::args_os().nth(1).is_some_and(|a| a == "__fix_git") {
+        return runner::fix::guarded_git();
     }
     if std::env::args_os()
         .nth(1)

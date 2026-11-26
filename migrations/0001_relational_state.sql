@@ -864,9 +864,9 @@ BEGIN
     UPDATE evidence_sweep SET dirty=1 WHERE project_id=NEW.project_id;
 END;
 
--- Owner-started, read-only investigations of one project ("agent reports"). They are not
--- tasks: nothing about a task, revision or attempt ever changes because of one. A running
--- row is owned by the investigator process holding the project's investigation lease.
+-- Owner-started agent runs of one project: read-only investigations ("agent reports") and
+-- fixes. Neither is a task. A report changes nothing about a task, revision or attempt. A
+-- running row is owned by the agent process holding the project's investigation lease.
 CREATE TABLE investigations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id),
@@ -878,7 +878,7 @@ CREATE TABLE investigations (
     provider TEXT NOT NULL CHECK (length(trim(provider)) > 0),
     model TEXT NOT NULL CHECK (length(trim(model)) > 0),
     effort TEXT CHECK (length(trim(effort)) > 0),
-    state TEXT NOT NULL CHECK (state IN ('running', 'finished', 'failed', 'timed_out', 'over_budget', 'stopped')),
+    state TEXT NOT NULL CHECK (state IN ('running', 'finished', 'failed', 'timed_out', 'over_budget', 'stopped', 'unverified')),
     -- The limits in force when it started.
     time_limit_ms INTEGER NOT NULL CHECK (time_limit_ms > 0),
     cost_limit_microusd INTEGER NOT NULL CHECK (cost_limit_microusd > 0),
@@ -897,11 +897,14 @@ CREATE TABLE investigations (
     what_happened TEXT CHECK (length(trim(what_happened)) > 0),
     cause TEXT CHECK (length(trim(cause)) > 0),
     ktask_defect TEXT CHECK (length(trim(ktask_defect)) > 0),
+    -- A fix keeps its record in agent_fixes; its question is the owner's instruction.
+    kind TEXT NOT NULL DEFAULT 'report' CHECK (kind IN ('report', 'fix')),
     FOREIGN KEY (task_id, project_id) REFERENCES tasks(id, project_id),
     CHECK ((state = 'running') = (finished_at_ms IS NULL)),
-    CHECK ((state = 'finished') = (what_happened IS NOT NULL)),
-    CHECK ((state = 'finished') = (cause IS NOT NULL)),
-    CHECK (state = 'finished' OR ktask_defect IS NULL),
+    CHECK ((state = 'finished' AND kind = 'report') = (what_happened IS NOT NULL)),
+    CHECK ((state = 'finished' AND kind = 'report') = (cause IS NOT NULL)),
+    CHECK ((state = 'finished' AND kind = 'report') OR ktask_defect IS NULL),
+    CHECK (state <> 'unverified' OR kind = 'fix'),
     CHECK ((state IN ('running', 'finished')) = (reason IS NULL))
 ) STRICT;
 CREATE UNIQUE INDEX ux_investigations_running ON investigations(project_id) WHERE state = 'running';
@@ -940,12 +943,65 @@ CREATE TABLE investigation_fix_steps (
     PRIMARY KEY (investigation_id, ordinal)
 ) WITHOUT ROWID, STRICT;
 
--- Time and cost one investigation of this project may use. A missing row means the defaults.
+-- A fix's own record. Its state, model, limits, requester, progress and usage are the
+-- investigations row of kind 'fix'.
+CREATE TABLE agent_fixes (
+    investigation_id INTEGER PRIMARY KEY REFERENCES investigations(id),
+    -- The report whose proposed steps it carries out; NULL follows the instruction.
+    report_id INTEGER REFERENCES investigations(id),
+    resume INTEGER NOT NULL CHECK (resume IN (0, 1)),
+    -- Capability of the fix agent's command callback; valid only while the fix runs.
+    token TEXT NOT NULL CHECK (length(token) > 0),
+    runner_was_running INTEGER NOT NULL DEFAULT 0 CHECK (runner_was_running IN (0, 1)),
+    paused_task_id INTEGER,
+    continued INTEGER NOT NULL DEFAULT 0 CHECK (continued IN (0, 1)),
+    summary TEXT CHECK (length(trim(summary)) > 0),
+    verification TEXT CHECK (length(trim(verification)) > 0)
+) STRICT;
+
+-- Every step of a fix and its result, in the order they happened.
+CREATE TABLE agent_fix_steps (
+    investigation_id INTEGER NOT NULL REFERENCES investigations(id),
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    recorded_at_ms INTEGER NOT NULL CHECK (recorded_at_ms >= 0),
+    source TEXT NOT NULL CHECK (source IN ('supervisor', 'ktask', 'agent', 'git')),
+    action TEXT NOT NULL CHECK (length(trim(action)) > 0),
+    result TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('applied', 'failed', 'refused', 'left_for_owner')),
+    PRIMARY KEY (investigation_id, sequence)
+) WITHOUT ROWID, STRICT;
+
+-- The files and settings a fix changed, and where it put work it found.
+CREATE TABLE agent_fix_changes (
+    investigation_id INTEGER NOT NULL REFERENCES investigations(id),
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    kind TEXT NOT NULL CHECK (kind IN ('file', 'setting', 'stash', 'commit', 'recovery_ref', 'uncommitted')),
+    target TEXT NOT NULL CHECK (length(trim(target)) > 0),
+    detail TEXT NOT NULL,
+    PRIMARY KEY (investigation_id, sequence)
+) WITHOUT ROWID, STRICT;
+
+-- What a fix repeats to verify itself, before it changed anything and after.
+CREATE TABLE agent_fix_probes (
+    investigation_id INTEGER NOT NULL REFERENCES investigations(id),
+    ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+    kind TEXT NOT NULL CHECK (kind IN ('check', 'dependency', 'work_tree', 'command')),
+    target TEXT NOT NULL CHECK (length(trim(target)) > 0),
+    -- NULL: not run (a check the fix added has no result from before).
+    passed_before INTEGER CHECK (passed_before IN (0, 1)),
+    passed_after INTEGER CHECK (passed_after IN (0, 1)),
+    detail TEXT,
+    PRIMARY KEY (investigation_id, ordinal)
+) WITHOUT ROWID, STRICT;
+
+-- Time and cost one report or fix of this project may use. A missing row means the defaults.
 CREATE TABLE project_investigation_limits (
     project_id INTEGER PRIMARY KEY REFERENCES projects(id),
     row_version INTEGER NOT NULL CHECK (row_version > 0),
     time_limit_ms INTEGER NOT NULL CHECK (time_limit_ms BETWEEN 1000 AND 86400000),
-    cost_limit_microusd INTEGER NOT NULL CHECK (cost_limit_microusd BETWEEN 10000 AND 1000000000)
+    cost_limit_microusd INTEGER NOT NULL CHECK (cost_limit_microusd BETWEEN 10000 AND 1000000000),
+    fix_time_limit_ms INTEGER NOT NULL DEFAULT 1800000 CHECK (fix_time_limit_ms BETWEEN 1000 AND 86400000),
+    fix_cost_limit_microusd INTEGER NOT NULL DEFAULT 5000000 CHECK (fix_cost_limit_microusd BETWEEN 10000 AND 1000000000)
 ) STRICT;
 
 CREATE INDEX ix_tasks_history ON tasks(project_id, closed_at_ms DESC, id DESC);

@@ -3,11 +3,12 @@
 //! ever left running against a task that moved on.
 use super::{Workspace, supervisor_alive, workspace};
 use crate::{
-    application::{Service, VersionedTask, lifecycle::State, require},
+    application::{Service, Task, VersionedTask, lifecycle::State, require},
     storage::{Error, Result},
 };
 use std::{
     fs::File,
+    path::Path,
     time::{Duration, Instant},
 };
 
@@ -95,6 +96,28 @@ pub fn restart(service: &mut Service, target: VersionedTask, reason: &str) -> Re
     )
 }
 
+/// Stop for an agent fix, which holds the project folder for as long as it runs: it paused
+/// the runner and none can start, so no workspace is acquired.
+pub(crate) fn stop_held(
+    service: &mut Service,
+    root: &Path,
+    target: VersionedTask,
+    reason: &str,
+) -> Result<Saved> {
+    require(
+        !supervisor_alive(service)?,
+        "A runner still holds the project folder",
+    )?;
+    let task = examine(service, target)?;
+    let (target, saved) = if owns_changes(task.state()) {
+        save_task_work(service, root, task.id)?
+    } else {
+        (target, Saved { stash: None })
+    };
+    service.stop_task(target, reason)?;
+    Ok(saved)
+}
+
 /// Mark done: the owner's judgment. A live attempt is stopped and its changes stashed first;
 /// commit them before marking done to keep them in the tree.
 pub fn mark_done(service: &mut Service, target: VersionedTask, reason: &str) -> Result<Saved> {
@@ -168,7 +191,7 @@ pub(crate) fn finish_pending_with_workspace(
         let stash = if existing_stash(workspace, &label)? {
             Some(label)
         } else if service.workspace_owner_attempt()? == Some(control.attempt) {
-            save_changes(workspace, task.id, task.attempts.len())?
+            save_changes(&workspace.root, task.id, task.attempts.len())?
         } else {
             None
         };
@@ -181,6 +204,16 @@ pub(crate) fn finish_pending_with_workspace(
 /// Stop the task's worker if one runs, then save the changes its attempt left. Returns the
 /// task's version after the worker stopped: stopping it is this request's own doing.
 fn halt(service: &mut Service, target: VersionedTask) -> Result<(VersionedTask, Saved)> {
+    let task = examine(service, target)?;
+    if !owns_changes(task.state()) {
+        return Ok((target, Saved { stash: None }));
+    }
+    let workspace = Workspace::acquire(&service.project_root()?)?;
+    save_task_work(service, &workspace.root, task.id)
+}
+
+/// The task a control targets, at the version the caller read.
+fn examine(service: &mut Service, target: VersionedTask) -> Result<Task> {
     let task = service
         .task(target.id)?
         .ok_or_else(|| Error::Conflict(format!("Task #{} does not exist", target.id)))?;
@@ -188,14 +221,23 @@ fn halt(service: &mut Service, target: VersionedTask) -> Result<(VersionedTask, 
         task.version == target.version,
         "Task changed elsewhere; refresh the task",
     )?;
-    let owns_changes = matches!(
-        task.state(),
+    Ok(task)
+}
+
+/// Whether a task in `state` can have an attempt with uncommitted work.
+fn owns_changes(state: State) -> bool {
+    matches!(
+        state,
         State::Running | State::Paused | State::NeedsInput | State::NeedsDependency | State::Failed
-    );
-    if !owns_changes {
-        return Ok((target, Saved { stash: None }));
-    }
-    let workspace = Workspace::acquire(&service.project_root()?)?;
+    )
+}
+
+/// Settles an orphaned attempt and stashes the work it owns. The caller keeps any runner
+/// out of the project folder.
+fn save_task_work(service: &mut Service, root: &Path, id: i64) -> Result<(VersionedTask, Saved)> {
+    let task = service
+        .task(id)?
+        .ok_or_else(|| Error::Conflict(format!("Task #{id} does not exist")))?;
     if task.state() == State::Running
         && service
             .current_task()?
@@ -204,14 +246,14 @@ fn halt(service: &mut Service, target: VersionedTask) -> Result<(VersionedTask, 
         service.settle_orphan()?;
     }
     let task = service
-        .task(target.id)?
+        .task(id)?
         .ok_or_else(|| Error::Conflict("Task disappeared while stopping".into()))?;
     let attempt = task.attempts.len();
     // Starting or resuming another attempt transfers checkout ownership; queue edits do not.
     let stash = if task.attempts.last().is_some()
         && service.workspace_owner_attempt()? == task.attempts.last().map(|a| a.id)
     {
-        save_changes(&workspace, task.id, attempt)?
+        save_changes(root, task.id, attempt)?
     } else {
         None
     };
@@ -271,18 +313,20 @@ fn wait_for_release(alive: impl Fn() -> Result<bool>, deadline: Instant) -> Resu
 }
 
 /// Save uncommitted changes, untracked files included, as one stash named for the attempt.
-fn save_changes(workspace: &Workspace, task: i64, attempt: usize) -> Result<Option<String>> {
-    if workspace.clean()? {
+fn save_changes(root: &Path, task: i64, attempt: usize) -> Result<Option<String>> {
+    let clean =
+        || -> Result<bool> { Ok(workspace::git(root, &["status", "--porcelain"])?.is_empty()) };
+    if clean()? {
         return Ok(None);
     }
-    workspace::git_identity(&workspace.root)?;
+    workspace::git_identity(root)?;
     let label = format!("ktask: task #{task} attempt #{attempt}");
     workspace::git(
-        &workspace.root,
+        root,
         &["stash", "push", "--include-untracked", "--message", &label],
     )?;
     require(
-        workspace.clean()?,
+        clean()?,
         "Some changes could not be stashed; the task was left unchanged",
     )?;
     Ok(Some(label))

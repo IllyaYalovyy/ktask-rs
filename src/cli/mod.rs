@@ -8,6 +8,7 @@ mod mcp;
 mod output;
 mod pause_all;
 mod profile;
+pub(crate) mod repair;
 
 use crate::{
     application::{self, Service},
@@ -43,6 +44,14 @@ impl Failure {
         Self {
             status: SIGPIPE_EXIT,
             code: "closed_output",
+            message: String::new(),
+        }
+    }
+    /// The command already wrote its own output; only its status is left.
+    fn silent(status: u8) -> Self {
+        Self {
+            status,
+            code: "silent",
             message: String::new(),
         }
     }
@@ -121,7 +130,7 @@ pub fn launch(instance: Instance) -> ExitCode {
 }
 
 fn report(error: Failure, json_output: bool) -> ExitCode {
-    if error.code == "closed_output" {
+    if matches!(error.code, "closed_output" | "silent") {
         return ExitCode::from(error.status);
     }
     let mut stderr = io::stderr().lock();
@@ -386,6 +395,16 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             cli.json,
         );
     }
+    if let Command::InFix { args } = command {
+        let token = cli.worker_token.as_deref().unwrap_or_default();
+        let output = crate::runner::callback::fix_command(token, args)?;
+        io::stdout().write_all(&output.stdout)?;
+        io::stderr().write_all(&output.stderr)?;
+        return match u8::try_from(output.code) {
+            Ok(0) => Ok(()),
+            code => Err(Failure::silent(code.unwrap_or(1))),
+        };
+    }
     if let Command::DependencyRequest { requirement } = command {
         let id = crate::runner::callback::dependency(
             cli.worker_token.as_deref().unwrap_or_default(),
@@ -479,158 +498,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         return emit(agent::run(&mut service, &paths, actor, action)?, cli.json);
     }
     if let Command::Tool { action } = command {
-        use args::ToolAction;
-        let reply = match action {
-            ToolAction::ProvisionPlan { recipe, source } => {
-                let plan = service.provision_plan(&paths, recipe, *source)?;
-                output::Reply {
-                    text: format!(
-                        "{}\n",
-                        serde_json::to_string_pretty(&plan).expect("plan JSON")
-                    ),
-                    data: json!({"plan":plan}),
-                }
-            }
-            ToolAction::ProvisionMode { mode } => {
-                let enabled = matches!(mode, args::ProvisionMode::Automatic);
-                service.set_provision_enabled(enabled)?;
-                output::Reply {
-                    text: format!(
-                        "provisioning mode: {}\n",
-                        if enabled { "automatic" } else { "manual" }
-                    ),
-                    data: json!({"mode":if enabled { "automatic" } else { "manual" }}),
-                }
-            }
-            ToolAction::ProvisionConsent { recipe, source } => {
-                service.consent_to_provision(recipe, *source)?;
-                output::Reply {
-                    text: format!("recorded human license consent for {recipe}\n"),
-                    data: json!({"action":"consented","recipe":recipe}),
-                }
-            }
-            ToolAction::ProvisionInstall { recipe, source } => {
-                let waiting = service.provision_target()?;
-                let id = service.provision_android(&paths, recipe, *source)?;
-                let (rechecked, resumed) =
-                    crate::runner::continue_after_provision(&mut service, &paths, waiting)?;
-                output::Reply {
-                    text: format!(
-                        "published and bound Android SDK generation #{id}; dependency rechecked: {rechecked}; resumed: {resumed}\n"
-                    ),
-                    data: json!({"action":"provisioned","id":id,"rechecked":rechecked,"resumed":resumed}),
-                }
-            }
-            ToolAction::ProvisionStatus => {
-                let status = service.provision_status(&paths)?;
-                output::Reply {
-                    text: format!(
-                        "{}\n",
-                        serde_json::to_string_pretty(&status).expect("status JSON")
-                    ),
-                    data: json!({"status":status}),
-                }
-            }
-            ToolAction::ProvisionCancel => {
-                service.cancel_provision(&paths)?;
-                output::Reply {
-                    text: "provisioning cancellation requested\n".into(),
-                    data: json!({"action":"cancellation_requested"}),
-                }
-            }
-            ToolAction::List => {
-                let tools = service.tools()?;
-                output::Reply {
-                    data: json!({"tools":tools}),
-                    text: tools
-                        .iter()
-                        .map(|t| {
-                            format!(
-                                "#{} v{} {} {} {} {} {} {} {} {}\n",
-                                t.id,
-                                t.row_version,
-                                t.name,
-                                t.version,
-                                t.platform,
-                                t.architecture,
-                                t.path.display(),
-                                t.provenance,
-                                if t.ready {
-                                    "ready"
-                                } else {
-                                    "changed or missing"
-                                },
-                                t.binding_version
-                                    .map_or(String::new(), |v| format!("bound v{v}"))
-                            )
-                        })
-                        .collect(),
-                }
-            }
-            ToolAction::Register {
-                name,
-                version,
-                platform,
-                architecture,
-                path,
-                components,
-                managed,
-            } => {
-                let id = service.register_tool(
-                    &paths,
-                    &application::tools::Registration {
-                        name,
-                        version,
-                        platform,
-                        architecture,
-                        components,
-                        path,
-                        managed: *managed,
-                    },
-                )?;
-                output::Reply {
-                    data: json!({"action":"registered","id":id}),
-                    text: format!("registered generation #{id}\n"),
-                }
-            }
-            ToolAction::Bind {
-                name,
-                generation,
-                if_version,
-            } => {
-                let version = service.bind_tool(name, *generation, *if_version)?;
-                output::Reply {
-                    data: json!({"action":"bound","name":name,"generation":generation,"version":version}),
-                    text: format!("bound {name} to #{generation} v{version}\n"),
-                }
-            }
-            ToolAction::Unbind { name, if_version } => {
-                service.unbind_tool(name, *if_version)?;
-                output::Reply {
-                    data: json!({"action":"unbound","name":name}),
-                    text: format!("unbound {name}\n"),
-                }
-            }
-            ToolAction::Refresh {
-                generation,
-                version,
-                components,
-                if_version,
-            } => {
-                let row_version = service.refresh_external_tool(
-                    &paths,
-                    *generation,
-                    *if_version,
-                    version,
-                    components,
-                )?;
-                output::Reply {
-                    data: json!({"action":"refreshed","id":generation,"version":row_version}),
-                    text: format!("refreshed generation #{generation} v{row_version}\n"),
-                }
-            }
-        };
-        return emit(reply, cli.json);
+        return emit(execute::tool(&mut service, &paths, action)?, cli.json);
     }
     if service
         .pending_control()?
@@ -915,22 +783,16 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
 }
 
 fn validate(cli: &Cli) -> Result<()> {
-    if std::env::var_os("KTASK_WORKER_CALLBACK").is_some()
-        && !matches!(
-            cli.command,
-            Some(Command::FollowUp { .. } | Command::DependencyRequest { .. })
-        )
-    {
+    let callback = matches!(
+        cli.command,
+        Some(Command::FollowUp { .. } | Command::DependencyRequest { .. } | Command::InFix { .. })
+    );
+    if std::env::var_os("KTASK_WORKER_CALLBACK").is_some() && !callback {
         return Err(Failure::usage(
-            "Workers may only request follow-up drafts or missing dependencies",
+            "Workers may only request follow-up drafts or missing dependencies; an agent fix runs ktask commands through fix-command",
         ));
     }
-    if cli.worker_token.is_some()
-        != matches!(
-            cli.command,
-            Some(Command::FollowUp { .. } | Command::DependencyRequest { .. })
-        )
-    {
+    if cli.worker_token.is_some() != callback {
         return Err(Failure::usage(
             "Follow-up and dependency-request callbacks require --worker-token and a live worker",
         ));

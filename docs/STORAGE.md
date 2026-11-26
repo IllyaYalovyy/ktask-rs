@@ -246,6 +246,11 @@ erDiagram
     investigations ||--o{ investigation_progress : "investigation_id"
     investigations ||--o{ investigation_references : "investigation_id"
     investigations ||--o{ investigation_fix_steps : "investigation_id"
+    investigations ||--o| agent_fixes : "investigation_id"
+    investigations o|--o{ agent_fixes : "report_id"
+    investigations ||--o{ agent_fix_steps : "investigation_id"
+    investigations ||--o{ agent_fix_changes : "investigation_id"
+    investigations ||--o{ agent_fix_probes : "investigation_id"
     projects ||--o| project_investigation_limits : "project_id"
     projects ||--o| evidence_sweep : "project_id"
     projects ||--o| instance_runner_log_baselines : "project_id"
@@ -821,22 +826,91 @@ baselines, including across rotation and restart.
 
 - PK `(id)`.
 
+### agent_fixes
+
+What only an agent fix records; its state, model, limits, requester, progress and usage are its `investigations` row of kind fix. A fix is owner-started, never a task, and its changes to tasks and settings go through the ordinary commands as the AI actor "agent fix #N".
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `investigation_id` | INTEGER | no | The run, which gives the fix its ID. |
+| `report_id` | INTEGER | yes | Report whose proposed steps it carries out; NULL follows the instruction. |
+| `resume` | INTEGER | no | Whether a verified fix continues the queue. |
+| `token` | TEXT | no | Capability of the agent's command callback; accepted only while the fix runs. |
+| `runner_was_running` | INTEGER | no | A runner was running when the fix started. |
+| `paused_task_id` | INTEGER | yes | Task that pause stopped. |
+| `continued` | INTEGER | no | The queue was continued after verification. |
+| `summary` | TEXT | yes | The agent's own account. |
+| `verification` | TEXT | yes | The supervisor's verification outcome; NULL while running. |
+
+- PK `(investigation_id)`.
+- FK `(investigation_id)` → `investigations(id)`.
+- FK `(report_id)` → `investigations(id)`.
+
+### agent_fix_steps
+
+Every step of a fix and its result, in order. Refused and left-for-owner steps were not applied.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `investigation_id` | INTEGER | no | Owning fix. |
+| `sequence` | INTEGER | no | Order within the fix. |
+| `recorded_at_ms` | INTEGER | no | When it was recorded. |
+| `source` | TEXT | no | supervisor, ktask, agent or git. |
+| `action` | TEXT | no | What was done or asked. |
+| `result` | TEXT | no | What came of it; may be empty. |
+| `status` | TEXT | no | applied, failed, refused or left_for_owner. |
+
+- PK `(investigation_id, sequence)`.
+- FK `(investigation_id)` → `investigations(id)`.
+
+### agent_fix_changes
+
+The files and settings a fix changed, and where work it found went.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `investigation_id` | INTEGER | no | Owning fix. |
+| `sequence` | INTEGER | no | Order within the fix. |
+| `kind` | TEXT | no | file, setting, stash, commit, recovery_ref or uncommitted. |
+| `target` | TEXT | no | Path, setting, stash, commit or ref. |
+| `detail` | TEXT | no | Old and new value, message or where it is kept. |
+
+- PK `(investigation_id, sequence)`.
+- FK `(investigation_id)` → `investigations(id)`.
+
+### agent_fix_probes
+
+What a fix repeats to verify itself, with the result before it changed anything and after.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `investigation_id` | INTEGER | no | Owning fix. |
+| `ordinal` | INTEGER | no | Position within the fix. |
+| `kind` | TEXT | no | check, dependency, work_tree or command. |
+| `target` | TEXT | no | Check name, task, rule or command. |
+| `passed_before` | INTEGER | yes | NULL for a check the fix added. |
+| `passed_after` | INTEGER | yes | NULL until repeated. |
+| `detail` | TEXT | yes | Last output line or reason. |
+
+- PK `(investigation_id, ordinal)`.
+- FK `(investigation_id)` → `investigations(id)`.
+
 ### investigations
 
-One agent report: an owner-started, read-only investigation of a project. It is not a task and never changes one. A running row belongs to the investigator process holding the project's investigation lease; a row left running by a process that is gone is recorded as failed by the next command that reads or starts reports. Only a finished row has a report.
+One agent run: an owner-started, read-only investigation ("agent report") or an agent fix of a project. It is not a task. A running row belongs to the agent process holding the project's investigation lease; a row left running by a process that is gone is recorded as failed by the next command that reads or starts agent runs. Only a finished report row has a report.
 
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
 | `id` | INTEGER | no | Stable row ID, shown to the owner. |
 | `project_id` | INTEGER | no | Investigated project. |
 | `task_id` | INTEGER | yes | Task the owner asked about; NULL looks at the project and its current task. |
-| `question` | TEXT | yes | The owner's question; NULL explains the current state. |
+| `question` | TEXT | yes | The owner's question (NULL explains the current state), or a fix's instruction. |
 | `requester_kind` | TEXT | no | human or ai. |
 | `requester` | TEXT | no | Actor name; attribution, not authentication. |
 | `provider` | TEXT | no | Operator model provider. |
 | `model` | TEXT | no | Operator model at the start. |
 | `effort` | TEXT | yes | Reasoning effort; NULL means none. |
-| `state` | TEXT | no | running, finished, failed, timed_out, over_budget or stopped. |
+| `state` | TEXT | no | running, finished, failed, timed_out, over_budget, stopped or, for a fix, unverified. A finished fix is verified. |
 | `time_limit_ms` | INTEGER | no | Time limit in force. |
 | `cost_limit_microusd` | INTEGER | no | Cost limit in force. |
 | `stop_requested_by` | TEXT | yes | Who asked it to stop. |
@@ -851,11 +925,12 @@ One agent report: an owner-started, read-only investigation of a project. It is 
 | `what_happened` | TEXT | yes | Report: what happened. |
 | `cause` | TEXT | yes | Report: the cause. |
 | `ktask_defect` | TEXT | yes | Report: the defect, when the cause is in ktask itself. |
+| `kind` | TEXT | no | report or fix. |
 
 - PK `(id)`.
 - FK `(project_id)` → `projects(id)`.
 - FK `(task_id, project_id)` → `tasks(id, project_id)`.
-- Index `ux_investigations_running`: one running investigation per project.
+- Index `ux_investigations_running`: one running report or fix per project.
 - Index `ix_investigations_project`: `INDEX ix_investigations_project ON investigations(project_id, id)`.
 
 ### investigation_progress
@@ -906,7 +981,7 @@ The proposed fix of a finished report, in order. ktask applies none of it.
 
 ### project_investigation_limits
 
-Time and cost one agent report of a project may use. A missing row means 15 minutes and 2 USD.
+Time and cost one agent report or fix of a project may use. A missing row means 15 minutes and 2 USD for a report, 30 minutes and 5 USD for a fix.
 
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
@@ -914,6 +989,8 @@ Time and cost one agent report of a project may use. A missing row means 15 minu
 | `row_version` | INTEGER | no | Guards concurrent edits. |
 | `time_limit_ms` | INTEGER | no | From 1 second to 24 hours. |
 | `cost_limit_microusd` | INTEGER | no | From 0.01 to 1000 USD. |
+| `fix_time_limit_ms` | INTEGER | no | Fix time, from 1 second to 24 hours. |
+| `fix_cost_limit_microusd` | INTEGER | no | Fix cost, from 0.01 to 1000 USD. |
 
 - PK `(project_id)`.
 - FK `(project_id)` → `projects(id)`.

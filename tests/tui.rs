@@ -1,3 +1,5 @@
+#[path = "cases/agent_fix.rs"]
+mod agent_fix;
 #[path = "cases/agent_report.rs"]
 mod agent_report;
 #[path = "cases/build_cache.rs"]

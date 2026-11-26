@@ -300,6 +300,7 @@ keep separate settings.
 
 **Role models.** A task needs `execution`, `review`, `validation` and `remediation` models;
 `planning` is used only by `breakdown`, and `operator` only by [agent reports](#agent-reports)
+and [agent fixes](#agent-fixes)
 (unset, they use the remediation model). `--provider` is `codex`, `claude` or `opencode`; `--model`
 is optional for `claude` (Sonnet); `--effort` is optional. Any role may use any provider.
 
@@ -722,6 +723,79 @@ limits**. `--demo` shows simulated reports and starts no agent.
   deletes them with their project. One that failed, timed out, passed its cost limit or was
   stopped is recorded as such with what it had found, never as a finished report.
   `ktask shutdown` stops running investigations. Remote access is not part of this command yet.
+
+## Agent fixes
+
+A report says how to fix something; an agent fix does it, so you do not have to log in. You always
+start it: ktask never does, an AI actor (`--actor-kind ai`) is refused, and automatic remediation
+of task findings is unchanged.
+
+```sh
+ktask agent fix --report 3                    # carry out a finished report's steps; prints the ID
+ktask agent fix "The build check names the wrong script" --resume
+ktask agent fix --report 3 --dry-run          # print the steps it would take; change nothing
+ktask agent show 4                            # live progress, then the record
+ktask agent stop 4                            # end it and reap its processes
+ktask agent limits --fix-time-limit-ms 1800000 --fix-cost-limit-usd 5
+```
+
+In the TUI press **f** (or click **[f Fix]**) on Current Task, on Projects for the selected
+project, or on a finished report. Choose the report or type an instruction, choose what happens
+when verified, Apply, then confirm in the dialog that names the project and the allowed scope.
+The record is followed live; Esc leaves it running, **s** stops it, **[** and **]** page through
+past fixes. `--demo` shows a simulated fix and starts no agent.
+
+**What happens.**
+
+1. The project runner is paused through the task state machine and the fix waits for it to exit.
+   No runner starts, and no other command stashes or changes the project folder, until the fix ends.
+   One fix or report runs per project.
+2. What fails now is noted: the project checks are run, unmet requirements of the current task
+   and uncommitted files no task owns are recorded, and the agent names further commands that
+   must pass afterwards.
+3. Work in the tree that no task owns is saved as a git stash named
+   `ktask: agent fix #N: work found in the tree`. A paused or failed task's own uncommitted work
+   stays in place, because its attempt continues with it; the record names it.
+4. The agent works, with the operator model, its own scratch `TMPDIR` and the fix limits (default
+   30 minutes and 5 USD; Codex reports no cost, so only time bounds it).
+5. The same things are repeated. The fix is **Done** only when something that failed now passes,
+   nothing else broke, and it left no stray file. It is **Failed** when nothing got better, when
+   something passing now fails, when the agent did not finish, or when work or history was
+   discarded. Otherwise it is **Unverified**. With `--resume` only a Done fix continues the
+   queue; otherwise the runner stays paused.
+
+**Allowed.** ktask commands for this project (checks, models, delivery, setup, project-scope
+categories and lenses, tool bindings, task edits, adding and moving tasks, stop, restart, retry,
+and answering a question when the instruction gives the answer); repairing the project folder
+and Git state without discarding work (commit or stash); changing the host inside your account,
+for example installing a missing tool. Restart and retry never start a worker during the fix:
+the task runs when the queue continues. Changes are made by the same application commands, with
+the same validation and version guards, and recorded as `agent fix #N`, an AI, never as you.
+
+**Not allowed.** Deleting or moving projects, touching other projects, shutting ktask down,
+changing limits of agent runs, settings shared across projects, marking tasks done, cancelling or
+superseding them, approving drafts unless the instruction says `approve #ID` (or `approve all
+drafts`), elevated privileges, and `reset`, `clean`, `restore`, `rebase`, amend, force-push or
+deleting branches or stashes. Code changes to the product are added to the queue as tasks;
+project files the agent writes itself are named and keep the fix from Done. Refused steps are
+listed in the record as left for the owner. Under planner approval `review-required`, tasks and
+revisions the fix creates are drafts.
+
+**How it is bounded, and where it is not.** The agent runs in bubblewrap: ktask's records, caches
+and program (both instances), other registered projects and bound tools are read-only, it cannot
+see or signal other processes, and it cannot gain privileges. ktask commands reach ktask only
+through the fix's own callback, which applies the scope above. A guarding `git` refuses
+destructive commands, and refs and stashes are checked afterwards: anything lost is kept under
+`refs/ktask/agent-fix-N/` and fails the fix. The rest of your account is writable, so this guards
+against mistakes, not against a hostile agent. Like other writable turns it follows the agent
+network setting: with it off, Claude Code and OpenCode cannot fix, and Codex keeps its workspace
+sandbox, so host changes and Git commits are left to you. Remote access is not part of this
+command yet.
+
+**The record.** `agent show` lists each step and its result, the files, settings, commits and
+stashes changed, the verification outcome with before and after, and what remains. A stopped,
+timed out or over-budget fix keeps the steps already applied and leaves the runner paused.
+`ktask shutdown` stops running fixes.
 
 ## Task CLI
 

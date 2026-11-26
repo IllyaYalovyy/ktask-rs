@@ -71,6 +71,12 @@ pub struct Sandbox {
     personal_android: Option<PathBuf>,
     #[serde(default)]
     hidden: Vec<PathBuf>,
+    /// Kept writable although a protected folder contains them.
+    #[serde(default)]
+    rebound: Vec<PathBuf>,
+    /// The command sees and can signal only the processes it started.
+    #[serde(default)]
+    private_processes: bool,
 }
 
 fn android_installation(installations: &[PathBuf]) -> bool {
@@ -115,6 +121,8 @@ impl Sandbox {
             private_android_devices: android_installation(installations),
             personal_android: personal_android(installations),
             hidden: Vec::new(),
+            rebound: Vec::new(),
+            private_processes: false,
         };
         for installation in installations {
             sandbox.protect(installation)?;
@@ -143,6 +151,8 @@ impl Sandbox {
             private_android_devices: android_installation(installations),
             personal_android: personal_android(installations),
             hidden: Vec::new(),
+            rebound: Vec::new(),
+            private_processes: false,
         };
         for root in writable_roots {
             sandbox.writable.push(root.canonicalize()?);
@@ -151,6 +161,29 @@ impl Sandbox {
             sandbox.protect(installation)?;
         }
         Ok(sandbox)
+    }
+
+    /// An agent fix works as the account: the host stays writable for it, but `protected`
+    /// paths are read-only (never the project's own folder inside one of them), it gains
+    /// no privileges, and it can neither see nor signal other processes.
+    pub fn for_repair(project: &Path, protected: &[PathBuf]) -> Result<Self> {
+        let project = project.canonicalize()?;
+        let mut read_only = Vec::new();
+        for path in protected.iter().filter(|path| path.exists()) {
+            read_only.push(path.canonicalize()?);
+        }
+        Ok(Self {
+            bwrap: bwrap()?,
+            read_only,
+            writable: Vec::new(),
+            read_only_root: false,
+            network: true,
+            private_android_devices: false,
+            personal_android: None,
+            hidden: Vec::new(),
+            rebound: vec![project],
+            private_processes: true,
+        })
     }
 
     pub fn protect(&mut self, path: &Path) -> Result<()> {
@@ -196,6 +229,8 @@ impl Sandbox {
             private_android_devices: false,
             personal_android: None,
             hidden: Vec::new(),
+            rebound: Vec::new(),
+            private_processes: false,
         })
     }
 
@@ -220,8 +255,24 @@ impl Sandbox {
                 command.arg("--tmpfs").arg(personal_android);
             }
         }
-        for path in &self.read_only {
+        // A protected folder that contains a rebound one is mounted before it, any other
+        // (including one inside it) after it.
+        let contains_rebound = |path: &&PathBuf| {
+            self.rebound
+                .iter()
+                .any(|inner| inner != *path && inner.starts_with(path))
+        };
+        for path in self.read_only.iter().filter(contains_rebound) {
             command.arg("--ro-bind").arg(path).arg(path);
+        }
+        for path in &self.rebound {
+            command.arg("--bind").arg(path).arg(path);
+        }
+        for path in self.read_only.iter().filter(|path| !contains_rebound(path)) {
+            command.arg("--ro-bind").arg(path).arg(path);
+        }
+        if self.private_processes {
+            command.args(["--unshare-pid", "--proc", "/proc"]);
         }
         command.arg("--bind").arg(scratch).arg(scratch);
         for path in &self.hidden {

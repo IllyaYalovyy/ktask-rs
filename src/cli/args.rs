@@ -100,21 +100,55 @@ pub enum AgentAction {
         #[arg(value_parser = nonempty)]
         question: Option<String>,
     },
-    /// End a running investigation, reap its processes and keep what it had found.
+    /// Have an agent repair this project, from a report or an instruction, and record it.
+    ///
+    /// Prints the fix ID at once; read it with agent show ID and end it with agent stop ID.
+    /// Only the owner starts one (not --actor-kind ai); ktask never does. The fix first pauses the project runner and waits
+    /// for it to exit, and no runner starts while it works. Work found in the tree that no
+    /// task owns is saved as a git stash naming the fix; a paused or failed task's own work
+    /// stays for it. The project's checks, unmet requirements and what the agent names as
+    /// failing are repeated before and after: only a failure that now passes makes a
+    /// verified fix, and --resume then continues the queue. Otherwise the runner stays
+    /// paused. One fix or report runs per project (exit 4 names the running one).
+    ///
+    /// The agent may use ktask commands for this project (configuration, checks, models,
+    /// limits, delivery, task edits, adding and moving tasks, stop, restart, retry, and
+    /// answering a question the instruction answers), repair the project folder and its Git
+    /// state without discarding work, and change this account's setup. It may not delete or
+    /// move projects, touch other projects, shut ktask down, judge tasks done or cancelled,
+    /// approve drafts unless the instruction says "approve #ID", gain privileges, or write
+    /// product code (it adds tasks for that). Refused steps are listed as left for the owner.
+    Fix {
+        /// Carry out the proposed steps of this finished report of this project.
+        #[arg(long, value_parser = positive, conflicts_with = "instruction", required_unless_present = "instruction")]
+        report: Option<i64>,
+        /// What to repair, as one quoted argument.
+        #[arg(value_parser = nonempty)]
+        instruction: Option<String>,
+        /// Continue the queue if the fix is verified.
+        #[arg(long)]
+        resume: bool,
+        /// Print the steps it would take and change nothing. With --report these are the
+        /// report's steps; an instruction is planned by a read-only agent turn.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// End a running report or fix, reap its processes and keep what it had done.
     Stop {
-        /// Investigation ID.
+        /// Report or fix ID.
         #[arg(value_parser = positive)]
         id: i64,
     },
-    /// List this project's investigations, newest first.
+    /// List this project's reports and fixes, newest first.
     List,
-    /// Show one investigation: its report, or why it ended and what it had found.
+    /// Show one report or fix: the report or record, or why it ended and what it had done.
     Show {
-        /// Investigation ID.
+        /// Report or fix ID.
         #[arg(value_parser = positive)]
         id: i64,
     },
-    /// Show or change the time and cost one investigation may use (default 15 min, $2).
+    /// Show or change the time and cost one report (default 15 min, $2) or fix (default
+    /// 30 min, $5) may use.
     ///
     /// The cost limit ends an investigation whose provider reports a higher cost: Claude
     /// Code also enforces it itself, OpenCode reports cost per step, and Codex reports no
@@ -127,6 +161,12 @@ pub enum AgentAction {
         /// Cost one investigation may use, in US dollars (0.01 to 1000).
         #[arg(long, value_parser = usd)]
         cost_limit_usd: Option<Usd>,
+        /// Time one fix may take, in milliseconds.
+        #[arg(long, value_parser = positive)]
+        fix_time_limit_ms: Option<i64>,
+        /// Cost one fix may use, in US dollars (0.01 to 1000).
+        #[arg(long, value_parser = usd)]
+        fix_cost_limit_usd: Option<Usd>,
         /// Reject a stale edit of the limits.
         #[arg(long)]
         if_version: Option<i64>,
@@ -776,10 +816,11 @@ pub enum Command {
     Current,
     /// Serve every project of this instance over MCP on standard input/output (--project pins one).
     Mcp,
-    /// Have a read-only agent investigate this project and report what happened.
+    /// Have an agent investigate this project and report what happened, or repair it.
     ///
-    /// An agent report is started by the owner and changes nothing: no file, task, attempt
-    /// or setting. The agent runs on this host in a read-only sandbox with its own TMPDIR,
+    /// An agent fix (agent fix) repairs the project on request and records every change;
+    /// see its help. An agent report is started by the owner and changes nothing: no file,
+    /// task, attempt or setting. The agent runs on this host in a read-only sandbox with its own TMPDIR,
     /// under the time and cost limits of agent limits, with the operator model (model-default
     /// operator; unset, the remediation model). It reads ktask's records of the project, the
     /// project folder and Git state, and may probe the host. It works whether the runner is
@@ -794,6 +835,13 @@ pub enum Command {
     /// Models and effort come from the project defaults (model-default) unless --model or
     /// --effort is given. New tasks allow 3 attempts and have no time limits.
     Add(Add),
+    /// One command of a running agent fix (its callback only).
+    #[command(hide = true)]
+    #[command(name = "fix-command")]
+    InFix {
+        #[arg(last = true, required = true)]
+        args: Vec<String>,
+    },
     /// Append a follow-up draft to the queue from inside an attempt (worker callback only).
     FollowUp {
         /// Short title.

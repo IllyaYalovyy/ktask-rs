@@ -45,6 +45,7 @@ pub(super) fn controls(app: &App) -> Vec<(&'static str, Action)> {
         ("End Follow", Action::Follow),
         ("a Add", Action::Add),
         ("i Investigate", Action::Investigate),
+        ("f Fix", Action::Fix),
         ("S Stats", Action::Stats),
     ];
     if app.follow {

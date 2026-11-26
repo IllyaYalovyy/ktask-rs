@@ -82,9 +82,20 @@ pub enum DialogKind {
     Report {
         id: i64,
         running: bool,
+        /// A finished report offers to be carried out.
+        finished: bool,
     },
     /// The limits form, at the version it was read.
     ReportLimits(i64),
+    /// Prepare an agent fix or pick a past one.
+    Fixes,
+    /// The project and allowed scope of a fix, before it starts.
+    FixConfirm(crate::fix_ui::Confirmed),
+    /// One agent fix, followed while it runs.
+    FixView {
+        id: i64,
+        running: bool,
+    },
     Inspect {
         id: usize,
         attempt: usize,
@@ -296,6 +307,7 @@ impl Dialog {
                 | DialogKind::Stats
                 | DialogKind::Events
                 | DialogKind::Report { .. }
+                | DialogKind::FixView { .. }
                 | DialogKind::Inspect { .. }
         )
     }

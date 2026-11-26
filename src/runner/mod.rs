@@ -17,6 +17,7 @@ mod cycle;
 mod delivery;
 mod diagnosis;
 mod failure_summary;
+pub mod fix;
 pub(crate) mod investigate;
 mod judge;
 mod lens;

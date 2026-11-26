@@ -832,6 +832,9 @@ impl Backend for DemoWorkspace {
             | DialogKind::Reports
             | DialogKind::Report { .. }
             | DialogKind::ReportLimits(_)
+            | DialogKind::Fixes
+            | DialogKind::FixConfirm(_)
+            | DialogKind::FixView { .. }
             | DialogKind::Inspect { .. } => {}
             DialogKind::BreakdownPending | DialogKind::BreakdownReview { .. } => {
                 return Err("Persistent proposal is unavailable in demo mode".into());

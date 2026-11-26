@@ -1,5 +1,6 @@
 //! Restricted worker requests cross the workspace sandbox through owned TMPDIR files.
-//! The guardian, outside the Codex sandbox, applies follow-up and dependency requests.
+//! The guardian, outside the Codex sandbox, applies follow-up and dependency requests, and
+//! the commands of an agent fix.
 use crate::{
     application::{Actor, ActorKind, Definition, Kind, Service, dependency::Requirement},
     runner::android_transport::{Endpoint, MAX_RESPONSE, Output},
@@ -32,6 +33,24 @@ pub struct Capability {
     pub token: String,
     pub environment_fingerprint: String,
     pub environment_path: String,
+    /// Set for an agent fix turn, which has no task or attempt of its own.
+    #[serde(default)]
+    pub fix: Option<Box<FixScope>>,
+}
+
+/// Where an agent fix's commands are applied and its verification commands run.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct FixScope {
+    pub id: i64,
+    pub project_id: i64,
+    pub config: PathBuf,
+    pub cache: PathBuf,
+    pub data: PathBuf,
+    pub runtime: PathBuf,
+    pub executable: PathBuf,
+    pub sandbox: crate::runner::sandbox::Sandbox,
+    /// Longest one verification command may run.
+    pub command_limit_ms: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -52,6 +71,10 @@ enum Request {
         operation: String,
         args: Vec<String>,
         cwd: PathBuf,
+    },
+    Fix {
+        token: String,
+        args: Vec<String>,
     },
 }
 
@@ -96,6 +119,24 @@ pub fn android(token: &str, operation: &str, args: &[String]) -> Result<Output> 
             reply
                 .error
                 .unwrap_or_else(|| "Android command returned no result".into()),
+        )
+    })
+}
+
+/// One command of an agent fix: a ktask command or one of the fix's own record words.
+pub fn fix_command(token: &str, args: &[String]) -> Result<Output> {
+    let reply = exchange(
+        Request::Fix {
+            token: token.into(),
+            args: args.to_vec(),
+        },
+        Duration::from_secs(900),
+    )?;
+    reply.output.ok_or_else(|| {
+        Error::Conflict(
+            reply
+                .error
+                .unwrap_or_else(|| "Fix command returned no result".into()),
         )
     })
 }
@@ -272,12 +313,27 @@ fn apply(
     let token = match &request {
         Request::FollowUp { token, .. }
         | Request::Dependency { token, .. }
-        | Request::Android { token, .. } => token,
+        | Request::Android { token, .. }
+        | Request::Fix { token, .. } => token,
     };
     if *token != capability.token {
         return Err(Error::Conflict(
             "Worker callback token does not match this attempt".into(),
         ));
+    }
+    if let Some(scope) = &capability.fix {
+        let Request::Fix { token, args } = request else {
+            return Err(Error::Conflict(
+                "An agent fix runs only its fix commands".into(),
+            ));
+        };
+        return Ok(Response {
+            id: None,
+            error: None,
+            output: Some(crate::runner::fix::command(
+                capability, scope, &token, &args, stop,
+            )?),
+        });
     }
     let db = Database::open_in(&capability.state)?;
     let mut service = Service::find(db, &capability.project)?
@@ -349,6 +405,7 @@ fn apply(
                 output: Some(endpoint.exchange(&operation, &args, &cwd, stop)?),
             })
         }
+        Request::Fix { .. } => Err(Error::Conflict("No agent fix owns this callback".into())),
     }
 }
 
@@ -372,6 +429,7 @@ mod tests {
                 token: "unused".into(),
                 environment_fingerprint: "unbound".into(),
                 environment_path: std::env::var("PATH").unwrap_or_default(),
+                fix: None,
             },
             None,
         )?;

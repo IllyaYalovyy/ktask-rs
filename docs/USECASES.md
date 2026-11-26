@@ -8,6 +8,7 @@
 - Configuration — application settings, including mouse support.
 - About — application identity and version.
 - Agent reports — a dialog opened from Current Task or Projects (i) for that project: start a report or read a past one.
+- Agent fixes — a dialog opened from Current Task, Projects (f) or a finished report for that project: prepare and confirm a fix, follow it and read past records.
 
 ## Rules
 
@@ -17,6 +18,7 @@
 - Done, Cancelled and Superseded are final. Copy to queue brings any of them back as a new pending task; the original stays in History unchanged.
 - All user flows support mouse and keyboard. Mouse is enabled by default and can be disabled in Configuration.
 - An agent report is owner-started and read-only. It is not a task, is separate from the automatic failure judge, and changes no file, task, attempt or setting.
+- An agent fix is owner-started, never by ktask or an AI actor. It is not a task and does not change automatic remediation. It pauses the project runner through the task state machine and waits for it to exit before it touches the folder; one fix or report runs per project.
 
 ## Task kinds
 
@@ -120,6 +122,11 @@ A Docs task has the AI lifecycle with the checks removed: implement → review �
 - A report that failed, timed out, passed its cost limit or was stopped is recorded as that, with what it had found, and never shown as a finished report.
 - Read past reports → i, choose one in the Report field, Apply; [ and ] (or [Older] [Newer]) page through them and b returns to the form (`ktask agent list`, `ktask agent show ID`, `--json` for both). Reports keep question, requester, model, progress, token usage and cost, and are removed with their project.
 - Set what one report may use → Config i (or `ktask agent limits --time-limit-ms N --cost-limit-usd X`); defaults are 15 minutes and 2 USD. The cost limit ends a Claude Code or OpenCode report; Codex reports no cost, so only the time limit bounds it. The model is the operator role (Config m, or `ktask model-default operator`), by default the remediation model.
+- Let an agent repair the project → press f or click [f Fix] on Current Task or Projects, or on a finished report (or `ktask agent fix (--report ID | INSTRUCTION) [--resume]`, which prints the fix's ID at once) → choose a report or type an instruction, and whether a verified fix continues the queue → Apply → a dialog names the project, the request and the allowed scope → Start fix. `--dry-run` prints the steps it would take and changes nothing. A report that is unfinished, is not a report or belongs to another project is refused.
+- While a fix works → the runner is paused and none can start; the record is followed live (`ktask agent show ID`); Esc closes the view and the fix goes on; s or [s Stop] (`ktask agent stop ID`) ends it, reaps its processes, leaves the project paused and keeps the steps already applied. [ and ] page through past fixes, b returns to the form. A time limit and a cost limit bound it (Config i, `ktask agent limits --fix-time-limit-ms --fix-cost-limit-usd`; 30 minutes and 5 USD), with the operator role model and its own scratch TMPDIR.
+- What a fix may do → ktask commands for this project (configuration, checks, models, limits, delivery, task edits, inserting and moving tasks, stop, restart, retry, answering a question when the instruction gives the answer); repair the folder and Git state without discarding work (commit or stash); change the host inside the ktask user account. It may not delete or move projects, touch other projects, shut ktask down, mark tasks done or cancelled, approve drafts unless the instruction says "approve #ID", use elevated privileges, or write product code, which goes into the queue as tasks. Refused steps are listed as left for the owner. Changes go through the shared application commands and are attributed to the AI actor "agent fix #N".
+- The tree after a fix → work no task owns is stashed (message naming the fix) before the agent starts, and the record says where it went; a paused or failed task's own work stays for its attempt. A fix that leaves uncommitted files names them and is not Done.
+- The outcome → the fix repeats what failed (checks, the current task's requirements, a dirty tree, commands the agent named before changing anything). Done only when a failure now passes and nothing else is wrong; Failed when nothing got better; otherwise Unverified. With --resume only a Done fix continues the queue; otherwise the runner stays paused. The record lists each step and its result, files and settings changed, verification and what remains.
 - Open About → read application identity and version → return to the previous screen unchanged.
 - Use CLI → perform the same nonvisual operations and inspect their results; screen navigation, layout, and mouse preferences are TUI-only.
 

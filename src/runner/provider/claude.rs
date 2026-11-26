@@ -66,7 +66,9 @@ pub(super) fn launch(
             );
             args.extend(READ_ONLY_TOOLS.iter().map(|tool| tool.to_string()));
         }
-        Access::Write => args.extend(["--permission-mode".into(), "bypassPermissions".into()]),
+        Access::Write | Access::Repair => {
+            args.extend(["--permission-mode".into(), "bypassPermissions".into()])
+        }
     }
     if let Some(session) = session {
         args.extend(["--resume".into(), session.into()]);

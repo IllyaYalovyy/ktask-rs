@@ -7,7 +7,7 @@ use crate::{
     application::{
         Actor, ModelConfig, Service,
         investigation::{
-            FixClass, FixStep, Investigation, InvestigationLimits, InvestigationState,
+            AgentKind, FixClass, FixStep, Investigation, InvestigationLimits, InvestigationState,
             InvestigationUsage, Progress, ProgressKind, Reference, ReferenceKind, Report,
         },
         now_ms,
@@ -26,6 +26,8 @@ const QUESTION: &str = "Question (blank: explain the current state)";
 const TASK: &str = "Task ID (blank: current task)";
 const TIME_LIMIT: &str = "Time limit per report (minutes)";
 const COST_LIMIT: &str = "Cost limit per report (USD)";
+const FIX_TIME_LIMIT: &str = "Time limit per fix (minutes)";
+const FIX_COST_LIMIT: &str = "Cost limit per fix (USD)";
 const NEW: &str = "New report";
 /// Past reports the form offers and lists.
 const OFFERED: usize = 50;
@@ -42,6 +44,7 @@ struct Demo {
     reports: Vec<Investigation>,
     steps: u32,
     limits: InvestigationLimits,
+    fix_limits: InvestigationLimits,
 }
 
 const DEMO_FINDINGS: [(u32, &str); 3] = [
@@ -89,6 +92,7 @@ fn demo_investigation(id: i64, question: Option<&str>, task_id: Option<i64>) -> 
     let limits = InvestigationLimits::default();
     Investigation {
         id,
+        kind: AgentKind::Report,
         project_id: 0,
         task_id,
         question: question.map(str::to_owned),
@@ -133,6 +137,11 @@ impl Demo {
             reports: vec![stopped, finished],
             steps: 0,
             limits: InvestigationLimits::default(),
+            fix_limits: InvestigationLimits {
+                version: 0,
+                time_limit_ms: 30 * 60 * 1000,
+                cost_limit_microusd: 5_000_000,
+            },
         }
     }
 
@@ -223,7 +232,10 @@ impl Reports {
             return Ok(self.demo.reports.clone());
         };
         investigate::settle(&mut stored.service, &stored.paths).map_err(|e| e.to_string())?;
-        stored.service.investigations().map_err(|e| e.to_string())
+        let mut listed = stored.service.investigations().map_err(|e| e.to_string())?;
+        // Fixes have their own form and view.
+        listed.retain(|item| item.kind == AgentKind::Report);
+        Ok(listed)
     }
 
     fn read(&mut self, id: i64) -> Result<Investigation, String> {
@@ -287,24 +299,35 @@ impl Reports {
         }
     }
 
+    fn fix_limits(&self) -> Result<InvestigationLimits, String> {
+        match &self.stored {
+            Some(stored) => stored.service.fix_limits().map_err(|e| e.to_string()),
+            None => Ok(self.demo.fix_limits.clone()),
+        }
+    }
+
+    /// Saves both limits: `report` and `fix` as (time in ms, cost in micro-USD).
     fn save_limits(
         &mut self,
         version: i64,
-        time_limit_ms: i64,
-        cost_limit_microusd: i64,
+        report: (i64, i64),
+        fix: (i64, i64),
     ) -> Result<(), String> {
         match &mut self.stored {
             Some(stored) => stored
                 .service
-                .save_investigation_limits(version, time_limit_ms, cost_limit_microusd)
+                .save_investigation_limits(version, report.0, report.1)
+                .and_then(|saved| stored.service.save_fix_limits(saved.version, fix.0, fix.1))
                 .map(|_| ())
                 .map_err(|e| e.to_string()),
             None => {
-                self.demo.limits = InvestigationLimits {
+                let limits = |(time_limit_ms, cost_limit_microusd)| InvestigationLimits {
                     version: version + 1,
                     time_limit_ms,
                     cost_limit_microusd,
                 };
+                self.demo.limits = limits(report);
+                self.demo.fix_limits = limits(fix);
                 Ok(())
             }
         }
@@ -362,8 +385,13 @@ impl Reports {
     fn view(&mut self, id: i64) -> Result<Dialog, String> {
         let found = self.read(id)?;
         let running = found.state == InvestigationState::Running;
+        let finished = found.state == InvestigationState::Finished;
         let mut dialog = Dialog::new(
-            DialogKind::Report { id, running },
+            DialogKind::Report {
+                id,
+                running,
+                finished,
+            },
             &self.title(&found),
             &report_text::document(&found, now_ms()),
             vec![],
@@ -386,7 +414,7 @@ impl Reports {
 
     /// Reloads the view's report; true when the screen changed.
     fn refresh(&mut self, dialog: &mut Dialog) -> bool {
-        let DialogKind::Report { id, running } = dialog.kind else {
+        let DialogKind::Report { id, running, .. } = dialog.kind else {
             return false;
         };
         if !running || self.refreshed.elapsed() < REFRESH {
@@ -411,6 +439,7 @@ impl Reports {
                 dialog.kind = DialogKind::Report {
                     id,
                     running: !ended,
+                    finished: found.state == InvestigationState::Finished,
                 };
                 dialog.body = body;
                 dialog.title = title;
@@ -443,7 +472,7 @@ fn parse_amount(text: &str, what: &str) -> Result<f64, String> {
 
 impl App {
     /// The project a report action is about: the selected row on Projects, else the open one.
-    fn report_target(&self) -> Option<(i64, String)> {
+    pub(crate) fn agent_target(&self) -> Option<(i64, String)> {
         let id = if self.view == View::Projects {
             self.hub.selected
         } else {
@@ -461,7 +490,7 @@ impl App {
     fn bind_reports(&mut self) -> Result<(), String> {
         let (target, paths) = if self.hub.stored() {
             let paths = self.instance.paths().map_err(|e| e.to_string())?;
-            let target = self.report_target().ok_or("No project selected")?;
+            let target = self.agent_target().ok_or("No project selected")?;
             (Some(target), Some(paths))
         } else {
             (None, None)
@@ -523,6 +552,14 @@ impl App {
             KeyCode::Char('[') => Action::ReportStep(1),
             KeyCode::Char(']') => Action::ReportStep(-1),
             KeyCode::Char('b') => Action::Investigate,
+            KeyCode::Char('f')
+                if matches!(
+                    self.dialog.as_ref().map(|d| &d.kind),
+                    Some(DialogKind::Report { finished: true, .. })
+                ) =>
+            {
+                Action::Fix
+            }
             KeyCode::Home => Action::Scroll(i32::MIN),
             KeyCode::End => Action::Scroll(i32::MAX),
             _ => return false,
@@ -580,19 +617,21 @@ impl App {
     }
 
     pub(crate) fn report_limits_form(&mut self) {
-        let result = self.bind_reports().and_then(|()| self.reports.setup());
+        let result = self
+            .bind_reports()
+            .and_then(|()| Ok((self.reports.setup()?.1, self.reports.fix_limits()?)));
+        let dollars = |microusd: i64| format!("{:.2}", microusd as f64 / 1_000_000.0);
         match result {
-            Ok((_, limits)) => {
+            Ok((limits, fix)) => {
                 self.dialog = Some(Dialog::new(
                     DialogKind::ReportLimits(limits.version),
                     "Agent report limits",
-                    "What one investigation of this project may use. Reports already running keep their limits.\nThe cost limit ends a Claude Code or OpenCode report; Codex reports no cost, so only the time limit bounds it.\nThe model is the operator role in m Defaults; unset, the remediation model.",
+                    "What one report or fix of this project may use; running ones keep theirs.\nCodex reports no cost, so only the time limit bounds it.\nThe model is the operator role in m Defaults; unset, the remediation model.",
                     vec![
                         Field::text(TIME_LIMIT, &minutes(limits.time_limit_ms)),
-                        Field::text(
-                            COST_LIMIT,
-                            &format!("{:.2}", limits.cost_limit_microusd as f64 / 1_000_000.0),
-                        ),
+                        Field::text(COST_LIMIT, &dollars(limits.cost_limit_microusd)),
+                        Field::text(FIX_TIME_LIMIT, &minutes(fix.time_limit_ms)),
+                        Field::text(FIX_COST_LIMIT, &dollars(fix.cost_limit_microusd)),
                     ],
                 ))
             }
@@ -605,13 +644,17 @@ impl App {
         dialog: &Dialog,
         version: i64,
     ) -> Result<(), String> {
-        let time = parse_amount(dialog.get(TIME_LIMIT), "The time limit")?;
-        let cost = parse_amount(dialog.get(COST_LIMIT), "The cost limit")?;
-        self.reports.save_limits(
-            version,
-            (time * 60_000.0).round() as i64,
-            (cost * 1_000_000.0).round() as i64,
-        )?;
+        let pair = |time: &str, cost: &str, what: &str| -> Result<(i64, i64), String> {
+            let time = parse_amount(dialog.get(time), &format!("The {what} time limit"))?;
+            let cost = parse_amount(dialog.get(cost), &format!("The {what} cost limit"))?;
+            Ok((
+                (time * 60_000.0).round() as i64,
+                (cost * 1_000_000.0).round() as i64,
+            ))
+        };
+        let report = pair(TIME_LIMIT, COST_LIMIT, "report")?;
+        let fix = pair(FIX_TIME_LIMIT, FIX_COST_LIMIT, "fix")?;
+        self.reports.save_limits(version, report, fix)?;
         self.message("Agent report limits saved");
         Ok(())
     }

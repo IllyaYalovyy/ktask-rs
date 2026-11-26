@@ -1,6 +1,6 @@
 use super::{Failure, Result, output};
 use crate::{
-    application::Service,
+    application::{Service, investigation::AgentKind},
     instance::{Instance, Paths, TuiShutdown},
     runner::{control, investigate, registration, workspace::Workspace},
     storage::Database,
@@ -67,7 +67,8 @@ fn service(project: &Project<'_>) -> Result<Service> {
     Ok(Service::registered(db, project.id, project.name.clone())?)
 }
 
-/// An upgrade also ends agent reports still being written; what it ended.
+/// An upgrade also ends agent reports still being written and running fixes; what it
+/// ended.
 fn end_investigations(
     projects: &[Project<'_>],
     errors: &mut Vec<Failure>,
@@ -75,10 +76,11 @@ fn end_investigations(
     let mut ended = Vec::new();
     for project in projects {
         match end_investigation(project) {
-            Ok(Some(id)) => ended.push(json!({
+            Ok(Some((id, kind))) => ended.push(json!({
                 "instance": project.instance.name(),
                 "project": project.root.to_string_lossy(),
                 "id": id,
+                "kind": kind,
             })),
             Ok(None) => {}
             Err(error) => errors.push(context(error, project.instance, Some(&project.root))),
@@ -87,15 +89,15 @@ fn end_investigations(
     ended
 }
 
-/// The ID of the report it ended, if one was being written.
-fn end_investigation(project: &Project<'_>) -> Result<Option<i64>> {
+/// The report or fix it ended, if one was running.
+fn end_investigation(project: &Project<'_>) -> Result<Option<(i64, AgentKind)>> {
     let mut service = service(project)?;
     investigate::settle(&mut service, project.paths)?;
-    let Some(id) = service.running_investigation()? else {
+    let Some((id, kind)) = service.running_agent()? else {
         return Ok(None);
     };
     investigate::stop(&mut service, project.paths, id)?;
-    Ok(Some(id))
+    Ok(Some((id, kind)))
 }
 
 fn request<'a>(project: &'a Project<'a>, mut service: Service, lease: File) -> Result<Target<'a>> {
@@ -243,11 +245,18 @@ pub(super) fn run(shutdown: bool) -> Result<output::Reply> {
         });
     }
     let count = runners.len();
-    let ended = if investigations.is_empty() {
-        String::new()
-    } else {
-        format!(" Stopped {} agent report(s).", investigations.len())
-    };
+    let fixes = investigations
+        .iter()
+        .filter(|ended| ended["kind"] == "fix")
+        .count();
+    let reports = investigations.len() - fixes;
+    let mut ended = String::new();
+    if reports > 0 {
+        ended.push_str(&format!(" Stopped {reports} agent report(s)."));
+    }
+    if fixes > 0 {
+        ended.push_str(&format!(" Stopped {fixes} agent fix(es)."));
+    }
     let text = match (shutdown, count) {
         (true, _) => format!("Shutdown complete. Paused {count} runner(s).{ended}\n"),
         (false, 0) => "Nothing is running\n".into(),

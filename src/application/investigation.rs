@@ -1,6 +1,7 @@
 //! Agent reports: owner-started, read-only investigations of one project and the reports
 //! they leave. An investigation is not a task. Its commands write only its own rows, so no
-//! task, revision, attempt or setting changes because one ran.
+//! task, revision, attempt or setting changes because one ran. Agent fixes
+//! ([`super::fix`]) share the run record: ID, state, limits, progress, usage and stop.
 use super::*;
 use serde::Serialize;
 
@@ -15,7 +16,25 @@ pub const OPERATOR_ROLE: &str = "operator";
 stored_names! {
     #[derive(Serialize)]
     #[serde(rename_all = "snake_case")]
-    /// How an investigation stands. Only `finished` has a report.
+    /// What an agent run is: a read-only report or a fix.
+    pub enum AgentKind {
+        Report => "report",
+        Fix => "fix",
+    }
+}
+
+impl AgentKind {
+    /// "Agent report #3" or "Agent fix #4".
+    pub fn named(self, id: i64) -> String {
+        format!("Agent {self} #{id}")
+    }
+}
+
+stored_names! {
+    #[derive(Serialize)]
+    #[serde(rename_all = "snake_case")]
+    /// How an agent run stands. Only a `finished` report has a report; a `finished` fix is
+    /// verified.
     pub enum InvestigationState {
         Running => "running",
         Finished => "finished",
@@ -23,6 +42,7 @@ stored_names! {
         TimedOut => "timed_out",
         OverBudget => "over_budget",
         Stopped => "stopped",
+        Unverified => "unverified",
     }
 }
 
@@ -35,6 +55,7 @@ impl InvestigationState {
             Self::TimedOut => "Timed out",
             Self::OverBudget => "Over cost limit",
             Self::Stopped => "Stopped",
+            Self::Unverified => "Unverified",
         }
     }
 }
@@ -157,6 +178,7 @@ pub struct InvestigationUsage {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Investigation {
     pub id: i64,
+    pub kind: AgentKind,
     pub project_id: i64,
     pub task_id: Option<i64>,
     pub question: Option<String>,
@@ -186,7 +208,7 @@ pub struct NewInvestigation<'a> {
     pub limits: &'a InvestigationLimits,
 }
 
-const COLUMNS: &str = "id,project_id,task_id,question,requester_kind,requester,provider,model,effort,state,time_limit_ms,cost_limit_microusd,stop_requested_by,started_at_ms,finished_at_ms,reason,input_tokens,cache_read_tokens,cache_write_tokens,output_tokens,cost_microusd";
+const COLUMNS: &str = "id,project_id,task_id,question,requester_kind,requester,provider,model,effort,state,time_limit_ms,cost_limit_microusd,stop_requested_by,started_at_ms,finished_at_ms,reason,input_tokens,cache_read_tokens,cache_write_tokens,output_tokens,cost_microusd,kind";
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Investigation> {
     Ok(Investigation {
@@ -215,12 +237,13 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Investigation> {
             output_tokens: r.get(19)?,
             cost_microusd: r.get(20)?,
         },
+        kind: r.get(21)?,
         report: None,
         progress: Vec::new(),
     })
 }
 
-fn clip(text: &str, limit: usize) -> String {
+pub(super) fn clip(text: &str, limit: usize) -> String {
     let mut clipped: String = text.trim().chars().take(limit).collect();
     if text.trim().chars().count() > limit {
         clipped.push('…');
@@ -300,17 +323,14 @@ impl Service {
         })
     }
 
-    /// The investigation recorded as running, whether or not its process is still alive.
+    /// The report or fix recorded as running, whether or not its process is still alive.
     pub fn running_investigation(&self) -> Result<Option<i64>> {
-        Ok(self
-            .db
-            .connection()
-            .query_row(
-                "SELECT id FROM investigations WHERE project_id=?1 AND state='running'",
-                [self.project_id],
-                |r| r.get(0),
-            )
-            .optional()?)
+        Ok(self.running_agent()?.map(|(id, _)| id))
+    }
+
+    /// Like [`Self::running_investigation`], with what runs.
+    pub fn running_agent(&self) -> Result<Option<(i64, AgentKind)>> {
+        running(self.db.connection(), self.project_id)
     }
 
     /// Records a running investigation requested by this service's actor. Only the process
@@ -330,33 +350,7 @@ impl Service {
                 &format!("Task #{task} does not exist in this project"),
             )?;
         }
-        let running: Option<i64> = tx
-            .query_row(
-                "SELECT id FROM investigations WHERE project_id=?1 AND state='running'",
-                [self.project_id],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if let Some(id) = running {
-            return Err(Error::Conflict(already_running(id)));
-        }
-        tx.execute(
-            "INSERT INTO investigations(project_id,task_id,question,requester_kind,requester,provider,model,effort,state,time_limit_ms,cost_limit_microusd,started_at_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'running',?9,?10,?11)",
-            params![
-                self.project_id,
-                new.task_id,
-                new.question.map(str::trim).filter(|q| !q.is_empty()),
-                self.actor.kind.as_str(),
-                self.actor.name,
-                new.model.provider,
-                new.model.model,
-                new.model.effort,
-                new.limits.time_limit_ms,
-                new.limits.cost_limit_microusd,
-                now_ms()
-            ],
-        )?;
-        let id = tx.last_insert_rowid();
+        let id = insert_run(&tx, self.project_id, &self.actor, AgentKind::Report, new)?;
         tx.commit()?;
         Ok(id)
     }
@@ -422,7 +416,11 @@ impl Service {
             ))
         })?;
         Err(Error::Conflict(format!(
-            "Investigation #{id} is not running ({})",
+            "{} is not running ({})",
+            match found.kind {
+                AgentKind::Report => format!("Investigation #{id}"),
+                AgentKind::Fix => AgentKind::Fix.named(id),
+            },
             found.state.label().to_lowercase()
         )))
     }
@@ -558,7 +556,7 @@ impl Service {
                 })
             })?
             .collect::<rusqlite::Result<_>>()?;
-        if found.state == InvestigationState::Finished {
+        if found.kind == AgentKind::Report && found.state == InvestigationState::Finished {
             let references = tx
                 .prepare("SELECT kind,target,detail,verified FROM investigation_references WHERE investigation_id=?1 ORDER BY ordinal")?
                 .query_map([id], |r| {
@@ -599,11 +597,56 @@ impl Service {
     }
 }
 
-/// The refusal a second request gets, naming the investigation that runs.
-pub(crate) fn already_running(id: i64) -> String {
+/// The refusal a second request gets, naming the report or fix that runs.
+pub(crate) fn already_running(id: i64, kind: AgentKind) -> String {
+    let name = match kind {
+        AgentKind::Report => format!("Investigation #{id}"),
+        AgentKind::Fix => AgentKind::Fix.named(id),
+    };
     format!(
-        "Investigation #{id} is already running for this project; read it with ktask agent show {id} or end it with ktask agent stop {id}"
+        "{name} is already running for this project; read it with ktask agent show {id} or end it with ktask agent stop {id}"
     )
+}
+
+fn running(db: &rusqlite::Connection, project: i64) -> Result<Option<(i64, AgentKind)>> {
+    Ok(db
+        .query_row(
+            "SELECT id,kind FROM investigations WHERE project_id=?1 AND state='running'",
+            [project],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?)
+}
+
+/// Records one running report or fix; refused while either runs.
+pub(super) fn insert_run(
+    tx: &Transaction<'_>,
+    project: i64,
+    actor: &Actor,
+    kind: AgentKind,
+    new: &NewInvestigation<'_>,
+) -> Result<i64> {
+    if let Some((id, kind)) = running(tx, project)? {
+        return Err(Error::Conflict(already_running(id, kind)));
+    }
+    tx.execute(
+        "INSERT INTO investigations(project_id,task_id,question,requester_kind,requester,provider,model,effort,state,time_limit_ms,cost_limit_microusd,started_at_ms,kind) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'running',?9,?10,?11,?12)",
+        params![
+            project,
+            new.task_id,
+            new.question.map(str::trim).filter(|q| !q.is_empty()),
+            actor.kind.as_str(),
+            actor.name,
+            new.model.provider,
+            new.model.model,
+            new.model.effort,
+            new.limits.time_limit_ms,
+            new.limits.cost_limit_microusd,
+            now_ms(),
+            kind
+        ],
+    )?;
+    Ok(tx.last_insert_rowid())
 }
 
 #[cfg(test)]

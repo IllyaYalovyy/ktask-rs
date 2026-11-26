@@ -1,7 +1,9 @@
 //! The investigator behind an agent report: a detached process that runs one read-only
 //! agent turn about a project and records what it found. It holds the project's
 //! investigation lease, never its runner or workspace locks, so a run goes on untouched.
-//! Starting, stopping and settling are the same however the request arrived.
+//! Starting, stopping and settling are the same however the request arrived. Agent fixes
+//! ([`super::fix`]) start through the same handshake and hold the same lease, so a project
+//! never has a report and a fix at once.
 use super::{
     process::{self, Invocation, Received, Worker},
     provider::{self, Access, Event, Provider},
@@ -11,8 +13,9 @@ use crate::{
     application::{
         Actor, ActorKind, ModelConfig, Service,
         investigation::{
-            FixClass, FixStep, InvestigationLimits, InvestigationState, InvestigationUsage,
-            NewInvestigation, ProgressKind, Reference, ReferenceKind, Report, already_running,
+            AgentKind, FixClass, FixStep, InvestigationLimits, InvestigationState,
+            InvestigationUsage, NewInvestigation, ProgressKind, Reference, ReferenceKind, Report,
+            already_running,
         },
     },
     instance::{Instance, Paths},
@@ -85,10 +88,10 @@ struct Wire {
     requester: String,
 }
 
-/// The investigator's one answer to whoever started it.
+/// The agent process's one answer to whoever started it.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum Started {
+pub(super) enum Started {
     Started(i64),
     Refused(String),
 }
@@ -101,9 +104,24 @@ fn file(paths: &Paths, project: i64, extension: &str) -> PathBuf {
     directory(paths).join(format!("{project}.{extension}"))
 }
 
-/// Every file ktask keeps for a project's investigations outside the database.
-pub(crate) fn files(paths: &Paths, project: i64) -> [PathBuf; 3] {
-    ["lock", "worker", "log"].map(|extension| file(paths, project, extension))
+/// Every file ktask keeps for a project's reports and fixes outside the database.
+pub(crate) fn files(paths: &Paths, project: i64) -> [PathBuf; 5] {
+    ["lock", "worker", "log", "probe", "plan"].map(|extension| file(paths, project, extension))
+}
+
+/// The lock of the guardian running a dry run's planning turn.
+pub(super) fn plan_lock(paths: &Paths, project: i64) -> PathBuf {
+    file(paths, project, "plan")
+}
+
+/// The lock of the guardian running a report or fix turn of `project`.
+pub(super) fn worker_lock(paths: &Paths, project: i64) -> PathBuf {
+    file(paths, project, "worker")
+}
+
+/// The lock of the guardian running a fix agent's own verification command.
+pub(super) fn probe_lock(paths: &Paths, project: i64) -> PathBuf {
+    file(paths, project, "probe")
 }
 
 /// The project's investigation lease, held so none starts; None while one is alive.
@@ -140,12 +158,18 @@ pub fn settle(service: &mut Service, paths: &Paths) -> Result<()> {
     }
 }
 
-fn abandon(service: &mut Service) -> Result<()> {
-    if let Some(id) = service.running_investigation()? {
+/// Records the running report or fix as failed; only called without a live process.
+pub(super) fn abandon(service: &mut Service) -> Result<()> {
+    if let Some((id, kind)) = service.running_agent()? {
         service.end_investigation(
             id,
             InvestigationState::Failed,
-            "The investigator process ended without recording a result",
+            match kind {
+                AgentKind::Report => "The investigator process ended without recording a result",
+                AgentKind::Fix => {
+                    "The fix process ended without recording a result; the runner stays paused"
+                }
+            },
         )?;
     }
     Ok(())
@@ -189,11 +213,27 @@ pub fn start(paths: &Paths, project: i64, request: &Request) -> Result<i64> {
             "The question must be at most 4000 characters",
         )?;
     }
+    let wire = Wire {
+        task: request.task,
+        question: request.question.clone(),
+        ai: matches!(request.requester.kind, ActorKind::Ai),
+        requester: request.requester.name.clone(),
+    };
+    launch(paths, project, "__investigate", &wire)
+}
+
+/// Starts a detached agent process, hands it `wire` and returns the ID it records.
+pub(super) fn launch(
+    paths: &Paths,
+    project: i64,
+    mode: &str,
+    wire: &impl Serialize,
+) -> Result<i64> {
     fs::create_dir_all(directory(paths))?;
     let log_path = file(paths, project, "log");
     let log = File::create(&log_path)?;
     let mut child = Command::new(&paths.executable)
-        .arg("__investigate")
+        .arg(mode)
         .arg(project.to_string())
         .current_dir(&paths.state)
         .stdin(Stdio::piped())
@@ -202,14 +242,8 @@ pub fn start(paths: &Paths, project: i64, request: &Request) -> Result<i64> {
         // Its own group: closing or interrupting the launching terminal does not end it.
         .process_group(0)
         .spawn()?;
-    let wire = Wire {
-        task: request.task,
-        question: request.question.clone(),
-        ai: matches!(request.requester.kind, ActorKind::Ai),
-        requester: request.requester.name.clone(),
-    };
     let mut input = child.stdin.take().expect("piped stdin");
-    let sent = serde_json::to_writer(&mut input, &wire)
+    let sent = serde_json::to_writer(&mut input, wire)
         .map_err(io::Error::other)
         .and_then(|()| writeln!(input));
     drop(input);
@@ -227,7 +261,7 @@ pub fn start(paths: &Paths, project: i64, request: &Request) -> Result<i64> {
     sent?;
     let line = answer.recv_timeout(PATIENCE).map_err(|_| {
         Error::Conflict(format!(
-            "The investigator has not started yet; check ktask agent list and {}",
+            "The agent has not started yet; check ktask agent list and {}",
             log_path.display()
         ))
     })?;
@@ -237,21 +271,21 @@ pub fn start(paths: &Paths, project: i64, request: &Request) -> Result<i64> {
         Err(_) => {
             let log = fs::read_to_string(&log_path).unwrap_or_default();
             Err(Error::Conflict(format!(
-                "The investigator ended before it started: {}",
+                "The agent ended before it started: {}",
                 log.trim()
             )))
         }
     }
 }
 
-fn answer(started: &Started) -> io::Result<()> {
+pub(super) fn answer(started: &Started) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
     serde_json::to_writer(&mut stdout, started)?;
     writeln!(stdout)?;
     stdout.flush()
 }
 
-fn message(error: Error) -> String {
+pub(super) fn message(error: Error) -> String {
     match error {
         Error::Conflict(message) => message,
         other => other.to_string(),
@@ -360,20 +394,21 @@ fn prepare(instance: Instance, project: &str) -> Result<Prepared> {
     })
 }
 
-/// Exclusive ownership of the project's investigations, or the refusal naming the one that
-/// runs. Status checks and an investigator that is just starting are waited out.
-fn lease(service: &mut Service, paths: &Paths) -> Result<File> {
+/// Exclusive ownership of the project's reports and fixes, or the refusal naming the one
+/// that runs. Status checks and an agent that is just starting are waited out.
+pub(super) fn lease(service: &mut Service, paths: &Paths) -> Result<File> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if let Some(lease) = claim(paths, service.project_id)? {
             return Ok(lease);
         }
-        if let Some(id) = service.running_investigation()? {
-            return Err(Error::Conflict(already_running(id)));
+        if let Some((id, kind)) = service.running_agent()? {
+            return Err(Error::Conflict(already_running(id, kind)));
         }
         if Instant::now() >= deadline {
             return Err(Error::Conflict(
-                "Another investigation of this project is starting or ending; try again".into(),
+                "Another investigation or fix of this project is starting or ending; try again"
+                    .into(),
             ));
         }
         thread::sleep(Duration::from_millis(25));
@@ -494,7 +529,7 @@ fn invocation(
 }
 
 /// Git state as the investigation found it, read without refreshing the index.
-fn git_snapshot(root: &Path) -> Result<String> {
+pub(super) fn git_snapshot(root: &Path) -> Result<String> {
     let mut text = String::new();
     for args in [
         &["status", "--porcelain=v2", "--branch"][..],

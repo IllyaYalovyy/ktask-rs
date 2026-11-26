@@ -40,7 +40,12 @@ const BY_TASK: [&str; 7] = [
     "task_lifecycle_events",
 ];
 /// Rows that belong to an investigation and carry no project of their own.
-const BY_INVESTIGATION: [&str; 3] = [
+const BY_INVESTIGATION: [&str; 7] = [
+    // Before the fix record: its rows name the report they carried out.
+    "agent_fix_steps",
+    "agent_fix_changes",
+    "agent_fix_probes",
+    "agent_fixes",
     "investigation_progress",
     "investigation_references",
     "investigation_fix_steps",
@@ -118,7 +123,7 @@ fn idle(db: &Database, paths: &Paths, id: i64, name: &str) -> Result<Idle> {
     })?;
     let investigation = investigate::claim(paths, id)?.ok_or_else(|| {
         Error::Conflict(format!(
-            "An agent report is being written for {name} · stop it first (ktask agent stop ID)"
+            "An agent report is being written for {name}, or an agent fix runs · stop it first (ktask agent stop ID)"
         ))
     })?;
     let provision = match fs::File::open(provision_file(paths, id, "lock")) {

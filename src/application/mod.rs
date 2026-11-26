@@ -67,6 +67,7 @@ pub mod configuration;
 pub mod delivery;
 pub mod dependency;
 pub mod execution;
+pub mod fix;
 pub mod investigation;
 pub(crate) mod investigation_packet;
 pub mod lenses;

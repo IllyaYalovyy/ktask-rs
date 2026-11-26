@@ -17,6 +17,10 @@ pub(super) fn launch(
     let sandbox = match access {
         Access::ReadOnly => "read-only",
         Access::Write => "workspace-write",
+        // The fix's own bubblewrap sandbox bounds it. Without agent network Codex keeps
+        // its workspace sandbox, which is what blocks the network.
+        Access::Repair if network => "danger-full-access",
+        Access::Repair => "workspace-write",
     };
     let mut args: Vec<String> = [
         "exec",

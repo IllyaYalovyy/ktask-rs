@@ -41,7 +41,8 @@ pub(crate) fn provider_invocation(
         schema: launch.schema_file,
         sandbox: match access {
             Access::ReadOnly => Some(sandbox::Sandbox::for_project(project, paths)?),
-            Access::Write => None,
+            // A fix turn's sandbox is the caller's own.
+            Access::Write | Access::Repair => None,
         },
         ..Invocation::new(
             provider.executable()?,
@@ -390,6 +391,7 @@ impl Turn<'_> {
                     || std::env::var("PATH").unwrap_or_default(),
                     |(_, value)| value.clone(),
                 ),
+            fix: None,
         });
         Ok(invocation)
     }

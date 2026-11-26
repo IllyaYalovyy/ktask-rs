@@ -24,6 +24,14 @@ fn hint(dialog: &Dialog, has_position: bool) -> &str {
         "[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t artifacts"
     } else if matches!(dialog.kind, DialogKind::Report { running: true, .. }) {
         "s stop · [ ] older/newer · b reports · Esc: close, it keeps running"
+    } else if matches!(dialog.kind, DialogKind::Report { finished: true, .. }) {
+        "f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc"
+    } else if matches!(dialog.kind, DialogKind::FixView { running: true, .. }) {
+        "s stop · [ ] older/newer · b fixes · Esc: close, it keeps running"
+    } else if matches!(dialog.kind, DialogKind::FixView { .. }) {
+        "[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close"
+    } else if matches!(dialog.kind, DialogKind::FixConfirm(_)) {
+        "Enter / Ctrl-S: start the fix · Esc: cancel"
     } else if matches!(dialog.kind, DialogKind::Report { .. }) {
         "[ ] older/newer · b reports · Wheel / PgUp / PgDn: scroll · Esc: close"
     } else if dialog.read_only() {
@@ -182,10 +190,31 @@ fn controls(app: &App, dialog: &Dialog, has_position: bool) -> Vec<(&'static str
     if matches!(dialog.kind, DialogKind::Readiness) {
         return readiness_controls(app);
     }
-    if let DialogKind::Report { running, .. } = dialog.kind {
+    if let DialogKind::FixView { running, .. } = dialog.kind {
+        let mut controls = vec![("Copy", Action::Copy)];
+        if running {
+            controls.push(("s Stop", Action::FixStop));
+        }
+        controls.extend([
+            ("Older", Action::FixStep(1)),
+            ("Newer", Action::FixStep(-1)),
+            ("b Fixes", Action::Fix),
+            ("Up", Action::Scroll(-8)),
+            ("Down", Action::Scroll(8)),
+            ("Close", Action::Cancel),
+        ]);
+        return controls;
+    }
+    if let DialogKind::Report {
+        running, finished, ..
+    } = dialog.kind
+    {
         let mut controls = vec![("Copy", Action::Copy)];
         if running {
             controls.push(("s Stop", Action::ReportStop));
+        }
+        if finished {
+            controls.push(("f Fix", Action::Fix));
         }
         controls.extend([
             ("Older", Action::ReportStep(1)),
@@ -208,6 +237,8 @@ fn controls(app: &App, dialog: &Dialog, has_position: bool) -> Vec<(&'static str
         ]
     } else if matches!(dialog.kind, DialogKind::BuildCacheConfirm(_)) {
         vec![("Confirm", Action::Submit), ("Cancel", Action::Cancel)]
+    } else if matches!(dialog.kind, DialogKind::FixConfirm(_)) {
+        vec![("Start fix", Action::Submit), ("Cancel", Action::Cancel)]
     } else {
         vec![("Apply", Action::Submit), ("Cancel", Action::Cancel)]
     };

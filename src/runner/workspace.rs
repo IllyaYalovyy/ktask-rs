@@ -89,6 +89,32 @@ pub struct Workspace {
     pub worker_lock: PathBuf,
     _lease: super::process::Lease,
 }
+/// Held by an agent fix in the Git common directory for as long as it works: no runner
+/// starts and no other ktask command changes the project folder meanwhile. It is not the
+/// runner lease, so a fix never shows as a live runner.
+const FIX_LOCK: &str = "ktask-fix.lock";
+
+pub(crate) struct FixHold {
+    _lease: super::process::Lease,
+}
+
+/// Refuses while an agent fix holds the repository, naming it.
+fn refuse_during_fix(common: &Path) -> Result<()> {
+    let path = common.join(FIX_LOCK);
+    let file = match File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if super::process::inspect(&file, |_| Ok(()))?.is_some() {
+        return Ok(());
+    }
+    let id = std::fs::read_to_string(&path)?;
+    let id = id.trim();
+    Err(Error::Conflict(format!(
+        "Agent fix #{id} is working in this project folder; wait for it, or end it with ktask agent stop {id}"
+    )))
+}
 pub const GIT_IDENTITY_FIX: &str =
     "git config user.name 'Your Name' && git config user.email 'you@example.com'";
 
@@ -181,7 +207,32 @@ impl Workspace {
         }
     }
 
+    /// Claims the project folder for fix `id`. A runner that already owns it keeps going
+    /// until the fix pauses it.
+    pub(crate) fn hold_for_fix(root: &Path, id: i64) -> Result<FixHold> {
+        let common = Self::common_dir(root)?
+            .ok_or_else(|| Error::Conflict("The project is not a Git repository".into()))?;
+        let lease = super::process::lock(&common.join(FIX_LOCK))?;
+        lease.set_len(0)?;
+        std::io::Write::write_all(&mut &*lease, id.to_string().as_bytes())?;
+        Ok(FixHold { _lease: lease })
+    }
+
     pub fn acquire(root: &Path) -> Result<Self> {
+        let workspace = Self::claim(root)?;
+        if let Some(common) = Self::common_dir(&workspace.root)? {
+            // Checked after taking the runner lease, which a fix reads after taking its own.
+            refuse_during_fix(&common)?;
+        }
+        Ok(workspace)
+    }
+
+    /// The runner lease for the fix that holds `_hold`, to settle what its runner left.
+    pub(crate) fn acquire_for_fix(root: &Path, _hold: &FixHold) -> Result<Self> {
+        Self::claim(root)
+    }
+
+    fn claim(root: &Path) -> Result<Self> {
         let root = root.canonicalize()?;
         let top = PathBuf::from(git(&root, &["rev-parse", "--show-toplevel"])?).canonicalize()?;
         if root != top {
