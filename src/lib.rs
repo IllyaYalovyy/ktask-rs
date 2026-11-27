@@ -25,6 +25,7 @@ mod fix_ui;
 mod forms;
 pub mod instance;
 mod lens_ui;
+mod limits_ui;
 mod link;
 mod mock;
 mod persistent;

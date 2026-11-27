@@ -217,7 +217,7 @@ fn delete_all(paths: &[PathBuf]) {
 
 /// Removes a scratch tree even when a stopped process left directories without owner
 /// permissions (a test fixture with mode 000, for example). A missing tree is success.
-fn remove_tree(path: &Path) -> io::Result<()> {
+pub(crate) fn remove_tree(path: &Path) -> io::Result<()> {
     match fs::remove_dir_all(path) {
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
             unlock_directories(path)?;

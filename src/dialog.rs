@@ -78,6 +78,12 @@ pub enum DialogKind {
     },
     Preferences(crate::application::preferences::Preferences),
     Delivery(crate::application::configuration::DeliveryConfig),
+    /// Every resource limit, to choose one to edit.
+    Limits(Vec<crate::application::resource_limits::LimitSetting>),
+    /// One limit's stored project and instance values, at what was read.
+    Limit(Box<crate::application::resource_limits::LimitSetting>),
+    /// Raise the limit a paused task waits on and resume it.
+    RaiseLimit(usize),
     Storage(crate::application::retention::Preview),
     StorageConfirm(crate::application::retention::Preview),
     BuildCache(crate::build_cache::Policy),

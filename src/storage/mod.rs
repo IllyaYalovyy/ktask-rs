@@ -26,6 +26,8 @@ pub enum Error {
     Conflict(String),
     /// A storage limit stopped its producer; the supervisor diagnoses it before pausing.
     Breach(Box<crate::resource::Breach>),
+    /// The shared storage budget refused a write; nothing of it was stored.
+    Capacity(Box<crate::resource::StorageRefusal>),
 }
 
 impl fmt::Display for Error {
@@ -36,6 +38,7 @@ impl fmt::Display for Error {
             Self::Incompatible(message) => write!(out, "incompatible database: {message}"),
             Self::Conflict(message) => write!(out, "command conflict: {message}"),
             Self::Breach(breach) => write!(out, "command conflict: {}", breach.reason),
+            Self::Capacity(refusal) => write!(out, "command conflict: {}", refusal.reason),
         }
     }
 }
@@ -45,7 +48,7 @@ impl std::error::Error for Error {
         match self {
             Self::Io(error) => Some(error),
             Self::Sql(error) => Some(error),
-            Self::Incompatible(_) | Self::Conflict(_) | Self::Breach(_) => None,
+            Self::Incompatible(_) | Self::Conflict(_) | Self::Breach(_) | Self::Capacity(_) => None,
         }
     }
 }

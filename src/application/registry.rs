@@ -13,8 +13,13 @@ use std::{
 };
 
 /// Rows that belong to an attempt and carry no project of their own.
-const BY_ATTEMPT: [&str; 13] = [
+const BY_ATTEMPT: [&str; 17] = [
     "resource_breaches",
+    "resource_pauses",
+    "attempt_scratch_peaks",
+    "pending_transcripts",
+    // After its manifest, which the statement before this list removes.
+    "evidence_collections",
     "attempt_delivery",
     "attempt_progress",
     "lens_review_findings",
@@ -50,7 +55,9 @@ const BY_INVESTIGATION: [&str; 7] = [
     "investigation_references",
     "investigation_fix_steps",
 ];
-const BY_PROJECT: [&str; 27] = [
+const BY_PROJECT: [&str; 29] = [
+    "resource_limit_settings",
+    "resource_high_water",
     "investigations",
     "project_investigation_limits",
     "pending_controls",
@@ -227,6 +234,14 @@ pub fn remove(db: &mut Database, paths: &Paths, id: i64, confirm: &str) -> Resul
         "DELETE FROM check_timeouts WHERE step_id IN (SELECT id FROM attempt_steps WHERE project_id = ?1)",
         [id],
     )?;
+    let retained = tx
+        .prepare("SELECT c.source_path FROM evidence_collections c JOIN attempts a ON a.id=c.attempt_id WHERE a.project_id=?1 AND c.state='collecting'")?
+        .query_map([id], |r| r.get::<_, Vec<u8>>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    tx.execute(
+        "DELETE FROM evidence_manifest WHERE collection_id IN (SELECT c.id FROM evidence_collections c JOIN attempts a ON a.id=c.attempt_id WHERE a.project_id=?1)",
+        [id],
+    )?;
     for table in BY_ATTEMPT {
         tx.execute(
             &format!("DELETE FROM {table} WHERE attempt_id IN (SELECT id FROM attempts WHERE project_id = ?1)"),
@@ -257,10 +272,19 @@ pub fn remove(db: &mut Database, paths: &Paths, id: i64, confirm: &str) -> Resul
             "{name} was not deleted; something still refers to it: {error}"
         ))
     })?;
-    let leftovers = remove_files(paths, id, &attempts);
+    let mut leftovers = remove_files(paths, id, &attempts);
+    // Evidence still waiting to be archived lives outside the state directory.
+    for path in retained {
+        use std::os::unix::ffi::OsStringExt;
+        let path = PathBuf::from(std::ffi::OsString::from_vec(path));
+        if let Err(error) = fs::remove_dir_all(&path)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            leftovers.push(format!("{}: {error}", path.display()));
+        }
+    }
     drop(idle);
     let lease = registration::lease_file(paths, id);
-    let mut leftovers = leftovers;
     discard(&lease, &mut leftovers);
     Ok(Removed {
         id,

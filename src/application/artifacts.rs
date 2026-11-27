@@ -57,8 +57,28 @@ fn valid_utf8_chunk(tail: &mut Vec<u8>, bytes: &[u8]) -> bool {
     }
 }
 
-fn retained_bytes(tx: &Transaction<'_>, attempt: i64) -> Result<i64> {
-    Ok(tx.query_row("SELECT (SELECT coalesce(sum(size_bytes),0) FROM artifacts WHERE attempt_id=?1 AND pruned_at_ms IS NULL) + (SELECT coalesce(sum(size_bytes),0) FROM artifact_reservations WHERE attempt_id=?1)", [attempt], |r| r.get(0))?)
+/// Files and bytes an attempt's artifact limits already count, pending copies included.
+/// With `transcripts`, only the supervisor's transcripts count: a worker's evidence never
+/// crowds out the record of a check.
+pub(super) fn retained(
+    db: &rusqlite::Connection,
+    attempt: i64,
+    transcripts: bool,
+) -> Result<(u64, u64)> {
+    let (files, bytes): (i64, i64) = db.query_row(
+        "SELECT count(*),coalesce(sum(size_bytes),0) FROM (
+           SELECT size_bytes,relative_path FROM artifacts WHERE attempt_id=?1 AND pruned_at_ms IS NULL
+           UNION ALL SELECT size_bytes,relative_path FROM artifact_reservations WHERE attempt_id=?1
+         ) WHERE ?2=0 OR relative_path LIKE '%.log'",
+        params![attempt, transcripts],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    Ok((files as u64, bytes as u64))
+}
+
+/// The supervisor's own transcripts are the `.log` files; worker evidence has no extension.
+fn is_transcript(relative: &str) -> bool {
+    relative.ends_with(".log")
 }
 
 /// A refused admission: the limit, what it was measured against, and the artifact that
@@ -96,12 +116,18 @@ fn require_file_budget(
     ))
 }
 
-fn require_budget(tx: &Transaction<'_>, attempt: i64, name: &str, size: u64) -> Result<()> {
+fn require_budget(
+    tx: &Transaction<'_>,
+    attempt: i64,
+    name: &str,
+    size: u64,
+    transcript: bool,
+) -> Result<()> {
     require_file_budget(tx, attempt, name, size)?;
     let attempt_limit = effective_limit(tx, attempt, Limit::ArtifactAttemptBytes)?;
     let count_limit = effective_limit(tx, attempt, Limit::ArtifactAttemptFiles)?;
-    let used = retained_bytes(tx, attempt)?;
-    let total = (used as u64).saturating_add(size);
+    let (count, used) = retained(tx, attempt, transcript)?;
+    let total = used.saturating_add(size);
     if total > attempt_limit {
         return Err(exceeded(
             Limit::ArtifactAttemptBytes,
@@ -114,12 +140,11 @@ fn require_budget(tx: &Transaction<'_>, attempt: i64, name: &str, size: u64) -> 
             ),
         ));
     }
-    let count: i64 = tx.query_row("SELECT (SELECT count(*) FROM artifacts WHERE attempt_id=?1 AND pruned_at_ms IS NULL) + (SELECT count(*) FROM artifact_reservations WHERE attempt_id=?1)", [attempt], |r| r.get(0))?;
-    if count as u64 >= count_limit {
+    if count >= count_limit {
         return Err(exceeded(
             Limit::ArtifactAttemptFiles,
             count_limit,
-            count as u64 + 1,
+            count + 1,
             name,
             format!(
                 "Artifact count limit reached ({count_limit} per attempt, including pending reservations)"
@@ -343,7 +368,7 @@ impl Service {
         }
         let tx = Transaction::new_unchecked(self.db.connection(), TransactionBehavior::Immediate)?;
         require(tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND project_id=?2 AND execution_token=?3)", params![attempt,self.project_id,token], |r| r.get::<_, bool>(0))?, "Runner lost ownership of artifact attempt")?;
-        require_budget(&tx, attempt, name, size)?;
+        require_budget(&tx, attempt, name, size, is_transcript(relative))?;
         super::retention::admit_capacity(
             &tx,
             super::retention::measure_known_bytes(&self.db)?,
@@ -799,7 +824,8 @@ mod tests {
                 &tx,
                 run.attempt,
                 "too-much",
-                Limit::ArtifactAttemptBytes.default_value()
+                Limit::ArtifactAttemptBytes.default_value(),
+                false
             )
             .is_err()
         );

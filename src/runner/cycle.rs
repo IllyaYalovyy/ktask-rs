@@ -1,8 +1,8 @@
 //! Findings are normal work within one durable attempt, not failed attempts.
 use super::{
-    Context, Outcome, check_timeout, checks,
+    Context, Outcome, check_timeout, checks, finish_evidence,
     judge::{judge, judge_attempt},
-    resource_breach,
+    record_pause, resource_breach,
     turn::ai,
 };
 use crate::{
@@ -63,12 +63,22 @@ fn phases(
         if let Some(wait) = ctx.environment_wait(service, run, "during the attempt")? {
             return Ok(wait);
         }
+        // Reviewers are given complete evidence, or the fact that it is truncated.
+        finish_evidence(service, ctx.workspace)?;
         refresh_verified_proof(service, run, ctx, progress)?;
         if let Some(breach) = service.pending_breach(run)? {
             match resource_breach::resolve(service, run, ctx, progress, &breach) {
                 Ok(Some(outcome)) => return Ok(outcome),
                 Ok(None) => continue,
+                Err(Error::Capacity(refusal)) => return Ok(Outcome::StorageBlocked(refusal)),
                 Err(error) => {
+                    record_pause(
+                        service,
+                        run,
+                        ctx,
+                        (breach.limit, breach.configured, breach.measured),
+                        matches!(error, Error::Breach(_)),
+                    )?;
                     return Ok(Outcome::DeliveryBlocked(format!(
                         "{}\nResource limit diagnosis could not continue: {error}; the breach is retained. Resume to retry diagnosis",
                         breach.report
@@ -82,7 +92,18 @@ fn phases(
             match check_timeout::resolve(service, run, ctx, progress, &timeout) {
                 Ok(Some(outcome)) => return Ok(outcome),
                 Ok(None) => continue,
+                Err(Error::Capacity(refusal)) => return Ok(Outcome::StorageBlocked(refusal)),
                 Err(error) => {
+                    // The timed-out check's transcript did not fit its limit.
+                    if let Error::Breach(breach) = &error {
+                        record_pause(
+                            service,
+                            run,
+                            ctx,
+                            (breach.limit, breach.configured, breach.measured),
+                            true,
+                        )?;
+                    }
                     return Ok(Outcome::DeliveryBlocked(format!(
                         "Check timeout diagnosis could not continue: {error}; timed-out check retained. Resume to retry diagnosis"
                     )));
@@ -195,9 +216,8 @@ fn phases(
         if progress.phase == Phase::Baseline {
             match outcome {
                 Outcome::Passed(_) => {
-                    service.output(
+                    service.note(
                         run,
-                        "system",
                         "Starting state verified: every check passes before work begins",
                     )?;
                     progress.phase = Phase::Implement;
@@ -278,7 +298,7 @@ fn phases(
                             Phase::Review | Phase::Validate | Phase::Decide
                         )
                     {
-                        service.output(run, "system", "Repair limit reached; only minor findings remain. Retaining them for independent acceptance.")?;
+                        service.note(run, "Repair limit reached; only minor findings remain. Retaining them for independent acceptance.")?;
                         progress.evidence.push_str(&format!("\n{}: {report}\nOnly minor findings remain; all mandatory criteria passed.", progress.phase));
                         progress.phase = if progress.phase == Phase::Review {
                             Phase::Validate
@@ -376,7 +396,7 @@ fn refresh_verified_proof(
     progress.evidence = format!("{}\n{change}", progress.context);
     progress.verified_tree.clear();
     progress.verified_environment.clear();
-    service.output(run, "system", &change)?;
+    service.note(run, &change)?;
     service.save_progress(run, progress)
 }
 
@@ -410,9 +430,8 @@ pub(super) fn request_fixes(
     );
     progress.phase = Phase::Judge;
     progress.why = finding_headline(report);
-    service.output(
+    service.note(
         run,
-        "system",
         &format!(
             "Changes requested · planning fix round {}/{REPAIR_ROUNDS} · {}",
             progress.round, progress.why,
@@ -446,9 +465,8 @@ pub(super) fn fix_checks(
     progress.phase = Phase::Fix;
     progress.why = report.lines().take(2).collect::<Vec<_>>().join(" · ");
     let headline = report.lines().next().unwrap_or(report);
-    service.output(
+    service.note(
         run,
-        "system",
         &format!(
             "{headline} · worker fixing, round {}/{REPAIR_ROUNDS}",
             progress.round

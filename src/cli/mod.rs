@@ -70,7 +70,9 @@ impl Failure {
 impl From<storage::Error> for Failure {
     fn from(error: storage::Error) -> Self {
         let (status, code) = match &error {
-            storage::Error::Conflict(_) | storage::Error::Breach(_) => (4, "conflict"),
+            storage::Error::Conflict(_)
+            | storage::Error::Breach(_)
+            | storage::Error::Capacity(_) => (4, "conflict"),
             storage::Error::Incompatible(_) => (1, "incompatible_database"),
             storage::Error::Io(_) => (1, "io"),
             storage::Error::Sql(_) => (1, "database"),
@@ -79,6 +81,7 @@ impl From<storage::Error> for Failure {
         let message = match error {
             storage::Error::Conflict(message) => message,
             storage::Error::Breach(breach) => breach.reason,
+            storage::Error::Capacity(refusal) => refusal.reason,
             other => other.to_string(),
         };
         Self {
@@ -583,12 +586,25 @@ fn run(instance: Instance, cli: &Cli, arguments: &[std::ffi::OsString]) -> Resul
         background,
         notify,
         continue_session,
+        raise,
     } = command
     {
         if *notify {
             // A detached supervisor leaves its launcher's session: with no controlling
             // terminal, closing that terminal or the TUI cannot signal it.
             nix::unistd::setsid().map_err(std::io::Error::from)?;
+        }
+        let mut raised = None;
+        if let Some(to) = raise {
+            let current = service
+                .current_task()?
+                .ok_or_else(|| Failure::missing("Queue is empty"))?;
+            let (limit, from, to) = service.raise_paused_limit(current.id, *to)?;
+            raised = Some(format!(
+                "Raised {limit} from {} to {} for this project; resumed",
+                limit.show(from),
+                limit.show(to)
+            ));
         }
         let resuming = service
             .current_task()?
@@ -624,10 +640,14 @@ fn run(instance: Instance, cli: &Cli, arguments: &[std::ffi::OsString]) -> Resul
             note!("{message}");
             return Ok(());
         }
+        let reply = output::Reply {
+            data: json!({"message":message}),
+            text: format!("{message}\n"),
+        };
         return emit(
-            output::Reply {
-                data: json!({"message":message}),
-                text: format!("{message}\n"),
+            match raised {
+                Some(raised) => reply.with_note(&raised),
+                None => reply,
             },
             cli.json,
         );

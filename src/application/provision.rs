@@ -1023,9 +1023,7 @@ impl Service {
                 crate::runner::process::Received::Disconnected => {
                     return Err(Error::Conflict("Installer guardian disconnected".into()));
                 }
-                crate::runner::process::Received::Artifact => {
-                    return Err(Error::Conflict("Unexpected installer artifact".into()));
-                }
+                crate::runner::process::Received::Note(_) => {}
             }
         };
         drop(child);
@@ -1364,9 +1362,7 @@ fn probe_android_payload(
                     "Android probe guardian disconnected".into(),
                 ));
             }
-            crate::runner::process::Received::Artifact => {
-                return Err(Error::Conflict("Unexpected Android probe artifact".into()));
-            }
+            crate::runner::process::Received::Note(_) => {}
         }
     }
 }

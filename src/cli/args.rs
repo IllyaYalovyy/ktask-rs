@@ -640,6 +640,37 @@ pub enum Command {
         /// Internal handoff after an intervention in an existing queue session.
         #[arg(long, hide = true)]
         continue_session: bool,
+        /// Raise and resume: raise the limit the paused task waits on, then resume it.
+        /// Without VALUE the proposed value is used: it covers the measured need with
+        /// headroom and stays under the ceiling.
+        #[arg(long, value_name = "VALUE", num_args = 0..=1)]
+        raise: Option<Option<u64>>,
+    },
+    /// Show and change the resource limits.
+    ///
+    /// Lists every limit with the value in force, its ceiling, where the value comes from
+    /// (env, project, automatic, instance or default) and the most a successful task of
+    /// this project needed. Project values override instance defaults; a change applies to
+    /// the next step of a paused attempt. A KTASK_ variable of the same limit overrides
+    /// both, for tests.
+    Limits {
+        /// One limit by name, such as artifact_attempt_files; omit to list all.
+        #[arg(value_parser = clap::builder::PossibleValuesParser::new(
+            crate::resource::Limit::SETTINGS.map(crate::resource::Limit::name)
+        ))]
+        name: Option<String>,
+        /// Store this value.
+        #[arg(long, requires = "name", value_parser = clap::value_parser!(u64).range(1..))]
+        value: Option<u64>,
+        /// Store this ceiling: automatic extensions and Raise and resume never exceed it.
+        #[arg(long, requires = "name", value_parser = clap::value_parser!(u64).range(1..))]
+        ceiling: Option<u64>,
+        /// Remove the stored value and ceiling, so the limit is inherited again.
+        #[arg(long, requires = "name", conflicts_with_all = ["value", "ceiling"])]
+        reset: bool,
+        /// Change the instance default that every project inherits, not this project.
+        #[arg(long, requires = "name")]
+        instance: bool,
     },
     /// Pause the runner and wait until it has exited; run resumes the same attempt.
     ///
@@ -878,6 +909,9 @@ pub enum Command {
         /// Task ID.
         #[arg(value_parser = positive)]
         id: i64,
+        /// Also list every file of truncated evidence with its size and checksum.
+        #[arg(long)]
+        manifest: bool,
     },
     /// Open a retained text artifact by ID (listed by show/current).
     Artifact {

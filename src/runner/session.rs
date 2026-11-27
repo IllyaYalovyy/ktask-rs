@@ -5,6 +5,7 @@ use super::{
     queue::{checks_required, preflight},
     workspace,
 };
+use crate::resource::Limit;
 use crate::{
     application::{Service, VersionedTask, lifecycle::State, provision::ProvisionTarget, require},
     instance::Paths,
@@ -199,10 +200,9 @@ pub fn background(
         .state
         .join(format!("runner-{}.log", service.project_id));
     let log_start = log::Mark::of(&log_path)?;
-    let log_budget = service.runner_log_budget()?.min(crate::resource::limit(
-        "KTASK_RUNNER_LOG_BYTES",
-        8 * 1024 * 1024,
-    ));
+    let log_budget = service
+        .runner_log_budget()?
+        .min(service.effective_setting(Limit::RunnerLogBytes)?.value);
     let mut logger = Command::new(&paths.executable)
         .arg("__logger")
         .arg(&log_path)

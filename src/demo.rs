@@ -954,6 +954,9 @@ impl Backend for DemoWorkspace {
             | DialogKind::ProjectCheck { .. }
             | DialogKind::Preferences(..)
             | DialogKind::Delivery(_)
+            | DialogKind::Limits(_)
+            | DialogKind::Limit(_)
+            | DialogKind::RaiseLimit(_)
             | DialogKind::Storage(_)
             | DialogKind::StorageConfirm(_)
             | DialogKind::BuildCache(_)

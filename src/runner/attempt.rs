@@ -1,8 +1,8 @@
 //! One attempt of the current task: begun on a verified workspace, driven through its
 //! workflow and Git delivery, and settled into what the queue does next.
 use super::{
-    Context, Outcome, Workspace, backoff, cycle, delivery, holds_own_work, judge, resource_limit,
-    workspace,
+    Context, Outcome, Workspace, backoff, cycle, delivery, holds_own_work, judge, record_pause,
+    resource_limit, workspace,
 };
 use crate::{
     application::{
@@ -75,6 +75,14 @@ pub(super) fn begin(
     )?;
     // A live attempt blocks configuration changes before settings are read or Git mutates.
     let delivery = pin_delivery(service, workspace, &run);
+    if !matches!(task.status.as_str(), "paused" | "waiting") {
+        for warning in service.limit_warnings()? {
+            service.note(
+                &run,
+                &format!("Limit warning: {warning}; raise it in Configuration → Resource limits or with ktask limits"),
+            )?;
+        }
+    }
     Ok(Begun {
         run,
         opening,
@@ -236,6 +244,16 @@ pub(super) fn run(service: &mut Service, launch: &Launch<'_>, begun: Begun) -> R
         tools,
     };
     let result = drive(service, &run, &mut context, opening, delivery);
+    // A breach outside the workflow, such as no room for the opening notice, pauses too.
+    if let Err(Error::Breach(breach)) = &result {
+        record_pause(
+            service,
+            &run,
+            &context,
+            (breach.limit, breach.configured, breach.measured),
+            true,
+        )?;
+    }
     // A transport error during a provider wait belongs to the same outage.
     let had_rate_wait = matches!(
         &result,
@@ -274,6 +292,7 @@ fn settle_result(result: Result<Outcome>, had_rate_wait: bool) -> Outcome {
             ))
         }
         Ok(outcome) => outcome,
+        Err(Error::Capacity(refusal)) => Outcome::StorageBlocked(refusal),
         Err(error) => match resource_limit(&error) {
             Some(reason) => Outcome::DeliveryBlocked(reason.into()),
             None => Outcome::Failed("environment", error.to_string()),
@@ -366,7 +385,11 @@ fn verify(
         {
             Ok(Outcome::DeliveryBlocked(message))
         }
-        Err(error) if service.attempt_delivery(run)?.stage != Stage::Work => {
+        // A storage refusal keeps its data: it pauses with its budget at any stage.
+        Err(error)
+            if !matches!(error, Error::Capacity(_))
+                && service.attempt_delivery(run)?.stage != Stage::Work =>
+        {
             Ok(Outcome::DeliveryBlocked(error.to_string()))
         }
         other => other,
@@ -496,6 +519,11 @@ fn settle(
             release(service, run, "paused", &reason)?;
             Ok(Then::Return(format!("Paused: {reason}")))
         }
+        Outcome::StorageBlocked(refusal) => {
+            release(service, run, "paused", &refusal.reason)?;
+            service.record_storage_pause(run.attempt, &refusal)?;
+            Ok(Then::Return(format!("Paused: {}", refusal.reason)))
+        }
         Outcome::Question(question) => {
             release(service, run, "waiting", &question)?;
             Ok(Then::Return(format!("Waiting for answer: {question}")))
@@ -535,6 +563,9 @@ fn wait_out_limit(
                 return Err(error);
             };
             service.pause_wait(run, reason)?;
+            if let Error::Capacity(refusal) = &error {
+                service.record_storage_pause(run.attempt, refusal)?;
+            }
             service.release_supervisor(run)?;
             return Ok(Then::Return(format!("Paused: {reason}")));
         }
@@ -584,17 +615,10 @@ fn fail(
     category: &'static str,
     message: &str,
 ) -> Result<Then> {
-    if let Err(error) = service.output(
+    service.note(
         run,
-        "system",
         &format!("Attempt failed ({category}); evaluating automatic recovery"),
-    ) {
-        let Some(reason) = resource_limit(&error) else {
-            return Err(error);
-        };
-        release(service, run, "paused", reason)?;
-        return Ok(Then::Return(format!("Paused: {reason}")));
-    }
+    )?;
     service.finish_run(run, "failed", Some(category), message, None)?;
     let task = service
         .task(run.task)?

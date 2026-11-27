@@ -31,6 +31,82 @@ fn task_with_dependencies(service: &mut Service, id: i64) -> Result<Reply> {
     Ok(reply)
 }
 
+/// Lists each truncated attempt's files, archived or not.
+fn add_manifest(service: &mut Service, id: i64, reply: &mut Reply) -> Result<()> {
+    let task = task(service, id)?;
+    let mut listed = Vec::new();
+    for attempt in task
+        .attempts
+        .iter()
+        .filter(|a| a.truncated_evidence.is_some())
+    {
+        let files = service.evidence_manifest(attempt.id)?;
+        reply
+            .text
+            .push_str(&format!("Evidence manifest of attempt #{}:\n", attempt.id));
+        for file in &files {
+            reply.text.push_str(&format!(
+                "  {}\t{} bytes\tsha256 {}\t{}\n",
+                output::safe(&file.name),
+                file.size_bytes,
+                file.checksum_sha256.as_deref().unwrap_or("unread"),
+                file.omitted.as_deref().unwrap_or("archived")
+            ));
+        }
+        listed.push(json!({"attempt":attempt.id,"files":files}));
+    }
+    reply.data["evidence_manifest"] = json!(listed);
+    Ok(())
+}
+
+/// `limits`: list, or change one limit's stored value and ceiling in one scope.
+fn limits(
+    service: &mut Service,
+    name: Option<&str>,
+    (value, ceiling, reset): (Option<u64>, Option<u64>, bool),
+    instance: bool,
+) -> Result<Reply> {
+    use crate::application::resource_limits::{LimitChange, LimitScope};
+    let limit = name
+        .map(|name| crate::resource::Limit::parse(name).expect("clap accepts only limit names"));
+    let change = LimitChange {
+        value: if reset { Some(None) } else { value.map(Some) },
+        ceiling: if reset { Some(None) } else { ceiling.map(Some) },
+    };
+    let settings = match limit {
+        Some(limit) if change.value.is_some() || change.ceiling.is_some() => {
+            let scope = if instance {
+                LimitScope::Instance
+            } else {
+                LimitScope::Project
+            };
+            vec![service.set_resource_limit(scope, limit, change, None)?]
+        }
+        Some(limit) => vec![service.resource_limit(limit)?],
+        None => service.resource_limits()?,
+    };
+    let mut text = String::from("limit\tvalue\tceiling\tsource\thigh water\n");
+    for setting in &settings {
+        text.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\n",
+            setting.limit,
+            setting.value,
+            setting.ceiling,
+            setting.source,
+            setting
+                .high_water
+                .map_or("-".into(), |need| need.to_string())
+        ));
+    }
+    for warning in settings.iter().filter_map(|s| s.warning.as_deref()) {
+        text.push_str(&format!("Warning: {warning}\n"));
+    }
+    Ok(Reply {
+        data: json!({"limits":settings}),
+        text,
+    })
+}
+
 impl Settings {
     pub(super) fn empty(&self) -> bool {
         self.model.is_empty()
@@ -760,7 +836,25 @@ pub(super) fn command(
             });
             Ok(Reply::list(&rows))
         }
-        Command::Show { id } => task_with_dependencies(service, *id),
+        Command::Show { id, manifest } => {
+            let mut reply = task_with_dependencies(service, *id)?;
+            if *manifest {
+                add_manifest(service, *id, &mut reply)?;
+            }
+            Ok(reply)
+        }
+        Command::Limits {
+            name,
+            value,
+            ceiling,
+            reset,
+            instance,
+        } => limits(
+            service,
+            name.as_deref(),
+            (*value, *ceiling, *reset),
+            *instance,
+        ),
         Command::Artifact { id } => {
             let (artifact, content) = service.open_text_artifact(*id)?;
             Ok(Reply {

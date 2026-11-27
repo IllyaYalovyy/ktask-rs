@@ -383,8 +383,12 @@ pub(crate) fn inspect_attempt(
         .lines()
         .next()
         .unwrap_or_default();
+    let truncated = record
+        .truncated_evidence
+        .as_ref()
+        .map_or_else(String::new, |evidence| format!("\n{}", evidence.label()));
     let heading = format!(
-        "Attempt {} / {} · #{} · revision {} · {}\nOutcome: {outcome}",
+        "Attempt {} / {} · #{} · revision {} · {}\nOutcome: {outcome}{truncated}",
         attempt + 1,
         task.attempts.len(),
         record.id,

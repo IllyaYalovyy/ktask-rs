@@ -272,6 +272,7 @@ fn invocation(
         fixing.worker_lock(),
     )?;
     invocation.sandbox = Some(sandbox.clone());
+    invocation.scratch_limits = Some(fixing.service.project_scratch_limits()?);
     let mut path = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into());
     if let Some(tools) = tools {
         for (key, value) in tools.env {
@@ -355,7 +356,7 @@ pub(super) fn run(
             break Err(halt);
         }
         match worker.receive(Duration::from_millis(20))? {
-            Received::Idle | Received::Artifact => {}
+            Received::Idle | Received::Note(_) => {}
             Received::Output {
                 stream: source,
                 bytes,

@@ -362,7 +362,7 @@ impl Clock<'_> {
                 return Ok(Err(halt));
             }
             match worker.receive(Duration::from_millis(20))? {
-                Received::Idle | Received::Artifact => {}
+                Received::Idle | Received::Note(_) => {}
                 Received::Output { bytes, .. } => {
                     output.extend(bytes);
                     let excess = output.len().saturating_sub(4096);

@@ -46,7 +46,11 @@ pub use session::{
 };
 pub(crate) use turn::provider_invocation;
 
-use crate::storage::{Error, Result};
+use crate::{
+    application::{Service, execution::Run, resource_limits::PauseCause},
+    resource::{Limit, PauseLimit, StorageRefusal},
+    storage::{Error, Result},
+};
 use context::Context;
 use std::{os::unix::fs::PermissionsExt, path::PathBuf};
 use workspace::Workspace;
@@ -72,6 +76,8 @@ enum Outcome {
     DiagnosisUnavailable(&'static str, &'static str, String),
     Paused,
     DeliveryBlocked(String),
+    /// The shared storage budget refused work: the attempt pauses on it.
+    StorageBlocked(Box<StorageRefusal>),
     Question(String),
     Dependency(String),
     /// Provider rate or usage limit, with its own reset time when it names one.
@@ -81,11 +87,52 @@ enum Outcome {
     Replanned(agent::Judgment),
 }
 
+/// Records the limit a pausing attempt waits on, `(limit, value, measured)`. The source
+/// tree is kept where changed source could change the outcome: the cumulative output budget
+/// is spent whatever the source holds.
+fn record_pause(
+    service: &Service,
+    run: &Run,
+    ctx: &Context<'_>,
+    (limit, value, measured): (Limit, u64, u64),
+    deterministic: bool,
+) -> Result<()> {
+    let tree = if limit.is_output() {
+        None
+    } else {
+        Some(ctx.workspace.fingerprint(&ctx.scratch_root())?)
+    };
+    service.record_resource_pause(
+        run.attempt,
+        &PauseCause {
+            limit: PauseLimit::Resource(limit),
+            value,
+            measured: Some(measured),
+            deterministic,
+            source_tree: tree.as_deref(),
+            claim: 0,
+        },
+    )
+}
+
+/// Finishes the evidence a guardian could not archive. A held worker lease means a
+/// guardian is still at it.
+fn finish_evidence(service: &Service, workspace: &Workspace) -> Result<()> {
+    let Ok(_lease) = process::lock(&workspace.worker_lock) else {
+        return Ok(());
+    };
+    for note in service.finish_pending_evidence()? {
+        note!("{note}");
+    }
+    Ok(())
+}
+
 /// The reason of a resource-limit pause: capacity, not the work, stopped the attempt.
 fn resource_limit(error: &Error) -> Option<&str> {
     match error {
         Error::Conflict(reason) if reason.starts_with("Resource limit:") => Some(reason),
         Error::Breach(breach) => Some(&breach.reason),
+        Error::Capacity(refusal) => Some(&refusal.reason),
         _ => None,
     }
 }

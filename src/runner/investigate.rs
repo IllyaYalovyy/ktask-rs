@@ -511,6 +511,7 @@ fn invocation(
         paths.cache.join("workers"),
         file(paths, prepared.service.project_id, "worker"),
     )?;
+    invocation.scratch_limits = Some(prepared.service.project_scratch_limits()?);
     let mut protected: Vec<PathBuf> = prepared
         .service
         .tools()?
@@ -721,7 +722,7 @@ fn agent_turn(
             break over_budget(cost, cost_limit);
         }
         match worker.receive(Duration::from_millis(20))? {
-            Received::Idle | Received::Artifact => {}
+            Received::Idle | Received::Note(_) => {}
             Received::Output {
                 stream: source,
                 bytes,

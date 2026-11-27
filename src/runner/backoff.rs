@@ -37,9 +37,8 @@ pub(super) fn bounded<'a>(
         if retry == RETRIES || !retryable(&outcome) {
             return Ok(outcome);
         }
-        service.output(
+        service.note(
             run,
-            "system",
             &format!(
                 "{} · automatic retry {}/{RETRIES} after {}s · {}; Pause cancels",
                 notice.failed,
@@ -94,7 +93,7 @@ pub fn wait_for_limit_reset(
     cursor: i64,
     stop: &AtomicBool,
 ) -> Result<bool> {
-    service.output(run,"system","Automatic rate-limit backoff; Pause stops the scheduler without discarding the wait or session")?;
+    service.note(run,"Automatic rate-limit backoff; Pause stops the scheduler without discarding the wait or session")?;
     loop {
         if interrupted(service, run, stop, cursor)? {
             service.output(

@@ -485,6 +485,9 @@ impl Service {
         if !any {
             text.push_str("No artifacts recorded.\n");
         }
+        if let Some(evidence) = super::collection::truncated(db, attempt)? {
+            text.push_str(&format!("{}\n{}\n", evidence.label(), evidence.note));
+        }
         Ok(text)
     }
 
@@ -711,8 +714,10 @@ impl Service {
             [attempt],
             |r| r.get(0),
         )?;
+        let truncated = super::collection::truncated(self.db.connection(), attempt)?
+            .map_or_else(String::new, |evidence| format!("\n{}", evidence.fact()));
         Ok(format!(
-            "\nAttempt #{attempt}: {count} archived artifacts. Consult the evidence packet index by criterion and source tree."
+            "\nAttempt #{attempt}: {count} archived artifacts. Consult the evidence packet index by criterion and source tree.{truncated}"
         ))
     }
     /// Persisted waiting-attempt timing, read without changing the attempt or its guards.
@@ -1113,6 +1118,8 @@ fn attempts(
                 steps: Vec::new(),
                 lens_reviews: Vec::new(),
                 artifacts: Vec::new(),
+                resource_pause: None,
+                truncated_evidence: None,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1132,6 +1139,8 @@ fn attempts(
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        attempt.resource_pause = super::resource_limits::pause_of(db, attempt.id)?;
+        attempt.truncated_evidence = super::collection::truncated(db, attempt.id)?;
         (attempt.usage, attempt.role_usage) = super::usage_report::attempt(db, attempt.id)?;
         attempt.cost_microusd = attempt.usage.cost_microusd;
         attempt.waiting_ms = waiting_time(db, attempt.id)?;

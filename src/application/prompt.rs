@@ -106,7 +106,7 @@ const BLOCKED: &str = "Do not ask for permission, approval, sandbox changes or w
 const WORKER_VERDICT: &str = "Return complete when your change is done, with no findings. The summary says in one or two sentences what you changed and why; leave out what you ran, untracked files, and what checks or reviewers will do next: ktask records all of that. For each criterion, say what you changed or ran.";
 const JUDGE_VERDICT: &str = "The normal lifecycle is implement, review, fix, validate, with up to ten repair rounds inside one attempt. Return changes_requested for actionable findings, not failed. List every finding with severity critical or minor and a concrete description with location, trigger, consequence and correction. Critical means real harm to correctness, behavior, security or data, performance, or long-term maintenance, or an unmet mandatory acceptance criterion; minor means anything else, which is recorded but never costs a fix round. Never mark a mandatory criterion passed merely because the repair budget is spent. Empty findings plus complete means acceptance. Preserve minor findings in the record even when accepting them at the repair limit.";
 const WORKER_ENVIRONMENT: &str = "If you blame the environment for a failure, include a concrete reproduction and its observed error. Repository instructions (AGENTS.md, CLAUDE.md and similar files) govern scope, quality and evidence.";
-const WORKER_EVIDENCE: &str = "Do not review or validate your own work; independent judges do. Save deliberate evidence files directly in KTASK_ARTIFACT_DIR. Archive safeguards are separate from reviewer input (128 MiB per file, 1 GiB and 4096 files per attempt by default). In each criterion assessment cite the exact test/check, source file/line or artifact name proving it; report missing proof explicitly. Do not duplicate logs already recorded by a supervisor check. The guardian archives them before deleting scratch; judges can read the archived paths in Context.";
+const WORKER_EVIDENCE: &str = "Do not review or validate your own work; independent judges do. Save deliberate evidence files directly in KTASK_ARTIFACT_DIR. Archive safeguards are project limits, separate from reviewer input (128 MiB per file, 1 GiB and 4096 files per attempt by default); files beyond them are listed but not archived. In each criterion assessment cite the exact test/check, source file/line or artifact name proving it; report missing proof explicitly. Do not duplicate logs already recorded by a supervisor check. The guardian archives them before deleting scratch; judges can read the archived paths in Context.";
 /// The worker's scratch budget and what must not fill it, in one sentence.
 fn scratch_rule((bytes, entries): (u64, u64)) -> String {
     format!(
@@ -233,7 +233,7 @@ pub fn compose(
     callback: Option<&Callback<'_>>,
 ) -> Result<Prompt> {
     let work = render_work(turn.template(category), category, task, context)?;
-    let scratch = callback.map_or_else(crate::resource::configured_scratch, |callback| {
+    let scratch = callback.map_or_else(crate::resource::fallback_scratch, |callback| {
         callback.scratch
     });
     Ok(Prompt {
@@ -266,7 +266,7 @@ pub fn compose_lens(
             rules(
                 Turn::Review,
                 category.checks,
-                crate::resource::configured_scratch()
+                crate::resource::fallback_scratch()
             ),
             lens_rule(lens)
         ),
@@ -377,15 +377,15 @@ mod tests {
 
     #[test]
     fn the_stated_scratch_limits_are_the_ones_the_guardian_enforces() {
-        use crate::resource::{Limit, configured_scratch};
+        use crate::resource::{Limit, fallback_scratch};
         let code = builtin::named("code").unwrap();
         let (criteria, mut task) = task();
         task.criteria = &criteria;
         let (bytes, entries) = (
-            Limit::ScratchBytes.configured(),
-            Limit::ScratchEntries.configured(),
+            Limit::ScratchBytes.fallback(),
+            Limit::ScratchEntries.fallback(),
         );
-        assert_eq!((bytes, entries), configured_scratch());
+        assert_eq!((bytes, entries), fallback_scratch());
         let named = format!("limit of {bytes} bytes and {entries} entries");
         // A preview and a turn without an attempt state what the guardian enforces by default.
         for text in [

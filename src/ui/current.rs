@@ -51,6 +51,8 @@ pub(super) fn controls(app: &App) -> Vec<(&'static str, Action)> {
     if app.follow {
         controls.retain(|(label, _)| *label != "End Follow");
     }
+    // Only a pause on a resource limit offers it; `enabled` drops it otherwise.
+    controls.insert(1, ("+ Raise and resume", Action::RaiseResume));
     if app
         .current()
         .is_some_and(|task| task.status() == Status::NeedsDependency)
@@ -123,6 +125,44 @@ fn summary_height(height: u16) -> u16 {
     }
 }
 
+/// The limit a paused task waits on, and evidence the latest attempt did not archive.
+fn resource_lines(task: &Task, width: usize) -> Vec<Line<'static>> {
+    let Some(attempt) = task.attempts.last() else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    if let Some(pause) = attempt
+        .resource
+        .as_ref()
+        .filter(|_| task.status() == Status::Paused)
+    {
+        lines.push(format!("Limit {}", pause.limit));
+        lines.push(format!(
+            "Now {}{}",
+            pause.current,
+            pause
+                .measured
+                .map_or_else(String::new, |need| format!(" · needed {need}"))
+        ));
+        lines.push(match pause.proposal {
+            Some(to) => format!("+ Raise to {to} and resume"),
+            None => "Cannot raise · + explains".to_owned(),
+        });
+    }
+    if let Some(truncated) = &attempt.truncated {
+        lines.push(format!(
+            "Truncated evidence {}/{}",
+            truncated.archived_files, truncated.total_files
+        ));
+    }
+    // A byte budget's value and need are long numbers: wrap rather than cut them off.
+    lines
+        .into_iter()
+        .flat_map(|line| wrapped(&line, width.max(1)))
+        .map(|line| Line::styled(line, Style::new().fg(WARN)))
+        .collect()
+}
+
 /// The Status panel: state, progress, why, waits, readiness, model and usage, then steps.
 fn status_lines(app: &App, task: &Task, width: usize, compact: bool) -> Vec<Line<'static>> {
     let status = task.status();
@@ -137,6 +177,7 @@ fn status_lines(app: &App, task: &Task, width: usize, compact: bool) -> Vec<Line
         format!("{} · {}", status.label(), task.definition().kind.label()),
         Style::new().fg(status_color(status)).bold(),
     )];
+    lines.extend(resource_lines(task, width));
     lines.extend(fitted(app.backend.status_progress(task)));
     lines.extend(
         app.backend

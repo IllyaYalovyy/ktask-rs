@@ -51,6 +51,14 @@ const OWNER_JUDGMENT: &str = "giving up, resolving or replacing a task is the ow
 fn scope(command: &Command) -> Scope {
     use Scope::{Change, Read, Refused};
     match command {
+        Command::Limits {
+            value: None,
+            ceiling: None,
+            reset: false,
+            ..
+        } => Read,
+        Command::Limits { instance: true, .. } => Refused(INSTANCE_WIDE),
+        Command::Limits { .. } => Change,
         Command::Show { .. }
         | Command::List { .. }
         | Command::Current
@@ -267,6 +275,12 @@ fn settings(service: &Service, paths: &Paths) -> Result<BTreeMap<String, String>
         preferences.planner_approval.name().into(),
     );
     found.insert("lens defaults".into(), service.lens_defaults()?.join(", "));
+    for setting in service.resource_limits()? {
+        found.insert(
+            format!("limit {}", setting.limit),
+            format!("{} (ceiling {})", setting.value, setting.ceiling),
+        );
+    }
     for tool in service.tools()?.into_iter().filter(|tool| tool.bound) {
         found.insert(
             format!("tool {}", tool.name),
@@ -502,6 +516,9 @@ fn special(
                 ))
             )))
         }
+        Command::Run { raise: Some(_), .. } => Some(Answer::Refused(
+            "raise a limit with limits; the queue resumes after the fix".into(),
+        )),
         Command::Run { .. } => {
             let current = service
                 .current_task()?
@@ -605,6 +622,8 @@ mod tests {
             &["tool", "provision-consent", "x", "1"],
             &["agent", "fix", "again"],
             &["agent", "stop", "1"],
+            &["limits", "output_rows", "--value", "9", "--instance"],
+            &["limits", "output_rows", "--reset", "--instance"],
         ] {
             assert!(refused(line), "{line:?}");
         }
@@ -619,6 +638,8 @@ mod tests {
             &["retry"],
             &["answer", "1", "--text", "x"],
             &["category", "delete", "x", "--scope", "project"],
+            &["limits"],
+            &["limits", "output_rows", "--value", "9"],
         ] {
             assert!(!refused(line), "{line:?}");
         }

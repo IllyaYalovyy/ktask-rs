@@ -58,7 +58,7 @@ pub(super) fn retry(
         return Ok(Some(Outcome::Failed("agent", error.to_string())));
     }
     if matches!(error, DeliveryError::Retry(_)) && *retries < 3 {
-        service.output(run, "system", &format!("Git delivery retry: {error}"))?;
+        service.note(run, &format!("Git delivery retry: {error}"))?;
         let outcome = backoff::operational_backoff(service, run, ctx, *retries)?;
         *retries += 1;
         Ok(outcome)
@@ -113,6 +113,7 @@ fn run_command(
     }
     let invocation = Invocation {
         env,
+        scratch_limits: Some(service.scratch_limits(run.attempt)?),
         ..ctx.invocation(
             PathBuf::from(executable),
             args.iter().map(|s| (*s).to_owned()).collect(),
@@ -151,9 +152,7 @@ fn run_command(
         }
         match worker.receive(Duration::from_millis(50))? {
             Received::Idle => {}
-            Received::Artifact => {
-                return Err(DeliveryError::Retry("Unexpected delivery artifact".into()));
-            }
+            Received::Note(_) => {}
             Received::Output { stream, bytes } => {
                 let buffer = if stream == "stdout" {
                     &mut out
@@ -857,7 +856,7 @@ pub(super) fn reset_verification(
     head: &str,
     reason: &str,
 ) -> Result<()> {
-    service.output(run, "system", reason)?;
+    service.note(run, reason)?;
     service.reset_delivery_verification(run, head, reason)
 }
 fn has_conflicts(root: &std::path::Path) -> Result<bool> {

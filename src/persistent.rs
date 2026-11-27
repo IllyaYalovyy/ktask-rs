@@ -371,7 +371,7 @@ impl StoredWorkspace {
         true
     }
 
-    fn run(&mut self, screen: &mut Screen) {
+    pub(crate) fn run(&mut self, screen: &mut Screen) {
         if screen
             .current()
             .is_some_and(|task| task.status() == Status::NeedsDependency)
@@ -461,6 +461,12 @@ impl StoredWorkspace {
                 if let Some(id) = current {
                     let _ = self.service.record_launch_result(id, &error);
                     let _ = self.reload(screen);
+                    // A refused repeat of a resource pause explains itself and offers the raise.
+                    if let Some(at) = error.find("Resume refused")
+                        && let Ok(dialog) = self.raise_dialog(id as usize, Some(&error[at..]))
+                    {
+                        screen.dialog = Some(dialog);
+                    }
                 }
                 screen.message(error);
             }
@@ -887,6 +893,9 @@ impl StoredWorkspace {
             | DialogKind::ProjectCheck { .. }
             | DialogKind::Preferences(_)
             | DialogKind::Delivery(_)
+            | DialogKind::Limits(_)
+            | DialogKind::Limit(_)
+            | DialogKind::RaiseLimit(_)
             | DialogKind::Storage(_)
             | DialogKind::StorageConfirm(_)
             | DialogKind::BuildCache(_)
@@ -1014,6 +1023,10 @@ impl Backend for StoredWorkspace {
             | Action::Storage
             | Action::BuildCache
             | Action::Tools => Some(self.open_project_config(screen, action)?),
+            Action::ResourceLimits => Some(self.limits_dialog()?),
+            Action::RaiseResume => target
+                .map(|task| self.raise_dialog(task.id, None))
+                .transpose()?,
             Action::ExportSettings | Action::ImportSettings => Some(self.open_settings(action)?),
             Action::Breakdown => Some(self.propose_breakdown(screen)?),
             Action::Add | Action::Insert | Action::Edit => Some(project_view::task_form(
@@ -1092,6 +1105,12 @@ impl Backend for StoredWorkspace {
                 | DialogKind::ToolPreview
         ) {
             return self.save_project_config(screen, dialog);
+        }
+        if matches!(dialog.kind, DialogKind::Limits(_) | DialogKind::Limit(_)) {
+            return self.save_limits_form(screen, dialog);
+        }
+        if let DialogKind::RaiseLimit(id) = dialog.kind {
+            return self.raise_and_resume(screen, dialog, id);
         }
         if matches!(
             dialog.kind,
@@ -1277,8 +1296,15 @@ impl Backend for StoredWorkspace {
             );
         }
         let delivery = self.service.delivery_config().unwrap_or_default();
+        let warnings: String = self
+            .service
+            .limit_warnings()
+            .unwrap_or_default()
+            .iter()
+            .map(|warning| format!("Limit warning: {warning}.\n"))
+            .collect();
         format!(
-            "Project: {}\nStorage: SQLite output and instance check artifacts. Press k for usage, retention and cleanup; b for build caches.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\nDelivery: {} via {}/{}\nDependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing. CLI require declares prerequisites before a task starts.\n\nDefaults apply to new tasks; existing revisions stay pinned.\nu User defaults: what new projects start with; preview and apply them here.\nf Profiles: named role models to reuse; select one here or as the new-project default.\nw Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art; override per project.\nL Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default selection.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.\ni Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.\nE Export settings and o Import settings move this project's settings to another computer.",
+            "Project: {}\n{warnings}Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\nDelivery: {} via {}/{}\nDependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing. CLI require declares prerequisites before a task starts.\n\nDefaults apply to new tasks; existing revisions stay pinned.\nu User defaults: what new projects start with; preview and apply them here.\nf Profiles: named role models to reuse; select one here or as the new-project default.\nw Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art; override per project.\nL Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default selection.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.\ni Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.\nE Export settings and o Import settings move this project's settings to another computer.",
             screen.project_name,
             if screen.mouse_enabled {
                 "Enabled"
@@ -1312,6 +1338,7 @@ impl Backend for StoredWorkspace {
             ("c Checks", Action::ProjectChecks),
             ("g Git delivery", Action::Delivery),
             ("k Storage", Action::Storage),
+            ("R Limits", Action::ResourceLimits),
             ("b Build cache", Action::BuildCache),
             ("t Tools", Action::Tools),
             ("i Report limits", Action::ReportLimits),

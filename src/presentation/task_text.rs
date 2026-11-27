@@ -150,6 +150,20 @@ pub fn task(task: &Task, detail: Detail, escape: fn(&str) -> String) -> String {
         for role in &attempt.role_usage {
             text.push_str(&format!("  {}\n", escape(&role_usage(role))));
         }
+        if let Some(pause) = &attempt.resource_pause {
+            text.push_str(&format!(
+                "  Resource pause: {}. {}\n",
+                pause.describe(),
+                escape(&pause.offer())
+            ));
+        }
+        if let Some(truncated) = &attempt.truncated_evidence {
+            text.push_str(&format!(
+                "  {}. {}\n",
+                truncated.label(),
+                escape(&truncated.note)
+            ));
+        }
         if detail == Detail::Full {
             evidence(&mut text, attempt, escape);
         }
@@ -328,6 +342,8 @@ mod tests {
                 steps: Vec::new(),
                 lens_reviews: Vec::new(),
                 artifacts: Vec::new(),
+                resource_pause: None,
+                truncated_evidence: None,
             }],
             attempts_used: 1,
             counted_from: 0,

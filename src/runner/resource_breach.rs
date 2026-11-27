@@ -1,13 +1,13 @@
 //! Diagnose a storage-limit breach before the queue pauses for the owner.
 //!
-//! The producer is already stopped and its scratch deleted. A read-only remediation turn
+//! The producer is already stopped (a check transcript that does not fit has finished). A read-only remediation turn
 //! reads what filled the budget, as it reads a timed-out check, and decides to repair the
 //! cause, extend that one limit once or escalate; only an escalation pauses.
 use super::{
     Context, Outcome,
     backoff::Notice,
     diagnosis::{self, Diagnosed, Inquiry, Judgment},
-    test_summary,
+    record_pause, test_summary,
 };
 use crate::{
     application::{
@@ -25,6 +25,36 @@ const TRANSCRIPT_BYTES: usize = 16 * 1024;
 
 /// None continues the active attempt from the now-persisted workflow state.
 pub(super) fn resolve(
+    service: &mut Service,
+    run: &Run,
+    ctx: &mut Context<'_>,
+    progress: &mut Progress,
+    breach: &Breached,
+) -> Result<Option<Outcome>> {
+    let outcome = judge(service, run, ctx, progress, breach)?;
+    let judged = match &outcome {
+        Some(Outcome::DeliveryBlocked(_)) => true,
+        Some(Outcome::DiagnosisUnavailable(..)) => false,
+        _ => return Ok(outcome),
+    };
+    // A check, recorded output and the cumulative output budget give the same result
+    // again; an agent turn only once it has repeated itself.
+    let repeats = judged
+        && (breach.limit.is_output()
+            || !breach.limit.is_scratch()
+            || service.breached_in_check(run.attempt)?
+            || service.breach_repeats(run, breach)?);
+    record_pause(
+        service,
+        run,
+        ctx,
+        (breach.limit, breach.configured, breach.measured),
+        repeats,
+    )?;
+    Ok(outcome)
+}
+
+fn judge(
     service: &mut Service,
     run: &Run,
     ctx: &mut Context<'_>,
@@ -114,11 +144,17 @@ fn context(
     extension: Option<u64>,
 ) -> Result<String> {
     Ok(format!(
-        "{}\nResource limit breach: {} was {} against a limit of {}. The producer was stopped at once and its scratch deleted. Cause key: {}.\n{}\n{}\n{}\n{}\nRecorded owner answers:\n{}",
+        "{}\nResource limit breach: {} was {} against a limit of {}. {} Cause key: {}.\n{}\n{}\n{}\n{}\nRecorded owner answers:\n{}",
         progress.context,
         breach.limit,
         breach.limit.show(breach.measured),
         breach.limit.show(breach.configured),
+        // Worker evidence is truncated, never a breach: only a transcript reaches an artifact limit here.
+        if breach.limit.is_scratch() || breach.limit.is_output() {
+            "The producer was stopped at once and its scratch deleted."
+        } else {
+            "The check had finished and its result is recorded, but its transcript does not fit; it is archived from the retained output once it does."
+        },
         breach.cause,
         if breach.summary.is_empty() {
             "No summary of what filled the budget could be taken."
@@ -195,7 +231,7 @@ fn decide(
                 breach.limit.show(breach.configured),
                 breach.limit.show(*limit)
             );
-            service.output(run, "system", &message)?;
+            service.note(run, &message)?;
             progress.why = message.lines().next().unwrap_or_default().to_owned();
             ("extend", reason, Some(*limit), None)
         }

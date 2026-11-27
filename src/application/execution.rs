@@ -96,6 +96,16 @@ pub struct Check {
     pub directory: String,
     pub timeout_ms: i64,
 }
+/// A finished check whose transcript is still only in the retained output.
+pub(crate) struct PendingTranscript {
+    pub step: i64,
+    pub relative: String,
+    pub output: (i64, i64),
+    pub passed: bool,
+    pub report: String,
+    pub counts: Option<CheckCounts>,
+}
+
 pub struct ReusableCheck {
     pub step: i64,
     pub attempt: i64,
@@ -599,6 +609,7 @@ impl Service {
                 execution_token: &saved,
                 now_ms: now_ms(),
             })?;
+            self.clear_resource_pause(id)?;
             // The owner may have committed on top while the attempt was paused; its own
             // change, and so its review, starts at the current HEAD. Delivery keeps its base.
             self.db.connection().execute(
@@ -639,6 +650,21 @@ impl Service {
             lenses: pinned.lenses.clone(),
             active_ms,
         })
+    }
+    /// A supervisor message about work that has already ended. It is bookkeeping: when the
+    /// output budget or the storage reserve has no room, it is dropped, never a pause.
+    pub(crate) fn note(&self, run: &Run, text: &str) -> Result<()> {
+        match self.output(run, "system", text) {
+            Err(Error::Breach(breach)) => {
+                note!("note dropped ({}): {text}", breach.limit);
+                Ok(())
+            }
+            Err(Error::Capacity(refusal)) => {
+                note!("note dropped ({}): {text}", refusal.reason);
+                Ok(())
+            }
+            other => other,
+        }
     }
     pub fn output(&self, run: &Run, stream: &str, text: &str) -> Result<()> {
         let tx = Transaction::new_unchecked(self.db.connection(), TransactionBehavior::Immediate)?;
@@ -1264,6 +1290,68 @@ impl Service {
             "Check step changed before its result was recorded",
         )
     }
+    /// Keeps a finished check's transcript to be archived from its retained output later.
+    pub(crate) fn defer_transcript(
+        &self,
+        step: &Step,
+        run: &Run,
+        relative: &str,
+        tree: &str,
+        (start, end): (i64, i64),
+    ) -> Result<()> {
+        self.db.connection().execute(
+            "INSERT OR REPLACE INTO pending_transcripts(step_id,attempt_id,relative_path,source_tree,output_start,output_end) VALUES (?1,?2,?3,?4,?5,?6)",
+            params![step.id, run.attempt, relative, tree, start, end],
+        )?;
+        Ok(())
+    }
+
+    /// The recorded result of this check on this source whose transcript is not archived.
+    pub(crate) fn pending_transcript(
+        &self,
+        run: &Run,
+        check: &Check,
+        tree: &str,
+        environment: &str,
+    ) -> Result<Option<PendingTranscript>> {
+        Ok(self
+            .db
+            .connection()
+            .query_row(
+                "SELECT p.step_id,p.relative_path,p.output_start,p.output_end,s.state,coalesce(s.report,''),s.passed_count,s.failed_count,s.ignored_count
+                 FROM pending_transcripts p JOIN attempt_steps s ON s.id=p.step_id
+                 WHERE p.attempt_id=?1 AND p.source_tree=?2 AND s.project_check_id=?3 AND s.check_name=?4
+                   AND s.command=?5 AND s.working_directory=?6 AND s.timeout_ms=?7 AND s.environment_fingerprint=?8
+                   AND s.state IN ('succeeded','failed') ORDER BY p.step_id DESC LIMIT 1",
+                params![run.attempt, tree, check.id, check.name, check.command, check.directory, check.timeout_ms, environment],
+                |r| {
+                    let counts = match r.get::<_, Option<i64>>(6)? {
+                        Some(passed) => Some(CheckCounts {
+                            passed,
+                            failed: r.get(7)?,
+                            ignored: r.get(8)?,
+                        }),
+                        None => None,
+                    };
+                    Ok(PendingTranscript {
+                        step: r.get(0)?,
+                        relative: r.get(1)?,
+                        output: (r.get(2)?, r.get(3)?),
+                        passed: r.get::<_, String>(4)? == "succeeded",
+                        report: r.get(5)?,
+                        counts,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    pub(crate) fn settle_transcript(&self, step: i64) -> Result<()> {
+        self.db
+            .connection()
+            .execute("DELETE FROM pending_transcripts WHERE step_id=?1", [step])?;
+        Ok(())
+    }
     pub fn previous_check_counts(&self, run: &Run, check: i64) -> Result<Option<CheckCounts>> {
         self.db
             .connection()
@@ -1434,6 +1522,7 @@ impl Service {
             tx.execute("INSERT INTO questions(attempt_id,prompt,state,created_at_ms) VALUES (?1,?2,'open',?3)",params![run.attempt,report,now])?;
         }
         if state == "succeeded" {
+            super::resource_limits::record_high_water(&tx, run.attempt)?;
             tx.execute("UPDATE tasks SET lifecycle='succeeded',closed_at_ms=?2,resolved_by_kind='system',resolved_by='runner',resolution_reason=?3 WHERE id=?1",params![run.task,now,report])?;
             super::commands::lifecycle_event(
                 &tx,

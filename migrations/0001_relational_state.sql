@@ -591,6 +591,90 @@ CREATE TABLE resource_breaches (
 ) STRICT;
 CREATE INDEX resource_breaches_attempt ON resource_breaches(attempt_id, limit_name);
 
+-- Resource limits the owner set. A NULL project is the instance default every project
+-- inherits. `extended` is a raise ktask made itself for steady evidence growth; it never
+-- raises the owner's ceiling and an owner's value replaces it.
+CREATE TABLE resource_limit_settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER REFERENCES projects(id),
+    limit_name TEXT NOT NULL CHECK (limit_name IN ('scratch_bytes', 'scratch_entries', 'artifact_file_bytes', 'artifact_attempt_bytes', 'artifact_attempt_files', 'output_bytes', 'output_rows', 'runner_log_bytes')),
+    value INTEGER CHECK (value > 0),
+    extended INTEGER CHECK (extended > 0),
+    ceiling INTEGER CHECK (ceiling > 0),
+    CHECK (value IS NOT NULL OR extended IS NOT NULL OR ceiling IS NOT NULL),
+    CHECK (extended IS NULL OR project_id IS NOT NULL)
+) STRICT;
+CREATE UNIQUE INDEX ux_resource_limit_settings ON resource_limit_settings(ifnull(project_id, 0), limit_name);
+
+-- The most any successful attempt of a project needed of each limit.
+CREATE TABLE resource_high_water (
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    limit_name TEXT NOT NULL,
+    value INTEGER NOT NULL CHECK (value >= 0),
+    attempt_id INTEGER NOT NULL REFERENCES attempts(id),
+    PRIMARY KEY (project_id, limit_name)
+) STRICT;
+
+-- The most managed scratch any one worker of an attempt used, as its guardian measured it.
+CREATE TABLE attempt_scratch_peaks (
+    attempt_id INTEGER PRIMARY KEY REFERENCES attempts(id),
+    bytes INTEGER NOT NULL CHECK (bytes >= 0),
+    entries INTEGER NOT NULL CHECK (entries >= 0)
+) STRICT;
+
+-- Why a paused attempt is waiting on a limit or the storage budget (storage_max_*). `deterministic` means repeating the same work
+-- under the same limit (and, when recorded, the same source) would pause it again.
+CREATE TABLE resource_pauses (
+    attempt_id INTEGER PRIMARY KEY REFERENCES attempts(id),
+    limit_name TEXT NOT NULL,
+    value INTEGER NOT NULL CHECK (value > 0),
+    measured INTEGER CHECK (measured >= 0),
+    deterministic INTEGER NOT NULL CHECK (deterministic IN (0, 1)),
+    source_tree TEXT CHECK (source_tree IS NULL OR length(source_tree) IN (40,64)),
+    -- What a write the storage budget refused would have added; zero for a limit.
+    claim INTEGER NOT NULL DEFAULT 0 CHECK (claim >= 0)
+) STRICT;
+
+-- A finished check whose transcript still has to be archived from the retained output. The
+-- check's result is already recorded and the check is not run again for it.
+CREATE TABLE pending_transcripts (
+    step_id INTEGER PRIMARY KEY REFERENCES attempt_steps(id),
+    attempt_id INTEGER NOT NULL REFERENCES attempts(id),
+    relative_path TEXT NOT NULL,
+    source_tree TEXT NOT NULL CHECK (length(source_tree) IN (40,64)),
+    output_start INTEGER NOT NULL CHECK (output_start >= 0),
+    output_end INTEGER NOT NULL CHECK (output_end >= output_start)
+) STRICT;
+
+-- One worker's deliberate evidence. While 'collecting', `source_path` holds the files kept
+-- apart from its deleted scratch. 'truncated' means some files were not archived; each file
+-- is then listed in evidence_manifest.
+CREATE TABLE evidence_collections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempt_id INTEGER NOT NULL REFERENCES attempts(id),
+    relative_prefix TEXT NOT NULL,
+    source_path BLOB NOT NULL,
+    source_tree TEXT NOT NULL CHECK (length(source_tree) IN (40,64)),
+    state TEXT NOT NULL CHECK (state IN ('collecting', 'complete', 'truncated')),
+    total_files INTEGER NOT NULL DEFAULT 0 CHECK (total_files >= 0),
+    total_bytes INTEGER NOT NULL DEFAULT 0 CHECK (total_bytes >= 0),
+    archived_files INTEGER NOT NULL DEFAULT 0 CHECK (archived_files >= 0),
+    archived_bytes INTEGER NOT NULL DEFAULT 0 CHECK (archived_bytes >= 0),
+    note TEXT
+) STRICT;
+CREATE INDEX ix_evidence_collections_attempt ON evidence_collections(attempt_id, id);
+
+CREATE TABLE evidence_manifest (
+    collection_id INTEGER NOT NULL REFERENCES evidence_collections(id),
+    ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+    name TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+    checksum_sha256 TEXT CHECK (checksum_sha256 IS NULL OR length(checksum_sha256) = 64),
+    -- NULL when the file was archived, else why it was not.
+    omitted TEXT,
+    PRIMARY KEY (collection_id, ordinal)
+) STRICT;
+
 CREATE TABLE criterion_results (
     step_id INTEGER NOT NULL,
     task_id INTEGER NOT NULL,

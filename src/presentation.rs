@@ -144,6 +144,10 @@ pub struct Attempt {
     pub report: String,
     /// Question the worker is waiting on, while open.
     pub question: Option<String>,
+    /// The resource limit a paused attempt waits on.
+    pub resource: Option<crate::application::resource_limits::ResourcePause>,
+    /// Set when some of the attempt's evidence was not archived.
+    pub truncated: Option<crate::application::collection::Truncated>,
     /// Supervisor steps in order: (role label, state).
     pub steps: Vec<(String, String)>,
     pub step: usize,
@@ -175,6 +179,8 @@ impl Attempt {
             supervisor_status: String::new(),
             report: String::new(),
             question: None,
+            resource: None,
+            truncated: None,
             steps: Vec::new(),
             step: 0,
             cost_cents: 0,

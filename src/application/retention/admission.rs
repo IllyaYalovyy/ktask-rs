@@ -2,8 +2,9 @@
 //! in their own write transaction; probes charge growth of the fixed files; a settled
 //! allocation scan replaces the projection with a measurement plus the claims admitted
 //! while it ran.
+use super::capacity::refusal;
 use super::measure::{Allocation, Walk, known_allocation, project_runner_logs};
-use super::policy::{Reserve, instance_limits};
+use super::policy::instance_limits;
 use super::*;
 use rusqlite::Connection;
 
@@ -108,15 +109,20 @@ pub(in crate::application) fn admit_capacity(
     let claim_bytes =
         clamp((output as u64).saturating_add(artifact_claim(artifact_bytes, artifact_files)));
     let claim_files = clamp(artifact_files).saturating_mul(ARTIFACT_FILE_ENTRIES);
-    if Reserve::Work.reached(
+    let after = (
         projected_bytes.saturating_add(claim_bytes),
         projected_files.saturating_add(claim_files),
-        limits,
-    ) {
-        return Err(Error::Conflict(format!(
+    );
+    // The refused write would also have charged the physical growth beyond the frontier.
+    let claimed = (after.0.saturating_sub(projected), claim_files);
+    let most = (limits.max_bytes, limits.max_files);
+    if let Some(refusal) = refusal(after, claimed, most, || {
+        format!(
             "Resource limit: shared storage capacity reserve reached (projected {projected_bytes} / {} bytes, {projected_files} / {} files); accepted evidence retained; raise capacity or reclaim closed evidence before resuming",
             limits.max_bytes, limits.max_files
-        )));
+        )
+    }) {
+        return Err(Error::Capacity(Box::new(refusal)));
     }
     tx.execute(
         "UPDATE instance_storage_admission SET projected_bytes=?1,projected_files=projected_files+?2,known_bytes=?3,generation=generation+1 WHERE id=1",

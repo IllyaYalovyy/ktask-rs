@@ -48,6 +48,15 @@ impl App {
             |task: Option<&Task>, step: TaskAction| task.is_some_and(|t| t.status().allows(step));
         let queue_or_current = self.view != View::History;
         match action {
+            Action::RaiseResume => {
+                self.view == View::Current
+                    && self.screen.remote.is_none()
+                    && self.supervisor_alive != Some(true)
+                    && current.is_some_and(|t| {
+                        t.status() == Status::Paused
+                            && t.attempts.last().is_some_and(|a| a.resource.is_some())
+                    })
+            }
             Action::Run => {
                 (matches!(self.view, View::Current | View::Queue)
                     || self.view == View::Config
@@ -163,6 +172,10 @@ impl App {
                 .current()
                 .and_then(|t| t.status().forward())
                 .unwrap_or(TaskAction::Run),
+            Action::RaiseResume => {
+                return "Raise and resume applies to a current task paused on a resource limit"
+                    .into();
+            }
             Action::Answer => TaskAction::Answer,
             Action::Pause => TaskAction::Pause,
             Action::Stop => TaskAction::Stop,
@@ -394,6 +407,8 @@ impl App {
             | Action::ProjectChecks
             | Action::Delivery
             | Action::Storage
+            | Action::ResourceLimits
+            | Action::RaiseResume
             | Action::BuildCache
             | Action::Tools
             | Action::Import

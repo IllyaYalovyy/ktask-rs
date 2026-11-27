@@ -121,6 +121,7 @@ fn check(
         fixing.scratch_root(),
         fixing.worker_lock(),
     );
+    invocation.scratch_limits = Some(fixing.service.project_scratch_limits()?);
     invocation.env.clone_from(&tools.env);
     invocation.time_limit_ms = Some(check.timeout_ms.unsigned_abs());
     if !tools.installations.is_empty() {

@@ -1,8 +1,8 @@
 //! A storage limit that stopped its producer, the decision on it, and the limits in effect.
 //!
-//! The limits are configured per instance; an `extend` decision raises one of them for one
-//! attempt, at most [`MAX_EXTENSIONS`] times, never above the owner's ceiling and never
-//! into the storage reserve.
+//! The limits are stored settings (see `resource_limits`); an `extend` decision raises one
+//! of them for one attempt, at most [`MAX_EXTENSIONS`] times, never above the owner's
+//! ceiling and never into the storage reserve.
 use super::{
     execution::{Run, close_unfinished},
     progress::Decision,
@@ -143,14 +143,15 @@ pub(crate) fn effective_limit(
     )
 }
 
-/// The configured limit raised by the attempt's `extend` decisions.
+/// The stored limit raised by the attempt's `extend` decisions.
 pub(crate) fn raised_limit(db: &rusqlite::Connection, attempt: i64, limit: Limit) -> Result<u64> {
-    let extended: u32 = db.query_row(
-        "SELECT count(*) FROM resource_breaches WHERE attempt_id=?1 AND limit_name=?2 AND decision IS 'extend'",
+    let (extended, project): (u32, i64) = db.query_row(
+        "SELECT (SELECT count(*) FROM resource_breaches WHERE attempt_id=?1 AND limit_name=?2 AND decision IS 'extend'),
+                project_id FROM attempts WHERE id=?1",
         params![attempt, limit.name()],
-        |r| r.get(0),
+        |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    Ok(limit.raised(extended))
+    Ok(super::resource_limits::effective(db, project, limit)?.raised(extended))
 }
 
 impl Service {
@@ -236,6 +237,28 @@ impl Service {
         raised_limit(self.db.connection(), run.attempt, limit)
     }
 
+    /// The project's scratch limits, for workers that belong to no attempt.
+    pub(crate) fn project_scratch_limits(&self) -> Result<(u64, u64)> {
+        Ok((
+            self.effective_setting(Limit::ScratchBytes)?.value,
+            self.effective_setting(Limit::ScratchEntries)?.value,
+        ))
+    }
+
+    /// Whether the attempt's last step before the breach was a project check.
+    pub(crate) fn breached_in_check(&self, attempt: i64) -> Result<bool> {
+        Ok(self
+            .db
+            .connection()
+            .query_row(
+                "SELECT role='check' FROM attempt_steps WHERE attempt_id=?1 AND role<>'remediation' ORDER BY id DESC LIMIT 1",
+                [attempt],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(false))
+    }
+
     /// The scratch limits in force for the attempt's workers.
     pub(crate) fn scratch_limits(&self, attempt: i64) -> Result<(u64, u64)> {
         let db = self.db.connection();
@@ -262,7 +285,8 @@ impl Service {
         if used >= MAX_EXTENSIONS {
             return Ok(None);
         }
-        let (current, next) = (limit.raised(used), limit.raised(used + 1));
+        let setting = self.effective_setting(limit)?;
+        let (current, next) = (setting.raised(used), setting.raised(used + 1));
         if next <= current {
             return Ok(None);
         }

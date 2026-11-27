@@ -40,7 +40,7 @@ fn routed(cli: &Cli) -> Option<Routed> {
     let (name, task, change) = match cli.command.as_ref()? {
         Command::List { .. } => ("list", None, false),
         Command::Current => ("current", None, false),
-        Command::Show { id } => ("show", Some(*id), false),
+        Command::Show { id, .. } => ("show", Some(*id), false),
         Command::Events { .. } => ("events", None, false),
         Command::Stats => ("stats", None, false),
         Command::Add(_) => ("add", None, true),
@@ -53,9 +53,11 @@ fn routed(cli: &Cli) -> Option<Routed> {
         Command::Approve { target } => ("approve", Some(target.id), true),
         Command::Reject { target, .. } => ("reject", Some(target.id), true),
         // The hidden flags belong to a supervisor that this host starts itself.
+        // Raising a limit changes settings, which stay on the child.
         Command::Run {
             notify: false,
             continue_session: false,
+            raise: None,
             ..
         } => ("run", None, true),
         Command::Pause { all: false } => ("pause", None, true),

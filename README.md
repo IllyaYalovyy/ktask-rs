@@ -477,6 +477,28 @@ In the TUI, Configuration → **E Export settings** and **o Import settings** (k
 do the same; Import shows the preview before **Apply**. In `--demo` they use in-memory files
 (`/demo/settings.json`).
 
+## Resource limits
+
+A limit exists to stop a runaway producer from filling the host, and only that stops work.
+Scratch and output breaches stop the worker at once and are diagnosed. Everything after a worker
+or check exits is housekeeping: evidence beyond the artifact limits is listed file by file with
+size and checksum, the task continues with the evidence marked truncated, and reviewers are told.
+Limits are settings you can see and change, per instance and per project, and they apply to the
+next step of a paused attempt:
+
+```sh
+ktask limits                                         # values, ceilings, sources, high-water marks
+ktask limits artifact_attempt_files --value 8000     # this project
+ktask limits scratch_bytes --value 8589934592 --instance
+ktask run --raise                                    # raise the limit current paused on, resume
+```
+
+In the TUI: Configuration → **R Limits**; on Current a paused task offers
+**+ Raise and resume**. Evidence that grows steadily extends its project's limit by itself within
+the ceiling, and a plain Resume that would only repeat a pause is refused. A pause on the shared
+storage budget (`retention`) offers the same Raise and resume. Details:
+[docs/RESOURCE_LIMITS.md](docs/RESOURCE_LIMITS.md).
+
 ## Task kinds
 
 A task is one of three kinds. **AI** (default) is code work: the project checks run on the clean

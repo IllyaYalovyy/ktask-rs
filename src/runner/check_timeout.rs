@@ -128,7 +128,7 @@ pub(super) fn resolve(
                 "Check {} timeout extended from {} ms to {limit} ms for this attempt. {reason}",
                 timeout.name, timeout.timeout_ms,
             );
-            service.output(run, "system", &report)?;
+            service.note(run, &report)?;
             progress.why = report.lines().next().unwrap_or_default().to_owned();
             ("extend", Some(limit), None)
         }
@@ -185,7 +185,7 @@ fn archive_timeout(
     );
     if report != timeout.report {
         service.complete_check_timeout_report(run, timeout, &report)?;
-        service.output(run, "system", &report)?;
+        service.note(run, &report)?;
     }
     Ok(report)
 }

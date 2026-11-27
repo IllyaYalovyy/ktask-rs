@@ -306,6 +306,13 @@ erDiagram
     attempt_steps ||--o| lens_reviews : "step_id"
     attempt_steps ||--o| check_timeouts : "step_id"
     attempts ||--o{ resource_breaches : "attempt_id"
+    attempts ||--o| resource_pauses : "attempt_id"
+    attempts ||--o| attempt_scratch_peaks : "attempt_id"
+    projects o|--o{ resource_limit_settings : "project_id"
+    projects ||--o{ resource_high_water : "project_id"
+    attempts ||--o{ resource_high_water : "attempt_id"
+    attempt_steps ||--o| pending_transcripts : "step_id"
+    attempts ||--o{ pending_transcripts : "attempt_id"
     lens_reviews ||--o{ lens_review_findings : "attempt_id, repair_round, source_tree, ordinal"
     attempts ||--o| attempt_delivery : "attempt_id"
     attempts o|--o{ attempt_delivery : "handoff_claimed_by"
@@ -337,6 +344,8 @@ erDiagram
     attempts ||--o| evidence_cleanup_admissions : "attempt_id"
     attempts ||--o{ artifacts : "attempt_id"
     attempts ||--o{ artifact_reservations : "attempt_id"
+    attempts ||--o{ evidence_collections : "attempt_id"
+    evidence_collections ||--o{ evidence_manifest : "collection_id"
 ```
 
 ## Table definitions
@@ -508,6 +517,19 @@ Durable phase within one attempt. Initial implementation is round zero; at most 
 | `verified_environment` | TEXT | no | Tool environment fingerprint binding retained proof to the verified generation set. |
 | `reset_fresh` | INTEGER | no | Unused; always 0. Kept because V1 reconciliation cannot drop columns. |
 | `why` | TEXT | no | A short explanation for the current repair round or a temporary check timeout extension. |
+
+- PK `(attempt_id)`.
+- FK `(attempt_id)` → `attempts(id)`.
+
+### attempt_scratch_peaks
+
+The most managed scratch any one worker of an attempt used, as its guardian measured it; the high-water mark of a successful attempt comes from it.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `attempt_id` | INTEGER | no | Attempt. |
+| `bytes` | INTEGER | no | Largest byte use. |
+| `entries` | INTEGER | no | Largest entry count. |
 
 - PK `(attempt_id)`.
 - FK `(attempt_id)` → `attempts(id)`.
@@ -687,6 +709,44 @@ Append-only command/runner audit and activity feed. Task and attempt are optiona
 - Index `ix_events_attempt`: `INDEX ix_events_attempt ON events(attempt_id, id)`.
 - Index `ix_events_task`: `INDEX ix_events_task ON events(task_id, id)`.
 - Index `ix_events_project`: `INDEX ix_events_project ON events(project_id, id)`.
+
+### evidence_collections
+
+One worker's deliberate evidence. A `collecting` row keeps the artifact directory outside the deleted scratch until it is archived, so an interrupted pass is finished from it; `truncated` means files were left out and are listed in evidence_manifest.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `id` | INTEGER | no | Stable row ID. |
+| `attempt_id` | INTEGER | no | Owning attempt. |
+| `relative_prefix` | TEXT | no | Evidence folder of the step under the state root. |
+| `source_path` | BLOB | no | Retained artifact directory while collecting. |
+| `source_tree` | TEXT | no | Source tree when the worker ended. |
+| `state` | TEXT | no | collecting, complete or truncated. |
+| `total_files` | INTEGER | no | Entries the worker left. |
+| `total_bytes` | INTEGER | no | Their bytes. |
+| `archived_files` | INTEGER | no | Entries archived. |
+| `archived_bytes` | INTEGER | no | Bytes archived. |
+| `note` | TEXT | yes | Why entries were left out. |
+
+- PK `(id)`.
+- FK `(attempt_id)` → `attempts(id)`.
+- Index `ix_evidence_collections_attempt`: `INDEX ix_evidence_collections_attempt ON evidence_collections(attempt_id, id)`.
+
+### evidence_manifest
+
+Every file of a truncated collection, archived or not. Retention keeps it with the task history.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `collection_id` | INTEGER | no | Truncated collection. |
+| `ordinal` | INTEGER | no | Position in archive order. |
+| `name` | TEXT | no | File name. |
+| `size_bytes` | INTEGER | no | File size. |
+| `checksum_sha256` | TEXT | yes | SHA-256; NULL when the entry is not a readable regular file. |
+| `omitted` | TEXT | yes | Why it was not archived; NULL when it was. |
+
+- PK `(collection_id, ordinal)`.
+- FK `(collection_id)` → `evidence_collections(id)`.
 
 ### evidence_pins
 
@@ -992,6 +1052,23 @@ The proposed fix of a finished report, in order. ktask applies none of it.
 - PK `(investigation_id, ordinal)`.
 - FK `(investigation_id)` → `investigations(id)`.
 
+### pending_transcripts
+
+A finished check whose transcript still has to be archived from the retained output. Its result is recorded, so a resume archives the transcript without running the check again.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `step_id` | INTEGER | no | The finished check step. |
+| `attempt_id` | INTEGER | no | Its attempt. |
+| `relative_path` | TEXT | no | Where the transcript belongs. |
+| `source_tree` | TEXT | no | Source tree when the check ended. |
+| `output_start` | INTEGER | no | Output sequence before the check. |
+| `output_end` | INTEGER | no | Last output sequence of the check. |
+
+- PK `(step_id)`.
+- FK `(step_id)` → `attempt_steps(id)`.
+- FK `(attempt_id)` → `attempts(id)`.
+
 ### project_investigation_limits
 
 Time and cost one agent report or fix of a project may use. A missing row means 15 minutes and 2 USD for a report, 30 minutes and 5 USD for a fix.
@@ -1155,6 +1232,55 @@ Configured tool commands (tests, Clippy, etc.), distinct from AI review and goal
 - FK `(project_id)` → `projects(id)`.
 - UQ `(id, project_id)`.
 - UQ `(project_id, name)`.
+
+### resource_high_water
+
+The most any successful attempt of a project needed of each limit. Configuration and task start warn when a limit has less than twice that headroom.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `project_id` | INTEGER | no | Project. |
+| `limit_name` | TEXT | no | Measured limit. |
+| `value` | INTEGER | no | Largest need. |
+| `attempt_id` | INTEGER | no | Attempt that set it. |
+
+- PK `(project_id, limit_name)`.
+- FK `(project_id)` → `projects(id)`.
+- FK `(attempt_id)` → `attempts(id)`.
+
+### resource_limit_settings
+
+Resource limits the owner stored. A NULL project is the instance default. `extended` is a raise ktask made for steady evidence growth; it stays under the ceiling and an owner's value removes it.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `id` | INTEGER | no | Stable row ID. |
+| `project_id` | INTEGER | yes | Project; NULL for the instance default. |
+| `limit_name` | TEXT | no | Limit, including runner_log_bytes. |
+| `value` | INTEGER | yes | Stored limit; NULL inherits. |
+| `extended` | INTEGER | yes | Automatic raise of a project. |
+| `ceiling` | INTEGER | yes | Stored owner ceiling. |
+
+- PK `(id)`.
+- FK `(project_id)` → `projects(id)`.
+- Index `ux_resource_limit_settings`: `UNIQUE INDEX ux_resource_limit_settings ON resource_limit_settings(ifnull(project_id, 0), limit_name)`.
+
+### resource_pauses
+
+Why a paused attempt waits on a limit or the storage budget; resuming the attempt removes it. A deterministic pause is not resumed until its limit or, where recorded, its source changes, or, for storage, room is reclaimed.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `attempt_id` | INTEGER | no | Paused attempt. |
+| `limit_name` | TEXT | no | Resource limit, storage_max_bytes or storage_max_files. |
+| `value` | INTEGER | no | Limit in force at the pause. |
+| `measured` | INTEGER | yes | Measured need, when known. |
+| `deterministic` | INTEGER | no | 1 when repeating the work would pause again. |
+| `source_tree` | TEXT | yes | Source tree, when changed source could change the outcome. |
+| `claim` | INTEGER | no | What a refused storage write would have added to the allocation; zero otherwise. |
+
+- PK `(attempt_id)`.
+- FK `(attempt_id)` → `attempts(id)`.
 
 ### tool_generations
 

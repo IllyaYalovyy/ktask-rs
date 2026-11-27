@@ -719,8 +719,8 @@ fn shared_admission_stops_live_output_and_artifacts_with_recovery_headroom() -> 
         };
         match service.output(run, "stdout", &chunk) {
             Ok(()) => accepted += 1,
-            Err(Error::Conflict(reason))
-                if reason.starts_with("Resource limit: shared storage") =>
+            Err(Error::Capacity(refusal))
+                if refusal.reason.starts_with("Resource limit: shared storage") =>
             {
                 denied = true;
                 break;
@@ -736,7 +736,7 @@ fn shared_admission_stops_live_output_and_artifacts_with_recovery_headroom() -> 
     std::fs::write(&source, vec![b'p'; 128 * 1024])?;
     let relative = format!("evidence/attempt-{}/step-999/file-1-0", run_second.attempt);
     assert!(
-        matches!(second.publish_artifact(run_second.attempt, &run_second.token, "proof.bin", &source, &relative, &"a".repeat(40)), Err(Error::Conflict(reason)) if reason.starts_with("Resource limit: shared storage"))
+        matches!(second.publish_artifact(run_second.attempt, &run_second.token, "proof.bin", &source, &relative, &"a".repeat(40)), Err(Error::Capacity(refusal)) if refusal.reason.starts_with("Resource limit: shared storage"))
     );
     assert!(
         !state.join(&relative).exists(),
@@ -820,8 +820,8 @@ fn shared_file_budget_rejects_publication_before_creating_more_directories() -> 
             &"a".repeat(40),
         ) {
             Ok(()) => accepted += 1,
-            Err(Error::Conflict(reason))
-                if reason.starts_with("Resource limit: shared storage") =>
+            Err(Error::Capacity(refusal))
+                if refusal.reason.starts_with("Resource limit: shared storage") =>
             {
                 rejected = Some(relative);
                 break;
@@ -1806,7 +1806,7 @@ fn step_launch_reads_no_output_and_walks_no_tree() -> Result<()> {
     let before = thread_read_bytes()?;
     let capacity = service.work_capacity()?;
     let launch = thread_read_bytes()? - before;
-    assert!(!capacity.reached);
+    assert!(capacity.refusal().is_none());
     let pages = usage.0 as u64 + 64;
     assert!(
         launch <= pages * 4096,

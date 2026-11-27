@@ -58,6 +58,10 @@ pub enum Action {
     Stop,
     Restart,
     MarkDone,
+    /// Raise the limit a paused task waits on, then resume it.
+    RaiseResume,
+    /// Configuration's resource limits.
+    ResourceLimits,
     /// Cancel a pending task (Action::Cancel closes a dialog).
     CancelTask,
     Supersede,
@@ -651,6 +655,9 @@ impl App {
             View::Current => match code {
                 KeyCode::Char('u') => Some(Action::Readiness),
                 KeyCode::Char('r') => Some(Action::Run),
+                KeyCode::Char('+') => self
+                    .offered(Action::RaiseResume)
+                    .then_some(Action::RaiseResume),
                 KeyCode::Char('m') => Some(Action::Configure),
                 KeyCode::Char('p') => Some(Action::Pause),
                 KeyCode::Char('s') => Some(Action::Stop),
@@ -712,6 +719,7 @@ impl App {
                     KeyCode::Char('L') => Action::Lenses,
                     KeyCode::Char('c') => Action::ProjectChecks,
                     KeyCode::Char('k') => Action::Storage,
+                    KeyCode::Char('R') => Action::ResourceLimits,
                     KeyCode::Char('b') => Action::BuildCache,
                     KeyCode::Char('t') => Action::Tools,
                     KeyCode::Char('g') => Action::Delivery,

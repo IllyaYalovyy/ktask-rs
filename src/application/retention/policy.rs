@@ -1,5 +1,6 @@
 //! Retention policy, storage limits and the capacity reserves derived from them.
 use super::*;
+use crate::resource::StorageBudget;
 use rusqlite::Connection;
 
 /// A self-hosting instance's SQLite file alone can exceed 1 GiB, so the default budget is
@@ -8,6 +9,9 @@ pub(super) const DEFAULT_MAX_BYTES: i64 = 8 * 1024 * 1024 * 1024;
 const DEFAULT_MAX_FILES: i64 = 100_000;
 const DEFAULT_DAYS: i64 = 30;
 const DAY_MS: i64 = 86_400_000;
+/// The largest budgets a policy accepts: the ceiling of raising one.
+pub(super) const MOST_BYTES: i64 = 1_099_511_627_776;
+pub(super) const MOST_FILES: i64 = 10_000_000;
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 pub struct Policy {
@@ -57,11 +61,11 @@ pub(in crate::application) fn validate_policy(policy: Policy) -> Result<()> {
         "Retention days must be between 0 and 365000",
     )?;
     require(
-        (1_048_576..=1_099_511_627_776).contains(&policy.max_bytes),
+        (1_048_576..=MOST_BYTES).contains(&policy.max_bytes),
         "Storage bytes must be between 1 MiB and 1 TiB",
     )?;
     require(
-        (16..=10_000_000).contains(&policy.max_files),
+        (16..=MOST_FILES).contains(&policy.max_files),
         "Storage files must be between 16 and 10000000",
     )
 }
@@ -93,6 +97,23 @@ pub(super) fn instance_limits(db: &Connection) -> Result<Limits> {
     )?)
 }
 
+/// The smallest budget of the instance's other projects, which `project` cannot raise.
+pub(super) fn smallest_other_budget(
+    db: &Connection,
+    project: i64,
+    budget: StorageBudget,
+) -> Result<Option<i64>> {
+    let (column, default) = match budget {
+        StorageBudget::StorageMaxBytes => ("max_bytes", DEFAULT_MAX_BYTES),
+        StorageBudget::StorageMaxFiles => ("max_files", DEFAULT_MAX_FILES),
+    };
+    Ok(db.query_row(
+        &format!("SELECT min(coalesce(l.{column},?1)) FROM projects p LEFT JOIN project_storage_limits l ON l.project_id=p.id WHERE p.id<>?2"),
+        params![default, project],
+        |r| r.get(0),
+    )?)
+}
+
 /// Headroom kept free below the limits: work stops at a quarter, new launches at half,
 /// each capped so a large budget does not waste most of its space.
 #[derive(Clone, Copy, Debug)]
@@ -110,10 +131,31 @@ impl Reserve {
     }
 
     pub(super) fn reached(self, bytes: i64, files: i64, limits: Limits) -> bool {
-        let byte_reserve = (limits.max_bytes / self.divisor()).min(256 * 1024 * 1024);
-        let file_reserve = (limits.max_files / self.divisor()).clamp(1, 256);
-        bytes.saturating_add(byte_reserve) >= limits.max_bytes
-            || files.saturating_add(file_reserve) >= limits.max_files
+        self.reached_in(StorageBudget::StorageMaxBytes, bytes, limits.max_bytes)
+            || self.reached_in(StorageBudget::StorageMaxFiles, files, limits.max_files)
+    }
+
+    /// Whether `used` leaves less than this reserve free of a budget of `most`.
+    pub(super) fn reached_in(self, budget: StorageBudget, used: i64, most: i64) -> bool {
+        used.saturating_add(self.headroom(budget, most)) >= most
+    }
+
+    fn headroom(self, budget: StorageBudget, most: i64) -> i64 {
+        match budget {
+            StorageBudget::StorageMaxBytes => (most / self.divisor()).min(256 * 1024 * 1024),
+            StorageBudget::StorageMaxFiles => (most / self.divisor()).clamp(1, 256),
+        }
+    }
+
+    /// The smallest budget that holds `used` with this reserve free.
+    pub(super) fn smallest_budget(self, budget: StorageBudget, used: i64) -> i64 {
+        let mut most = used.max(0).saturating_add(1);
+        while most < i64::MAX && self.reached_in(budget, used, most) {
+            most = used
+                .saturating_add(self.headroom(budget, most))
+                .saturating_add(1);
+        }
+        most
     }
 }
 

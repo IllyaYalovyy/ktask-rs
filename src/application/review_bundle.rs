@@ -69,6 +69,23 @@ impl Service {
             )?;
         }
         artifacts.flush()?;
+        // Files a truncated collection did not archive are listed, never silently absent.
+        let mut manifest = BufWriter::new(File::create(folder.join("manifest.jsonl"))?);
+        let mut statement = db.prepare("SELECT c.attempt_id,m.name,m.size_bytes,m.checksum_sha256,m.omitted FROM evidence_manifest m JOIN evidence_collections c ON c.id=m.collection_id JOIN attempts a ON a.id=c.attempt_id WHERE a.project_id=?1 AND a.task_id=?2 ORDER BY c.id DESC,m.ordinal")?;
+        let mut rows = statement.query(params![self.project_id, task])?;
+        while let Some(row) = rows.next()? {
+            let omitted: Option<String> = row.get(4)?;
+            record(
+                &mut manifest,
+                &json!({"attempt":row.get::<_, i64>(0)?,"name":row.get::<_, String>(1)?,"bytes":row.get::<_, i64>(2)?,
+                "sha256":row.get::<_, Option<String>>(3)?,"archived":omitted.is_none(),"not_archived_because":omitted}),
+            )?;
+        }
+        manifest.flush()?;
+        let truncated = super::collection::truncated(db, attempt)?
+            .map_or_else(String::new, |evidence| {
+                format!("{} The list is manifest.jsonl.\n", evidence.fact())
+            });
         let mut steps = BufWriter::new(File::create(folder.join("steps.jsonl"))?);
         let mut statement = db.prepare("SELECT s.id,s.attempt_id,s.role,s.state,s.check_name,s.command,s.exit_code,s.source_tree,s.reused_from_step_id,s.report,s.passed_count,s.failed_count,s.ignored_count,s.environment_fingerprint FROM attempt_steps s JOIN attempts a ON a.id=s.attempt_id WHERE a.project_id=?1 AND a.task_id=?2 ORDER BY s.id")?;
         let mut latest = BTreeMap::new();
@@ -171,7 +188,7 @@ impl Service {
         }
         latest_file.flush()?;
         Ok(format!(
-            "Evidence packet: task #{task}, attempt #{attempt}, revision {revision}, current source tree {tree}.\nRead-only index directory: {}\n{criterion_count} criteria in criteria.jsonl; {} latest role/check records in latest.jsonl ({shown} shown below); {step_count} historical steps in steps.jsonl; {artifact_count} artifacts in artifacts.jsonl ({matching} available with matching tree).\nStart with criteria.jsonl and latest.jsonl. Inspect every criterion's proof and every unresolved critical finding; reports are complete files, not summaries. Earlier findings are hypotheses until checked against the current diff. A missing, pruned, stale or unverified source is NOT proof. Matching tree alone does not prove the check definition matches: retain the supervisor's reuse guards.\nFull review scope, owner answers and authorized repair scope: workflow.txt. Search that file for 'Review scope', 'Recorded answers', and 'Repair plan'; do not replay it wholesale. The task criteria and mandatory review bar are unchanged.\nUse the supervisor's evidence command to page/search these files; open required PNG paths with your image viewer. Do not concatenate archives into context. Actual visual inspection is mandatory for visual criteria.\nLatest results (not a substitute for source inspection):\n{preview}",
+            "Evidence packet: task #{task}, attempt #{attempt}, revision {revision}, current source tree {tree}.\nRead-only index directory: {}\n{criterion_count} criteria in criteria.jsonl; {} latest role/check records in latest.jsonl ({shown} shown below); {step_count} historical steps in steps.jsonl; {artifact_count} artifacts in artifacts.jsonl ({matching} available with matching tree).\nStart with criteria.jsonl and latest.jsonl. Inspect every criterion's proof and every unresolved critical finding; reports are complete files, not summaries. Earlier findings are hypotheses until checked against the current diff. A missing, pruned, stale or unverified source is NOT proof. Matching tree alone does not prove the check definition matches: retain the supervisor's reuse guards.\nFull review scope, owner answers and authorized repair scope: workflow.txt. Search that file for 'Review scope', 'Recorded answers', and 'Repair plan'; do not replay it wholesale. The task criteria and mandatory review bar are unchanged.\nUse the supervisor's evidence command to page/search these files; open required PNG paths with your image viewer. Do not concatenate archives into context. Actual visual inspection is mandatory for visual criteria.\n{truncated}Latest results (not a substitute for source inspection):\n{preview}",
             folder.display(),
             latest.len()
         ))

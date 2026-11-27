@@ -90,6 +90,12 @@
 - Run `make check`. Use compiler/Clippy diagnostics and behavioral tests, not custom
   file/function line limits. Use complexity and duplication measurements to guide review;
   do not invent metric gates or refactor solely to satisfy a number.
+- A resource limit exists to stop a runaway producer from filling the host, and only that may
+  stop work. Everything after a producer exits (collecting and archiving evidence, bookkeeping)
+  is housekeeping: complete it or degrade with a visible note, never pause sound work. Limits
+  are stored settings the owner sees and changes (docs/RESOURCE_LIMITS.md); environment
+  variables only override them in tests. Never retry an unchanged deterministic breach or
+  repeat a recorded result.
 - Resource-limit tests use explicit small per-test budgets and fixtures. Never create a
   production-scale capacity fixture inside an enclosing task's `TMPDIR`; its guardian
   accounts for those files too. Assert the specific capacity failure and cleanup.

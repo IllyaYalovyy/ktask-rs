@@ -214,6 +214,8 @@ pub(crate) fn project_task(task: &domain::Task) -> Result<model::Task, String> {
                 supervisor_status: a.report.clone().unwrap_or_default(),
                 report: report_text(a),
                 question: a.question.clone(),
+                resource: a.resource_pause.clone(),
+                truncated: a.truncated_evidence.clone(),
                 steps: a
                     .steps
                     .iter()

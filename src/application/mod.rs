@@ -60,9 +60,11 @@ pub mod evidence_pin;
 mod model_validation;
 mod output_text;
 pub(crate) mod resource_breach;
+pub mod resource_limits;
 mod review_bundle;
 pub use evidence::{EvidenceCursor, EvidenceMatch, EvidenceSearch};
 pub mod categories;
+pub mod collection;
 pub mod configuration;
 pub mod delivery;
 pub mod dependency;
@@ -316,6 +318,12 @@ pub struct Attempt {
     /// Every specialist review of this attempt, each attributed to its lens.
     pub lens_reviews: Vec<lenses::Review>,
     pub artifacts: Vec<Artifact>,
+    /// Set while the attempt is paused on a resource limit.
+    #[serde(default)]
+    pub resource_pause: Option<resource_limits::ResourcePause>,
+    /// Set when some of the attempt's evidence was not archived.
+    #[serde(default)]
+    pub truncated_evidence: Option<collection::Truncated>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Artifact {

@@ -3,7 +3,7 @@
 use super::{
     Options, Workspace,
     attempt::{self, Then},
-    control, cycle, process, provider,
+    control, cycle, finish_evidence, process, provider,
     provider::Provider,
     registration::Registration,
     sandbox, session, workspace,
@@ -17,6 +17,7 @@ use crate::{
         session::ExecutionSession,
     },
     instance::Paths,
+    resource::PauseLimit,
     storage::{Error, Result},
 };
 use std::{
@@ -33,6 +34,9 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
     service.settle_orphan()?;
     control::finish_pending_with_workspace(service, &workspace)?;
     workspace::git_identity(&workspace.root)?;
+    // Before anything reclaims scratch: evidence a stopped guardian kept is archived now.
+    finish_evidence(service, &workspace)?;
+    require_changed_cause(service, paths, &workspace)?;
     open_session(service, options)?;
     registration.admitted();
     let result = run_inner(service, paths, options, &workspace);
@@ -51,6 +55,40 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
         let _ = session::continue_pending_session(service, paths);
     }
     result
+}
+
+/// Resume of a paused attempt that would only repeat a resource pause is refused before a
+/// session starts. An edited task starts a new attempt, which is a change.
+fn require_changed_cause(
+    service: &mut Service,
+    paths: &Paths,
+    workspace: &Workspace,
+) -> Result<()> {
+    let Some(task) = service.current_task()? else {
+        return Ok(());
+    };
+    let Some(attempt) = task.attempts.last() else {
+        return Ok(());
+    };
+    let Some(pause) = attempt
+        .resource_pause
+        .as_ref()
+        .filter(|pause| pause.repeats())
+    else {
+        return Ok(());
+    };
+    if task.state() != State::Paused || attempt.revision != task.definition().number {
+        return Ok(());
+    }
+    // Room is judged after the safe-point cleanup: reclaimed capacity resumes by itself.
+    if matches!(pause.limit, PauseLimit::Storage(_)) {
+        let stop = process::stopped()?;
+        let (storage, progress) = service.automatic_housekeeping_progress(1)?;
+        // The session's earlier pause does not apply to this new Run.
+        let _ = reclaim(service, &stop, |_| Ok(false), storage, progress)?;
+    }
+    let tree = workspace.fingerprint(&paths.cache.join("workers"))?;
+    service.require_changed_cause(attempt.id, &tree)
 }
 
 /// Records how this run left its session; true when a continuation was requested meanwhile.
@@ -252,7 +290,7 @@ fn next_task(service: &mut Service, stop: &AtomicBool) -> Result<ControlFlow<Str
     let Some(task) = service.current_task()? else {
         return Ok(ControlFlow::Break("Queue complete".into()));
     };
-    let storage = match reclaim(service, stop, storage, cleanup_progress)? {
+    let storage = match reclaim(service, stop, session_paused, storage, cleanup_progress)? {
         ControlFlow::Continue(storage) => storage,
         ControlFlow::Break(halt) => return Ok(ControlFlow::Break(halt)),
     };
@@ -268,6 +306,7 @@ fn next_task(service: &mut Service, stop: &AtomicBool) -> Result<ControlFlow<Str
 fn reclaim(
     service: &mut Service,
     stop: &AtomicBool,
+    paused: fn(&Service) -> Result<bool>,
     mut storage: Preview,
     mut cleanup_progress: HousekeepingProgress,
 ) -> Result<ControlFlow<String, Preview>> {
@@ -282,7 +321,7 @@ fn reclaim(
         if stop.load(Ordering::Relaxed) {
             return Ok(ControlFlow::Break(STOPPED.into()));
         }
-        if session_paused(service)? {
+        if paused(service)? {
             return Ok(ControlFlow::Break(PAUSED.into()));
         }
         if cleanup_progress == HousekeepingProgress::Contended {

@@ -10,11 +10,13 @@
 //! - [`sweep`]: removal of empty evidence directories.
 //! - [`database`]: SQLite page and WAL reclamation.
 use super::*;
+use crate::resource::StorageRefusal;
 use serde::Serialize;
 use std::fs::File;
 
 mod admission;
 mod candidates;
+mod capacity;
 mod database;
 mod deletion;
 mod measure;
@@ -28,6 +30,7 @@ pub(super) use admission::{
 };
 use admission::{probe_known_allocation, projected_allocation};
 use candidates::PreviewMode;
+pub(super) use capacity::{Standing, storage_standing};
 use database::{Reclamation, free_pages};
 use measure::{Allocation, ScanProgress, allocation, bounded_allocation_scan};
 pub use policy::Policy;
@@ -107,7 +110,26 @@ pub(crate) struct WorkCapacity {
     pub allocated_files: i64,
     pub effective_max_bytes: i64,
     pub effective_max_files: i64,
-    pub reached: bool,
+}
+
+impl WorkCapacity {
+    /// Why no step may launch, when the work reserve is reached.
+    pub(crate) fn refusal(&self) -> Option<StorageRefusal> {
+        capacity::refusal(
+            (self.allocated_bytes, self.allocated_files),
+            (0, 0),
+            (self.effective_max_bytes, self.effective_max_files),
+            || {
+                format!(
+                    "Resource limit: storage capacity reserve reached ({} / {} bytes, {} / {} files/directories); evidence and work retained",
+                    self.allocated_bytes,
+                    self.effective_max_bytes,
+                    self.allocated_files,
+                    self.effective_max_files,
+                )
+            },
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -199,7 +221,6 @@ impl Service {
             allocated_files: usage.files,
             effective_max_bytes: limits.max_bytes,
             effective_max_files: limits.max_files,
-            reached: Reserve::Work.reached(usage.bytes, usage.files, limits),
         })
     }
 

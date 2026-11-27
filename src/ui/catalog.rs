@@ -119,8 +119,13 @@ fn details(app: &App, task: &Task) -> String {
             .map(|(id, title)| format!("\nFollow-up #{id}: {title}"))
             .collect::<String>()
     );
+    let truncated = task
+        .attempts
+        .last()
+        .and_then(|attempt| attempt.truncated.as_ref())
+        .map_or_else(String::new, |evidence| format!("\n{}", evidence.label()));
     format!(
-        "{}\n#{} · {} · {}{}\n\nGoal: {}\n\nCheck: {}\n\nAttempts: {} · {}{}\n\nModels:\n{}{}",
+        "{}\n#{} · {} · {}{}\n\nGoal: {}\n\nCheck: {}\n\nAttempts: {} · {}{truncated}{}\n\nModels:\n{}{}",
         task.definition().title,
         task.id,
         task.status().label(),

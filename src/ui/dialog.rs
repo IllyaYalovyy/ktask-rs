@@ -40,6 +40,8 @@ fn hint(dialog: &Dialog, has_position: bool) -> &str {
         "Enter / Ctrl-S: delete evidence · Esc: cancel"
     } else if matches!(dialog.kind, DialogKind::BuildCacheConfirm(_)) {
         "Enter / Ctrl-S: confirm · Esc: cancel"
+    } else if matches!(dialog.kind, DialogKind::RaiseLimit(_)) {
+        "Enter / Ctrl-S: raise and resume · Esc: cancel"
     } else {
         "Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply"
     }
@@ -239,6 +241,11 @@ fn controls(app: &App, dialog: &Dialog, has_position: bool) -> Vec<(&'static str
         vec![("Confirm", Action::Submit), ("Cancel", Action::Cancel)]
     } else if matches!(dialog.kind, DialogKind::FixConfirm(_)) {
         vec![("Start fix", Action::Submit), ("Cancel", Action::Cancel)]
+    } else if matches!(dialog.kind, DialogKind::RaiseLimit(_)) {
+        vec![
+            ("Raise and resume", Action::Submit),
+            ("Cancel", Action::Cancel),
+        ]
     } else {
         vec![("Apply", Action::Submit), ("Cancel", Action::Cancel)]
     };

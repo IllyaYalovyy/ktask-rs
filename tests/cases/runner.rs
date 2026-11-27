@@ -17,6 +17,9 @@ use std::{
 };
 const BIN: &str = env!("CARGO_BIN_EXE_ktask-dev");
 
+#[path = "limits.rs"]
+mod limits;
+
 #[test]
 fn bound_tool_probes_protect_installations_on_admission_and_recheck() -> Result {
     use ktask_rs_mk3::application::{dependency::Requirement, tools::Registration};
@@ -2416,7 +2419,7 @@ fn live_output_capacity_pause_reaps_worker_and_resumes_same_attempt() -> Result 
 }
 
 #[test]
-fn artifact_capacity_rejection_keeps_verification_incomplete_until_resume() -> Result {
+fn storage_pressure_leaves_worker_evidence_out_with_a_note_instead_of_pausing() -> Result {
     let f = Fixture::new()?;
     f.provider("artifact-capacity")?;
     f.add("Archive proof within shared capacity")?;
@@ -2424,39 +2427,26 @@ fn artifact_capacity_rejection_keeps_verification_incomplete_until_resume() -> R
     let allocated = before["preview"]["allocated_bytes"].as_i64().unwrap();
     let budget = (allocated + 1024 * 1024).max(1_048_576).to_string();
     f.ok(&["retention", "30", "--max-bytes", &budget])?;
-    let paused = f.process().args(["run", "--one"]).output()?;
-    assert!(paused.status.success(), "{paused:?}");
+    let run = f.process().args(["run", "--one"]).output()?;
+    assert!(run.status.success(), "{run:?}");
+    let task = f.ok(&["show", "1", "--manifest"])?;
     assert!(
-        String::from_utf8_lossy(&paused.stdout).contains("Resource limit: shared storage"),
-        "{paused:?}"
+        !String::from_utf8_lossy(&run.stdout).contains("artifact evidence incomplete"),
+        "{run:?}"
     );
-    let task = f.ok(&["show", "1"])?;
-    assert_eq!(task["status"], "paused");
+    let files = task["evidence_manifest"][0]["files"].as_array().unwrap();
+    let proof = files
+        .iter()
+        .find(|file| file["name"] == "proof.bin")
+        .unwrap();
     assert!(
-        task["attempts"][0]["artifacts"]
-            .as_array()
-            .unwrap()
-            .is_empty()
+        proof["omitted"].as_str().unwrap().contains("storage"),
+        "{task}"
     );
-    let passed: i64 = f.db()?.connection().query_row(
-        "SELECT count(*) FROM attempt_steps WHERE attempt_id=1 AND role='check' AND state='succeeded'", [], |r| r.get(0)
-    )?;
-    assert_eq!(passed, 0, "check passed without required proof");
+    assert_eq!(proof["size_bytes"], 524_288);
+    assert_eq!(proof["checksum_sha256"].as_str().unwrap().len(), 64);
     f.guardian_finished()?;
     f.no_scratch()?;
-    f.ok(&["retention", "30", "--max-bytes", "1073741824"])?;
-    let resumed = f.process().args(["run", "--one"]).output()?;
-    assert!(resumed.status.success(), "{resumed:?}");
-    let task = f.ok(&["show", "1"])?;
-    assert_eq!(task["status"], "succeeded", "{task}");
-    assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
-    assert!(
-        task["attempts"][0]["artifacts"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|a| a["name"] == "proof.bin")
-    );
     Ok(())
 }
 
@@ -2614,39 +2604,41 @@ fn worker_artifact_survives_scratch_and_reaches_later_judge_and_attempt() -> Res
 }
 
 #[test]
-fn oversized_worker_artifact_reports_limit_and_releases_scratch() -> Result {
+fn oversized_worker_artifact_is_listed_and_does_not_stop_the_task() -> Result {
     let f = Fixture::new()?;
     f.provider("artifact-oversize")?;
-    f.add("Reject oversized capture")?;
+    f.add("List an oversized capture")?;
     let run = f
         .process()
         .env("KTASK_ARTIFACT_FILE_BYTES", "8388608")
         .args(["run", "--one"])
         .output()?;
-    assert_eq!(run.status.code(), Some(0));
-    assert!(
-        String::from_utf8_lossy(&run.stdout).contains("8 MiB per-artifact limit"),
-        "{}",
-        String::from_utf8_lossy(&run.stdout)
-    );
-    assert_eq!(f.ok(&["show", "1"])?["attempts"][0]["state"], "paused");
-    f.guardian_finished()?;
-    f.no_scratch()?;
-    let resumed = f
-        .process()
-        .env("KTASK_ARTIFACT_FILE_BYTES", "8388610")
-        .args(["run", "--one"])
-        .output()?;
-    assert!(resumed.status.success(), "{resumed:?}");
-    let task = f.ok(&["show", "1"])?;
+    assert_eq!(run.status.code(), Some(0), "{run:?}");
+    let task = f.ok(&["show", "1", "--manifest"])?;
     assert_eq!(task["status"], "succeeded", "{task}");
     assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(task["attempts"][0]["truncated_evidence"]["total_files"], 1);
+    assert_eq!(
+        task["attempts"][0]["truncated_evidence"]["archived_files"],
+        0
+    );
+    let file = &task["evidence_manifest"][0]["files"][0];
+    assert_eq!(file["name"], "huge.bin");
+    assert_eq!(file["size_bytes"], 8_388_609);
+    assert!(
+        file["omitted"]
+            .as_str()
+            .unwrap()
+            .contains("artifact_file_bytes (8388608)"),
+        "{file}"
+    );
+    f.guardian_finished()?;
     f.no_scratch()?;
     Ok(())
 }
 
 #[test]
-fn many_empty_artifacts_and_nested_entry_pause_with_bounded_records() -> Result {
+fn many_empty_artifacts_and_a_nested_entry_are_all_listed_with_bounded_records() -> Result {
     let f = Fixture::new()?;
     f.provider("artifact-empty-flood")?;
     f.add("Bound empty evidence")?;
@@ -2656,58 +2648,36 @@ fn many_empty_artifacts_and_nested_entry_pause_with_bounded_records() -> Result 
         .args(["run", "--one"])
         .output()?;
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Resource limit"));
-    let db = f.db()?;
-    let count: i64 = db.connection().query_row(
-        "SELECT count(*) FROM artifacts WHERE attempt_id=1",
-        [],
-        |r| r.get(0),
-    )?;
-    assert_eq!(
-        count, 128,
-        "accepted empty evidence should remain available"
-    );
     assert!(
         output.stdout.len() < 4096,
-        "overflow diagnostics must stay bounded"
+        "truncation diagnostics must stay bounded"
     );
-    assert_eq!(f.ok(&["show", "1"])?["attempts"][0]["state"], "paused");
+    let task = f.ok(&["show", "1", "--manifest"])?;
+    assert_eq!(task["status"], "succeeded", "{task}");
+    let truncated = &task["attempts"][0]["truncated_evidence"];
+    assert_eq!(truncated["total_files"], 401, "{truncated}");
+    assert_eq!(truncated["archived_files"], 128);
+    let files = task["evidence_manifest"][0]["files"].as_array().unwrap();
+    assert_eq!(files.len(), 401);
+    let nested = files.iter().find(|file| file["name"] == "nested").unwrap();
+    assert!(
+        nested["omitted"]
+            .as_str()
+            .unwrap()
+            .contains("regular files")
+    );
+    // The selection is by name, so it is the same every time.
+    let archived: Vec<_> = files
+        .iter()
+        .filter(|file| file["omitted"].is_null())
+        .map(|file| file["name"].as_str().unwrap().to_owned())
+        .collect();
+    let mut expected: Vec<_> = (0..400).map(|i| format!("empty-{i}")).collect();
+    expected.sort();
+    expected.truncate(128);
+    assert_eq!(archived, expected);
     f.guardian_finished()?;
     f.no_scratch()?;
-    Ok(())
-}
-
-#[test]
-fn resource_pause_is_visible_in_real_terminal_by_keyboard_and_mouse() -> Result {
-    for mouse in [false, true] {
-        let f = Fixture::new()?;
-        f.provider("artifact-oversize")?;
-        f.add("Inspect resource pause")?;
-        let mut t = Terminal::open_project_with_env(
-            BIN,
-            f.scratch.path(),
-            &f.root,
-            120,
-            34,
-            &[("KTASK_ARTIFACT_FILE_BYTES", "8388608")],
-        )?;
-        t.screen("resource fixture ready", |screen| {
-            screen.contains("Inspect resource pause") && screen.contains("r Run queue")
-        })?;
-        if mouse {
-            t.click("r Run queue")?;
-        } else {
-            t.send("r")?;
-        }
-        let screen = t.screen("resource condition visible", |screen| {
-            screen.contains("Paused") && screen.contains("Resource limit: artifact evidence")
-        })?;
-        println!("RESOURCE PAUSE mouse={mouse}\n{screen}");
-        f.supervisor_stopped()?;
-        t.send("q")?;
-        t.kill()?;
-        f.no_scratch()?;
-    }
     Ok(())
 }
 
@@ -3022,84 +2992,49 @@ fn a_limit_is_extended_at_most_twice_per_attempt_and_never_above_the_ceiling() -
 }
 
 #[test]
-fn artifact_count_breach_is_repaired_extended_or_escalated_by_the_judge() -> Result {
-    let env = [("KTASK_ARTIFACT_ATTEMPT_FILES", "128")];
-    // The repaired attempt still has a full artifact budget: the next archive (a check
-    // transcript) is a second breach, for another cause, and is extended.
-    let repair = breach_fixture_with(
-        "breach-artifacts",
-        &env,
-        &[
-            serde_json::json!({"action": "repair", "reason": "Too many proof files", "plan": "Bundle the proof files into one archive"}),
-            serde_json::json!({"action": "extend", "reason": "Room for the check transcripts"}),
-        ],
-        true,
-    )?;
-    assert_eq!(repair.ok(&["show", "1"])?["status"], "succeeded");
-    assert_eq!(repair_rounds(&repair)?, 1);
-    let rows = breaches(&repair)?;
-    assert_eq!(
-        (
-            rows[0].0.as_str(),
-            rows[0].1,
-            rows[0].3.as_str(),
-            rows[0].5.as_str()
-        ),
-        ("artifact_attempt_files", 128, "proof-#", "repair")
-    );
-    assert_eq!(rows[1].5, "extend");
-    assert!(rows[0].4.contains("artifacts"), "{}", rows[0].4);
-    assert!(
-        fs::read_to_string(repair.scratch.path().join("breach-judge-prompt"))?
-            .contains("BREACH-MARKER writing proof files"),
-        "the judge reads the stopped work's transcript"
-    );
-    assert!(
-        fs::read_to_string(repair.scratch.path().join("prompt-repair-worker"))?
-            .contains("Bundle the proof files into one archive")
-    );
-    assert_eq!(
-        breach_stat(&repair, "artifact_attempt_files", "repaired")?,
-        1
-    );
-    assert_eq!(
-        breach_stat(&repair, "artifact_attempt_files", "extended")?,
-        1
-    );
-
-    let extend = breach_fixture(
-        "breach-artifacts",
-        &env,
-        serde_json::json!({"action": "extend", "reason": "The proof is legitimate"}),
-        true,
-    )?;
-    assert_eq!(extend.ok(&["show", "1"])?["status"], "succeeded");
-    assert_eq!(repair_rounds(&extend)?, 0);
-    assert_eq!(breaches(&extend)?[0].7, Some(256));
-    assert_eq!(
-        breach_stat(&extend, "artifact_attempt_files", "extended")?,
-        1
-    );
-
-    let escalate = breach_fixture(
-        "breach-artifacts",
-        &env,
-        serde_json::json!({"action": "escalate", "reason": "The worker floods evidence"}),
-        false,
-    )?;
-    let attempt = &escalate.ok(&["show", "1"])?["attempts"][0];
-    assert_eq!(attempt["state"], "paused");
-    assert!(
-        attempt["report"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Diagnosis: The worker floods evidence"),
-        "{attempt}"
-    );
-    assert_eq!(
-        breach_stat(&escalate, "artifact_attempt_files", "escalated")?,
-        1
-    );
+fn steady_artifact_growth_is_extended_and_a_flood_truncated_without_a_model_turn() -> Result {
+    // 200 files against 128: within twice the limit, so the project's limit follows.
+    for (limit, extended, archived) in [(128, Some(256), None), (50, None, Some(50))] {
+        let f = Fixture::new()?;
+        f.provider("breach-artifacts")?;
+        f.ok(&[
+            "limits",
+            "artifact_attempt_files",
+            "--value",
+            &limit.to_string(),
+        ])?;
+        f.add("Keep many proof files")?;
+        let run = f.process().args(["run", "--one"]).output()?;
+        assert_eq!(run.status.code(), Some(0), "{run:?}");
+        let task = f.ok(&["show", "1"])?;
+        assert_eq!(task["status"], "succeeded", "{task}");
+        assert!(!f.scratch.path().join("breach-judge-calls").exists());
+        assert!(breaches(&f)?.is_empty());
+        assert_eq!(repair_rounds(&f)?, 0);
+        let setting = f.ok(&["limits", "artifact_attempt_files"])?["limits"][0].clone();
+        match extended {
+            Some(to) => {
+                assert_eq!(setting["value"], to, "{setting}");
+                assert_eq!(setting["source"], "automatic", "{setting}");
+                assert_eq!(setting["project"]["value"], limit, "{setting}");
+                assert_eq!(setting["ceiling"], limit * 4, "{setting}");
+                assert!(
+                    task["attempts"][0]["truncated_evidence"].is_null(),
+                    "{task}"
+                );
+            }
+            None => {
+                assert_eq!(setting["value"], limit, "{setting}");
+                assert_eq!(
+                    task["attempts"][0]["truncated_evidence"]["archived_files"],
+                    archived.unwrap(),
+                    "{task}"
+                );
+            }
+        }
+        f.guardian_finished()?;
+        f.no_scratch()?;
+    }
     Ok(())
 }
 
@@ -3293,11 +3228,6 @@ fn unread_guardian_output_cannot_suspend_scratch_monitoring() -> Result {
 
 #[test]
 fn blocked_supervisor_delivery_pauses_and_resumes_same_attempt() -> Result {
-    use nix::{
-        sys::signal::{Signal, kill},
-        unistd::Pid,
-    };
-
     // The quota leaves room beyond startup files for enough output to block the stopped
     // supervisor, and stdout is emitted before scratch increases.
     const BLOCKED_SCRATCH_BYTES: u64 = 256 * 1024;
@@ -3327,9 +3257,9 @@ fn blocked_supervisor_delivery_pauses_and_resumes_same_attempt() -> Result {
         let scratch = PathBuf::from(fs::read_to_string(
             f.scratch.path().join("scratch-observed"),
         )?);
-        let supervisor_pid = Pid::from_raw(supervisor.id() as i32);
-        kill(supervisor_pid, Signal::SIGSTOP)?;
-        // Always resume the supervisor, including when the bounded observation fails.
+        // The stall under test is a supervisor that stops draining its guardian. The guard
+        // resumes it, including when the bounded observation fails.
+        let paused_supervisor = pause_when_db_idle(&f, supervisor.id() as i32)?;
         let observed = (|| -> Result<(u64, u64)> {
             fs::write(f.scratch.path().join("blocked-provider-go"), "go")?;
             let deadline = Instant::now() + Duration::from_secs(10);
@@ -3354,7 +3284,7 @@ fn blocked_supervisor_delivery_pauses_and_resumes_same_attempt() -> Result {
                 thread::sleep(Duration::from_millis(5));
             }
         })();
-        kill(supervisor_pid, Signal::SIGCONT)?;
+        drop(paused_supervisor);
         let peak = observed?;
         let deadline = Instant::now() + Duration::from_secs(15);
         while supervisor.try_wait()?.is_none() {
@@ -3524,29 +3454,45 @@ fn startup_output_limits_pause_and_resume_same_attempt_without_repair() -> Resul
         let f = Fixture::new()?;
         f.provider("normal")?;
         f.add("Resume startup output")?;
-        let mut first_report = String::new();
-        for resume in 0..2 {
-            let output = f
-                .process()
-                .env(variable, exhausted)
-                .args(["run", "--one"])
-                .output()?;
-            assert_eq!(output.status.code(), Some(0), "{output:?}");
-            let report = String::from_utf8(output.stdout)?;
-            assert!(report.contains("attempt output exceeds"), "{report}");
-            let task = f.ok(&["show", "1"])?;
-            assert_eq!(task["attempts"][0]["state"], "paused", "{task}");
-            assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
-            assert!(
-                task["attempts"][0]["report"]
-                    .as_str()
-                    .unwrap()
-                    .contains("Resource limit:")
-            );
-            if resume == 0 {
-                first_report = report;
-            }
-        }
+        let paused = f
+            .process()
+            .env(variable, exhausted)
+            .args(["run", "--one"])
+            .output()?;
+        assert_eq!(paused.status.code(), Some(0), "{paused:?}");
+        let first_report = String::from_utf8(paused.stdout)?;
+        assert!(
+            first_report.contains("attempt output exceeds"),
+            "{first_report}"
+        );
+        let task = f.ok(&["show", "1"])?;
+        assert_eq!(task["attempts"][0]["state"], "paused", "{task}");
+        assert_eq!(
+            task["attempts"][0]["resource_pause"]["deterministic"], true,
+            "{task}"
+        );
+        let invocations =
+            fs::read_to_string(f.scratch.path().join("provider-invocations")).unwrap_or_default();
+        let refused = f
+            .process()
+            .env(variable, exhausted)
+            .args(["run", "--one"])
+            .output()?;
+        assert_eq!(refused.status.code(), Some(4), "{refused:?}");
+        let error = String::from_utf8(refused.stderr)?;
+        assert!(
+            error.contains("Resume refused") && error.contains(variable),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("provider-invocations")).unwrap_or_default(),
+            invocations,
+            "a refused resume starts nothing"
+        );
+        assert_eq!(
+            f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
+            1
+        );
         let db = f.db()?;
         let (bytes, rows): (i64, i64) = db.connection().query_row(
             "SELECT coalesce(bytes,0),coalesce(rows,0) FROM attempts a LEFT JOIN attempt_output_usage u ON u.attempt_id=a.id WHERE a.id=1", [], |r| Ok((r.get(0)?,r.get(1)?)))?;
@@ -3569,7 +3515,7 @@ fn startup_output_limits_pause_and_resume_same_attempt_without_repair() -> Resul
 }
 
 #[test]
-fn startup_output_pause_repeated_resume_and_recovery_render_in_real_terminal() -> Result {
+fn startup_output_pause_refused_resume_and_recovery_render_in_real_terminal() -> Result {
     for mouse in [false, true] {
         let f = Fixture::new()?;
         f.provider("normal")?;
@@ -3601,20 +3547,25 @@ fn startup_output_pause_repeated_resume_and_recovery_render_in_real_terminal() -
         } else {
             t.send("r")?;
         }
-        support::eventually("same attempt resumed under exhausted limit", || {
-            let db = f.db()?;
-            let count: i64 = db.connection().query_row(
+        let refused = t.screen("unchanged resume refused", |s| {
+            s.contains("Raise and resume") && s.contains("Resume refused")
+        })?;
+        println!("STARTUP RESOURCE PTY mouse={mouse} refused\n{refused}");
+        if mouse {
+            t.click("Cancel")?;
+        } else {
+            t.send("\x1b")?;
+        }
+        t.screen("refusal closed", |s| !s.contains("[Cancel]"))?;
+        f.supervisor_stopped()?;
+        assert_eq!(
+            f.db()?.connection().query_row(
                 "SELECT count(*) FROM events WHERE attempt_id=1 AND kind='attempt.resumed'",
                 [],
-                |r| r.get(0),
-            )?;
-            Ok((count >= 1).then_some(()))
-        })?;
-        f.supervisor_stopped()?;
-        let paused = t.still("resource pause after repeated resume", |s| {
-            s.contains("[r Resume]") && s.contains("Resource limit: attempt output")
-        })?;
-        println!("STARTUP RESOURCE PTY mouse={mouse} repeated\n{paused}");
+                |r| r.get::<_, i64>(0),
+            )?,
+            0
+        );
         t.send("q")?;
         t.kill()?;
         let mut recovered = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 34)?;
@@ -3652,17 +3603,17 @@ fn startup_output_pause_repeated_resume_and_recovery_render_in_real_terminal() -
 }
 
 #[test]
-fn fifo_artifact_is_rejected_without_hanging_guardian_or_leaving_scratch() -> Result {
+fn fifo_artifact_is_skipped_without_hanging_guardian_or_leaving_scratch() -> Result {
     let f = Fixture::new()?;
     f.provider("artifact-fifo")?;
-    f.add("Reject a named pipe")?;
+    f.add("Skip a named pipe")?;
     let mut child = f
         .process()
         .args(["run", "--one"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if child.try_wait()?.is_some() {
             break;
@@ -3675,15 +3626,25 @@ fn fifo_artifact_is_rejected_without_hanging_guardian_or_leaving_scratch() -> Re
         thread::sleep(Duration::from_millis(20));
     }
     let output = child.wait_with_output()?;
-    assert_eq!(output.status.code(), Some(4));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("only regular files"));
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let task = f.ok(&["show", "1", "--manifest"])?;
+    assert_eq!(task["status"], "succeeded", "{task}");
+    let file = &task["evidence_manifest"][0]["files"][0];
+    assert_eq!(file["name"], "pipe");
+    assert!(file["checksum_sha256"].is_null());
+    assert!(
+        file["omitted"]
+            .as_str()
+            .unwrap()
+            .contains("only regular files")
+    );
     f.guardian_finished()?;
     f.no_scratch()?;
     Ok(())
 }
 
 #[test]
-fn mixed_artifacts_keep_valid_siblings_and_reject_oversize_without_orphans() -> Result {
+fn mixed_artifacts_keep_valid_siblings_and_omit_oversize_without_orphans() -> Result {
     let f = Fixture::new()?;
     f.provider("artifact-mixed")?;
     f.add("Archive valid siblings")?;
@@ -3693,7 +3654,7 @@ fn mixed_artifacts_keep_valid_siblings_and_reject_oversize_without_orphans() -> 
         .args(["run", "--one"])
         .output()?;
     assert_eq!(output.status.code(), Some(0));
-    assert!(String::from_utf8_lossy(&output.stdout).contains("8 MiB per-artifact limit"));
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
     let db = f.db()?;
     let rows = db.connection().prepare("SELECT name,relative_path FROM artifacts WHERE attempt_id=1 AND name IN ('a.txt','b.bin','c.txt') ORDER BY name")?
         .query_map([], |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?)))?.collect::<std::result::Result<Vec<_>, _>>()?;
@@ -3813,7 +3774,7 @@ fn interrupted_artifact_publication_reconciles_original_source_tree() -> Result 
 }
 
 #[test]
-fn cross_turn_budget_rejects_new_file_without_retaining_untracked_bytes() -> Result {
+fn cross_turn_budget_omits_new_file_without_retaining_untracked_bytes() -> Result {
     let f = Fixture::new()?;
     f.provider("artifact-budget")?;
     f.ok(&[
@@ -3829,7 +3790,20 @@ fn cross_turn_budget_rejects_new_file_without_retaining_untracked_bytes() -> Res
         .args(["run", "--one"])
         .output()?;
     assert_eq!(run.status.code(), Some(0));
-    assert!(String::from_utf8_lossy(&run.stdout).contains("64 MiB per-attempt artifact limit"));
+    let task = f.ok(&["show", "1", "--manifest"])?;
+    assert_eq!(task["status"], "succeeded", "{task}");
+    assert!(
+        task["evidence_manifest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|attempt| attempt["files"].as_array().unwrap())
+            .any(|file| file["name"] == "extra.bin"
+                && file["omitted"]
+                    .as_str()
+                    .is_some_and(|why| why.contains("artifact_attempt_bytes"))),
+        "{task}"
+    );
     let db = f.db()?;
     let recorded: i64 = db.connection().query_row(
         "SELECT coalesce(sum(size_bytes),0) FROM artifacts WHERE pruned_at_ms IS NULL",
@@ -3873,14 +3847,6 @@ fn cross_turn_budget_rejects_new_file_without_retaining_untracked_bytes() -> Res
         recorded as u64
     );
     f.ok(&["retention", "0"])?;
-    let deferred = f.process().args(["storage", "--apply"]).output()?;
-    assert_eq!(deferred.status.code(), Some(4));
-    assert_eq!(
-        bytes_under(&f.scratch.path().join("state/ktask-dev/evidence"))?,
-        recorded as u64,
-        "unresolved failure evidence must stay retained"
-    );
-    f.ok(&["done", "1", "--reason", "Evidence inspection complete"])?;
     f.ok(&["storage", "--apply"])?;
     assert_eq!(
         bytes_under(&f.scratch.path().join("state/ktask-dev/evidence"))?,
@@ -4827,7 +4793,12 @@ impl Drop for PausedSupervisor {
 }
 
 fn pause_supervisor_when_db_idle(f: &Fixture) -> Result<PausedSupervisor> {
-    let supervisor = f.supervisor_pid()?;
+    pause_when_db_idle(f, f.supervisor_pid()?)
+}
+
+/// Stops `supervisor` while none of its writes is in progress: a stop inside one would also
+/// hold SQLite's write lock, which every other process, its guardian included, would wait on.
+fn pause_when_db_idle(f: &Fixture, supervisor: i32) -> Result<PausedSupervisor> {
     for _ in 0..100 {
         nix::sys::signal::kill(
             nix::unistd::Pid::from_raw(supervisor),

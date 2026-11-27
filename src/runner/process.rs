@@ -1,7 +1,7 @@
 //! A small worker guardian: stdin is a lifeline, not a terminal. Losing the supervisor
 //! stops the entire child process group before releasing its workspace/scratch leases.
 use crate::{
-    application::Service,
+    application::{Service, collection::Collection},
     resource::{Breach, Limit},
     runner::callback::{Capability, Server},
     scratch::Scratch,
@@ -126,11 +126,7 @@ pub fn capture_readonly(
                 output.extend(bytes);
             }
             Received::Exited(code) => return Ok((code, stdout, stderr)),
-            Received::Artifact => {
-                return Err(Error::Conflict(
-                    "Unexpected artifact from read-only proposal".into(),
-                ));
-            }
+            Received::Note(_) => {}
             Received::Failed(error) => return Err(worker.failure(error)),
             Received::Disconnected => {
                 return Err(Error::Conflict("Remediation worker disconnected".into()));
@@ -176,12 +172,7 @@ pub fn capture_probe(
                 output.extend(bytes);
             }
             Received::Exited(code) => return Ok((code, stdout, stderr)),
-            Received::Artifact => {
-                worker.join()?;
-                return Err(Error::Conflict(
-                    "Unexpected dependency probe artifact".into(),
-                ));
-            }
+            Received::Note(_) => {}
             Received::Failed(error) => return Err(worker.failure(error)),
             Received::Disconnected => {
                 return Err(Error::Conflict(
@@ -197,15 +188,16 @@ pub enum Message {
         stream: String,
         bytes: Vec<u8>,
     },
-    Artifact {
-        name: String,
-        relative_path: String,
-    },
+    /// Housekeeping after the command exited that the owner should see.
+    Note(String),
     Exit {
         code: i32,
         /// The guardian stopped the command at its time limit.
         #[serde(default)]
         timed_out: bool,
+        /// The most `(bytes, entries)` of managed scratch the guardian measured.
+        #[serde(default)]
+        scratch_peak: (u64, u64),
     },
     Error(String),
     /// A storage limit stopped the worker; the scratch summary was taken before cleanup.
@@ -222,15 +214,12 @@ pub enum WorkerResult {
 #[derive(Clone, Copy)]
 pub enum ResourceKind {
     Scratch,
-    Artifact,
     Delivery,
 }
 impl ResourceKind {
     fn from_reason(reason: &str) -> Self {
         if reason.contains("managed scratch exceeded") {
             Self::Scratch
-        } else if reason.contains("artifact evidence incomplete") {
-            Self::Artifact
         } else {
             Self::Delivery
         }
@@ -239,7 +228,6 @@ impl ResourceKind {
     pub const fn exit_code(self) -> u8 {
         match self {
             Self::Scratch => 75,
-            Self::Artifact => 76,
             Self::Delivery => 77,
         }
     }
@@ -247,7 +235,6 @@ impl ResourceKind {
     fn from_exit_code(code: Option<i32>) -> Option<Self> {
         match code {
             Some(75) => Some(Self::Scratch),
-            Some(76) => Some(Self::Artifact),
             Some(77) => Some(Self::Delivery),
             _ => None,
         }
@@ -257,9 +244,6 @@ impl ResourceKind {
         match self {
             Self::Scratch => {
                 "Resource limit: managed scratch exceeded; worker stopped and its scratch deleted, and captured evidence retained, but guardian output delivery was incomplete. Raise the scratch limit, then resume for fresh verification"
-            }
-            Self::Artifact => {
-                "Resource limit: artifact evidence incomplete; worker stopped and captured evidence retained, but guardian output delivery was incomplete. Raise the artifact limit or free capacity, then resume for fresh verification"
             }
             Self::Delivery => {
                 "Resource limit: guardian output delivery incomplete; worker stopped and captured evidence retained. Restore delivery capacity, then resume for fresh verification"
@@ -435,14 +419,9 @@ fn reader(
         }
     })
 }
-/// The scratch limits in force: those the supervisor passed, else the configured ones.
+/// The scratch limits in force: those the supervisor passed, else the fallback.
 fn scratch_limits(passed: Option<(u64, u64)>) -> (u64, u64) {
-    passed.unwrap_or_else(crate::resource::configured_scratch)
-}
-
-fn scratch_exceeded(path: &std::path::Path, passed: Option<(u64, u64)>) -> io::Result<bool> {
-    let (bytes, entries) = scratch_limits(passed);
-    crate::resource::scratch_exceeded(path, bytes, entries)
+    passed.unwrap_or_else(crate::resource::fallback_scratch)
 }
 
 /// What filled a breached scratch directory. The worker is stopped; nothing is deleted yet.
@@ -609,6 +588,7 @@ pub fn worker() -> Result<WorkerResult> {
     let mut code = None;
     let mut disconnected = false;
     let mut quota = None;
+    let mut peak = (0, 0);
     let mut last_scan = Instant::now();
     let mut pending_message = None;
     let mut blocked_since = None;
@@ -619,6 +599,7 @@ pub fn worker() -> Result<WorkerResult> {
                 scratch.path(),
                 spec.scratch_limits,
                 android_runtime_root.as_deref(),
+                &mut peak,
             )?;
             if quota.is_some() {
                 child.stop()?;
@@ -693,16 +674,22 @@ pub fn worker() -> Result<WorkerResult> {
             scratch.path(),
             spec.scratch_limits,
             android_runtime_root.as_deref(),
+            &mut peak,
         )?;
     }
-    let artifact_error = spec
+    // The scratch is summarized while it is whole: a breach is diagnosed from this.
+    let final_error = quota.map(|quota| match quota {
+        Quota::Scratch => Final::Breach(scratch_breach(scratch.path(), spec.scratch_limits)),
+        Quota::Reason(reason) => Final::Text(reason),
+    });
+    // The producer has stopped: archiving its evidence completes or degrades with a note.
+    let note = spec
         .artifact_target
         .as_ref()
-        .map(|target| archive_artifacts(&artifact_dir, target, &outbound))
-        .transpose()
-        .err();
-    // The scratch is summarized while it still exists: a breach is diagnosed from this.
-    let final_error = final_error(quota, scratch.path(), spec.scratch_limits, artifact_error);
+        .and_then(|target| archive_artifacts(&artifact_dir, &spec.scratch_root, target));
+    if let Some(note) = note {
+        let _ = enqueue_final(&outbound, Message::Note(note));
+    }
     drop(callback);
     drop(android);
     scratch.close()?;
@@ -723,35 +710,26 @@ pub fn worker() -> Result<WorkerResult> {
         Message::Exit {
             code: code.unwrap_or(130),
             timed_out,
+            scratch_peak: peak,
         },
         ResourceKind::Delivery,
     ))
 }
 
-/// The capacity limit a worker has exceeded, if any.
+/// The capacity limit a worker has exceeded, if any. `peak` keeps the most scratch seen.
 fn capacity(
     scratch: &std::path::Path,
     limits: Option<(u64, u64)>,
     android_runtime: Option<&std::path::Path>,
+    peak: &mut (u64, u64),
 ) -> io::Result<Option<Quota>> {
-    if scratch_exceeded(scratch, limits)? {
+    let (byte_limit, entry_limit) = scratch_limits(limits);
+    let (bytes, entries) = crate::resource::scratch_usage(scratch, byte_limit, entry_limit)?;
+    *peak = (peak.0.max(bytes), peak.1.max(entries));
+    if bytes > byte_limit || entries > entry_limit {
         return Ok(Some(Quota::Scratch));
     }
     Ok(android_runtime_error(android_runtime)?.map(Quota::Reason))
-}
-
-/// What the guardian reports instead of an exit: a quota stop first, else an archive failure.
-fn final_error(
-    quota: Option<Quota>,
-    scratch: &std::path::Path,
-    limits: Option<(u64, u64)>,
-    artifacts: Option<Error>,
-) -> Option<Final> {
-    match quota {
-        Some(Quota::Scratch) => Some(Final::Breach(scratch_breach(scratch, limits))),
-        Some(Quota::Reason(reason)) => Some(Final::Text(reason)),
-        None => artifacts.map(|error| artifact_failure(error, scratch)),
-    }
 }
 
 /// Why the guardian stopped a worker for capacity.
@@ -770,8 +748,7 @@ impl Final {
     fn kind(&self) -> ResourceKind {
         match self {
             Self::Text(reason) => ResourceKind::from_reason(reason),
-            Self::Breach(breach) if breach.limit.is_scratch() => ResourceKind::Scratch,
-            Self::Breach(_) => ResourceKind::Artifact,
+            Self::Breach(_) => ResourceKind::Scratch,
         }
     }
 
@@ -780,38 +757,6 @@ impl Final {
             Self::Text(reason) => Message::Error(reason),
             Self::Breach(breach) => Message::Breach(breach),
         }
-    }
-}
-
-/// An artifact archive error as the guardian reports it. A limit breach also carries what
-/// filled the scratch it is about to delete.
-fn artifact_failure(error: Error, scratch: &std::path::Path) -> Final {
-    let detail = match &error {
-        Error::Conflict(message) => message.clone(),
-        Error::Breach(breach) => breach.reason.clone(),
-        other => other.to_string(),
-    };
-    let limited = detail.contains(" limit")
-        || detail.contains("No space left on device")
-        || detail.contains("Disk quota exceeded");
-    if !limited {
-        return Final::Text(format!(
-            "Artifact evidence incomplete: {detail}; work and captured evidence retained"
-        ));
-    }
-    let reason = format!(
-        "Resource limit: artifact evidence incomplete: {detail}; work and captured evidence retained. Raise the limit or free capacity, then resume"
-    );
-    match error {
-        Error::Breach(breach) => {
-            let summary = crate::resource::summarize(scratch);
-            Final::Breach(Breach {
-                reason,
-                summary: summary.render(),
-                ..*breach
-            })
-        }
-        _ => Final::Text(reason),
     }
 }
 
@@ -871,85 +816,63 @@ fn enqueue_final(outbound: &mpsc::SyncSender<Message>, message: Message) -> io::
     }
 }
 
-/// The guardian owns the scratch lease until every selected file is in state storage.
-/// Only regular, flat files are accepted; a worker cannot redirect the copy with a symlink.
+/// The guardian owns the worker lease until every selected file is in state storage. The
+/// collection is recorded first and the artifact directory then leaves the scratch, which
+/// is deleted whatever happens here, so an interrupted pass can be finished from the kept
+/// files. Only regular, flat files are accepted; a worker cannot redirect the copy with a
+/// symlink. Returns the note about anything that was not archived.
 fn archive_artifacts(
     source: &std::path::Path,
+    root: &std::path::Path,
     target: &ArtifactTarget,
-    outbound: &mpsc::SyncSender<Message>,
-) -> Result<()> {
-    let service = Service::open(Database::open_in(&target.state)?, &target.project, None)?;
-    let tree = super::workspace::Workspace::fingerprint_at(&target.project, &target.scratch_root)?;
-    let scan_limit = crate::resource::limit("KTASK_ARTIFACT_SCAN_ENTRIES", 256) as usize;
-    let mut entries = Vec::new();
-    let mut scan_overflow = false;
-    for entry in std::fs::read_dir(source)? {
-        if entries.len() == scan_limit {
-            scan_overflow = true;
-            break;
-        }
-        entries.push(entry?);
+) -> Option<String> {
+    let metadata = std::fs::symlink_metadata(source);
+    if !metadata.is_ok_and(|metadata| metadata.is_dir()) {
+        return Some(
+            "Evidence could not be archived: the artifact directory was replaced or removed".into(),
+        );
     }
-    entries.sort_by_key(|entry| entry.file_name());
-    let mut errors = Vec::new();
-    let mut breach = None;
-    if scan_overflow {
-        errors.push(format!("Artifact directory exceeds the {scan_limit}-entry scan limit; remaining evidence was not archived"));
+    // A readable directory with nothing in it needs no record.
+    if std::fs::read_dir(source).is_ok_and(|mut entries| entries.next().is_none()) {
+        return None;
     }
-    for (index, entry) in entries.iter().enumerate() {
-        let name = match entry.file_name().into_string() {
-            Ok(name) => name,
-            Err(_) => {
-                if errors.len() < 5 {
-                    errors.push("Artifact name must be UTF-8".to_owned());
-                }
-                continue;
-            }
-        };
-        let stored_name = format!("file-{}-{index}", std::process::id());
-        let relative = format!("{}/{stored_name}", target.relative_prefix);
-        match service.publish_artifact(
-            target.attempt,
-            &target.token,
-            &name,
-            &entry.path(),
-            &relative,
-            &tree,
-        ) {
-            Ok(()) => {
-                // Publication is already durable. A disconnected supervisor must
-                // not prevent later siblings from being archived.
-                if outbound
-                    .try_send(Message::Artifact {
-                        name,
-                        relative_path: stored_name,
-                    })
-                    .is_err()
-                    && errors.len() < 5
-                {
-                    errors.push("Resource limit: artifact notification delivery stalled; archived evidence retained".into());
-                }
-            }
-            Err(error) => {
-                if errors.len() < 5 {
-                    errors.push(match &error {
-                        Error::Conflict(message) => message.clone(),
-                        Error::Breach(breach) => breach.reason.clone(),
-                        other => other.to_string(),
-                    });
-                }
-                if let Error::Breach(first) = error {
-                    breach.get_or_insert(first);
-                }
-            }
-        }
+    let kept = root.join(format!(
+        "evidence-{}-{}",
+        target.attempt,
+        std::process::id()
+    ));
+    let opened = (|| -> Result<(Service, String)> {
+        let service = Service::open(Database::open_in(&target.state)?, &target.project, None)?;
+        let tree =
+            super::workspace::Workspace::fingerprint_at(&target.project, &target.scratch_root)?;
+        Ok((service, tree))
+    })();
+    let (service, tree) = match opened {
+        Ok(opened) => opened,
+        Err(error) => return Some(format!("Evidence could not be archived: {error}")),
+    };
+    let collection = |source| Collection {
+        attempt: target.attempt,
+        token: &target.token,
+        prefix: &target.relative_prefix,
+        source,
+        tree: &tree,
+    };
+    if let Err(error) = service.reserve_collection(&collection(&kept)) {
+        return Some(format!("Evidence could not be archived: {error}"));
     }
-    let reason = errors.join("; ");
-    match (errors.is_empty(), breach) {
-        (true, _) => Ok(()),
-        (false, Some(breach)) => Err(Error::Breach(Box::new(Breach { reason, ..*breach }))),
-        (false, None) => Err(Error::Conflict(reason)),
-    }
+    let source = match std::fs::rename(source, &kept) {
+        Ok(()) => kept.as_path(),
+        Err(_) => source,
+    };
+    service
+        .collect_evidence(&collection(source))
+        .unwrap_or_else(|error| {
+            Some(format!(
+                "Evidence not archived yet: {error}. The files are kept in {} and the runner finishes or records them when it continues",
+                source.display()
+            ))
+        })
 }
 
 pub struct Worker {
@@ -961,6 +884,7 @@ pub struct Worker {
     /// The limit breach the guardian reported, for [`Self::failure`].
     breach: Option<Breach>,
     timed_out: bool,
+    scratch_peak: (u64, u64),
 }
 
 /// One step of a guardian's message stream, as [`Worker::receive`] reports it.
@@ -971,8 +895,8 @@ pub enum Received {
         stream: String,
         bytes: Vec<u8>,
     },
-    /// The guardian archived an evidence file.
-    Artifact,
+    /// Housekeeping after the exit that the owner should see.
+    Note(String),
     /// The worker exited with this code; the guardian has been joined.
     Exited(i32),
     /// The guardian reported a protocol or I/O error; it has not been joined yet.
@@ -1013,6 +937,7 @@ impl Worker {
             reader: Some(reader),
             breach: None,
             timed_out: false,
+            scratch_peak: (0, 0),
         };
         // Retain stdin in Child as the lifeline; Drop closes it before wait.
         let sent = serde_json::to_writer(&mut input, spec)
@@ -1036,9 +961,14 @@ impl Worker {
         };
         Ok(match message {
             Ok(Message::Output { stream, bytes }) => Received::Output { stream, bytes },
-            Ok(Message::Artifact { .. }) => Received::Artifact,
-            Ok(Message::Exit { code, timed_out }) => {
+            Ok(Message::Note(note)) => Received::Note(note),
+            Ok(Message::Exit {
+                code,
+                timed_out,
+                scratch_peak,
+            }) => {
                 self.timed_out = timed_out;
+                self.scratch_peak = scratch_peak;
                 self.join()?;
                 Received::Exited(code)
             }
@@ -1060,6 +990,11 @@ impl Worker {
     /// [`Invocation::time_limit_ms`].
     pub fn timed_out(&self) -> bool {
         self.timed_out
+    }
+
+    /// The most `(bytes, entries)` of managed scratch the exited worker used.
+    pub fn scratch_peak(&self) -> (u64, u64) {
+        self.scratch_peak
     }
 
     /// Output already queued behind the last message, without waiting. Any other message
@@ -1208,10 +1143,10 @@ mod tests {
             finish_delivery(
                 queued,
                 delivered,
-                Message::Error("artifact".into()),
-                ResourceKind::Artifact
+                Message::Error("delivery".into()),
+                ResourceKind::Delivery
             ),
-            WorkerResult::ResourceUndelivered(ResourceKind::Artifact)
+            WorkerResult::ResourceUndelivered(ResourceKind::Delivery)
         ));
     }
 

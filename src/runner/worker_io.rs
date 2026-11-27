@@ -75,11 +75,14 @@ pub(super) fn execute(
             last_tick = Instant::now();
         }
         match worker.receive(Duration::from_millis(40))? {
-            Received::Idle | Received::Artifact => {}
+            Received::Idle => {}
+            Received::Note(note) => service.note(run, &note)?,
             Received::Output { stream, bytes } => {
                 sink.record(service, run, step, &mut worker, (stream, bytes))?;
             }
             Received::Exited(code) => {
+                let (bytes, entries) = worker.scratch_peak();
+                service.record_scratch_peak(run.attempt, bytes, entries)?;
                 sink.finish(service, run)?;
                 ctx.persist_active_time(service, run)?;
                 let ended = if worker.timed_out() {
@@ -106,16 +109,10 @@ fn launch_refused(service: &Service, run: &Run, ctx: &Context<'_>) -> Result<Opt
         ctx.persist_active_time(service, run)?;
         return Ok(Some(outcome));
     }
-    let storage = service.work_capacity()?;
-    Ok(storage.reached.then(|| {
-        Outcome::DeliveryBlocked(format!(
-            "Resource limit: storage capacity reserve reached ({} / {} bytes, {} / {} files/directories); evidence and work retained",
-            storage.allocated_bytes,
-            storage.effective_max_bytes,
-            storage.allocated_files,
-            storage.effective_max_files,
-        ))
-    }))
+    Ok(service
+        .work_capacity()?
+        .refusal()
+        .map(|refusal| Outcome::StorageBlocked(Box::new(refusal))))
 }
 
 /// The worker's evidence files are archived as this step's.

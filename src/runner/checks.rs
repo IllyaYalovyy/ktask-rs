@@ -48,6 +48,14 @@ pub(super) fn run(
         if let Some(extended) = service.check_extension_for(run, check.id)? {
             check.timeout_ms = extended;
         }
+        match recorded_result(service, run, ctx, &check, tree)? {
+            Some(Outcome::Passed(recorded)) => {
+                evidence.push_str(&recorded);
+                continue;
+            }
+            Some(failed) => return Ok(failed),
+            None => {}
+        }
         if let Some(source) = service.reusable_check(&check, tree, &ctx.tools.fingerprint)? {
             let transcript = ctx.paths.state.join(&source.transcript);
             if !source.transcript.is_empty() && transcript.is_file() {
@@ -59,9 +67,8 @@ pub(super) fn run(
                     &source,
                     &transcript,
                 )?;
-                service.output(
+                service.note(
                 run,
-                "system",
                 &format!(
                     "Check {}: reused passing result from attempt #{} step #{} · transcript: {}",
                     check.name, source.attempt, source.step, transcript.display()
@@ -100,6 +107,62 @@ pub(super) fn run(
     }
     evidence.push_str(&service.artifact_manifest(run.attempt, &ctx.paths.state)?);
     Ok(Outcome::Passed(evidence))
+}
+
+/// A check this attempt already ran on this source, whose transcript could not be archived
+/// then: archive it from the retained output and use the recorded result without running the
+/// check again.
+fn recorded_result(
+    service: &mut Service,
+    run: &Run,
+    ctx: &Context<'_>,
+    check: &Check,
+    tree: &str,
+) -> Result<Option<Outcome>> {
+    let Some(pending) = service.pending_transcript(run, check, tree, &ctx.tools.fingerprint)?
+    else {
+        return Ok(None);
+    };
+    let path = archive_transcript(
+        service,
+        run,
+        ctx,
+        Transcript {
+            relative: &pending.relative,
+            name: &check.name,
+            tree,
+            output: pending.output,
+        },
+    )?;
+    service.settle_transcript(pending.step)?;
+    service.note(
+        run,
+        &format!(
+            "Check {}: transcript archived from the retained output; its recorded result stands and it is not run again",
+            check.name
+        ),
+    )?;
+    Ok(Some(if pending.passed {
+        Outcome::Passed(format!(
+            "\nSupervisor check evidence: {}",
+            serde_json::json!({
+                "name": check.name, "command": check.command, "exit_code": 0, "timeout_ms": check.timeout_ms,
+                "environment_fingerprint": ctx.tools.fingerprint,
+                "transcript": path, "current_counts": pending.counts,
+                "previous_checkpoint_counts": service.previous_check_counts(run, check.id)?,
+            })
+        ))
+    } else {
+        Outcome::Failed(
+            "check",
+            format!(
+                "{}\nFull log: {}{}",
+                pending.report,
+                path.display(),
+                service.artifact_manifest(run.attempt, &ctx.paths.state)?
+            ),
+        )
+    }))
 }
 
 /// Runs `check` once. A pass carries its evidence entry; a failure names its full log.
@@ -185,55 +248,36 @@ fn run_one(
         return Ok((Outcome::CheckTimedOut, ctx.paths.state.join(relative), None));
     }
     let transcript_tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
-    let path = archive_transcript(
-        service,
-        run,
-        ctx,
-        Transcript {
-            relative: &relative,
-            name: &check.name,
-            tree: &transcript_tree,
-            output: (cursor, i64::MAX),
-        },
-    )?;
+    let output = (cursor, service.output_cursor(run)?);
+    let transcript_of = || Transcript {
+        relative: &relative,
+        name: &check.name,
+        tree: &transcript_tree,
+        output,
+    };
+    let (outcome, exit, counts) = match finish {
+        Ok(Finish::Exited(code)) => {
+            let mut bytes = Vec::new();
+            service.write_output_range(run, output, &mut bytes)?;
+            let (outcome, counts) =
+                judge_output(&check.name, code, &String::from_utf8_lossy(&bytes));
+            (outcome, Some(code), counts)
+        }
+        // A check that could not be launched is a recorded failure without an exit status.
+        Ok(Finish::Stopped(failed @ Outcome::Failed(..))) => (failed, None, None),
+        other => {
+            let path = archive_transcript(service, run, ctx, transcript_of())?;
+            return match other? {
+                Finish::Stopped(outcome) => Ok((outcome, path, None)),
+                Finish::Exited(_) => unreachable!("handled above"),
+            };
+        }
+    };
     let environment_changed = service
         .resolve_tools(ctx.paths)
         .map_or(true, |current| current.fingerprint != ctx.tools.fingerprint);
-    let (outcome, exit, counts) = match finish? {
-        Finish::Exited(code) => {
-            let bytes = std::fs::read(&path)?;
-            let transcript = String::from_utf8_lossy(&bytes);
-            let counts = test_summary::parse(transcript.as_ref());
-            let suites = super::check_report::parse(transcript.as_ref());
-            let suite_json = serde_json::to_string(&suites).expect("suite serialization");
-            let verdict = match verdict(&check.name, code, counts) {
-                Outcome::Passed(_) if suites.blocks() => Outcome::Failed(
-                    "check",
-                    format!(
-                        "Check {} has failed, crashed, incomplete or unknown suites",
-                        check.name
-                    ),
-                ),
-                other => other,
-            };
-            let outcome = match verdict {
-                Outcome::Failed(category, headline) => Outcome::Failed(
-                    category,
-                    format!(
-                        "{headline}\n{}\nSuite results: {suite_json}",
-                        failure_summary::summarize(transcript.as_ref()).join("\n")
-                    ),
-                ),
-                Outcome::Passed(message) => {
-                    Outcome::Passed(format!("{message}\nSuite results: {suite_json}"))
-                }
-                other => other,
-            };
-            (outcome, Some(code), counts)
-        }
-        Finish::Stopped(outcome) => (outcome, None, None),
-    };
-    if environment_changed && matches!(outcome, Outcome::Passed(_) | Outcome::Failed(_, _)) {
+    if environment_changed {
+        let path = archive_transcript(service, run, ctx, transcript_of())?;
         let report = format!(
             "Tool environment changed during check {}; its result cannot be reused",
             check.name
@@ -242,19 +286,28 @@ fn run_one(
         service.request_tool_environment_wait(run, &report)?;
         return Ok((Outcome::Dependency(report), path, counts));
     }
+    // The result is recorded before its transcript is archived: a resume after an archive
+    // that failed archives the retained output without running the check again.
     match &outcome {
         Outcome::Passed(report) => service.finish_check(&step, true, report, exit, counts)?,
         Outcome::Failed(_, report) => service.finish_check(&step, false, report, exit, counts)?,
-        // A paused check ends with its attempt.
-        _ => {}
+        _ => unreachable!("a finished check passes or fails"),
     }
-    if matches!(outcome, Outcome::Passed(_) | Outcome::Failed(_, _)) && transcript_tree == tree {
+    if transcript_tree == tree {
         service.record_check_tree(&step, tree)?;
     }
+    let path = match archive_transcript(service, run, ctx, transcript_of()) {
+        Ok(path) => path,
+        Err(error) => {
+            if exit.is_some() {
+                service.defer_transcript(&step, run, &relative, &transcript_tree, output)?;
+            }
+            return Err(error);
+        }
+    };
     if let Some(counts) = counts {
-        service.output(
+        service.note(
             run,
-            "system",
             &format!(
                 "Check {}: {} passed, {} failed, {} ignored",
                 check.name, counts.passed, counts.failed, counts.ignored
@@ -262,6 +315,34 @@ fn run_one(
         )?;
     }
     Ok((outcome, path, counts))
+}
+
+/// The verdict on an exited check from its exit status and its own test summaries.
+fn judge_output(name: &str, code: i32, transcript: &str) -> (Outcome, Option<CheckCounts>) {
+    let counts = test_summary::parse(transcript);
+    let suites = super::check_report::parse(transcript);
+    let suite_json = serde_json::to_string(&suites).expect("suite serialization");
+    let verdict = match verdict(name, code, counts) {
+        Outcome::Passed(_) if suites.blocks() => Outcome::Failed(
+            "check",
+            format!("Check {name} has failed, crashed, incomplete or unknown suites"),
+        ),
+        other => other,
+    };
+    let outcome = match verdict {
+        Outcome::Failed(category, headline) => Outcome::Failed(
+            category,
+            format!(
+                "{headline}\n{}\nSuite results: {suite_json}",
+                failure_summary::summarize(transcript).join("\n")
+            ),
+        ),
+        Outcome::Passed(message) => {
+            Outcome::Passed(format!("{message}\nSuite results: {suite_json}"))
+        }
+        other => other,
+    };
+    (outcome, counts)
 }
 
 pub(super) struct Transcript<'a> {
@@ -283,19 +364,36 @@ pub(super) fn archive_transcript(
     service.write_output_range(run, transcript.output, &mut output)?;
     output.flush()?;
     output.sync_all()?;
-    service.publish_artifact(
-        run.attempt,
-        &run.token,
-        transcript.name,
-        &temporary,
-        transcript.relative,
-        transcript.tree,
-    ).map_err(|error| {
+    // At most one steady extension of each artifact limit.
+    let mut extensions = 0;
+    let published = loop {
+        let published = service.publish_artifact(
+            run.attempt,
+            &run.token,
+            transcript.name,
+            &temporary,
+            transcript.relative,
+            transcript.tree,
+        );
+        match published {
+            Err(crate::storage::Error::Breach(breach))
+                if extensions < 3
+                    && service.extend_steadily(run.attempt, breach.limit, breach.measured)? =>
+            {
+                extensions += 1;
+            }
+            other => break other,
+        }
+    };
+    published.map_err(|error| {
         let reason = format!("Resource limit: check transcript evidence incomplete: {error}; captured output retained. Raise the limit or free capacity, then resume");
         match error {
             crate::storage::Error::Breach(breach) => {
                 crate::storage::Error::Breach(Box::new(crate::resource::Breach { reason, ..*breach }))
             }
+            crate::storage::Error::Capacity(refusal) => crate::storage::Error::Capacity(Box::new(
+                crate::resource::StorageRefusal { reason, ..*refusal },
+            )),
             _ => crate::storage::Error::Conflict(reason),
         }
     })?;

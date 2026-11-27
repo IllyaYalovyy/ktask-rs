@@ -218,9 +218,19 @@ WHEN EXECUTION STOPS ON A FAILED TASK
   Use edit ID --preview-project-defaults to inspect all four effective role settings;
   edit ID --apply-project-defaults copies them.
 
+RESOURCE LIMITS
+  ktask limits lists every limit with its value, ceiling, source and the most a successful
+  task used; limits NAME --value N [--ceiling N] [--instance] or --reset changes one. A
+  paused task shows the limit, the need and a proposed value: run --raise[=VALUE] raises
+  and resumes. A plain run of an unchanged deterministic resource pause exits 4. A pause on
+  the storage budget (storage_max_bytes or storage_max_files) works the same; run --raise
+  stores the new maximum in this project's retention policy.
+
 OUTPUT CONTRACT
   Workers and checks can save flat regular files in KTASK_ARTIFACT_DIR. Files are
-  archived per attempt before scratch cleanup, up to 128 MiB each, 1 GiB and 4096 files per attempt.
+  archived per attempt before scratch cleanup, up to 128 MiB each, 1 GiB and 4096 files per attempt
+  by default. Files beyond the limits are listed with size and checksum, and the evidence is
+  marked truncated (show ID --manifest); this never pauses the task.
   Judges start with bounded evidence indexes; full logs stay in the archive.
   ktask evidence FILE --offset 0 --limit 4096 pages text without opening the database.
   Add --search TEXT for literal search; follow next_offset until eof.
