@@ -5,7 +5,7 @@ use crate::{
     app::{Action, EvidenceSection, Screen},
     application::{EvidenceCursor, EvidenceSearch},
     dialog::Dialog,
-    presentation::Task,
+    presentation::{self as model, Status, Task, attempt_time, budget, model_label},
 };
 
 /// A History column after the title: its header and whether its cells align left.
@@ -42,6 +42,8 @@ pub(crate) trait Backend {
     fn busy(&self) -> bool {
         false
     }
+    /// The owner is back at this workspace after another project was on screen.
+    fn resumed(&mut self) {}
 
     // Task details: the body of an Inspect dialog and the evidence it pages through. The
     // defaults describe a workspace without stored evidence pages.
@@ -88,8 +90,13 @@ pub(crate) trait Backend {
         Ok(EvidenceSearch::Exhausted)
     }
 
-    // Wording that differs between a simulated and a stored workspace.
+    // Wording that differs between a simulated and a stored workspace. The defaults describe
+    // stored tasks, local or linked; the simulator replaces them.
 
+    /// The stored task behind a row, which usage and budgets are read from.
+    fn stored_task(&self, _id: usize) -> Option<&crate::application::Task> {
+        None
+    }
     /// The header's description of the data on screen.
     fn label(&self) -> &'static str;
     /// The Config or About screen's text.
@@ -97,24 +104,123 @@ pub(crate) trait Backend {
     /// Buttons on the Config screen; their keys work only when listed.
     fn config_controls(&self) -> Vec<(&'static str, Action)>;
     /// Status lines about attempts and budget, under the state line.
-    fn status_progress(&self, task: &Task) -> Vec<String>;
+    fn status_progress(&self, task: &Task) -> Vec<String> {
+        vec![if task.attempts.is_empty() {
+            "No attempts yet".to_owned()
+        } else {
+            format!("Attempt {}", task.attempts.len())
+        }]
+    }
     /// The running step the Status panel highlights, if this workspace records steps.
-    fn status_step(&self, task: &Task) -> Option<String>;
+    fn status_step(&self, task: &Task) -> Option<String> {
+        (task.status() == Status::Running).then(|| {
+            format!(
+                "Step: {}",
+                model::running_step(task).map_or_else(|| model::active_phase(task), str::to_owned)
+            )
+        })
+    }
     /// Model, usage and budget lines of the Status panel; `compact` panels have 7 rows.
-    fn status_meter(&self, task: &Task, width: usize, compact: bool) -> Vec<String>;
+    fn status_meter(&self, task: &Task, width: usize, compact: bool) -> Vec<String> {
+        let attempt = task.attempts.last();
+        // An attempt runs on the revision it started with.
+        let settings = &attempt
+            .map_or_else(|| task.definition(), |a| &a.revision)
+            .settings;
+        let model = &settings.models[model::active_role(task)];
+        let mut usage = attempt.map_or_else(Vec::new, |attempt| {
+            let tokens = if attempt.usage_tokens.chars().count() <= width {
+                attempt.usage_tokens.clone()
+            } else if attempt.usage_tokens_short.chars().count() <= width {
+                attempt.usage_tokens_short.clone()
+            } else if attempt.usage_tokens.contains('?') {
+                "Tokens ? · Enter: details".to_owned()
+            } else {
+                "Tokens · Enter: details".to_owned()
+            };
+            vec![attempt_time(attempt), tokens, attempt.usage_cost.clone()]
+        });
+        let mut lines = Vec::new();
+        if compact && usage.len() == 3 {
+            lines.push(usage.remove(1));
+        }
+        lines.push(format!(
+            "Model {}",
+            model_label(&model.name, model.effort.as_deref())
+        ));
+        lines.extend(usage);
+        lines.push(budget(task.used(), settings.attempt_limit));
+        lines
+    }
     /// What a running task is doing, before its Pause/Stop hint.
-    fn running_situation(&self, task: &Task) -> String;
+    fn running_situation(&self, task: &Task) -> String {
+        model::active_phase(task)
+    }
     /// The situation of a pending current task that can run.
-    fn ready_situation(&self, auto_advance: bool) -> &'static str;
+    fn ready_situation(&self, auto_advance: bool) -> &'static str {
+        if auto_advance {
+            "Ready · r Run queue; checks and repair run automatically"
+        } else {
+            "Run one selected · m Run mode to continue the queue"
+        }
+    }
     /// The output pane of a current task with no attempt that can run.
-    fn idle_output(&self) -> &'static str;
-    fn activity_title(&self, task: usize) -> String;
+    fn idle_output(&self) -> &'static str {
+        "Ready. r starts an attempt in the background supervisor; this pane follows its log.\nDefaults and checks live in Config; c pins models for this task."
+    }
+    fn activity_title(&self, task: usize) -> String {
+        format!(" Activity · #{task} · l: all ")
+    }
     /// History's toolbar description.
-    fn history_scope(&self) -> &'static str;
-    fn history_columns(&self) -> &'static [Column];
-    fn history_cells(&self, task: &Task) -> Vec<String>;
+    fn history_scope(&self) -> &'static str {
+        "closed tasks"
+    }
+    fn history_columns(&self) -> &'static [Column] {
+        &[
+            Column {
+                name: "Finished",
+                left: true,
+            },
+            Column {
+                name: "Attempts",
+                left: false,
+            },
+            Column {
+                name: "Time",
+                left: false,
+            },
+            Column {
+                name: "Usage",
+                left: false,
+            },
+        ]
+    }
+    fn history_cells(&self, task: &Task) -> Vec<String> {
+        vec![
+            model::finished_label(task.closed_at_ms, crate::application::now_ms()),
+            task.attempts.len().to_string(),
+            model::duration(task.elapsed_ms()),
+            crate::project_view::usage(self.stored_task(task.id)).history_label(),
+        ]
+    }
     /// The details pane's cost of a task.
-    fn task_cost(&self, task: &Task) -> String;
+    fn task_cost(&self, task: &Task) -> String {
+        crate::project_view::usage(self.stored_task(task.id)).cost_label()
+    }
     /// The details pane's per-attempt lines.
-    fn attempt_lines(&self, task: &Task) -> String;
+    fn attempt_lines(&self, task: &Task) -> String {
+        task.attempts
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                format!(
+                    "\nAttempt {} · {} · {}\n{}",
+                    i + 1,
+                    a.state.label(),
+                    attempt_time(a),
+                    a.usage
+                )
+            })
+            .collect()
+    }
 }

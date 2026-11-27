@@ -22,7 +22,7 @@ pub const MAX_TEMPLATE_CHARS: usize = 8000;
 pub const TEMPLATE_ROLES: [&str; 4] = ["execution", "review", "validation", "remediation"];
 
 /// Where a category definition comes from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Scope {
     BuiltIn,
@@ -89,7 +89,7 @@ impl Templates {
 }
 
 /// A category as defined, or as a revision pinned it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Category {
     pub name: String,
     pub description: String,

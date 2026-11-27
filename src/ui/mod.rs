@@ -74,14 +74,32 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Constraint::Length(if compact_current { 1 } else { 2 }),
     ])
     .areas(area);
+    // A linked project is named with its host, and the header says when it is offline.
+    let (name, source) = match &app.remote {
+        Some(link) => (
+            format!(
+                "{} @ {}",
+                shortened(&app.project_name, 20),
+                shortened(&link.host, 14)
+            ),
+            Span::styled(
+                link.label(),
+                Style::new().fg(if link.offline.is_some() { WARN } else { MUTED }),
+            ),
+        ),
+        None => (
+            shortened(&app.project_name, 24),
+            Span::styled(app.backend.label(), Style::new().fg(MUTED)),
+        ),
+    };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
                 format!(" {} ", app.instance.name()),
                 Style::new().fg(ACCENT).bold(),
             ),
-            Span::raw(format!(" / {}   ", shortened(&app.project_name, 24))),
-            Span::styled(app.backend.label(), Style::new().fg(MUTED)),
+            Span::raw(format!(" / {name}   ")),
+            source,
             projects::summary(app),
         ])),
         header,
@@ -140,7 +158,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     Style::new().fg(MUTED),
                 ),
             ]),
-            Line::styled(queue_progress(app, status.width), Style::new().fg(ACCENT)),
+            match app.remote.as_ref().and_then(|link| link.offline_text()) {
+                Some(offline) => Line::styled(
+                    shortened(
+                        &format!(" {offline} · actions disabled"),
+                        status.width as usize,
+                    ),
+                    Style::new().fg(WARN).bold(),
+                ),
+                None => Line::styled(queue_progress(app, status.width), Style::new().fg(ACCENT)),
+            },
         ]),
         status,
     );
@@ -318,7 +345,16 @@ fn controls(app: &App) -> Vec<(&'static str, Action)> {
     if !matches!(app.view, View::Current | View::Projects) {
         controls.insert(0, ("p Pause", Action::Pause));
     }
-    controls.retain(|(_, action)| app.enabled(*action));
+    // While a linked host cannot take them, its task actions stay visible but disabled.
+    controls.retain(|(_, action)| {
+        app.enabled(*action)
+            || app.view != View::Projects
+                && app
+                    .remote
+                    .as_ref()
+                    .is_some_and(|link| link.shows_disabled(*action))
+                && app.state_allows(*action)
+    });
     controls
 }
 

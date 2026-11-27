@@ -221,7 +221,7 @@ impl ModelConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Definition {
     pub title: String,
     pub goal: String,
@@ -266,7 +266,7 @@ impl Definition {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Revision {
     pub number: i64,
     pub lifecycle: String,
@@ -284,7 +284,7 @@ impl Revision {
         self.category.as_ref().is_some_and(|c| c.checks)
     }
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Attempt {
     pub id: i64,
     pub revision: i64,
@@ -317,7 +317,7 @@ pub struct Attempt {
     pub lens_reviews: Vec<lenses::Review>,
     pub artifacts: Vec<Artifact>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Artifact {
     pub id: i64,
     pub name: String,
@@ -328,7 +328,7 @@ pub struct Artifact {
     pub pruned: bool,
 }
 /// One supervisor step of an attempt (execution, check, review, validation, remediation).
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Step {
     pub role: String,
     pub state: String,
@@ -342,13 +342,13 @@ pub struct Step {
     pub check_name: Option<String>,
     pub counts: Option<CheckCounts>,
 }
-#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CheckCounts {
     pub passed: i64,
     pub failed: i64,
     pub ignored: i64,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Task {
     pub id: i64,
     pub version: i64,
@@ -369,7 +369,7 @@ pub struct Task {
     /// When the task completed, failed-skipped, was cancelled or superseded; None while open.
     pub closed_at_ms: Option<i64>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LifecycleEvent {
     pub action: String,
     pub outcome: Option<String>,

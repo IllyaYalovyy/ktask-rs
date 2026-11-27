@@ -47,6 +47,9 @@ fn routed(cli: &Cli) -> Option<Routed> {
         Command::Edit {
             target, changes, ..
         } => ("edit", Some(target.id), !changes.preview_project_defaults),
+        Command::Move { target, .. } => ("move", Some(target.id), true),
+        // The reads of a parent's TUI.
+        Command::Screen { .. } => ("screen", None, false),
         Command::Approve { target } => ("approve", Some(target.id), true),
         Command::Reject { target, .. } => ("reject", Some(target.id), true),
         // The hidden flags belong to a supervisor that this host starts itself.
@@ -57,7 +60,7 @@ fn routed(cli: &Cli) -> Option<Routed> {
         } => ("run", None, true),
         Command::Pause { all: false } => ("pause", None, true),
         Command::Stop { target, .. } => ("stop", Some(target.id), true),
-        Command::Restart { target } => ("restart", Some(target.id), true),
+        Command::Restart { target, .. } => ("restart", Some(target.id), true),
         Command::Done { target, .. } => ("done", Some(target.id), true),
         Command::Cancel { target, .. } => ("cancel", Some(target.id), true),
         Command::Answer { target, .. } => ("answer", Some(target.id), true),
@@ -68,8 +71,8 @@ fn routed(cli: &Cli) -> Option<Routed> {
 
 fn not_accepted() -> Failure {
     Failure::usage(
-        "Only list, current, show, events, add, edit, approve, reject, run, pause (not --all), \
-         stop, restart, done, cancel, answer and stats run on another host; project-delete, \
+        "Only list, current, show, events, add, edit, move, approve, reject, run, pause (not \
+         --all), stop, restart, done, cancel, answer and stats run on another host; project-delete, \
          project-move, shutdown, tool and provisioning commands are never accepted remotely",
     )
 }
@@ -270,6 +273,7 @@ mod tests {
             ("k show 1", "show"),
             ("k events", "events"),
             ("k stats", "stats"),
+            ("k screen {}", "screen"),
         ] {
             assert_eq!(route(line), Some((name, false)), "{line}");
         }
@@ -283,6 +287,8 @@ mod tests {
             ("k pause", "pause"),
             ("k stop 1", "stop"),
             ("k restart 1", "restart"),
+            ("k restart 1 --background", "restart"),
+            ("k move 1 --before 2", "move"),
             ("k done 1", "done"),
             ("k cancel 1", "cancel"),
             ("k answer 1 --text yes", "answer"),

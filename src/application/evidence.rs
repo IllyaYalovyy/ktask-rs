@@ -6,7 +6,7 @@ use std::io::{Read, Seek, SeekFrom};
 const SEARCH_BYTES: usize = 8192;
 const SEARCH_BATCH: usize = 64;
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EvidenceCursor {
     pub sequence: i64,
     /// Raw byte offset, before any display-only control character escaping.
@@ -16,7 +16,7 @@ pub struct EvidenceCursor {
     pub stream_overlap: std::collections::BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EvidenceMatch {
     pub page: usize,
     pub chunk: usize,
@@ -24,6 +24,7 @@ pub struct EvidenceMatch {
     pub excerpt: String,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum EvidenceSearch {
     Found(EvidenceMatch, EvidenceCursor),
     Continue(EvidenceCursor),

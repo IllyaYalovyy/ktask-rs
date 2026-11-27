@@ -9,10 +9,31 @@ use crate::{
     backend::EvidenceAt,
     dialog::{Dialog, DialogKind, Field},
     presentation::{Kind, Status, Task, TaskAction},
+    projects::Row,
 };
 
 impl App {
     pub fn enabled(&self, action: Action) -> bool {
+        self.link_refusal(action).is_none() && self.state_allows(action)
+    }
+
+    /// Why a linked project's link does not offer `action`; the Projects screen has its
+    /// own rows.
+    fn link_refusal(&self, action: Action) -> Option<String> {
+        self.screen
+            .remote
+            .as_ref()
+            .filter(|_| self.view != View::Projects)
+            .and_then(|link| link.refusal(action))
+    }
+
+    /// Whether a key for a conditionally offered control should act, if only to say why not.
+    pub(crate) fn offered(&self, action: Action) -> bool {
+        self.enabled(action) || self.link_refusal(action).is_some()
+    }
+
+    /// Whether the task's state and the screen offer `action`, whatever carries it out.
+    pub(crate) fn state_allows(&self, action: Action) -> bool {
         if action == Action::Run
             && self
                 .readiness
@@ -86,7 +107,12 @@ impl App {
             Action::Filter | Action::Search | Action::Clear | Action::Export => {
                 matches!(self.view, View::Queue | View::History)
             }
-            Action::OpenProject | Action::MoveProject | Action::DeleteProject => {
+            Action::OpenProject => {
+                self.view == View::Projects
+                    && self.hub.selected.is_some()
+                    && self.hub.selected_row().is_none_or(Row::opens)
+            }
+            Action::MoveProject | Action::DeleteProject => {
                 self.view == View::Projects
                     && self.hub.selected.is_some()
                     && self.hub.selected_remote().is_none()
@@ -107,6 +133,9 @@ impl App {
 
     /// Why `action` is unavailable: the task's state names what it offers instead.
     fn unavailable_message(&self, action: Action) -> String {
+        if let Some(refusal) = self.link_refusal(action) {
+            return refusal;
+        }
         const ELSEWHERE: &str =
             "Unavailable here · only the current task can execute; History offers Copy to queue";
         if self.view == View::Projects
@@ -121,7 +150,13 @@ impl App {
             && let Some(row) = self.hub.selected_remote()
         {
             let host = row.host_label();
-            return format!("Read-only here: this project is on {host} · manage it there");
+            return if row.opens() {
+                format!(
+                    "Local-only: this project is on {host} · move, delete, investigate and fix it there"
+                )
+            } else {
+                format!("Read-only here: this project is on {host} · manage it there")
+            };
         }
         let step = match action {
             Action::Run => self
@@ -179,7 +214,7 @@ impl App {
             .dialog
             .as_ref()
             .is_some_and(|dialog| matches!(dialog.kind, DialogKind::Readiness));
-        if action == Action::Run && readiness_open && !self.enabled(action) {
+        if action == Action::Run && readiness_open && !self.offered(action) {
             return;
         }
         if readiness_open
@@ -406,7 +441,23 @@ impl App {
         }
         let key = self.evidence_attempt_key(id, attempt);
         if !self.evidence_attempts.contains_key(&key) {
-            let watermark = self.backend.watermark(key.attempt).unwrap_or(0);
+            // A task without attempts has no output to ask about.
+            let recorded = self
+                .task(id)
+                .is_some_and(|task| task.attempts.get(attempt).is_some());
+            let found = if recorded {
+                self.backend.watermark(key.attempt)
+            } else {
+                Ok(0)
+            };
+            let watermark = match found {
+                Ok(watermark) => watermark,
+                // A linked host that does not answer: keep what is on screen.
+                Err(error) => {
+                    self.message(error);
+                    return;
+                }
+            };
             self.evidence_attempts.insert(
                 key,
                 EvidenceAttemptState {

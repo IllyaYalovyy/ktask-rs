@@ -26,8 +26,8 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub project: Option<PathBuf>,
     /// Run a task command on this linked child host, with --project as the project's ID or
-    /// name there: list, current, show, events, add, edit, approve, reject, run, pause,
-    /// stop, restart, done, cancel, answer or stats.
+    /// name there: list, current, show, events, add, edit, move, approve, reject, run,
+    /// pause, stop, restart, done, cancel, answer or stats.
     #[arg(id = "on_host", long = "host", global = true, value_name = "NAME")]
     pub host: Option<String>,
     /// Set by link run on a child: the command arrived from this configured parent.
@@ -713,6 +713,12 @@ pub enum Command {
     Restart {
         #[command(flatten)]
         target: Target,
+        /// Why; recorded with the stopped attempt.
+        #[arg(long, default_value = "")]
+        reason: String,
+        /// Return once a background supervisor has started the fresh run.
+        #[arg(long)]
+        background: bool,
     },
     /// Mark a task done, whatever its state, overriding the supervisor's verdict.
     ///
@@ -908,6 +914,12 @@ pub enum Command {
     InFix {
         #[arg(last = true, required = true)]
         args: Vec<String>,
+    },
+    /// One read for a parent's screens of this project (the TUI of a linked parent only).
+    #[command(hide = true)]
+    Screen {
+        /// The query, as JSON.
+        query: String,
     },
     /// Append a follow-up draft to the queue from inside an attempt (worker callback only).
     FollowUp {

@@ -3,12 +3,14 @@
 //!
 //! The child runs `ssh PARENT ktask link accept`, so authentication and encryption are the
 //! hosts' SSH keys and `known_hosts`. On the parent `link accept` only pipes that channel
-//! into the hub, which `link run` serves on sockets below the runtime directory.
+//! into the hub, which `link run` serves on sockets below the runtime directory. `screen`
+//! is what the parent's TUI reads and sends over it.
 mod child;
 mod execute;
 pub(crate) mod fleet;
 mod hub;
 mod protocol;
+pub(crate) mod screen;
 
 pub(crate) use hub::{Called, Forgotten, HostRecord};
 

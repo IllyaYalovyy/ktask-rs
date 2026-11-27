@@ -6,18 +6,17 @@ use crate::{
         self as domain, Definition, EvidenceCursor, EvidenceSearch, ModelConfig, Service,
         VersionedTask, transfer,
     },
-    backend::{Backend, Column, EvidenceAt},
+    backend::{Backend, EvidenceAt},
     dialog::{Dialog, DialogKind, Field},
     forms, lens_ui,
-    presentation::{
-        self as model, Kind, ROLES, Status, Task, attempt_time, budget, duration, finished_label,
-        model_label,
-        task_text::{self, Detail},
+    presentation::{self as model, ROLES, Status, Task},
+    project_view::{
+        self, APPROVAL, EvidencePageAt, FormChoices, before_id, chosen_category, control_notice,
+        versioned,
     },
 };
 use std::{collections::BTreeMap, path::Path, time::Duration, time::Instant};
 
-const APPROVAL: &str = "Approval";
 const PROJECT_DEFAULTS: &str = "Project defaults";
 const APPLY_DEFAULTS: &str = "Apply current project defaults";
 
@@ -98,122 +97,34 @@ impl StoredWorkspace {
 
     fn open_readiness(&mut self, screen: &mut Screen) {
         self.readiness_running = None;
-        let report = match self.reload(screen) {
-            Ok(()) => screen.readiness.clone().expect("reload inspects readiness"),
-            Err(error) => crate::readiness::Readiness {
+        if let Err(error) = self.reload(screen) {
+            screen.readiness = Some(crate::readiness::Readiness {
                 lines: vec![format!(
                     "BLOCK · Refresh failed: {error} → Refresh before running"
                 )],
                 blockers: 1,
                 refresh_failed: true,
-            },
-        };
-        screen.readiness = Some(report.clone());
-        let mut body = format!(
-            "{} · {} blocker(s)\n\n{}",
-            if report.blockers == 0 {
-                "Can run"
-            } else {
-                "Run blocked"
-            },
-            report.blockers,
-            report.lines.join("\n")
-        );
-        if let Some(issue) = &self.launch_issue
-            && !report.refresh_failed
-        {
-            body.push_str(&format!("\n\nLast launch failure: {issue}"));
+            });
         }
-        if let Some(session) = &screen.execution_session
-            && !report.refresh_failed
-            && session.state != "running"
-            && session.state != "completed"
-        {
-            body.push_str(&format!(
-                "\n\nQueue: {} · {}",
-                session.state, session.reason
-            ));
-        }
-        body.push_str("\n\nAfter fixing setup, Refresh here or press r on Current. Inspection creates no attempt.");
-        screen.dialog = Some(Dialog::new(
-            DialogKind::Readiness,
-            "Execution readiness",
-            &body,
-            vec![],
+        screen.dialog = Some(project_view::readiness_dialog(
+            screen,
+            self.launch_issue.as_deref(),
         ));
     }
 
-    fn usage(&self, id: usize) -> domain::usage_report::UsageTotals {
-        self.stored
-            .get(&id)
-            .map(task_text::usage)
-            .unwrap_or_default()
-    }
-
     pub(crate) fn reload(&mut self, screen: &mut Screen) -> Result<(), String> {
-        let service = &mut self.service;
-        // Recover an orphan to Paused or its committed dependency wait before rendering.
-        if !crate::runner::supervisor_alive(service).map_err(|e| e.to_string())? {
-            crate::runner::control::settle(service).map_err(|e| e.to_string())?;
-            crate::runner::control::finish_pending(service).map_err(|e| e.to_string())?;
-        }
-        screen.execution_session = service.execution_session().map_err(|e| e.to_string())?;
-        let snapshot = service.snapshot_brief().map_err(|e| e.to_string())?;
-        let project = |tasks: &[domain::Task]| {
-            tasks
-                .iter()
-                .map(crate::projection::project_task)
-                .collect::<Result<Vec<_>, _>>()
-        };
-        let (queue, history) = (project(&snapshot.queue)?, project(&snapshot.history)?);
-        let previous = screen.current().map(|t| t.id);
-        self.stored = snapshot
-            .queue
-            .into_iter()
-            .chain(snapshot.history)
-            .map(|t| (t.id as usize, t))
-            .collect();
-        let alive = crate::runner::supervisor_alive(&self.service).map_err(|e| e.to_string())?;
-        screen.supervisor_alive = Some(alive);
-        screen.queue = queue;
-        screen.history = history;
-        self.launch_issue = match screen.current().map(|task| task.id as i64) {
-            Some(id) => self
-                .service
-                .latest_launch_issue(id)
-                .map_err(|e| e.to_string())?,
-            None => None,
-        };
-        let current = screen.current().map(|t| t.id as i64);
-        screen.task_events = snapshot
-            .events
-            .iter()
-            .filter(|(task, _)| current.is_some() && (*task == current || task.is_none()))
-            .map(|(_, message)| message.clone())
-            .collect();
-        screen.events = snapshot
-            .events
-            .into_iter()
-            .map(|(_, message)| message)
-            .collect();
-        if screen.current().map(|t| t.id) != previous {
-            screen.follow = true;
-            screen.show_log = false;
-            screen.log_offset = 0;
-        }
-        screen.reconcile();
+        let data = project_view::read(&mut self.service, true)?;
+        let alive = data.supervisor_alive;
+        self.stored = project_view::show(screen, data)?;
+        let current = screen.current().map(|task| task.id);
+        self.launch_issue = project_view::launch_issue(&self.service, current.map(|id| id as i64))?;
         // While the supervisor runs the current attempt, nothing readiness checks can change,
         // and inspecting runs Git: inspect again once that run ends or another task is current.
-        let running = screen
-            .current()
-            .filter(|task| alive && task.status() == Status::Running)
-            .map(|task| task.id);
+        let running = project_view::running(screen);
         if running.is_none() || running != self.readiness_running {
-            screen.readiness = Some(crate::readiness::inspect(
+            screen.readiness = Some(project_view::inspect_readiness(
                 &self.service,
-                screen
-                    .current()
-                    .and_then(|task| Some((task.status(), self.stored.get(&task.id)?))),
+                current.and_then(|id| self.stored.get(&id)),
                 alive,
             ));
         }
@@ -556,71 +467,6 @@ impl StoredWorkspace {
         }
     }
 
-    fn task_form(&self, screen: &Screen, action: Action) -> Dialog {
-        let task = screen.target(action).filter(|_| action == Action::Edit);
-        let mut dialog = forms::task(
-            action,
-            task,
-            if task.is_none() {
-                "Save creates a task in SQLite. Blank execution fields use project defaults; with a new model, blank effort means none.\nNeeds review creates a draft."
-            } else {
-                "Save commits a new revision to SQLite. Earlier attempts remain unchanged.\nNeeds review creates a draft; any previous ready revision stays usable."
-            },
-        );
-        let stored = task.and_then(|task| self.stored.get(&task.id));
-        let ready = stored.is_none_or(|t| t.definition().lifecycle == "ready");
-        dialog.fields.push(Field::choice(
-            APPROVAL,
-            &["Ready", "Needs review"],
-            if ready { "Ready" } else { "Needs review" },
-        ));
-        let current = stored.and_then(|t| t.definition().definition.category.clone());
-        let mut names = vec![forms::DEFAULT_CATEGORY.to_owned()];
-        names.extend(
-            self.service
-                .categories()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|entry| entry.category.name),
-        );
-        if let Some(name) = current.as_ref().filter(|n| !names.contains(n)) {
-            names.push(name.clone());
-        }
-        dialog.fields.push(Field::choice(
-            forms::CATEGORY,
-            &names.iter().map(String::as_str).collect::<Vec<_>>(),
-            current.as_deref().unwrap_or(forms::DEFAULT_CATEGORY),
-        ));
-        dialog.fields.extend(self.lens_slots(stored));
-        dialog.expected = stored.map(versioned);
-        dialog
-    }
-
-    /// The review lens choice of a task form: the project default for a new task, the pinned
-    /// lenses (or an explicit ordinary review) for an edited one.
-    fn lens_slots(&self, stored: Option<&domain::Task>) -> Vec<Field> {
-        let pinned: Vec<String> = stored
-            .map(|t| {
-                t.definition()
-                    .lenses
-                    .iter()
-                    .map(|lens| lens.name.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let available = lens_ui::available(self.service.lenses().unwrap_or_default());
-        let mut fields = lens_ui::slots(&pinned, &available, true);
-        // An edited task that pinned no lens while the project defaults select some chose the
-        // ordinary review; keep that choice rather than silently adopting the defaults.
-        if stored.is_some()
-            && pinned.is_empty()
-            && !self.service.lens_defaults().unwrap_or_default().is_empty()
-        {
-            fields[0].value = lens_ui::NO_LENS.into();
-        }
-        fields
-    }
-
     fn models_form(&self, task: &Task) -> Result<Dialog, String> {
         let stored = self
             .stored
@@ -669,11 +515,6 @@ impl StoredWorkspace {
         Ok(dialog)
     }
 
-    fn with_version(&self, mut dialog: Dialog, id: usize) -> Dialog {
-        dialog.expected = self.stored.get(&id).map(versioned);
-        dialog
-    }
-
     fn answer_form(&self, screen: &Screen) -> Result<Option<Dialog>, String> {
         let Some(id) = screen.current().map(|t| t.id) else {
             return Ok(None);
@@ -683,7 +524,11 @@ impl StoredWorkspace {
             .open_question(id as i64)
             .map_err(|e| e.to_string())?
         {
-            Some((_, question)) => Ok(Some(self.with_version(forms::answer(id, &question), id))),
+            Some((_, question)) => Ok(Some(project_view::with_version(
+                forms::answer(id, &question),
+                &self.stored,
+                id,
+            ))),
             None => Err("No open question; refresh the task".into()),
         }
     }
@@ -816,11 +661,7 @@ impl StoredWorkspace {
             definition.criteria = criteria.lines().map(str::to_owned).collect();
         }
         let previous = (definition.kind, definition.category.clone());
-        definition.kind = match Kind::from_label(dialog.get(forms::KIND)) {
-            Some(Kind::Human) => domain::Kind::Human,
-            Some(Kind::Docs) => domain::Kind::Docs,
-            _ => domain::Kind::Ai,
-        };
+        definition.kind = project_view::kind(dialog.get(forms::KIND));
         definition.category =
             chosen_category(dialog.get(forms::CATEGORY), &previous, definition.kind)?;
         definition.lenses = lens_ui::selection(dialog)?;
@@ -1071,7 +912,6 @@ impl StoredWorkspace {
         record: &domain::Attempt,
     ) -> String {
         let DialogKind::Inspect {
-            attempt,
             section,
             page,
             chunk,
@@ -1079,109 +919,31 @@ impl StoredWorkspace {
             step,
             match_sequence,
             watermark,
-            ref excerpt,
             ..
         } = dialog.kind
         else {
             return String::new();
         };
-        let service = &self.service;
-        let evidence = match section {
-            0 => service.browse_output_at(
-                record.id,
-                page,
-                chunk,
-                match_sequence.and_then(|sequence| {
-                    dialog
-                        .fields
-                        .first()
-                        .map(|field| (sequence, field.value.as_str()))
-                }),
-                watermark,
-            ),
-            1 => service.browse_results(record.id),
-            2 => screen
-                .instance
-                .paths()
-                .map_err(Into::into)
-                .and_then(|paths| {
-                    service.browse_transcript(record.id, artifact, page, &paths.state)
-                }),
-            3 => service.browse_step_outline(record.id),
-            4 => service.browse_step_group(record.id, true, step),
-            _ => service.browse_step_group(record.id, false, step),
-        }
-        .unwrap_or_else(|error| format!("Evidence unavailable: {error}"));
-        let outcome = record
-            .outcome
-            .as_deref()
-            .unwrap_or("No outcome recorded")
-            .lines()
-            .next()
-            .unwrap_or_default();
-        let heading = format!(
-            "Attempt {} / {} · #{} · revision {} · {}\nOutcome: {outcome}",
-            attempt + 1,
-            task.attempts.len(),
-            record.id,
-            record.revision,
-            record.state,
-        );
-        if section >= 3 {
-            let reason = if section == 5 {
-                format!(
-                    "Failure category: {}\nReason: {}\n",
-                    record.failure_category.as_deref().unwrap_or("not recorded"),
-                    record
-                        .report
-                        .as_deref()
-                        .unwrap_or("No attempt report recorded")
-                )
-            } else {
-                String::new()
-            };
-            return format!(
-                "#{} {}\n{heading}\n{reason}\n{evidence}",
-                task.id,
-                task.definition().definition.title,
-            );
-        }
-        let revision = task
-            .revisions
-            .iter()
-            .find(|revision| revision.number == record.revision)
-            .unwrap_or_else(|| task.definition());
-        format!(
-            "{heading}\n{}{}{evidence}\n\nAttempt inputs: revision {} · session {}\n{}\nActive {} · waiting {}\nUsage: {}\n{}\n\n{}",
-            record
-                .report
-                .as_deref()
-                .filter(|report| Some(*report) != record.outcome.as_deref())
-                .map_or(String::new(), |report| format!(
-                    "Supervisor outcome: {}\n",
-                    report.lines().next().unwrap_or_default()
-                )),
-            if excerpt.is_empty() {
-                String::new()
-            } else {
-                format!("Match: {excerpt}\n")
-            },
-            record.revision,
-            record
-                .session
-                .map_or("not recorded".into(), |id| id.to_string()),
-            task_text::revision(revision, str::to_owned),
-            domain::limits::elapsed(record.active_ms),
-            domain::limits::elapsed(record.waiting_ms),
-            record.usage.label(),
-            record
-                .role_usage
-                .iter()
-                .map(task_text::role_usage)
-                .collect::<Vec<_>>()
-                .join("\n"),
-            task_text::task(task, Detail::Overview, str::to_owned).trim_end(),
-        )
+        let at = EvidencePageAt {
+            attempt: record.id,
+            section: EvidenceSection::from_index(section),
+            page,
+            chunk,
+            artifact,
+            step,
+            selected_match: match_sequence.and_then(|sequence| {
+                dialog
+                    .fields
+                    .first()
+                    .map(|field| (sequence, field.value.as_str()))
+            }),
+            watermark,
+        };
+        let evidence = match screen.instance.paths() {
+            Ok(paths) => project_view::evidence(&self.service, &paths.state, &at),
+            Err(error) => format!("Evidence unavailable: {error}"),
+        };
+        project_view::inspect_attempt(dialog, task, record, &evidence)
     }
 }
 
@@ -1254,11 +1016,19 @@ impl Backend for StoredWorkspace {
             | Action::Tools => Some(self.open_project_config(screen, action)?),
             Action::ExportSettings | Action::ImportSettings => Some(self.open_settings(action)?),
             Action::Breakdown => Some(self.propose_breakdown(screen)?),
-            Action::Add | Action::Insert | Action::Edit => Some(self.task_form(screen, action)),
-            Action::Move => {
-                target.map(|task| self.with_version(forms::move_task(task.id), task.id))
-            }
-            Action::Reject => target.map(|task| self.with_version(forms::reject(task.id), task.id)),
+            Action::Add | Action::Insert | Action::Edit => Some(project_view::task_form(
+                screen,
+                action,
+                &self.stored,
+                &FormChoices::read(&self.service),
+                "in SQLite",
+            )),
+            Action::Move => target.map(|task| {
+                project_view::with_version(forms::move_task(task.id), &self.stored, task.id)
+            }),
+            Action::Reject => target.map(|task| {
+                project_view::with_version(forms::reject(task.id), &self.stored, task.id)
+            }),
             Action::Models => target.map(|task| self.models_form(task)).transpose()?,
             Action::Stop
             | Action::Restart
@@ -1266,12 +1036,14 @@ impl Backend for StoredWorkspace {
             | Action::CancelTask
             | Action::Supersede
             | Action::CopyToQueue => target.and_then(|task| {
-                forms::control(action, task).map(|dialog| self.with_version(dialog, task.id))
+                forms::control(action, task)
+                    .map(|dialog| project_view::with_version(dialog, &self.stored, task.id))
             }),
             Action::Answer => self.answer_form(screen)?,
-            Action::Help => Some(forms::help(
-                "Changes save immediately. r runs the current task in a background supervisor; p pauses it.\nr on a paused task resumes the same attempt; on a failed task it retries, keeping the code and restarting the limits.\ns Stop returns any live task to Pending and stashes its uncommitted changes; the next Run starts fresh. T Restart also starts it again from current HEAD.\nD marks any unfinished task done. Pending tasks can be cancelled (x) or superseded (R); History offers C Copy to queue.\nChecks gate every result; review and validation judge it once the checks pass.\n0 Projects lists every project of this instance; Enter opens one, and each keeps its own queue and background runner. There m points a project at another folder and D deletes one permanently.",
-            )),
+            Action::Help => Some(forms::help(&format!(
+                "Changes save immediately. {}",
+                project_view::HELP
+            ))),
             Action::Import => Some(Dialog::new(
                 DialogKind::Import,
                 "Import task definitions · disk",
@@ -1362,26 +1134,10 @@ impl Backend for StoredWorkspace {
     }
 
     fn stats(&self, screen: &Screen) -> Result<Dialog, String> {
-        let usage = self.service.project_usage().map_err(|e| e.to_string())?;
-        let timing = self.service.project_timing().map_err(|e| e.to_string())?;
-        let limits = self
-            .service
-            .resource_limit_stats()
-            .map_err(|e| e.to_string())?;
         Ok(Dialog::new(
             DialogKind::Stats,
             "Project statistics · SQLite",
-            &format!(
-                "Queue: {}\nHistory: {}\nAttempts: {} ({} failed/interrupted)\nActive time: {}\nWaiting time: {}\nProject usage: {}\n{}Human tasks are marked done without AI attempts.",
-                screen.queue.len(),
-                screen.history.len(),
-                timing.attempts,
-                timing.failed,
-                domain::limits::elapsed(timing.active_ms),
-                domain::limits::elapsed(timing.waiting_ms),
-                usage.label(),
-                crate::application::resource_breach::limit_lines(&limits)
-            ),
+            &project_view::stats(&self.service, screen.queue.len(), screen.history.len())?,
             vec![],
         ))
     }
@@ -1413,20 +1169,12 @@ impl Backend for StoredWorkspace {
         };
         match task.attempts.get(attempt) {
             Some(record) => self.inspect_attempt(screen, dialog, task, record),
-            None => format!(
-                "{}\nNo attempt evidence recorded.",
-                task_text::task(task, Detail::Overview, str::to_owned).trim_end()
-            ),
+            None => project_view::inspect_overview(task),
         }
     }
 
     fn find_label(&self, section: EvidenceSection) -> Option<&'static str> {
-        match section {
-            EvidenceSection::Output => Some("Find output"),
-            EvidenceSection::Results => Some("Find results"),
-            EvidenceSection::Transcripts => Some("Find transcript"),
-            _ => None,
-        }
+        project_view::find_label(section)
     }
 
     fn watermark(&self, attempt: i64) -> Result<i64, String> {
@@ -1511,6 +1259,10 @@ impl Backend for StoredWorkspace {
         .map_err(|e| e.to_string())
     }
 
+    fn stored_task(&self, id: usize) -> Option<&domain::Task> {
+        self.stored.get(&id)
+    }
+
     fn label(&self) -> &'static str {
         "SQLite · real tasks"
     }
@@ -1569,136 +1321,6 @@ impl Backend for StoredWorkspace {
             ("Esc Back", Action::Back),
         ]
     }
-
-    fn status_progress(&self, task: &Task) -> Vec<String> {
-        vec![if task.attempts.is_empty() {
-            "No attempts yet".to_owned()
-        } else {
-            format!("Attempt {}", task.attempts.len())
-        }]
-    }
-
-    fn status_step(&self, task: &Task) -> Option<String> {
-        (task.status() == Status::Running).then(|| {
-            format!(
-                "Step: {}",
-                model::running_step(task).map_or_else(|| model::active_phase(task), str::to_owned)
-            )
-        })
-    }
-
-    fn status_meter(&self, task: &Task, width: usize, compact: bool) -> Vec<String> {
-        let attempt = task.attempts.last();
-        // An attempt runs on the revision it started with.
-        let settings = &attempt
-            .map_or_else(|| task.definition(), |a| &a.revision)
-            .settings;
-        let model = &settings.models[model::active_role(task)];
-        let mut usage = attempt.map_or_else(Vec::new, |attempt| {
-            let tokens = if attempt.usage_tokens.chars().count() <= width {
-                attempt.usage_tokens.clone()
-            } else if attempt.usage_tokens_short.chars().count() <= width {
-                attempt.usage_tokens_short.clone()
-            } else if attempt.usage_tokens.contains('?') {
-                "Tokens ? · Enter: details".to_owned()
-            } else {
-                "Tokens · Enter: details".to_owned()
-            };
-            vec![attempt_time(attempt), tokens, attempt.usage_cost.clone()]
-        });
-        let mut lines = Vec::new();
-        if compact && usage.len() == 3 {
-            lines.push(usage.remove(1));
-        }
-        lines.push(format!(
-            "Model {}",
-            model_label(&model.name, model.effort.as_deref())
-        ));
-        lines.extend(usage);
-        lines.push(budget(task.used(), settings.attempt_limit));
-        lines
-    }
-
-    fn running_situation(&self, task: &Task) -> String {
-        model::active_phase(task)
-    }
-
-    fn ready_situation(&self, auto_advance: bool) -> &'static str {
-        if auto_advance {
-            "Ready · r Run queue; checks and repair run automatically"
-        } else {
-            "Run one selected · m Run mode to continue the queue"
-        }
-    }
-
-    fn idle_output(&self) -> &'static str {
-        "Ready. r starts an attempt in the background supervisor; this pane follows its log.\nDefaults and checks live in Config; c pins models for this task."
-    }
-
-    fn activity_title(&self, task: usize) -> String {
-        format!(" Activity · #{task} · l: all ")
-    }
-
-    fn history_scope(&self) -> &'static str {
-        "closed tasks"
-    }
-
-    fn history_columns(&self) -> &'static [Column] {
-        &[
-            Column {
-                name: "Finished",
-                left: true,
-            },
-            Column {
-                name: "Attempts",
-                left: false,
-            },
-            Column {
-                name: "Time",
-                left: false,
-            },
-            Column {
-                name: "Usage",
-                left: false,
-            },
-        ]
-    }
-
-    fn history_cells(&self, task: &Task) -> Vec<String> {
-        vec![
-            finished_label(task.closed_at_ms, domain::now_ms()),
-            task.attempts.len().to_string(),
-            duration(task.elapsed_ms()),
-            self.usage(task.id).history_label(),
-        ]
-    }
-
-    fn task_cost(&self, task: &Task) -> String {
-        self.usage(task.id).cost_label()
-    }
-
-    fn attempt_lines(&self, task: &Task) -> String {
-        task.attempts
-            .iter()
-            .enumerate()
-            .map(|(i, a)| {
-                format!(
-                    "\nAttempt {} · {} · {}\n{}",
-                    i + 1,
-                    a.state.label(),
-                    attempt_time(a),
-                    a.usage
-                )
-            })
-            .collect()
-    }
-}
-
-fn versioned(task: &domain::Task) -> VersionedTask {
-    VersionedTask {
-        id: task.id,
-        version: task.version,
-    }
 }
 
 /// The revision a Models form edits: a draft newer than the selected one, else the selected.
@@ -1740,15 +1362,6 @@ fn breakdown_review(
     dialog
 }
 
-/// "#3 stopped · back to Pending", naming the stash that holds the attempt's changes.
-fn control_notice(id: i64, action: Action, stash: Option<String>) -> String {
-    let done = forms::control_done(action);
-    match stash {
-        Some(stash) => format!("#{id} {done} · changes stashed as \"{stash}\" (git stash list)"),
-        None => format!("#{id} {done}"),
-    }
-}
-
 fn defaults_preview(defaults: &[Option<ModelConfig>; 4]) -> String {
     ROLES
         .iter()
@@ -1776,42 +1389,6 @@ fn set_new_task_execution_model(
     Ok(())
 }
 
-/// The category a saved task form names. Changing the kind while leaving the category
-/// alone returns to the new kind's default; Human work has none.
-fn chosen_category(
-    chosen: &str,
-    previous: &(domain::Kind, Option<String>),
-    kind: domain::Kind,
-) -> Result<Option<String>, String> {
-    let explicit = (chosen != forms::DEFAULT_CATEGORY).then(|| chosen.to_owned());
-    let unchanged = explicit.as_deref() == previous.1.as_deref();
-    if kind == domain::Kind::Human {
-        return match explicit {
-            Some(_) if !unchanged => {
-                Err("Human tasks are done by the owner and have no work category".into())
-            }
-            _ => Ok(None),
-        };
-    }
-    Ok(if unchanged && kind != previous.0 {
-        None
-    } else {
-        explicit
-    })
-}
-
-fn before_id(text: &str) -> Result<Option<i64>, String> {
-    if text.is_empty() {
-        Ok(None)
-    } else {
-        text.trim_start_matches('#')
-            .parse::<i64>()
-            .ok()
-            .filter(|n| *n > 0)
-            .map(Some)
-            .ok_or_else(|| "Enter a task ID or leave blank for end of Queue".into())
-    }
-}
 fn limit(text: &str) -> Result<Option<i64>, String> {
     if text.is_empty() {
         Ok(None)

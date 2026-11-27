@@ -94,7 +94,7 @@ TYPICAL SESSION
   the owner, then prints why it stopped. A detached runner logs to
   <state>/runner-<project id>.log (see --paths).
 
-LINKED HOSTS (a parent lists its children's projects and runs task commands on them)
+LINKED HOSTS (a parent opens its children's projects and runs task commands on them)
   Owner setup: on a child, ktask link parent USER@HOST (--clear removes it); then keep
   ktask link run running on the child and on the parent. The child connects with
   ssh HOST ktask link accept; keys and known_hosts are SSH's. Restrict the child's key on
@@ -105,10 +105,11 @@ LINKED HOSTS (a parent lists its children's projects and runs task commands on t
   data.hosts lists linked hosts. Project and task IDs are per host: always read id together
   with host. ktask link forget HOST removes a disconnected host from the list.
   ktask --host NAME --project ID-or-NAME COMMAND   on the parent, runs list, current, show,
-  events, add, edit, approve, reject, run, pause, stop, restart, done, cancel, answer or
-  stats on that child: its own ktask executes it, with the same output, exit codes and
+  events, add, edit, move, approve, reject, run, pause, stop, restart, done, cancel,
+  answer or stats on that child: its own ktask executes it, with the same output, exit codes and
   --if-version guards, recorded as "<actor> via <parent>". Everything else is refused,
   project-delete, project-move, shutdown, tool and provisioning commands included.
+  The parent's TUI opens a linked project from Projects, on the same screens, over the link.
   ktask link control off    on the child, makes the link read-only (on after link parent).
   Exit 5 (host_offline, host_incompatible): nothing was sent. Exit 6 (outcome_unknown): the
   connection was lost; read the task and events there before repeating anything.

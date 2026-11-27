@@ -1,7 +1,8 @@
 //! Every project of this instance in one terminal: the Projects screen's list, and the
 //! workspaces opened from it. One project is open at a time; the others keep their screen
 //! (view, selection, scroll) parked until reopened. Each project still owns its queue and
-//! its background supervisor. Projects of linked hosts are listed beside them, read-only.
+//! its background supervisor. Projects of linked hosts are listed beside them and open on
+//! the same screens, over the link.
 use crate::{
     app::{Action, App, Screen, View},
     application::{Service, overview::Attention, registry},
@@ -10,6 +11,7 @@ use crate::{
     instance::{Instance, Paths},
     link::{self, HostRecord, fleet},
     persistent::StoredWorkspace,
+    remote_ui::RemoteWorkspace,
     storage::Database,
 };
 use ratatui::{crossterm::event::KeyCode, widgets::ListState};
@@ -30,6 +32,16 @@ pub(crate) struct Row {
     /// number of this terminal's own.
     pub key: i64,
     entry: fleet::Entry,
+}
+
+impl Row {
+    /// Whether this terminal can open the project: its own, or one of a host of this
+    /// ktask. Whether an offline one opens depends on whether it was open before.
+    pub fn opens(&self) -> bool {
+        self.remote
+            .as_ref()
+            .is_none_or(|remote| remote.incompatible.is_none() && !remote.placeholder)
+    }
 }
 
 impl Deref for Row {
@@ -185,7 +197,12 @@ impl Hub {
         self.position().map(|index| &self.rows[index])
     }
 
-    /// The selected row when it is another host's, which can only be read here.
+    /// Whether this project was opened and its screen is kept.
+    pub fn opened_before(&self, key: i64) -> bool {
+        self.parked.contains_key(&key) || self.active == Some(key)
+    }
+
+    /// The selected row when it is another host's, which is managed there.
     pub fn selected_remote(&self) -> Option<&Row> {
         self.selected_row().filter(|row| row.remote.is_some())
     }
@@ -227,14 +244,18 @@ impl Hub {
 
     /// The parked workspace of `id`, or a newly opened one.
     fn workspace(&mut self, instance: Instance, id: i64) -> Result<Workspace, String> {
-        if let Some(parked) = self.parked.remove(&id) {
-            return Ok(parked);
+        if let Some((mut backend, screen)) = self.parked.remove(&id) {
+            backend.resumed();
+            return Ok((backend, screen));
         }
         let row = self
             .rows
             .iter()
-            .find(|row| row.key == id && row.remote.is_none())
+            .find(|row| row.key == id && row.opens())
             .ok_or("That project is no longer registered")?;
+        if let Some(host) = row.host() {
+            return remote_workspace(instance, row, host);
+        }
         if !row.project.root.is_dir() {
             return Err(format!(
                 "{}: folder is missing · restore {} to open this project",
@@ -298,6 +319,19 @@ impl Hub {
         self.unregistered = None;
         Ok((id, workspace))
     }
+}
+
+/// Opens a linked project; one not open before needs its host.
+fn remote_workspace(instance: Instance, row: &Row, host: &str) -> Result<Workspace, String> {
+    if !row.online() {
+        return Err(format!(
+            "{host} is offline · {} opens when it reconnects",
+            row.project.name
+        ));
+    }
+    let mut screen = Screen::new(instance, &row.project.name);
+    let backend = RemoteWorkspace::open(&mut screen, instance, host, row.project.id)?;
+    Ok((Box::new(backend), screen))
 }
 
 fn stored_workspace(instance: Instance, service: Service) -> Result<Workspace, String> {
@@ -454,15 +488,31 @@ impl App {
             };
         }
         left.1.selection.clear();
+        // Mouse capture is this terminal's setting, which a linked host does not have.
+        if self.screen.remote.is_some() {
+            self.screen.mouse_enabled = left.1.mouse_enabled;
+        }
         if let Some(previous) = self.hub.active.replace(id) {
             self.hub.parked.insert(previous, left);
         }
         self.hub.selected = Some(id);
         self.screen.reconcile();
         let name = self.project_name.clone();
-        self.message(format!(
-            "Opened {name} · 0 Projects lists every project; runs continue in the background"
-        ));
+        let link = self
+            .remote
+            .as_ref()
+            .map(|link| (link.host.clone(), link.offline.is_some()));
+        self.message(match link {
+            Some((host, true)) => {
+                format!("Opened {name} on {host} · offline, showing its last state")
+            }
+            Some((host, false)) => {
+                format!("Opened {name} on {host} · live over the link; its runs continue there")
+            }
+            None => format!(
+                "Opened {name} · 0 Projects lists every project; runs continue in the background"
+            ),
+        });
     }
 
     pub(crate) fn project_controls(&self) -> Vec<(&'static str, Action)> {

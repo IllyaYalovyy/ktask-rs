@@ -5,7 +5,7 @@ use rusqlite::{Connection, params};
 /// Sums of what providers reported. A call that reported nothing (it failed before the
 /// provider sent usage, or the provider never reports cost) is counted, not guessed as zero,
 /// and does not hide what the other calls reported.
-#[derive(Clone, Debug, Default, serde::Serialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct UsageTotals {
     pub calls: i64,
     pub input: Option<i64>,
@@ -164,7 +164,7 @@ impl UsageTotals {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RoleUsage {
     pub role: String,
     pub model: String,

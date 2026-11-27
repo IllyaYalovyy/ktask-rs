@@ -74,9 +74,19 @@ fn current(row: &Row) -> String {
         })
 }
 
-fn hint(row: &Row, open: bool) -> String {
+fn hint(row: &Row, open: bool, opened_before: bool) -> String {
     if let Some(remote) = &row.remote {
-        return format!("Read-only here · manage it on {}.", remote.host);
+        let host = &remote.host;
+        if !row.opens() {
+            return format!("Read-only here · manage it on {host}.");
+        }
+        let enter = match (open, remote.online) {
+            (true, _) => "This project is open · Enter returns to it.",
+            (false, true) => "Enter opens it over the link.",
+            (false, false) if opened_before => "Enter shows its last state.",
+            (false, false) => "It opens when its host reconnects.",
+        };
+        return format!("{enter}\nLocal-only on {host}: move, delete, configuration.");
     }
     match (row.attention(), open) {
         (Attention::Missing, _) => {
@@ -113,7 +123,7 @@ fn host(row: &Row) -> String {
 fn details(app: &App, row: &Row) -> String {
     let project = &row.project;
     let open = Some(row.key) == app.hub.active;
-    let hint = hint(row, open);
+    let hint = hint(row, open, app.hub.opened_before(row.key));
     if row.remote.as_ref().is_some_and(|remote| remote.placeholder) {
         return format!("{}\n\n{hint}", host(row));
     }
@@ -176,9 +186,9 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) 
         (Some(error), ..) => {
             Line::styled(format!(" Refresh failed: {error}"), Style::new().fg(BAD))
         }
-        (None, Some(host), _) => {
-            Line::raw(format!(" Read-only: {host}'s projects are managed there"))
-        }
+        (None, Some(host), _) => Line::raw(format!(
+            " {host}'s project: move, delete and settings are local-only there"
+        )),
         (None, None, Some(folder)) => Line::raw(format!(
             " {} is not a project · n adds it",
             shortened(&folder.to_string_lossy(), 40)
@@ -284,10 +294,10 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) 
         .hub
         .selected_row()
         .map_or("Nothing selected.".into(), |row| details(app, row));
-    let title = if app.hub.selected_remote().is_some() {
-        " Project · read-only "
-    } else {
-        " Project · click to open "
+    let title = match app.hub.selected_remote() {
+        Some(row) if !row.opens() => " Project · read-only ",
+        Some(_) => " Project · linked · click to open ",
+        None => " Project · click to open ",
     };
     frame.render_widget(
         Paragraph::new(text)

@@ -11,6 +11,7 @@ mod pause_all;
 mod profile;
 mod remote;
 pub(crate) mod repair;
+mod screen;
 
 use crate::{
     application::{self, Service},
@@ -502,6 +503,13 @@ fn run(instance: Instance, cli: &Cli, arguments: &[std::ffi::OsString]) -> Resul
     if let Command::Tool { action } = command {
         return emit(execute::tool(&mut service, &paths, action)?, cli.json);
     }
+    if let Command::Screen { query } = command {
+        let control = admitted.as_ref().is_none_or(|admitted| admitted.control);
+        return emit(
+            screen::answer(&mut service, &paths, query, control)?,
+            cli.json,
+        );
+    }
     // Recovering an interrupted control changes the project, which a read-only link may not.
     if admitted.as_ref().is_none_or(|admitted| admitted.control)
         && service
@@ -511,7 +519,12 @@ fn run(instance: Instance, cli: &Cli, arguments: &[std::ffi::OsString]) -> Resul
     {
         crate::runner::control::finish_pending(&mut service)?;
     }
-    if let Command::Restart { target } = command {
+    if let Command::Restart {
+        target,
+        reason,
+        background,
+    } = command
+    {
         let current = service
             .current_task()?
             .ok_or_else(|| Failure::missing("Queue is empty"))?;
@@ -538,17 +551,24 @@ fn run(instance: Instance, cli: &Cli, arguments: &[std::ffi::OsString]) -> Resul
                 id: current.id,
                 version: current.version,
             },
-            "",
+            reason,
         )?;
-        let message = crate::runner::run(
-            &mut service,
-            &paths,
-            &crate::runner::Options {
-                queue: false,
-                notify: false,
-                continue_session: false,
-            },
-        )?;
+        let message = if *background {
+            let queue = service.preferences(&paths.config)?.continuation
+                == application::preferences::Continuation::Queue;
+            crate::runner::background(&mut service, &paths, queue, false)?;
+            "Runner started; inspect Current in the TUI".to_owned()
+        } else {
+            crate::runner::run(
+                &mut service,
+                &paths,
+                &crate::runner::Options {
+                    queue: false,
+                    notify: false,
+                    continue_session: false,
+                },
+            )?
+        };
         return emit(
             output::Reply {
                 data: json!({"action":"restarted","id":current.id,"stash":saved.stash,"message":message}),

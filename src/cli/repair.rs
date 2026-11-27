@@ -172,9 +172,10 @@ fn scope(command: &Command) -> Scope {
             Refused("evidence retention and build caches are not part of a fix")
         }
         Command::Evidence { .. } => Refused("run ktask evidence directly, not through the fix"),
-        Command::Mcp | Command::FollowUp { .. } | Command::DependencyRequest { .. } => {
-            Refused("it is not a command of a fix")
-        }
+        Command::Mcp
+        | Command::Screen { .. }
+        | Command::FollowUp { .. }
+        | Command::DependencyRequest { .. } => Refused("it is not a command of a fix"),
         Command::InFix { .. } => Refused("fix commands do not nest"),
     }
 }
@@ -479,7 +480,7 @@ fn special(
                 ))
             )))
         }
-        Command::Restart { target } => {
+        Command::Restart { target, reason, .. } => {
             let (task, target) = versioned(service, target)?;
             let current = service.current_task()?.map(|task| task.id);
             crate::application::require(
@@ -491,7 +492,7 @@ fn special(
                 service,
                 authority.root,
                 target,
-                &reason_or("", "Restart requested"),
+                &reason_or(reason, "Restart requested"),
             )?;
             Some(applied(format!(
                 "restart: #{} is Pending{} · {RUNS_LATER}",

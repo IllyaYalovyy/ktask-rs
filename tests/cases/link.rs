@@ -842,7 +842,7 @@ fn projects_screen_lists_local_and_remote_projects_by_keyboard_and_mouse() -> Re
                 t.send("jjj")?;
             }
             let selected = t.screen("remote selected", |s| {
-                s.contains("Projects · 4 / 5") && s.contains("Project · read-only")
+                s.contains("Projects · 4 / 5") && s.contains("Project · linked")
             })?;
             record(&selected, &format!("{case}-2-remote-selected"))?;
             let pane = details(&selected);
@@ -850,17 +850,17 @@ fn projects_screen_lists_local_and_remote_projects_by_keyboard_and_mouse() -> Re
             assert!(pane.contains("State: Needs approval"), "{selected}");
             assert!(pane.contains("#1 on devbox · Approve"), "{selected}");
             assert!(pane.contains("Queue: 1 unfinished"), "{selected}");
-            for absent in ["[Enter Open]", "[m Move]", "[D Delete]", "[f Fix]"] {
+            // It opens like a local one; moving and deleting it stay on its host.
+            assert!(selected.contains("[Enter Open]"), "{selected}");
+            for absent in ["[m Move]", "[D Delete]", "[f Fix]"] {
                 assert!(!selected.contains(absent), "{absent}\n{selected}");
             }
-            if mouse {
-                // Clicking the details, which opens a local project, only says why not.
-                t.click("Host: devbox")?;
-            } else {
-                t.send("\r")?;
+            if !mouse {
+                t.send("m")?;
+                t.screen("move is local-only", |s| {
+                    s.contains("Local-only: this project is on devbox")
+                })?;
             }
-            let refused = t.screen("read-only", |s| s.contains("Read-only here: this project"))?;
-            assert!(refused.contains("/ alpha"), "{refused}");
 
             first.stop()?;
             let offline = t.screen("devbox offline", |s| {
@@ -874,6 +874,16 @@ fn projects_screen_lists_local_and_remote_projects_by_keyboard_and_mouse() -> Re
             let pane = details(&offline);
             assert!(pane.contains("Host: devbox · offline"), "{offline}");
             assert!(pane.contains("last contact "), "{offline}");
+            // Never opened here, so it waits for its host.
+            if mouse {
+                t.click("Host: devbox")?;
+            } else {
+                t.send("\r")?;
+            }
+            let refused = t.screen("waits for its host", |s| {
+                s.contains("devbox is offline · shared opens")
+            })?;
+            assert!(refused.contains("/ alpha"), "{refused}");
 
             let first = devbox.link_run()?;
             beta.create(&[definition("Work while away")], None, true)?;

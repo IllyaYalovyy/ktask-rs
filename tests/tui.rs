@@ -30,6 +30,8 @@ mod profiles;
 mod projects;
 #[path = "cases/provision.rs"]
 mod provision;
+#[path = "cases/remote_tui.rs"]
+mod remote_tui;
 #[path = "cases/runner.rs"]
 mod runner;
 #[path = "cases/storage.rs"]

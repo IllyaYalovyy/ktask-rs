@@ -33,10 +33,10 @@ printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"{
 
 /// What a command ended with.
 #[derive(Debug, PartialEq, Eq)]
-struct Ended {
-    status: Option<i32>,
-    stdout: String,
-    stderr: String,
+pub(super) struct Ended {
+    pub(super) status: Option<i32>,
+    pub(super) stdout: String,
+    pub(super) stderr: String,
 }
 
 fn end(mut command: Command) -> Result<Ended> {
@@ -49,7 +49,7 @@ fn end(mut command: Command) -> Result<Ended> {
 }
 
 /// `ktask args` on this computer.
-fn local(host: &Host, args: &[&str]) -> Result<Ended> {
+pub(super) fn local(host: &Host, args: &[&str]) -> Result<Ended> {
     let mut command = host.command();
     command.args(args);
     end(command)
@@ -77,7 +77,7 @@ fn git(folder: &PathBuf, args: &[&str]) -> Result {
 }
 
 /// A project `web` on `host` that can run tasks with the stand-in agent.
-fn web(host: &Host) -> Result {
+pub(super) fn web(host: &Host) -> Result {
     support::write_executable(&host.dir.join("bin/codex"), AGENT)?;
     let folder = host.dir.join("web");
     fs::create_dir(&folder)?;
@@ -109,12 +109,12 @@ fn web(host: &Host) -> Result {
     on(&["init", "--check-before-task", "off"])
 }
 
-fn agent(host: &Host, mode: &str) -> Result {
+pub(super) fn agent(host: &Host, mode: &str) -> Result {
     Ok(fs::write(host.dir.join("agent"), mode)?)
 }
 
 /// Until an agent turn on `host` is under way and will not end by itself.
-fn holding(host: &Host) -> Result {
+pub(super) fn holding(host: &Host) -> Result {
     support::eventually("the agent holds its turn", || {
         Ok(fs::remove_file(host.dir.join("holding")).ok())
     })

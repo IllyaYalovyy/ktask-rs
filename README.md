@@ -861,7 +861,8 @@ timed out or over-budget fix keeps the steps already applied and leaves the runn
 
 ## Link hosts
 
-One computer, the **parent**, can list the projects of other computers, its **children**, and
+One computer, the **parent**, can list the projects of other computers, its **children**,
+[open them in its TUI](#open-a-childs-project-in-the-tui) and
 [control their tasks](#control-a-childs-tasks) from its CLI. A child dials out over SSH
 (`ssh PARENT ktask link accept`), keeps that one connection and reconnects by itself, so it
 needs no address the parent can reach. Authentication and encryption are your SSH keys and
@@ -929,8 +930,7 @@ that is silent for 20.
 by name then host: local projects marked `local`, the others with their host name, with state,
 queue size and current task. The header counts include connected hosts. A disconnected host's
 projects stay listed as **Offline** with the time of last contact until
-`ktask link forget HOST`. Remote rows are read-only in the TUI; use `--host` on the command
-line. Project and task IDs are per host:
+`ktask link forget HOST`. Project and task IDs are per host:
 `ktask --json projects` adds `host` (null for local) and `online` to every project, remote
 offline ones also `last_contact_ms`, and `hosts` lists the linked computers.
 
@@ -945,6 +945,32 @@ development instance), so without the `command=` line `ktask` must be on the `PA
 parent's non-interactive SSH shell. `link accept` finds the hub below `XDG_RUNTIME_DIR`, which
 SSH logins and user services share on a standard systemd system.
 
+### Open a child's project in the TUI
+
+On the parent's Projects screen, press Enter on a remote project (or click **Enter Open**). It
+opens in the same terminal with the same Current, Queue, History, task details, events and
+output as a local project, and follows the child live; the header names the project and its
+host, such as `billing @ devbox`.
+
+Run, Pause, Stop, Restart, Approve, Reject, Answer, Add, Insert, Edit, Move, Cancel and Mark
+done work through the same dialogs. They are sent to the child, whose own commands and state
+machine decide; a form stays open until the child answers and shows its refusal. Statistics
+and Readiness are the child's. Runs belong to the child and continue when you leave.
+
+**Local-only** on the child: configuration (models, checks, profiles, categories, lenses,
+delivery, settings export and import), tools and dependency setup, storage and build caches,
+project move and delete, reports and fixes, task models, break down, supersede, copy to queue
+and task import and export. Their keys say so.
+
+The Current log shows the newest 256 KiB of a live run; task details page through all of it.
+Each project keeps its own view, selection and scroll while you switch. When the child goes
+**offline**, its screens stay readable, marked offline with the time of last contact, and its
+actions are disabled with that reason until it reconnects. A project that was never opened
+opens once its host is connected. A read-only link (`ktask link control off`) opens for
+reading only.
+
+The TUI sees a child only through the link: it opens none of its files and no database.
+
 ### Control a child's tasks
 
 On the parent, add `--host NAME` and name the project by its ID or name on that host:
@@ -957,8 +983,9 @@ ktask --host devbox --project billing run --background
 ktask --host devbox --project billing pause
 ```
 
-`list`, `current`, `show`, `events`, `add`, `edit`, `approve`, `reject`, `run` (and `resume`,
-`retry`), `pause`, `stop`, `restart`, `done`, `cancel`, `answer` and `stats` run this way. The
+`list`, `current`, `show`, `events`, `add`, `edit`, `move`, `approve`, `reject`, `run` (and
+`resume`, `retry`), `pause`, `stop`, `restart`, `done`, `cancel`, `answer` and `stats` run this
+way. The
 child's own `ktask` runs the command line, so JSON, text, exit codes, `--if-version` guards and
 the task state machine are exactly the local ones, and the parent never opens a child's database
 or files. Everything else, including `project-delete`, `project-move`, `shutdown`, `pause --all`,
@@ -969,8 +996,8 @@ registers nothing: the project must exist on the child.
 name followed by the parent it is configured with, such as `claude-code via ktask-parent` (still
 as AI) or `owner via ktask-parent`, and notes every requested change in the project's events.
 
-**Read-only.** `ktask link control off` on the child keeps `list`, `current`, `show`, `events`
-and `stats`, and refuses every change (exit 4, code `read_only`). `ktask link control on` allows
+**Read-only.** `ktask link control off` on the child keeps `list`, `current`, `show`, `events`,
+`stats` and the parent TUI's reads, and refuses every change (exit 4, code `read_only`). `ktask link control on` allows
 changes again, `ktask link control` shows the setting, and naming the parent again keeps it. A
 child only ever takes commands over its own connection to its configured parent.
 
