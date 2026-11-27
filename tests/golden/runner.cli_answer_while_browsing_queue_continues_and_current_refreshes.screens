@@ -1,0 +1,62 @@
+@@ READINESS QUEUE BEFORE ANSWER · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs input · runner stopped · <t> |   Queue 1 · History 0
+ Session: Run one · waiting · Awaiting answer to current task
+ Queue · 1 shown / 1 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 1 · Model ───────────────────────────────────╮╭ Details · click for full ────────────╮
+│› #1   Needs input Question while browsing codex/execution││Question while browsing               │
+│                                                          ││#1 · Needs input · AI                 │
+│                                                          ││                                      │
+│                                                          ││Goal: Create result.txt containing    │
+│                                                          ││verified                              │
+│                                                          ││                                      │
+│                                                          ││Check: result.txt contains verified   │
+│                                                          ││                                      │
+│                                                          ││Attempts: 1 · 70 new tokens + 1       │
+│                                                          ││call(s) unreported                    │
+│                                                          ││                                      │
+│                                                          ││Models:                               │
+│                                                          ││Execution: codex/execution / none     │
+│                                                          ││Review: codex/review / none           │
+│                                                          ││Validation: codex/validation / none   │
+│                                                          ││Remediation: codex/remediation / none │
+│                                                          ││Attempt 1 · Needs input · Active <t> ·│
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Answer] [a Add] [i Insert] [e Edit] [c Models] [s Stop] [T Restart] [D Mark done]
+[o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CURRENT AFTER QUEUE ANSWER · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Run one · complete · no queued work · Checks, independent review and validation passed af…
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                   │
+│Inspect results in History, or add more work.                                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

@@ -1,0 +1,385 @@
+@@ COPY FORM Done · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #4 · Pending   |   Queue 1 · History 3
+ Queue preference · last task · m: run mode in Current
+ History · 3 shown / 3 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 3 / 3 · Finished Attempts Time Usage ────────────────────────────╮╭ Details · click for full ──────────────╮
+│  #3   Superseded Superseded original <date> 0 <t> -                        ││Done original                           │
+│  #2   Cancelled  Cancelled original <date> 0 <t> -                         ││#1 · Done · AI · finished <date>        │
+│› #1   Done       Done original <date> 0 <t> -                              ││                                        │
+│                                                                            ││Goal: Persist a real task               │
+│                    ╭ Copy to queue #1 Done original ────────────────────────────────────────────╮                    │
+│                    │Adds a new pending task with the same definition. The original stays in     │art                 │
+│                    │History unchanged.                                                          │                    │
+│                    │                                                                            │et                  │
+│                    │                                                                            │                    │
+│                    │Before task ID (blank = end of Queue)                                       │                    │
+│                    │▏                                                                           │red / none          │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │ / none             │
+│                    │                                                                            │ured / none         │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │gured / none        │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+╰────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats]
+[? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ COPIED Done · 120x34 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #4 · Pending   |   Queue 2 · History 3
+ Queue preference · Next #5: Done original · m: run mode in Current
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 2 · Model ───────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│  #4   Pending  Replacement                               unconfigured││Done original                                 │
+│› #5   Pending  Done original                             unconfigured││#5 · Pending · AI                             │
+│                                                                      ││                                              │
+│                                                                      ││Goal: Persist a real task                     │
+│                                                                      ││                                              │
+│                                                                      ││Check: Survives restart                       │
+│                                                                      ││                                              │
+│                                                                      ││Attempts: 0 · none yet                        │
+│                                                                      ││                                              │
+│                                                                      ││Models:                                       │
+│                                                                      ││Execution: unconfigured / none                │
+│                                                                      ││Review: unconfigured / none                   │
+│                                                                      ││Validation: unconfigured / none               │
+│                                                                      ││Remediation: unconfigured / none              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel]
+[R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Copied to the queue as #5
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ COPY FORM Cancelled · 120x34 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #4 · Pending   |   Queue 2 · History 3
+ Queue preference · Next #5: Done original · m: run mode in Current
+ History · 3 shown / 3 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 2 / 3 · Finished Attempts Time Usage ────────────────────────────╮╭ Details · click for full ──────────────╮
+│  #3   Superseded Superseded original <date> 0 <t> -                        ││Cancelled original                      │
+│› #2   Cancelled  Cancelled original <date> 0 <t> -                         ││#2 · Cancelled · AI · finished <date>   │
+│  #1   Done       Done original <date> 0 <t> -                              ││<date>                                  │
+│                                                                            ││                                        │
+│                    ╭ Copy to queue #2 Cancelled original ───────────────────────────────────────╮ task               │
+│                    │Adds a new pending task with the same definition. The original stays in     │                    │
+│                    │History unchanged.                                                          │art                 │
+│                    │                                                                            │                    │
+│                    │                                                                            │et                  │
+│                    │Before task ID (blank = end of Queue)                                       │                    │
+│                    │▏                                                                           │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │red / none          │
+│                    │                                                                            │ / none             │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │ured / none         │
+│                    │                                                                            │gured / none        │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+╰────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats]
+[? Help] [q Quit]
+
+Copied to the queue as #5
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ COPIED Cancelled · 120x34 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #4 · Pending   |   Queue 3 · History 3
+ Queue preference · Next #5: Done original · m: run mode in Current
+ Queue · 3 shown / 3 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 3 / 3 · Model ───────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│  #4   Pending  Replacement                               unconfigured││Cancelled original                            │
+│  #5   Pending  Done original                             unconfigured││#6 · Pending · AI                             │
+│› #6   Pending  Cancelled original                        unconfigured││                                              │
+│                                                                      ││Goal: Persist a real task                     │
+│                                                                      ││                                              │
+│                                                                      ││Check: Survives restart                       │
+│                                                                      ││                                              │
+│                                                                      ││Attempts: 0 · none yet                        │
+│                                                                      ││                                              │
+│                                                                      ││Models:                                       │
+│                                                                      ││Execution: unconfigured / none                │
+│                                                                      ││Review: unconfigured / none                   │
+│                                                                      ││Validation: unconfigured / none               │
+│                                                                      ││Remediation: unconfigured / none              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel]
+[R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Copied to the queue as #6
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ COPY FORM Superseded · 120x34 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #4 · Pending   |   Queue 3 · History 3
+ Queue preference · Next #5: Done original · m: run mode in Current
+ History · 3 shown / 3 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 3 · Finished Attempts Time Usage ────────────────────────────╮╭ Details · click for full ──────────────╮
+│› #3   Superseded Superseded original <date> 0 <t> -                        ││Superseded original                     │
+│  #2   Cancelled  Cancelled original <date> 0 <t> -                         ││#3 · Superseded · AI · finished <date>  │
+│  #1   Done       Done original <date> 0 <t> -                              ││<date>                                  │
+│                                                                            ││                                        │
+│                    ╭ Copy to queue #3 Superseded original ──────────────────────────────────────╮ task               │
+│                    │Adds a new pending task with the same definition. The original stays in     │                    │
+│                    │History unchanged.                                                          │art                 │
+│                    │                                                                            │                    │
+│                    │                                                                            │et                  │
+│                    │Before task ID (blank = end of Queue)                                       │                    │
+│                    │▏                                                                           │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │red / none          │
+│                    │                                                                            │ / none             │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │ured / none         │
+│                    │                                                                            │gured / none        │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+╰────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats]
+[? Help] [q Quit]
+
+Copied to the queue as #6
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ COPIED Superseded · 120x34 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #4 · Pending   |   Queue 4 · History 3
+ Queue preference · Next #5: Done original · m: run mode in Current
+ Queue · 4 shown / 4 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 4 / 4 · Model ───────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│  #4   Pending  Replacement                               unconfigured││Superseded original                           │
+│  #5   Pending  Done original                             unconfigured││#7 · Pending · AI                             │
+│  #6   Pending  Cancelled original                        unconfigured││                                              │
+│› #7   Pending  Superseded original                       unconfigured││Goal: Persist a real task                     │
+│                                                                      ││                                              │
+│                                                                      ││Check: Survives restart                       │
+│                                                                      ││                                              │
+│                                                                      ││Attempts: 0 · none yet                        │
+│                                                                      ││                                              │
+│                                                                      ││Models:                                       │
+│                                                                      ││Execution: unconfigured / none                │
+│                                                                      ││Review: unconfigured / none                   │
+│                                                                      ││Validation: unconfigured / none               │
+│                                                                      ││Remediation: unconfigured / none              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel]
+[R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Copied to the queue as #7
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ COPIED Done · 120x34 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #5 · Pending   |   Queue 2 · History 3
+ Queue preference · Next #4: Replacement · m: run mode in Current
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 2 · Model ───────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│› #5   Pending  Done original                             unconfigured││Done original                                 │
+│  #4   Pending  Replacement                               unconfigured││#5 · Pending · AI                             │
+│                                                                      ││                                              │
+│                                                                      ││Goal: Persist a real task                     │
+│                                                                      ││                                              │
+│                                                                      ││Check: Survives restart                       │
+│                                                                      ││                                              │
+│                                                                      ││Attempts: 0 · none yet                        │
+│                                                                      ││                                              │
+│                                                                      ││Models:                                       │
+│                                                                      ││Execution: unconfigured / none                │
+│                                                                      ││Review: unconfigured / none                   │
+│                                                                      ││Validation: unconfigured / none               │
+│                                                                      ││Remediation: unconfigured / none              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel]
+[R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Copied to the queue as #5
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ COPY FORM Cancelled · 120x34 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #5 · Pending   |   Queue 2 · History 3
+ Queue preference · Next #4: Replacement · m: run mode in Current
+ History · 3 shown / 3 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 2 / 3 · Finished Attempts Time Usage ────────────────────────────╮╭ Details · click for full ──────────────╮
+│  #3   Superseded Superseded original <date> 0 <t> -                        ││Cancelled original                      │
+│› #2   Cancelled  Cancelled original <date> 0 <t> -                         ││#2 · Cancelled · AI · finished <date>   │
+│  #1   Done       Done original <date> 0 <t> -                              ││<date>                                  │
+│                                                                            ││                                        │
+│                    ╭ Copy to queue #2 Cancelled original ───────────────────────────────────────╮ task               │
+│                    │Adds a new pending task with the same definition. The original stays in     │                    │
+│                    │History unchanged.                                                          │art                 │
+│                    │                                                                            │                    │
+│                    │                                                                            │et                  │
+│                    │Before task ID (blank = end of Queue)                                       │                    │
+│                    │▏                                                                           │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │red / none          │
+│                    │                                                                            │ / none             │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │ured / none         │
+│                    │                                                                            │gured / none        │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+╰────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats]
+[? Help] [q Quit]
+
+Copied to the queue as #5
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ COPIED Cancelled · 120x34 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #5 · Pending   |   Queue 3 · History 3
+ Queue preference · Next #4: Replacement · m: run mode in Current
+ Queue · 3 shown / 3 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 3 / 3 · Model ───────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│  #5   Pending  Done original                             unconfigured││Cancelled original                            │
+│  #4   Pending  Replacement                               unconfigured││#6 · Pending · AI                             │
+│› #6   Pending  Cancelled original                        unconfigured││                                              │
+│                                                                      ││Goal: Persist a real task                     │
+│                                                                      ││                                              │
+│                                                                      ││Check: Survives restart                       │
+│                                                                      ││                                              │
+│                                                                      ││Attempts: 0 · none yet                        │
+│                                                                      ││                                              │
+│                                                                      ││Models:                                       │
+│                                                                      ││Execution: unconfigured / none                │
+│                                                                      ││Review: unconfigured / none                   │
+│                                                                      ││Validation: unconfigured / none               │
+│                                                                      ││Remediation: unconfigured / none              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel]
+[R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Copied to the queue as #6
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ COPY FORM Superseded · 120x34 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #5 · Pending   |   Queue 3 · History 3
+ Queue preference · Next #4: Replacement · m: run mode in Current
+ History · 3 shown / 3 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 3 · Finished Attempts Time Usage ────────────────────────────╮╭ Details · click for full ──────────────╮
+│› #3   Superseded Superseded original <date> 0 <t> -                        ││Superseded original                     │
+│  #2   Cancelled  Cancelled original <date> 0 <t> -                         ││#3 · Superseded · AI · finished <date>  │
+│  #1   Done       Done original <date> 0 <t> -                              ││<date>                                  │
+│                                                                            ││                                        │
+│                    ╭ Copy to queue #3 Superseded original ──────────────────────────────────────╮ task               │
+│                    │Adds a new pending task with the same definition. The original stays in     │                    │
+│                    │History unchanged.                                                          │art                 │
+│                    │                                                                            │                    │
+│                    │                                                                            │et                  │
+│                    │Before task ID (blank = end of Queue)                                       │                    │
+│                    │▏                                                                           │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │red / none          │
+│                    │                                                                            │ / none             │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │ured / none         │
+│                    │                                                                            │gured / none        │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+╰────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats]
+[? Help] [q Quit]
+
+Copied to the queue as #6
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ COPIED Superseded · 120x34 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #5 · Pending   |   Queue 4 · History 3
+ Queue preference · Next #4: Replacement · m: run mode in Current
+ Queue · 4 shown / 4 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 4 / 4 · Model ───────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│  #5   Pending  Done original                             unconfigured││Superseded original                           │
+│  #4   Pending  Replacement                               unconfigured││#7 · Pending · AI                             │
+│  #6   Pending  Cancelled original                        unconfigured││                                              │
+│› #7   Pending  Superseded original                       unconfigured││Goal: Persist a real task                     │
+│                                                                      ││                                              │
+│                                                                      ││Check: Survives restart                       │
+│                                                                      ││                                              │
+│                                                                      ││Attempts: 0 · none yet                        │
+│                                                                      ││                                              │
+│                                                                      ││Models:                                       │
+│                                                                      ││Execution: unconfigured / none                │
+│                                                                      ││Review: unconfigured / none                   │
+│                                                                      ││Validation: unconfigured / none               │
+│                                                                      ││Remediation: unconfigured / none              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel]
+[R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Copied to the queue as #7
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

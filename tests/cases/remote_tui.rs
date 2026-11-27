@@ -7,9 +7,7 @@ use crate::support::{self, Result, Terminal};
 use ktask_rs_mk3::application::{Definition, Kind, VersionedTask};
 use serde_json::Value;
 use std::{
-    fs,
-    path::Path,
-    thread,
+    fs, thread,
     time::{Duration, Instant},
 };
 
@@ -112,13 +110,15 @@ impl World {
     }
 
     fn tui(&self, columns: u16, rows: u16) -> Result<Terminal> {
-        let t = Terminal::open_project(
+        let mut t = Terminal::open_project(
             DEV,
             &self.parent.dir,
             &self.parent.dir.join("alpha"),
             columns,
             rows,
         )?;
+        // A linked project's screens follow the child's store.
+        t.watch(self.devbox.dir.join("state"));
         t.screen("the local project opens", |s| s.contains("/ alpha"))?;
         Ok(t)
     }
@@ -206,15 +206,6 @@ impl Input {
     }
 }
 
-/// Prints a screen into the check transcript and, in a supervised run, keeps its picture.
-fn record(screen: &str, name: &str) -> Result {
-    println!("{name}\n{screen}");
-    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-        support::screen_png(screen, &Path::new(&directory).join(format!("{name}.png")))?;
-    }
-    Ok(())
-}
-
 /// The list rows, without the details pane beside them.
 fn listed(screen: &str) -> impl Iterator<Item = &str> {
     screen
@@ -232,7 +223,7 @@ fn row<'a>(screen: &'a str, title: &str) -> &'a str {
 
 /// Open, approve, add, run, follow, pause, offline and reconnect, switching and finishing.
 fn operate(columns: u16, rows: u16, mouse: bool) -> Result {
-    let case = format!("remote-{columns}x{rows}-mouse-{mouse}");
+    let case = "remote";
     let mut world = World::new()?;
     world.add("Remote build", "ready")?;
     world.add("Later plan", "draft")?;
@@ -240,20 +231,20 @@ fn operate(columns: u16, rows: u16, mouse: bool) -> Result {
         t: world.tui(columns, rows)?,
         mouse,
     };
-    open_and_approve(&mut t, &world, &case)?;
-    add_remotely(&mut t, &world, &case)?;
-    run_follow_and_pause(&mut t, &world, &case)?;
-    lose_and_regain_the_link(&mut t, &mut world, &case)?;
-    switch_projects(&mut t, &case)?;
-    return_after_being_away(&mut t, &mut world, &case)?;
-    local_only_and_finish(&mut t, &world, &case)?;
+    open_and_approve(&mut t, &world, case)?;
+    add_remotely(&mut t, &world, case)?;
+    run_follow_and_pause(&mut t, &world, case)?;
+    lose_and_regain_the_link(&mut t, &mut world, case)?;
+    switch_projects(&mut t, case)?;
+    return_after_being_away(&mut t, &mut world, case)?;
+    local_only_and_finish(&mut t, &world, case)?;
     t.quit()?;
     world.stop()
 }
 
 fn open_and_approve(t: &mut Input, world: &World, case: &str) -> Result {
     let opened = t.open_remote()?;
-    record(&opened, &format!("{case}-01-current"))?;
+    crate::support::record(&format!("{case}-01-current"), t.mouse, &opened);
     assert!(opened.contains("linked · live"), "{opened}");
     assert!(opened.contains("#1 Remote build"), "{opened}");
     assert!(opened.contains("Opened web on devbox"), "{opened}");
@@ -263,7 +254,7 @@ fn open_and_approve(t: &mut Input, world: &World, case: &str) -> Result {
     let queue = t.wait("remote queue", |s| {
         row(s, "Later plan").contains("Needs approval")
     })?;
-    record(&queue, &format!("{case}-02-queue"))?;
+    crate::support::record(&format!("{case}-02-queue"), t.mouse, &queue);
     if t.mouse {
         t.click_row("Later plan")?;
     } else {
@@ -274,7 +265,7 @@ fn open_and_approve(t: &mut Input, world: &World, case: &str) -> Result {
     let approved = t.wait("approved on the child", |s| {
         s.contains("Saved on devbox") && row(s, "Later plan").contains("Pending")
     })?;
-    record(&approved, &format!("{case}-03-approved"))?;
+    crate::support::record(&format!("{case}-03-approved"), t.mouse, &approved);
     assert_eq!(world.task(2)?["state"], "pending");
 
     Ok(())
@@ -302,12 +293,13 @@ fn add_remotely(t: &mut Input, world: &World, case: &str) -> Result {
     }
     t.t.send("Listed there")?;
     let filled = t.wait("filled", |s| s.contains("Listed there"))?;
-    record(&filled, &format!("{case}-04-add-form"))?;
+    crate::support::record(&format!("{case}-04-add-form"), t.mouse, &filled);
     t.press(CTRL_S, "Apply")?;
+    // The next read of the host selects the added task.
     let added = t.wait("added on the child", |s| {
-        !s.contains("Add task") && s.contains("added #3") && !row(s, "Added remotely").is_empty()
+        !s.contains("Add task") && s.contains("added #3") && row(s, "Added remotely").contains('›')
     })?;
-    record(&added, &format!("{case}-05-added"))?;
+    crate::support::record(&format!("{case}-05-added"), t.mouse, &added);
     assert_eq!(world.task(3)?["definition"]["goal"], "From the parent");
     assert_eq!(world.task(3)?["definition"]["criteria"][0], "Listed there");
 
@@ -323,10 +315,12 @@ fn run_follow_and_pause(t: &mut Input, world: &World, case: &str) -> Result {
     })?;
     t.press("r", "r Run queue")?;
     let running = t.wait("running with live output", |s| {
-        s.contains("Current #1 · Running") && s.contains("REMOTE-AGENT-WORKING")
+        s.contains("0 need you · 1")
+            && s.contains("Current #1 · Running")
+            && s.contains("REMOTE-AGENT-WORKING")
     })?;
     holding(&world.devbox)?;
-    record(&running, &format!("{case}-06-running"))?;
+    crate::support::record(&format!("{case}-06-running"), t.mouse, &running);
 
     // Details page the child's evidence; events are the child's.
     t.press("\r", "Enter Details")?;
@@ -334,22 +328,24 @@ fn run_follow_and_pause(t: &mut Input, world: &World, case: &str) -> Result {
         s.contains("Task details / attempts") && s.contains("Output page 1 / 1")
     })?;
     assert!(details.contains("Attempt 1 / 1"), "{details}");
-    record(&details, &format!("{case}-07-details"))?;
+    crate::support::record(&format!("{case}-07-details"), t.mouse, &details);
     t.press("\x1b", "Close")?;
     t.wait("details closed", |s| !s.contains("Task details / attempts"))?;
     t.press("l", "Activity · #1")?;
     let events = t.wait("child events", |s| {
         s.contains("Project events") && s.contains("via me@parent")
     })?;
-    record(&events, &format!("{case}-08-events"))?;
+    crate::support::record(&format!("{case}-08-events"), t.mouse, &events);
     t.press("\x1b", "Close")?;
     t.wait("events closed", |s| !s.contains("Project events"))?;
 
     t.press("p", "p Pause")?;
     let paused = t.wait("paused on the child", |s| {
-        s.contains("Current #1 · Paused") && s.contains("Paused on devbox")
+        s.contains("0 need you · 0")
+            && s.contains("Current #1 · Paused")
+            && s.contains("Paused on devbox")
     })?;
-    record(&paused, &format!("{case}-09-paused"))?;
+    crate::support::record(&format!("{case}-09-paused"), t.mouse, &paused);
     assert_eq!(world.task(1)?["state"], "paused");
 
     Ok(())
@@ -361,12 +357,12 @@ fn lose_and_regain_the_link(t: &mut Input, world: &mut World, case: &str) -> Res
     let offline = t.wait("marked offline", |s| {
         s.contains("OFFLINE · last contact") && s.contains("devbox is offline · last contact")
     })?;
-    record(&offline, &format!("{case}-10-offline"))?;
+    crate::support::record(&format!("{case}-10-offline"), t.mouse, &offline);
     assert!(offline.contains("#1 Remote build"), "{offline}");
     assert!(offline.contains("REMOTE-AGENT-WORKING"), "{offline}");
     t.press("r", "r Resume")?;
     let refused = t.wait("resume refused", |s| s.contains("actions wait until"))?;
-    record(&refused, &format!("{case}-11-offline-refused"))?;
+    crate::support::record(&format!("{case}-11-offline-refused"), t.mouse, &refused);
     assert!(!refused.contains("Sending to devbox"), "{refused}");
     t.press("\r", "Enter Details")?;
     t.t.still("details are refused too", |s| {
@@ -376,7 +372,7 @@ fn lose_and_regain_the_link(t: &mut Input, world: &mut World, case: &str) -> Res
     let held = t.wait("held queue", |s| {
         !row(s, "Added remotely").is_empty() && s.contains("OFFLINE")
     })?;
-    record(&held, &format!("{case}-12-offline-queue"))?;
+    crate::support::record(&format!("{case}-12-offline-queue"), t.mouse, &held);
     // The reason is already on screen, and the form still does not open.
     t.press("a", "a Add")?;
     t.t.still("add is refused", |s| {
@@ -385,7 +381,7 @@ fn lose_and_regain_the_link(t: &mut Input, world: &mut World, case: &str) -> Res
     // Its screens are kept while another project is open.
     t.open_local()?;
     let away = t.open_remote()?;
-    record(&away, &format!("{case}-12b-offline-reopened"))?;
+    crate::support::record(&format!("{case}-12b-offline-reopened"), t.mouse, &away);
     assert!(away.contains("offline, showing its last state"), "{away}");
     assert!(away.contains("OFFLINE · last contact"), "{away}");
     assert!(!row(&away, "Added remotely").is_empty(), "{away}");
@@ -396,7 +392,7 @@ fn lose_and_regain_the_link(t: &mut Input, world: &mut World, case: &str) -> Res
     let back = t.wait("live again", |s| {
         s.contains("linked · live") && !row(s, "While away").is_empty()
     })?;
-    record(&back, &format!("{case}-13-reconnected"))?;
+    crate::support::record(&format!("{case}-13-reconnected"), t.mouse, &back);
     assert!(!back.contains("OFFLINE"), "{back}");
 
     Ok(())
@@ -409,7 +405,7 @@ fn switch_projects(t: &mut Input, case: &str) -> Result {
     t.view(3, "History")?;
     t.wait("local history", |s| s.contains("closed tasks"))?;
     let returned = t.open_remote()?;
-    record(&returned, &format!("{case}-14-returned-to-remote"))?;
+    crate::support::record(&format!("{case}-14-returned-to-remote"), t.mouse, &returned);
     assert!(row(&returned, "Later plan").contains('›'), "{returned}");
     let local_again = t.open_local()?;
     assert!(local_again.contains("closed tasks"), "{local_again}");
@@ -428,7 +424,7 @@ fn return_after_being_away(t: &mut Input, world: &mut World, case: &str) -> Resu
     let news = t.wait("what changed while away", |s| {
         s.contains("linked · live") && !row(s, "Added meanwhile").is_empty()
     })?;
-    record(&news, &format!("{case}-14b-back-with-news"))?;
+    crate::support::record(&format!("{case}-14b-back-with-news"), t.mouse, &news);
 
     t.open_local()?;
     world.go_offline()?;
@@ -437,7 +433,7 @@ fn return_after_being_away(t: &mut Input, world: &mut World, case: &str) -> Resu
     let offline = t.wait("went offline while away", |s| {
         s.contains("OFFLINE · last contact")
     })?;
-    record(&offline, &format!("{case}-14c-back-offline"))?;
+    crate::support::record(&format!("{case}-14c-back-offline"), t.mouse, &offline);
     assert!(!row(&offline, "Added meanwhile").is_empty(), "{offline}");
     t.press("r", "r Resume")?;
     let refused = t.wait("still refused", |s| s.contains("actions wait until"))?;
@@ -446,7 +442,8 @@ fn return_after_being_away(t: &mut Input, world: &mut World, case: &str) -> Resu
     let live = t.wait("live once more", |s| {
         s.contains("linked · live") && !s.contains("OFFLINE")
     })?;
-    record(&live, &format!("{case}-14d-live-again"))
+    crate::support::record(&format!("{case}-14d-live-again"), t.mouse, &live);
+    Ok(())
 }
 
 /// What stays on the host is shown as local-only; then the child finishes its queue.
@@ -455,7 +452,7 @@ fn local_only_and_finish(t: &mut Input, world: &World, case: &str) -> Result {
     let config = t.wait("local-only configuration", |s| {
         s.contains("Local-only: change these on devbox")
     })?;
-    record(&config, &format!("{case}-15-config"))?;
+    crate::support::record(&format!("{case}-15-config"), t.mouse, &config);
     for kept in [
         "Configuration:",
         "Tools and dependency setup",
@@ -477,7 +474,7 @@ fn local_only_and_finish(t: &mut Input, world: &World, case: &str) -> Result {
     for absent in ["[m Move]", "[D Delete]", "[f Fix]"] {
         assert!(!projects.contains(absent), "{absent}\n{projects}");
     }
-    record(&projects, &format!("{case}-16-projects"))?;
+    crate::support::record(&format!("{case}-16-projects"), t.mouse, &projects);
     t.t.send("D")?;
     t.wait("delete is local-only", |s| {
         s.contains("Local-only: this project is on devbox")
@@ -493,11 +490,16 @@ fn local_only_and_finish(t: &mut Input, world: &World, case: &str) -> Result {
     t.wait("resume started", |s| {
         s.contains("Supervisor started on devbox")
     })?;
+    // History keeps the row selected when it opens, so it opens once everything is in it.
+    t.wait("every task closed", |s| s.contains("Queue 0 · History 5"))?;
     t.view(3, "History")?;
     let history = t.wait("finished on the child", |s| {
-        row(s, "Remote build").contains("Done")
+        crate::support::finished(s)
+            && s.contains("0 need you · 0")
+            && row(s, "Remote build").contains("Done")
     })?;
-    record(&history, &format!("{case}-17-history"))
+    crate::support::record(&format!("{case}-17-history"), t.mouse, &history);
+    Ok(())
 }
 
 #[test]
@@ -538,7 +540,7 @@ fn select(t: &mut Input, title: &str) -> Result {
 
 /// Every other task action through its dialog, and a link the child made read-only.
 fn manage(columns: u16, rows: u16, mouse: bool) -> Result {
-    let case = format!("remote-manage-{columns}x{rows}-mouse-{mouse}");
+    let case = "remote-manage";
     let world = World::new()?;
     for (title, approval) in [
         ("Alpha work", "ready"),
@@ -619,7 +621,7 @@ fn manage(columns: u16, rows: u16, mouse: bool) -> Result {
     let done = t.wait("marked done", |s| {
         !s.contains("Mark done #3") && s.contains("on devbox") && row(s, "Gamma edited").is_empty()
     })?;
-    record(&done, &format!("{case}-1-managed"))?;
+    crate::support::record(&format!("{case}-1-managed"), t.mouse, &done);
     assert_eq!(world.task(3)?["state"], "done");
 
     // Answer the worker's question.
@@ -633,9 +635,11 @@ fn manage(columns: u16, rows: u16, mouse: bool) -> Result {
     agent(&world.devbox, "hold")?;
     t.press("r", "r Answer")?;
     let question = t.wait("answer form", |s| {
-        s.contains("Answer AI question") && s.contains("Which content?")
+        s.contains("1 need you · 0")
+            && s.contains("Answer AI question")
+            && s.contains("Which content?")
     })?;
-    record(&question, &format!("{case}-2-question"))?;
+    crate::support::record(&format!("{case}-2-question"), t.mouse, &question);
     t.t.send("The short one")?;
     t.wait("answer typed", |s| s.contains("The short one"))?;
     t.press(CTRL_S, "Apply")?;
@@ -651,18 +655,21 @@ fn manage(columns: u16, rows: u16, mouse: bool) -> Result {
     t.wait("restarted", |s| s.contains("#1 restarted on devbox"))?;
     holding(&world.devbox)?;
     let restarted = t.wait("the fresh attempt", |s| {
-        s.contains("Current #1 · Running")
+        s.contains("0 need you · 1")
+            && s.contains("Current #1 · Running")
             && s.contains("Attempt 2")
             && s.contains("REMOTE-AGENT-WORKING")
     })?;
-    record(&restarted, &format!("{case}-3-restarted"))?;
+    crate::support::record(&format!("{case}-3-restarted"), t.mouse, &restarted);
     t.press("s", "s Stop")?;
     t.wait("stop form", |s| s.contains("Stop #1"))?;
     t.press(CTRL_S, "Apply")?;
     let stopped = t.wait("stopped", |s| {
-        s.contains("#1 stopped") && s.contains("Current #1 · Pending")
+        s.contains("0 need you · 0")
+            && s.contains("#1 stopped")
+            && s.contains("Current #1 · Pending")
     })?;
-    record(&stopped, &format!("{case}-4-stopped"))?;
+    crate::support::record(&format!("{case}-4-stopped"), t.mouse, &stopped);
     assert_eq!(world.task(1)?["state"], "pending");
 
     // Statistics are the child's.
@@ -677,8 +684,11 @@ fn manage(columns: u16, rows: u16, mouse: bool) -> Result {
     world.on_child_link(&["link", "control", "off"])?;
     t.wait("read-only", |s| s.contains("linked · read-only"))?;
     t.press("r", "r Run queue")?;
-    let refused = t.wait("run refused", |s| s.contains("is read-only"))?;
-    record(&refused, &format!("{case}-5-read-only"))?;
+    // A narrow header cuts the running count off; wide ones have caught up at zero.
+    let refused = t.wait("run refused", |s| {
+        !s.contains("need you · 1") && s.contains("is read-only")
+    })?;
+    crate::support::record(&format!("{case}-5-read-only"), t.mouse, &refused);
     assert_eq!(world.task(1)?["state"], "pending");
     t.quit()?;
     world.stop()
@@ -732,7 +742,7 @@ fn remote_queue_and_history_stay_usable_with_hundreds_of_tasks() -> Result {
     }
     for (columns, rows) in SIZES {
         for mouse in [false, true] {
-            let case = format!("remote-bulk-{columns}x{rows}-mouse-{mouse}");
+            let case = "remote-bulk";
             let mut t = Input {
                 t: world.tui(columns, rows)?,
                 mouse,
@@ -751,14 +761,14 @@ fn remote_queue_and_history_stay_usable_with_hundreds_of_tasks() -> Result {
             }
             t.t.send("G")?;
             let end = t.wait("queue end", |s| row(s, "Bulk 220").contains('›'))?;
-            record(&end, &format!("{case}-1-queue-end"))?;
+            crate::support::record(&format!("{case}-1-queue-end"), t.mouse, &end);
             t.view(3, "History")?;
             t.wait("history", |s| {
                 s.contains("closed tasks") && s.contains("Bulk 440")
             })?;
             t.t.send("G")?;
             let oldest = t.wait("history end", |s| row(s, "Bulk 221").contains('›'))?;
-            record(&oldest, &format!("{case}-2-history-end"))?;
+            crate::support::record(&format!("{case}-2-history-end"), t.mouse, &oldest);
             assert!(started.elapsed() < Duration::from_secs(30));
             // Both lists keep their place across a switch to the local project and back.
             t.open_local()?;

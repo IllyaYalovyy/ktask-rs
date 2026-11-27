@@ -1,0 +1,261 @@
+@@ MOUSE STORAGE BUDGET FORM · 120x42 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                      │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                    ╭ Storage retention ─────────────────────────────────────────────────────────╮                    │
+│Mouse: Enabled      │Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │                    │
+│Run mode: Continue q│Allocated: 811008 bytes in 4 files/directories · eligible files: 0 ·        │                    │
+│Planner approval: Au│reusable SQLite: 0 · protected: 811008 bytes                                │                    │
+│Delivery: local via │SQLite: 753664 · WAL: 24576 · runner logs: 0 · evidence: 0 · directories: 1 │                    │
+│Dependencies: manual│Protected evidence: 0 bytes younger than the 30-day minimum age · 0 bytes   │isite is missing.   │
+│CLI require declares│referenced by reused checks · 0 bytes of open work                          │                    │
+│                    │Cleanup keeps task history and all live or unresolved work.                 │                    │
+│Defaults apply to ne│                                                                            │                    │
+│u User defaults: wha│Retain completed attempts (days)                                            │                    │
+│f Profiles: named ro│30▏                                                                         │                    │
+│w Work categories: t│Action                                                                      │e, documents or art;│
+│override per project│< Save policy >   click / Space to change                                   │                    │
+│L Review lenses: opt│Maximum allocated bytes                                                     │ project's default  │
+│selection.          │8589934592                                                                  │                    │
+│Checks: list, add, e│Maximum files and directories                                               │                    │
+│Keyboard remains ava│100000                                                                      │                    │
+│i Report limits: tim│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │efaults.            │
+│E Export settings an│                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MOUSE INVALID BYTE BUDGET · 120x42 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                      │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                    ╭ Storage retention ─────────────────────────────────────────────────────────╮                    │
+│Mouse: Enabled      │Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │                    │
+│Run mode: Continue q│Allocated: 811008 bytes in 4 files/directories · eligible files: 0 ·        │                    │
+│Planner approval: Au│reusable SQLite: 0 · protected: 811008 bytes                                │                    │
+│Delivery: local via │SQLite: 753664 · WAL: 24576 · runner logs: 0 · evidence: 0 · directories: 1 │                    │
+│Dependencies: manual│Protected evidence: 0 bytes younger than the 30-day minimum age · 0 bytes   │isite is missing.   │
+│CLI require declares│referenced by reused checks · 0 bytes of open work                          │                    │
+│                    │Cleanup keeps task history and all live or unresolved work.                 │                    │
+│Defaults apply to ne│                                                                            │                    │
+│u User defaults: wha│Retain completed attempts (days)                                            │                    │
+│f Profiles: named ro│30                                                                          │                    │
+│w Work categories: t│Action                                                                      │e, documents or art;│
+│override per project│< Save policy >   click / Space to change                                   │                    │
+│L Review lenses: opt│Maximum allocated bytes                                                     │ project's default  │
+│selection.          │bad▏                                                                        │                    │
+│Checks: list, add, e│Maximum files and directories                                               │                    │
+│Keyboard remains ava│100000                                                                      │                    │
+│i Report limits: tim│Bytes must be an integer                                                    │efaults.            │
+│E Export settings an│                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MOUSE SAVED BUDGETS · 120x42 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                      │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                    ╭ Storage retention ─────────────────────────────────────────────────────────╮                    │
+│Mouse: Enabled      │Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │                    │
+│Run mode: Continue q│Allocated: 819200 bytes in 4 files/directories · eligible files: 0 ·        │                    │
+│Planner approval: Au│reusable SQLite: 0 · protected: 819200 bytes                                │                    │
+│Delivery: local via │SQLite: 753664 · WAL: 32768 · runner logs: 0 · evidence: 0 · directories: 1 │                    │
+│Dependencies: manual│Protected evidence: 0 bytes younger than the 30-day minimum age · 0 bytes   │isite is missing.   │
+│CLI require declares│referenced by reused checks · 0 bytes of open work                          │                    │
+│                    │Cleanup keeps task history and all live or unresolved work.                 │                    │
+│Defaults apply to ne│                                                                            │                    │
+│u User defaults: wha│Retain completed attempts (days)                                            │                    │
+│f Profiles: named ro│30▏                                                                         │                    │
+│w Work categories: t│Action                                                                      │e, documents or art;│
+│override per project│< Save policy >   click / Space to change                                   │                    │
+│L Review lenses: opt│Maximum allocated bytes                                                     │ project's default  │
+│selection.          │2097152                                                                     │                    │
+│Checks: list, add, e│Maximum files and directories                                               │                    │
+│Keyboard remains ava│500                                                                         │                    │
+│i Report limits: tim│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │efaults.            │
+│E Export settings an│                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ KEYBOARD SAVED BUDGETS · 105x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ───────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                       │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:       │
+│resource limits.                                                                                       │
+│Preferences: saved per project and instance.                                                           │
+│                                                                                                       │
+│Mouse: Enabled                                                                                         │
+│Run mode: Continue queue                                                                               │
+│Planner approval: Automatic                                                                            │
+│Delivery: local via origin/main                                                                        │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite│
+│is missing. CLI require declares prerequisites before a task starts.                                   │
+│                                                                                                       │
+│Defaults apply to new tasks; existing revisions stay pinned.                                           │
+│u User defaults: what new projects start with; preview and apply them here.                            │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                 │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code,   │
+│documents or art; override per project.                                                                │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the     │
+│project's default selection.                                                                           │
+╰───────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ KEYBOARD REOPENED BUDGETS · 105x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+             ╭ Storage retention ─────────────────────────────────────────────────────────╮
+╭ Config ────│Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │─────────────╮
+│Project: pro│Allocated: 827392 bytes in 4 files/directories · eligible files: 0 ·        │             │
+│Storage: SQL│reusable SQLite: 0 · protected: 827392 bytes                                │s · R:       │
+│resource lim│SQLite: 753664 · WAL: 40960 · runner logs: 0 · evidence: 0 · directories: 1 │             │
+│Preferences:│Protected evidence: 0 bytes younger than the 30-day minimum age · 0 bytes   │             │
+│            │referenced by reused checks · 0 bytes of open work                          │             │
+│Mouse: Enabl│Cleanup keeps task history and all live or unresolved work.                 │             │
+│Run mode: Co│                                                                            │             │
+│Planner appr│Retain completed attempts (days)                                            │             │
+│Delivery: lo│30▏                                                                         │             │
+│Dependencies│Action                                                                      │ prerequisite│
+│is missing. │< Save policy >   click / Space to change                                   │             │
+│            │Maximum allocated bytes                                                     │             │
+│Defaults app│3145728                                                                     │             │
+│u User defau│Maximum files and directories                                               │             │
+│f Profiles: │600                                                                         │             │
+│w Work categ│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │iate code,   │
+│documents or│                                                                            │             │
+│L Review len│[Copy] [Apply] [Cancel] [Up] [Down]                                         │ and the     │
+│project's de│                                                                            │             │
+╰────────────╰────────────────────────────────────────────────────────────────────────────╯─────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ KEYBOARD INVALID FILE BUDGET · 105x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+             ╭ Storage retention ─────────────────────────────────────────────────────────╮
+╭ Config ────│Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │─────────────╮
+│Project: pro│Allocated: 827392 bytes in 4 files/directories · eligible files: 0 ·        │             │
+│Storage: SQL│reusable SQLite: 0 · protected: 827392 bytes                                │s · R:       │
+│resource lim│SQLite: 753664 · WAL: 40960 · runner logs: 0 · evidence: 0 · directories: 1 │             │
+│Preferences:│Protected evidence: 0 bytes younger than the 30-day minimum age · 0 bytes   │             │
+│            │referenced by reused checks · 0 bytes of open work                          │             │
+│Mouse: Enabl│Cleanup keeps task history and all live or unresolved work.                 │             │
+│Run mode: Co│                                                                            │             │
+│Planner appr│Retain completed attempts (days)                                            │             │
+│Delivery: lo│30                                                                          │             │
+│Dependencies│Action                                                                      │ prerequisite│
+│is missing. │< Save policy >   click / Space to change                                   │             │
+│            │Maximum allocated bytes                                                     │             │
+│Defaults app│3145728                                                                     │             │
+│u User defau│Maximum files and directories                                               │             │
+│f Profiles: │bad▏                                                                        │             │
+│w Work categ│Files must be an integer                                                    │iate code,   │
+│documents or│                                                                            │             │
+│L Review len│[Copy] [Apply] [Cancel] [Up] [Down]                                         │ and the     │
+│project's de│                                                                            │             │
+╰────────────╰────────────────────────────────────────────────────────────────────────────╯─────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ KEYBOARD CAPACITY STATUS · 105x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config      ╭ Storage retention ─────────────────────────────────────────────────────────╮
+             │Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │
+╭ Config ────│Allocated: 5021696 bytes in 5 files/directories · eligible files: 0 ·       │─────────────╮
+│Project: pro│reusable SQLite: 0 · protected: 5021696 bytes · WORK PAUSED AT CAPACITY     │             │
+│Storage: SQL│RESERVE                                                                     │s · R:       │
+│resource lim│SQLite: 753664 · WAL: 40960 · runner logs: 4194304 · evidence: 0 ·          │             │
+│Preferences:│directories: 1                                                              │             │
+│            │Protected evidence: 0 bytes younger than the 30-day minimum age · 0 bytes   │             │
+│Mouse: Enabl│referenced by reused checks · 0 bytes of open work                          │             │
+│Run mode: Co│Cleanup keeps task history and all live or unresolved work.                 │             │
+│Planner appr│                                                                            │             │
+│Delivery: lo│Retain completed attempts (days)                                            │             │
+│Dependencies│30▏                                                                         │ prerequisite│
+│is missing. │Action                                                                      │             │
+│            │< Save policy >   click / Space to change                                   │             │
+│Defaults app│Maximum allocated bytes                                                     │             │
+│u User defau│3145728                                                                     │             │
+│f Profiles: │Maximum files and directories                                               │             │
+│w Work categ│600                                                                         │iate code,   │
+│documents or│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │             │
+│L Review len│                                                                            │ and the     │
+│project's de│[Copy] [Apply] [Cancel] [Up] [Down]                                         │             │
+╰────────────│                                                                            │─────────────╯
+[Copy] [m Def╰────────────────────────────────────────────────────────────────────────────╯ Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

@@ -1,0 +1,360 @@
+@@ DEMO FORM · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Agent reports · demo workspace ────────────────────────────────────╮
+│A read-only agent investigates this project on this host and        │
+│reports what happened and how to fix it. It changes nothing.        │
+│Model: codex/demo-operator · 15 min · $2.00                         │
+│2 report(s):                                                        │
+│#2 · Stopped · <date> · Explain the current state                   │
+│#1 · Finished · <date> · Why did the demo check fail?               │
+│Report                                                              │
+│< New report >   click / Space to change                            │
+│Question (blank: explain the current state)                         │
+│                                                                    │
+│Task ID (blank: current task)                                       │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Mock workspace · changes last only for this session
+@@ DEMO RUNNING · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Agent report #3 · Running · demo workspace ────────────────────────╮
+│Agent report #3 · Running                                           │
+│Question: Explain the current state                                 │
+│Task: the current task                                              │
+│Requested by human: owner                                           │
+│Model: codex/demo-operator                                          │
+│Started <date> · running for <t>                                    │
+│Usage: tokens not reported                                          │
+│Cost: not reported (limit $2.00) · time limit 15m 00s               │
+│                                                                    │
+│PROGRESS (no report yet)                                            │
+│                                                                    │
+│s stop · [ ] older/newer · b reports · Esc: close, it keeps running │
+│                                                                    │
+│[Copy] [s Stop] [Older] [Newer] [b Reports] [Up] [Down] [Close]     │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Agent report #3 started · closing keeps it running
+@@ DEMO PROGRESS · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Agent report #3 · Running · demo workspace ────────────────────────╮
+│Agent report #3 · Running                                           │
+│Question: Explain the current state                                 │
+│Task: the current task                                              │
+│Requested by human: owner                                           │
+│Model: codex/demo-operator                                          │
+│Started <date> · running for <t>                                    │
+│Usage: tokens not reported                                          │
+│Cost: not reported (limit $2.00) · time limit 15m 00s               │
+│                                                                    │
+│PROGRESS (no report yet)                                            │
+│» Reading the demo task's attempts and events                       │
+│» The demo check failed on its last run                             │
+│» The demo workspace has disk space to spare                        │
+│                                                                    │
+│s stop · [ ] older/newer · b reports · Esc: close, it keeps running │
+│                                                                    │
+│[Copy] [s Stop] [Older] [Newer] [b Reports] [Up] [Down] [Close]     │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent report #3 started · closing keeps it running
+@@ DEMO FINISHED · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Agent report #3 · Finished · demo workspace ───────────────────────╮
+│Agent report #3 · Finished                                          │
+│                                                                    │
+│WHAT HAPPENED                                                       │
+│The demo check failed and the demo task stopped.                    │
+│                                                                    │
+│CAUSE                                                               │
+│A simulated assertion no longer matches the simulated output.       │
+│                                                                    │
+│Shown by:                                                           │
+│- log runner.log:12: The simulated check output                     │
+│                                                                    │
+│PROPOSED FIX (nothing was applied)                                  │
+│1. [repository change] Update the simulated assertion               │
+│2. [ktask action] Retry the demo task                               │
+│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc│
+│                                                                    │
+│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]      │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent report #3 started · closing keeps it running
+@@ DEMO STOPPED · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Agent report #2 · Stopped · demo workspace ────────────────────────╮
+│Agent report #2 · Stopped                                           │
+│NOT A FINISHED REPORT: Stopped by owner                             │
+│                                                                    │
+│Question: Explain the current state                                 │
+│Task: the current task                                              │
+│Requested by human: owner                                           │
+│Model: codex/demo-operator                                          │
+│Started <date> · took <t>                                           │
+│Usage: tokens not reported                                          │
+│Cost: not reported (limit $2.00) · time limit 15m 00s               │
+│                                                                    │
+│WHAT IT HAD FOUND                                                   │
+│» Reading the demo task's attempts and events                       │
+│                                                                    │
+│[ ] older/newer · b reports · Wheel / PgUp / PgDn: scroll · Esc:    │
+│close                                                               │
+│[Copy] [Older] [Newer] [b Reports] [Up] [Down] [Close]              │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent report #3 started · closing keeps it running
+@@ DEMO PROJECTS FORM · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Agent reports · demo workspace ────────────────────────────────────╮
+│A read-only agent investigates this project on this host and        │
+│reports what happened and how to fix it. It changes nothing.        │
+│Model: codex/demo-operator · 15 min · $2.00                         │
+│3 report(s):                                                        │
+│#3 · Finished · <date> · Explain the current state                  │
+│#2 · Stopped · <date> · Explain the current state                   │
+│#1 · Finished · <date> · Why did the demo check fail?               │
+│Report                                                              │
+│< New report >   click / Space to change                            │
+│Question (blank: explain the current state)                         │
+│                                                                    │
+│Task ID (blank: current task)                                       │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent report #3 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DEMO FORM · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ #1 Recover a failed check
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Failed · AI                                 ││Goal: Include every task on the final queue page.                       │
+│Attempt 1 · step <n>/6                      ││Proof: All 240 tasks are reachable.                                     │
+│Budget 1 of 3 used  ╭ Agent reports · demo workspace ────────────────────────────────────────────╮────────────────────╯
+│Model economy / medi│A read-only agent investigates this project on this host and reports what   │────────────────────╮
+│Cost <cost> (mock)  │happened and how to fix it. It changes nothing.                             │                    │
+│                    │Model: codex/demo-operator · 15 min · $2.00                                 │                    │
+│                    │2 report(s):                                                                │                    │
+│                    │#2 · Stopped · <date> · Explain the current state                           │                    │
+│                    │#1 · Finished · <date> · Why did the demo check fail?                       │                    │
+│                    │Report                                                                      │                    │
+│                    │< New report >   click / Space to change                                    │                    │
+│                    │Question (blank: explain the current state)                                 │                    │
+│                    │                                                                            │                    │
+╰────────────────────│Task ID (blank: current task)                                               │                    │
+╭ Activity · l: all ─│                                                                            │                    │
+│• Check failed · #1 │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│• Execution stopped │                                                                            │                    │
+│• Stopped for a deci│[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││FAIL  final_page_includes_last_row                                      │
+│                                            ││Expected 240 tasks; received 239.                                       │
+│                                            ││Execution stopped after a failing check.                                │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DEMO RUNNING · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ #1 Recover a failed check
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Failed · AI                                 ││Goal: Include every task on the final queue page.                       │
+│Attempt 1 · step <n>/6                      ││Proof: All 240 tasks are reachable.                                     │
+│Budget 1 of 3 used  ╭ Agent report #3 · Running · demo workspace ────────────────────────────────╮────────────────────╯
+│Model economy / medi│Agent report #3 · Running                                                   │────────────────────╮
+│Cost <cost> (mock)  │Question: Explain the current state                                         │                    │
+│                    │Task: the current task                                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/demo-operator                                                  │                    │
+│                    │Started <date> · running for <t>                                            │                    │
+│                    │Usage: tokens not reported                                                  │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │                    │
+│                    │                                                                            │                    │
+│                    │PROGRESS (no report yet)                                                    │                    │
+╰────────────────────│                                                                            │                    │
+╭ Activity · l: all ─│s stop · [ ] older/newer · b reports · Esc: close, it keeps running         │                    │
+│• Check failed · #1 │                                                                            │                    │
+│• Execution stopped │[Copy] [s Stop] [Older] [Newer] [b Reports] [Up] [Down] [Close]             │                    │
+│• Stopped for a deci│                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││PASS  queue fixture 64                                                  │
+│                                            ││FAIL  final_page_includes_last_row                                      │
+│                                            ││Expected 240 tasks; received 239.                                       │
+│                                            ││Execution stopped after a failing check.                                │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Agent report #3 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DEMO PROGRESS · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ #1 Recover a failed check
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Failed · AI                                 ││Goal: Include every task on the final queue page.                       │
+│Attempt 1 · step <n>/6╭ Agent report #3 · Running · demo workspace ────────────────────────────────╮                    │
+│Budget 1 of 3 used  │Agent report #3 · Running                                                   │────────────────────╯
+│Model economy / medi│Question: Explain the current state                                         │────────────────────╮
+│Cost <cost> (mock)  │Task: the current task                                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/demo-operator                                                  │                    │
+│                    │Started <date> · running for <t>                                            │                    │
+│                    │Usage: tokens not reported                                                  │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │                    │
+│                    │                                                                            │                    │
+│                    │PROGRESS (no report yet)                                                    │                    │
+│                    │» Reading the demo task's attempts and events                               │                    │
+╰────────────────────│» The demo check failed on its last run                                     │                    │
+╭ Activity · l: all ─│» The demo workspace has disk space to spare                                │                    │
+│• Check failed · #1 │                                                                            │                    │
+│• Execution stopped │s stop · [ ] older/newer · b reports · Esc: close, it keeps running         │                    │
+│• Stopped for a deci│                                                                            │                    │
+│                    │[Copy] [s Stop] [Older] [Newer] [b Reports] [Up] [Down] [Close]             │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││Expected 240 tasks; received 239.                                       │
+│                                            ││Execution stopped after a failing check.                                │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Agent report #3 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DEMO FINISHED · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Curre╭ Agent report #3 · Finished · demo workspace ───────────────────────────────╮
+ Current #1 · Failed │Agent report #3 · Finished                                                  │
+ Queue preference · N│                                                                            │
+ #1 Recover a failed │WHAT HAPPENED                                                               │
+ Failed · r Retry kee│The demo check failed and the demo task stopped.                            │
+╭ Status · Enter: det│                                                                            │────────────────────╮
+│Failed · AI         │CAUSE                                                                       │                    │
+│Attempt 1 · step <n>/6│A simulated assertion no longer matches the simulated output.               │                    │
+│Budget 1 of 3 used  │                                                                            │────────────────────╯
+│Model economy / medi│Shown by:                                                                   │────────────────────╮
+│Cost <cost> (mock)  │- log runner.log:12: The simulated check output                             │                    │
+│                    │                                                                            │                    │
+│                    │PROPOSED FIX (nothing was applied)                                          │                    │
+│                    │1. [repository change] Update the simulated assertion                       │                    │
+│                    │2. [ktask action] Retry the demo task                                       │                    │
+│                    │                                                                            │                    │
+│                    │Question: Explain the current state                                         │                    │
+│                    │Task: the current task                                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+╰────────────────────│Model: codex/demo-operator                                                  │                    │
+╭ Activity · l: all ─│Started <date> · took <t>                                                   │                    │
+│• Check failed · #1 │Usage: tokens not reported                                                  │                    │
+│• Execution stopped │Cost: not reported (limit $2.00) · time limit 15m 00s                       │                    │
+│• Stopped for a deci│                                                                            │                    │
+│                    │HOW IT WAS FOUND                                                            │                    │
+│                    │» Reading the demo task's attempts and events                               │                    │
+│                    │» The demo check failed on its last run                                     │                    │
+│                    │» The demo workspace has disk space to spare                                │                    │
+│                    │                                                                            │                    │
+╰────────────────────│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc        │────────────────────╯
+[Copy] [r Retry] [s S│                                                                            │[Enter Details]
+[a Add] [i Investigat│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]              │
+                     │                                                                            │
+Agent report #3 start╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DEMO STOPPED · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ #1 Recover a failed check
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Failed · AI                                 ││Goal: Include every task on the final queue page.                       │
+│Attempt 1 · step <n>/6╭ Agent report #2 · Stopped · demo workspace ────────────────────────────────╮                    │
+│Budget 1 of 3 used  │Agent report #2 · Stopped                                                   │────────────────────╯
+│Model economy / medi│NOT A FINISHED REPORT: Stopped by owner                                     │────────────────────╮
+│Cost <cost> (mock)  │                                                                            │                    │
+│                    │Question: Explain the current state                                         │                    │
+│                    │Task: the current task                                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/demo-operator                                                  │                    │
+│                    │Started <date> · took <t>                                                   │                    │
+│                    │Usage: tokens not reported                                                  │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │                    │
+│                    │                                                                            │                    │
+╰────────────────────│WHAT IT HAD FOUND                                                           │                    │
+╭ Activity · l: all ─│» Reading the demo task's attempts and events                               │                    │
+│• Check failed · #1 │                                                                            │                    │
+│• Execution stopped │[ ] older/newer · b reports · Wheel / PgUp / PgDn: scroll · Esc: close      │                    │
+│• Stopped for a deci│                                                                            │                    │
+│                    │[Copy] [Older] [Newer] [b Reports] [Up] [Down] [Close]                      │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││Expected 240 tasks; received 239.                                       │
+│                                            ││Execution stopped after a failing check.                                │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Agent report #3 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DEMO PROJECTS FORM · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Projects · 0 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│The simulator has one mock workspace.                                                                                 │
+│Start without --demo╭ Agent reports · demo workspace ────────────────────────────────────────────╮                    │
+│                    │A read-only agent investigates this project on this host and reports what   │                    │
+│                    │happened and how to fix it. It changes nothing.                             │                    │
+│                    │Model: codex/demo-operator · 15 min · $2.00                                 │                    │
+│                    │3 report(s):                                                                │                    │
+│                    │#3 · Finished · <date> · Explain the current state                          │                    │
+│                    │#2 · Stopped · <date> · Explain the current state                           │                    │
+│                    │#1 · Finished · <date> · Why did the demo check fail?                       │                    │
+│                    │Report                                                                      │                    │
+│                    │< New report >   click / Space to change                                    │                    │
+│                    │Question (blank: explain the current state)                                 │                    │
+│                    │                                                                            │                    │
+│                    │Task ID (blank: current task)                                               │                    │
+│                    │                                                                            │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Agent report #3 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

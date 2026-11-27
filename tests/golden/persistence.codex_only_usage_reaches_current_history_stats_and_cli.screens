@@ -1,0 +1,184 @@
+@@ CODEX CURRENT · 100x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Failed current
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Failed · AI                                 ││Goal: Persist a real task                           │
+│Attempt 1                                   ││Proof: Survives restart                             │
+│Model codex/fixture-judge-2 / high          │╰────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Report · attempt 1 · o: raw log ───────────────────╮
+│Tokens 2k new · 1k cached · 100 out         ││Outcome: Failed check with review finding           │
+│2k new tokens                               ││                                                    │
+│Budget 1 of 3 used                          ││Review · failed · codex/fixture-model verdict:      │
+│Run blocked (6) · u Readiness               ││review structured finding                           │
+│Review      ✗ failed                        ││                                                    │
+│Validation  ✗ failed                        ││Validation · failed · codex/fixture-model verdict:  │
+│                                            ││validation structured finding                       │
+│                                            ││                                                    │
+│                                            ││Supervisor outcome: Failed check with review finding│
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #1 · l: all ────────────────────╮│                                                    │
+│• Failed check with review finding          ││                                                    │
+│• Current task attempt recorded             ││                                                    │
+│• #1 created: Failed current                ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CODEX DETAILS · 100x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects╭ Task details / attempts ───────────────────────────────────────────────────╮
+ Current #1│Attempt 1 / 1 · #1 · revision 1 · failed                                    │
+ Queue pref│Outcome: Failed check with review finding                                   │
+ #1 Failed │Output page 1 / 1 · chunk 1 / 1 · 1 records · newest first · snapshot #1    │
+ Failed · r│                                                                            │
+╭ Status · │#1 [stderr] Check failed: transcript evidence                               │──────────╮
+│Failed · A│                                                                            │          │
+│Attempt 1 │Attempt inputs: revision 1 · session not recorded                           │          │
+│Model code│Revision 1 · Failed current                                                 │──────────╯
+│Active <t>│Approval: ready · human: owner · Category: code (built-in, checks apply)    │──────────╮
+│Tokens 2k │Goal: Persist a real task                                                   │          │
+│2k new tok│Acceptance: 1: Survives restart                                             │          │
+│Budget 1 o│execution: codex/fixture-model / high                                       │ict:      │
+│Run blocke│review: codex/fixture-judge-1 / high                                        │          │
+│Review    │validation: codex/fixture-judge-2 / high                                    │          │
+│Validation│remediation: codex/fixture-judge-3 / high                                   │verdict:  │
+│          │Attempt limit: 3 · Task limit: 10 min · Stage limit: Off                    │          │
+│          │Active <t> · waiting <t>                                                    │          │
+│          │Usage: 2 calls · uncached 2,000 · cache read 1,000 · cache write 0 · output │ew finding│
+╰──────────│100 · 2k new tokens                                                         │          │
+╭ Activity │review: codex/fixture-model / none · 1 calls · uncached 1,000 · cache read  │          │
+│• Failed c│500 · cache write 0 · output 50 · 1k new tokens · provider time <t>         │          │
+│• Current │validation: codex/fixture-model / none · 1 calls · uncached 1,000 · cache   │          │
+│• #1 creat│read 500 · cache write 0 · output 50 · 1k new tokens · provider time <t>    │          │
+│          │                                                                            │          │
+│          │#1 v3 · Failed · ai                                                         │          │
+│          │Failed current                                                              │          │
+│          │Actions: Retry, Edit, Stop, Restart, Mark done                              │          │
+│          │Current Revision 1 · Failed current                                         │          │
+│          │Approval: ready · human: owner · Category: code (built-in, checks apply)    │          │
+│          │Goal: Persist a real task                                                   │          │
+│          │Acceptance: 1: Survives restart                                             │          │
+│          │execution: codex/fixture-model / high                                       │          │
+│          │review: codex/fixture-judge-1 / high                                        │          │
+│          │validation: codex/fixture-judge-2 / high                                    │          │
+│          │remediation: codex/fixture-judge-3 / high                                   │          │
+│          │Find output                                                                 │          │
+│          │▏                                                                           │          │
+╰──────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │──────────╯
+[Copy] [r R│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │Run mode]
+[Enter Deta│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │
+           │[Refresh] [Up] [Down] [Close] [Copy]                                        │
+Runs happen╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CODEX STATS · 100x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Failed current
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Failed · AI                                 ││Goal: Persist a real task                           │
+│Attempt 1                                   ││Proof: Survives restart                             │
+│Model codex/fixture-judge-2 / high          │╰────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Report · attempt 1 · o: raw log ───────────────────╮
+│Tokens 2k new · 1k cached · 100 out         ││Outcome: Failed check with review finding           │
+│2k new tokens                               ││                                                    │
+│Budget 1 of 3 used                          ││Review · failed · codex/fixture-model verdict:      │
+│Run blocked (6) · u Readiness               ││review structured finding                           │
+│Review    ╭ Project statistics · SQLite ───────────────────────────────────────────────╮          │
+│Validation│Queue: 1                                                                    │verdict:  │
+│          │History: 0                                                                  │          │
+│          │Attempts: 1 (1 failed/interrupted)                                          │          │
+│          │Active time: <t>                                                            │ew finding│
+╰──────────│Waiting time: <t>                                                           │          │
+╭ Activity │Project usage: 2 calls · uncached 2,000 · cache read 1,000 · cache write 0  │          │
+│• Failed c│· output 100 · 2k new tokens                                                │          │
+│• Current │Human tasks are marked done without AI attempts.                            │          │
+│• #1 creat│Wheel / PgUp / PgDn: scroll · Esc: close                                    │          │
+│          │                                                                            │          │
+│          │[Copy] [Close] [Up] [Down]                                                  │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CODEX HISTORY · 100x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Queue preference · no queued work · m: run mode in Current
+ History · 1 shown / 1 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 1 · Finished Attempts Time Usage ───────────────╮╭ Details · click for full ───────╮
+│› #1   Done     Failed current <date> 1 <t> 2k tkn             ││Failed current                   │
+│                                                               ││#1 · Done · AI · finished <date> │
+│                                                               ││<date>                           │
+│                                                               ││                                 │
+│                                                               ││Goal: Persist a real task        │
+│                                                               ││                                 │
+│                                                               ││Check: Survives restart          │
+│                                                               ││                                 │
+│                                                               ││Attempts: 1 · 2k new tokens      │
+│                                                               ││                                 │
+│                                                               ││Models:                          │
+│                                                               ││Execution: codex/fixture-model / │
+│                                                               ││high                             │
+│                                                               ││Review: codex/fixture-judge-1 /  │
+│                                                               ││high                             │
+│                                                               ││Validation: codex/fixture-judge-2│
+│                                                               ││/ high                           │
+│                                                               ││Remediation:                     │
+│                                                               ││codex/fixture-judge-3 / high     │
+│                                                               ││Attempt 1 · Failed · Active <t>  │
+│                                                               ││2 calls · uncached 2,000 · cache │
+│                                                               ││read 1,000 · cache write 0 ·     │
+│                                                               ││output 100 · 2k new tokens       │
+│                                                               ││                                 │
+│                                                               ││                                 │
+│                                                               ││                                 │
+│                                                               ││                                 │
+│                                                               ││                                 │
+│                                                               ││                                 │
+│                                                               ││                                 │
+│                                                               ││                                 │
+│                                                               ││                                 │
+╰───────────────────────────────────────────────────────────────╯╰─────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear]
+[E Export] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

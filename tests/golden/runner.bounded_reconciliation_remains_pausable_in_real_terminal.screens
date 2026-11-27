@@ -1,0 +1,152 @@
+@@ BOUNDED ACCOUNTING RUNNING · 105x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Queue · running · Run requested
+ #1 Pause while protected storage is counted
+ Supervisor preparing the next task · p Pause stops the queue
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ───────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified              │
+│No attempts yet                             ││Proof: result.txt contains verified                      │
+│Model codex/execution / none                │╰─────────────────────────────────────────────────────────╯
+│Budget 0 of 3 used                          │╭ Log · following ────────────────────────────────────────╮
+│                                            ││Run is blocked. Press u Readiness for each cause and a   │
+│                                            ││direct action. Refresh after setup; Run retries from     │
+│                                            ││Current.                                                 │
+│                                            ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+╰────────────────────────────────────────────╯│                                                         │
+╭ Activity · #1 · l: all ────────────────────╮│                                                         │
+│• #1 created: Pause while protected storage ││                                                         │
+│  is counted                                ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+╰────────────────────────────────────────────╯╰─────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ BOUNDED ACCOUNTING PAUSED · 105x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Queue · paused · Paused; no later task started
+ #1 Pause while protected storage is counted
+ Queue paused before the next task
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ───────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified              │
+│No attempts yet                             ││Proof: result.txt contains verified                      │
+│Can run · u Readiness                       │╰─────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Ready. r starts an attempt in the background supervisor; │
+│                                            ││this pane follows its log.                               │
+│                                            ││Defaults and checks live in Config; c pins models for    │
+│                                            ││this task.                                               │
+│                                            ││                                                         │
+│                                            ││                                                         │
+╰────────────────────────────────────────────╯│                                                         │
+╭ Activity · #1 · l: all ────────────────────╮│                                                         │
+│• Pause requested; no later task will start ││                                                         │
+│• #1 created: Pause while protected storage ││                                                         │
+│  is counted                                ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+╰────────────────────────────────────────────╯╰─────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down]
+[u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Pause requested · waiting for worker shutdown and cleanup
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ BOUNDED ACCOUNTING RUNNING · 120x42 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Queue · running · Run requested
+ #1 Pause while protected storage is counted
+ Supervisor preparing the next task · p Pause stops the queue
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                             │
+│No attempts yet                             ││Proof: result.txt contains verified                                     │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────────────────────────╯
+│Budget 0 of 3 used                          │╭ Log · following ───────────────────────────────────────────────────────╮
+│                                            ││Run is blocked. Press u Readiness for each cause and a direct action.   │
+│                                            ││Refresh after setup; Run retries from Current.                          │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• #1 created: Pause while protected storage ││                                                                        │
+│  is counted                                ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness] [m Run mode]
+[Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ BOUNDED ACCOUNTING PAUSED · 120x42 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Queue · paused · Paused; no later task started
+ #1 Pause while protected storage is counted
+ Queue paused before the next task
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                             │
+│No attempts yet                             ││Proof: result.txt contains verified                                     │
+│Can run · u Readiness                       │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Ready. r starts an attempt in the background supervisor; this pane      │
+│                                            ││follows its log.                                                        │
+│                                            ││Defaults and checks live in Config; c pins models for this task.        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• Pause requested; no later task will start ││                                                                        │
+│• #1 created: Pause while protected storage ││                                                                        │
+│  is counted                                ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Pause requested · waiting for worker shutdown and cleanup
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

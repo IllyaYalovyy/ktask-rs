@@ -1,0 +1,297 @@
+@@ registered · 110x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                                         │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
+│limits.                                                                                                     │
+│Preferences: saved per project and instance.                                                                │
+│                                                                                                            │
+│Mouse: Enabled                                                                                              │
+│Run mode: Continue queue                                                                                    │
+│Planner approval: Automatic                                                                                 │
+│Delivery: local via origin/main                                                                             │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is  │
+│missing. CLI require declares prerequisites before a task starts.                                           │
+│                                                                                                            │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                │
+│u User defaults: what new projects start with; preview and apply them here.                                 │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                      │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code,        │
+│documents or art; override per project.                                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's│
+│default selection.                                                                                          │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Registered tool generation #1
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ registered-state · 110x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 ╭ Project tools ─────────────────────────────────────────────────────────────╮
+ No current task│#1 v1 · rg 14.1 · linux x86_64 ·                                            │
+ Queue preferenc│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/exte│
+ Config         │rnal-rg · external · ready · components:                                    │
+                │                                                                            │
+╭ Config ───────│Tool action                                                                 │───────────────╮
+│Project: run-00│< Register >   click / Space to change                                      │               │
+│Storage: SQLite│Tool name                                                                   │ R: resource   │
+│limits.        │                                                                            │               │
+│Preferences: sa│Tool version                                                                │               │
+│               │                                                                            │               │
+│Mouse: Enabled │Platform                                                                    │               │
+│Run mode: Conti│linux                                                                       │               │
+│Planner approva│Architecture                                                                │               │
+│Delivery: local│x86_64                                                                      │               │
+│Dependencies: m│Installation path                                                           │erequisite is  │
+│missing. CLI re│                                                                            │               │
+│               │Components (; in one component, comma between components)                   │               │
+│Defaults apply │                                                                            │               │
+│u User defaults│Ownership                                                                   │               │
+│f Profiles: nam│< External >   click / Space to change                                      │               │
+│w Work categori│Generation ID                                                               │e code,        │
+│documents or ar│                                                                            │               │
+│L Review lenses│Expected version (binding or generation)                                    │d the project's│
+│default selecti│0                                                                           │               │
+╰───────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │───────────────╯
+[Copy] [m Defaul│                                                                            │ecks]
+[g Git delivery]│[Copy] [Apply] [Cancel] [Up] [Down]                                         │settings]
+[o Import settin│                                                                            │
+Registered tool ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ bound · 110x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                                         │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
+│limits.                                                                                                     │
+│Preferences: saved per project and instance.                                                                │
+│                                                                                                            │
+│Mouse: Enabled                                                                                              │
+│Run mode: Continue queue                                                                                    │
+│Planner approval: Automatic                                                                                 │
+│Delivery: local via origin/main                                                                             │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is  │
+│missing. CLI require declares prerequisites before a task starts.                                           │
+│                                                                                                            │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                │
+│u User defaults: what new projects start with; preview and apply them here.                                 │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                      │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code,        │
+│documents or art; override per project.                                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's│
+│default selection.                                                                                          │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Bound rg to #1 v1
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ bound-state · 110x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 ╭ Project tools ─────────────────────────────────────────────────────────────╮
+ No current task│#1 v1 · rg 14.1 · linux x86_64 ·                                            │
+ Queue preferenc│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/exte│
+ Config         │rnal-rg · external · ready · bound v1 · components:                         │
+                │                                                                            │
+╭ Config ───────│Tool action                                                                 │───────────────╮
+│Project: run-00│< Register >   click / Space to change                                      │               │
+│Storage: SQLite│Tool name                                                                   │ R: resource   │
+│limits.        │                                                                            │               │
+│Preferences: sa│Tool version                                                                │               │
+│               │                                                                            │               │
+│Mouse: Enabled │Platform                                                                    │               │
+│Run mode: Conti│linux                                                                       │               │
+│Planner approva│Architecture                                                                │               │
+│Delivery: local│x86_64                                                                      │               │
+│Dependencies: m│Installation path                                                           │erequisite is  │
+│missing. CLI re│                                                                            │               │
+│               │Components (; in one component, comma between components)                   │               │
+│Defaults apply │                                                                            │               │
+│u User defaults│Ownership                                                                   │               │
+│f Profiles: nam│< External >   click / Space to change                                      │               │
+│w Work categori│Generation ID                                                               │e code,        │
+│documents or ar│                                                                            │               │
+│L Review lenses│Expected version (binding or generation)                                    │d the project's│
+│default selecti│0                                                                           │               │
+╰───────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │───────────────╯
+[Copy] [m Defaul│                                                                            │ecks]
+[g Git delivery]│[Copy] [Apply] [Cancel] [Up] [Down]                                         │settings]
+[o Import settin│                                                                            │
+Bound rg to #1 v╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ changed · 110x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 ╭ Project tools ─────────────────────────────────────────────────────────────╮
+ No current task│#1 v1 · rg 14.1 · linux x86_64 ·                                            │
+ Queue preferenc│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/exte│
+ Config         │rnal-rg · external · changed or missing · bound v1 · components:            │
+                │                                                                            │
+╭ Config ───────│Tool action                                                                 │───────────────╮
+│Project: run-00│< Register >   click / Space to change                                      │               │
+│Storage: SQLite│Tool name                                                                   │ R: resource   │
+│limits.        │                                                                            │               │
+│Preferences: sa│Tool version                                                                │               │
+│               │                                                                            │               │
+│Mouse: Enabled │Platform                                                                    │               │
+│Run mode: Conti│linux                                                                       │               │
+│Planner approva│Architecture                                                                │               │
+│Delivery: local│x86_64                                                                      │               │
+│Dependencies: m│Installation path                                                           │erequisite is  │
+│missing. CLI re│                                                                            │               │
+│               │Components (; in one component, comma between components)                   │               │
+│Defaults apply │                                                                            │               │
+│u User defaults│Ownership                                                                   │               │
+│f Profiles: nam│< External >   click / Space to change                                      │               │
+│w Work categori│Generation ID                                                               │e code,        │
+│documents or ar│                                                                            │               │
+│L Review lenses│Expected version (binding or generation)                                    │d the project's│
+│default selecti│0                                                                           │               │
+╰───────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │───────────────╯
+[Copy] [m Defaul│                                                                            │ecks]
+[g Git delivery]│[Copy] [Apply] [Cancel] [Up] [Down]                                         │settings]
+[o Import settin│                                                                            │
+Bound rg to #1 v╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ refreshed · 110x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                                         │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
+│limits.                                                                                                     │
+│Preferences: saved per project and instance.                                                                │
+│                                                                                                            │
+│Mouse: Enabled                                                                                              │
+│Run mode: Continue queue                                                                                    │
+│Planner approval: Automatic                                                                                 │
+│Delivery: local via origin/main                                                                             │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is  │
+│missing. CLI require declares prerequisites before a task starts.                                           │
+│                                                                                                            │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                │
+│u User defaults: what new projects start with; preview and apply them here.                                 │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                      │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code,        │
+│documents or art; override per project.                                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's│
+│default selection.                                                                                          │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Refreshed generation #1 v2
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ refreshed-state · 110x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 ╭ Project tools ─────────────────────────────────────────────────────────────╮
+ No current task│#1 v2 · rg 14.2 · linux x86_64 ·                                            │
+ Queue preferenc│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/exte│
+ Config         │rnal-rg · external · ready · bound v1 · components:                         │
+                │                                                                            │
+╭ Config ───────│Tool action                                                                 │───────────────╮
+│Project: run-00│< Register >   click / Space to change                                      │               │
+│Storage: SQLite│Tool name                                                                   │ R: resource   │
+│limits.        │                                                                            │               │
+│Preferences: sa│Tool version                                                                │               │
+│               │                                                                            │               │
+│Mouse: Enabled │Platform                                                                    │               │
+│Run mode: Conti│linux                                                                       │               │
+│Planner approva│Architecture                                                                │               │
+│Delivery: local│x86_64                                                                      │               │
+│Dependencies: m│Installation path                                                           │erequisite is  │
+│missing. CLI re│                                                                            │               │
+│               │Components (; in one component, comma between components)                   │               │
+│Defaults apply │                                                                            │               │
+│u User defaults│Ownership                                                                   │               │
+│f Profiles: nam│< External >   click / Space to change                                      │               │
+│w Work categori│Generation ID                                                               │e code,        │
+│documents or ar│                                                                            │               │
+│L Review lenses│Expected version (binding or generation)                                    │d the project's│
+│default selecti│0                                                                           │               │
+╰───────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │───────────────╯
+[Copy] [m Defaul│                                                                            │ecks]
+[g Git delivery]│[Copy] [Apply] [Cancel] [Up] [Down]                                         │settings]
+[o Import settin│                                                                            │
+Refreshed genera╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ unbound · 110x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                                         │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
+│limits.                                                                                                     │
+│Preferences: saved per project and instance.                                                                │
+│                                                                                                            │
+│Mouse: Enabled                                                                                              │
+│Run mode: Continue queue                                                                                    │
+│Planner approval: Automatic                                                                                 │
+│Delivery: local via origin/main                                                                             │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is  │
+│missing. CLI require declares prerequisites before a task starts.                                           │
+│                                                                                                            │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                │
+│u User defaults: what new projects start with; preview and apply them here.                                 │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                      │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code,        │
+│documents or art; override per project.                                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's│
+│default selection.                                                                                          │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Unbound rg
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ unbound-state · 110x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 ╭ Project tools ─────────────────────────────────────────────────────────────╮
+ No current task│#1 v2 · rg 14.2 · linux x86_64 ·                                            │
+ Queue preferenc│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/exte│
+ Config         │rnal-rg · external · ready · components:                                    │
+                │                                                                            │
+╭ Config ───────│Tool action                                                                 │───────────────╮
+│Project: run-00│< Register >   click / Space to change                                      │               │
+│Storage: SQLite│Tool name                                                                   │ R: resource   │
+│limits.        │                                                                            │               │
+│Preferences: sa│Tool version                                                                │               │
+│               │                                                                            │               │
+│Mouse: Enabled │Platform                                                                    │               │
+│Run mode: Conti│linux                                                                       │               │
+│Planner approva│Architecture                                                                │               │
+│Delivery: local│x86_64                                                                      │               │
+│Dependencies: m│Installation path                                                           │erequisite is  │
+│missing. CLI re│                                                                            │               │
+│               │Components (; in one component, comma between components)                   │               │
+│Defaults apply │                                                                            │               │
+│u User defaults│Ownership                                                                   │               │
+│f Profiles: nam│< External >   click / Space to change                                      │               │
+│w Work categori│Generation ID                                                               │e code,        │
+│documents or ar│                                                                            │               │
+│L Review lenses│Expected version (binding or generation)                                    │d the project's│
+│default selecti│0                                                                           │               │
+╰───────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │───────────────╯
+[Copy] [m Defaul│                                                                            │ecks]
+[g Git delivery]│[Copy] [Apply] [Cancel] [Up] [Down]                                         │settings]
+[o Import settin│                                                                            │
+Unbound rg      ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

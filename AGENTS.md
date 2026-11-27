@@ -52,8 +52,17 @@
 - For every view and interaction, drive the real binary in a pseudo-terminal and inspect
   its rendered screen. Unit tests alone do not count. If you cannot inspect or test it, STOP
   and report the blocker; do not mark it done or continue dependent work.
-  Read-only review/validation agents inspect the supervisor's recorded PTY screens and check
-  transcripts instead of rerunning writable tests. Missing evidence still blocks acceptance.
+  Read-only review/validation agents inspect the check transcripts and the changed-screens
+  report instead of rerunning writable tests. Missing evidence still blocks acceptance.
+- Terminal screens are proven against the golden set in `tests/golden` (README, Golden
+  screens). Tests keep a screen only through `support::record`, from the real binary in a PTY,
+  at both sizes and by both input paths; they never write evidence files and never render
+  images. `make check` fails on a differing, new or no longer produced screen and never rewrites
+  golden files. After an intended UI change the worker runs `make golden` and leaves the updated
+  files in the task diff; they are approved when the task passes review and validation and is
+  committed. Matched screens are proven in code: review and validation judge only the new and
+  changed screens in the check's `changed-screens.txt` report. Normalise only volatile tokens,
+  by a named rule; never mask a frame or a test, and never drop a screen.
 - The owner authorized persistence, CLI and real orchestration. All use shared application
   commands. Codex execution must pass supervisor checks plus independent review/validation
   before success. Never present simulated outcomes as real. CLI JSON and exit codes are contracts.

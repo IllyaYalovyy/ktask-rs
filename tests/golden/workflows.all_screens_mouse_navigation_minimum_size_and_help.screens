@@ -1,0 +1,301 @@
+@@ CURRENT · 120x30 · keyboard
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ #1 Recover a failed check
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Failed · AI                                 ││Goal: Include every task on the final queue page.                       │
+│Attempt 1 · step <n>/6                      ││Proof: All 240 tasks are reachable.                                     │
+│Budget 1 of 3 used                          │╰────────────────────────────────────────────────────────────────────────╯
+│Model economy / medium                      │╭ Log · following · attempt 1 ───────────────────────────────────────────╮
+│Cost <cost> (mock)                          ││PASS  queue fixture 55                                                  │
+│                                            ││PASS  queue fixture 56                                                  │
+│                                            ││PASS  queue fixture 57                                                  │
+│                                            ││PASS  queue fixture 58                                                  │
+│                                            ││PASS  queue fixture 59                                                  │
+│                                            ││PASS  queue fixture 60                                                  │
+╰────────────────────────────────────────────╯│PASS  queue fixture 61                                                  │
+╭ Activity · l: all ─────────────────────────╮│PASS  queue fixture 62                                                  │
+│• Check failed · #1                         ││PASS  queue fixture 63                                                  │
+│• Execution stopped                         ││PASS  queue fixture 64                                                  │
+│• Stopped for a decision                    ││FAIL  final_page_includes_last_row                                      │
+│                                            ││Expected 240 tasks; received 239.                                       │
+│                                            ││Execution stopped after a failing check.                                │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ QUEUE · 120x30 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Queue · 120 shown / 120 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 120 · Model ─────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│› #1   Failed   Recover a failed check                  economy medium││Recover a failed check                        │
+│  #2   Pending  [Human] Approve the queue interaction   economy medium││#1 · Failed · AI                              │
+│  #3   Pending  Choose the export format                economy medium││                                              │
+│  #4   Pending  Failure recovery · case 4               economy medium││Goal: Include every task on the final queue   │
+│  #5   Pending  Workspace cleanup · case 5              economy medium││page.                                         │
+│  #6   Pending  Instance isolation · case 6             economy medium││                                              │
+│  #7   Pending  Queue pagination · case 7               economy medium││Check: All 240 tasks are reachable.           │
+│  #8   Pending  Keyboard navigation · case 8            economy medium││                                              │
+│  #9   Pending  Search matching · case 9                economy medium││Attempts: 1 · $0.08                           │
+│  #10  Pending  Failure recovery · case 10              economy medium││                                              │
+│  #11  Pending  Workspace cleanup · case 11             economy medium││Models:                                       │
+│  #12  Pending  Instance isolation · case 12            economy medium││Execution: economy / medium                   │
+│  #13  Pending  Queue pagination · case 13              economy medium││Review: capable / high                        │
+│  #14  Pending  Keyboard navigation · case 14           economy medium││Validation: capable / high                    │
+│  #15  Pending  Search matching · case 15               economy medium││Remediation: capable / high                   │
+│  #16  Pending  Failure recovery · case 16              economy medium││                                              │
+│  #17  Pending  Workspace cleanup · case 17             economy medium││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Retry] [a Add] [i Insert] [e Edit] [c Models] [s Stop] [T Restart] [D Mark done] [o Import] [E Export]
+[Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY · 120x30 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ History · 120 shown / 120 total · read-only
+ Filter: All  |  Search: / to search
+╭ History · 1 / 120 · Attempts Time Usage ───────────────────────────────────╮╭ Details · click for full ──────────────╮
+│› #121 Done     Queue pagination · case 121                       1 <t> $0.03││Queue pagination · case 121             │
+│  #122 Done     Keyboard navigation · case 122                    1 <t> $0.03││#121 · Done · AI                        │
+│  #123 Done     Search matching · case 123                        1 <t> $0.03││                                        │
+│  #124 Done     Failure recovery · case 124                       1 <t> $0.03││Goal: Make the requested change.        │
+│  #125 Done     Workspace cleanup · case 125                      1 <t> $0.03││                                        │
+│  #126 Done     Instance isolation · case 126                     1 <t> $0.03││Check: Automated checks pass.           │
+│  #127 Done     Queue pagination · case 127                       1 <t> $0.03││                                        │
+│  #128 Done     Keyboard navigation · case 128                    1 <t> $0.03││Attempts: 1 · $0.03                     │
+│  #129 Done     Search matching · case 129                        1 <t> $0.03││                                        │
+│  #130 Done     Failure recovery · case 130                       1 <t> $0.03││Models:                                 │
+│  #131 Done     Workspace cleanup · case 131                      1 <t> $0.03││Execution: economy / medium             │
+│  #132 Done     Instance isolation · case 132                     1 <t> $0.03││Review: capable / high                  │
+│  #133 Done     Queue pagination · case 133                       1 <t> $0.03││Validation: capable / high              │
+│  #134 Done     Keyboard navigation · case 134                    1 <t> $0.03││Remediation: capable / high             │
+│  #135 Done     Search matching · case 135                        1 <t> $0.03││                                        │
+│  #136 Done     Failure recovery · case 136                       1 <t> $0.03││                                        │
+│  #137 Done     Workspace cleanup · case 137                      1 <t> $0.03││                                        │
+╰────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats]
+[? Help] [q Quit]
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CONFIG · 120x30 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Mouse: Enabled                                                                                                        │
+│Simulation step delay: 400 ms                                                                                         │
+│Planner approval: Automatic                                                                                           │
+│Continue queue: Enabled                                                                                               │
+│Same-task retry: Keep useful work                                                                                     │
+│Cleanup: Success (mock)                                                                                               │
+│                                                                                                                      │
+│Demo datasets: Large, Guided, Empty, Waits, Approvals.                                                                │
+│Configure edits these session-only settings.                                                                          │
+│Keyboard remains available with mouse disabled.                                                                       │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings] [o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ ABOUT · 120x30 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ About
+
+╭ About ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ktask RS · <ver>                                                                                                      │
+│Instance: ktask-dev                                                                                                   │
+│                                                                                                                      │
+│A visual workspace for supervising AI coding tasks.                                                                   │
+│                                                                                                                      │
+│MOCK DATA: tasks, models, execution, and file operations                                                              │
+│are simulated; no backend, AI calls, or task CLI yet.                                                                 │
+│                                                                                                                      │
+│Development and production have separate app roots.                                                                   │
+│Use --paths to inspect this instance's paths.                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [Esc Back] [? Help] [q Quit]
+
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MINIMUM 1 Current · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ #1 Recover a failed check
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Failed · AI                 ││Goal: Include every task on the final…│
+│Attempt 1 · step <n>/6      ││Proof: All 240 tasks are reachable.   │
+│Budget 1 of 3 used          │╰──────────────────────────────────────╯
+│Model economy / medium      │╭ Log · following · attempt 1 ─────────╮
+│Cost <cost> (mock)          ││PASS  queue fixture 63                │
+╰────────────────────────────╯│PASS  queue fixture 64                │
+╭ Activity · l: all ─────────╮│FAIL  final_page_includes_last_row    │
+│• Check failed · #1         ││Expected 240 tasks; received 239.     │
+│• Execution stopped         ││Execution stopped after a failing     │
+│• Stopped for a decision    ││check.                                │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models]
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Mock workspace · changes last only for this session
+@@ MINIMUM 2 Queue · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Queue · 120 shown / 120 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 120 ───────────────────────╮╭ Details · click for full ╮
+│› #1   Failed   Recover a failed check  ││Recover a failed check    │
+│  #2   Pending  [Human] Approve the que…││#1 · Failed · AI          │
+│  #3   Pending  Choose the export format││                          │
+│  #4   Pending  Failure recovery · case…││Goal: Include every task  │
+│  #5   Pending  Workspace cleanup · cas…││on the final queue page.  │
+│  #6   Pending  Instance isolation · ca…││                          │
+│  #7   Pending  Queue pagination · case…││Check: All 240 tasks are  │
+│  #8   Pending  Keyboard navigation · c…││reachable.                │
+│  #9   Pending  Search matching · case 9││                          │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [r Retry] [a Add] [i Insert] [e Edit] [c Models] [s Stop]
+[T Restart] [D Mark done] [o Import] [E Export] [Enter Details]
+[f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MINIMUM 3 History · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ History · 120 shown / 120 total · read-only
+ Filter: All  |  Search: / to search
+╭ History · 1 / 120 · Attempts Time Usage ───────────────────────────╮
+│› #121 Done     Queue pagination · case 121               1 <t> $0.03│
+│  #122 Done     Keyboard navigation · case 122            1 <t> $0.03│
+│  #123 Done     Search matching · case 123                1 <t> $0.03│
+│  #124 Done     Failure recovery · case 124               1 <t> $0.03│
+│  #125 Done     Workspace cleanup · case 125              1 <t> $0.03│
+│  #126 Done     Instance isolation · case 126             1 <t> $0.03│
+│  #127 Done     Queue pagination · case 127               1 <t> $0.03│
+│  #128 Done     Keyboard navigation · case 128            1 <t> $0.03│
+│  #129 Done     Search matching · case 129                1 <t> $0.03│
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures]
+[f Filter] [/ Search] [Esc Clear] [E Export] [S Stats] [? Help]
+[q Quit]
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MINIMUM 4 Config · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Mouse: Enabled                                                      │
+│Simulation step delay: 400 ms                                       │
+│Planner approval: Automatic                                         │
+│Continue queue: Enabled                                             │
+│Same-task retry: Keep useful work                                   │
+│Cleanup: Success (mock)                                             │
+│                                                                    │
+│Demo datasets: Large, Guided, Empty, Waits, Approvals.              │
+│Configure edits these session-only settings.                        │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings]
+[o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MINIMUM 5 About · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ About
+
+╭ About ─────────────────────────────────────────────────────────────╮
+│ktask RS · <ver>                                                    │
+│Instance: ktask-dev                                                 │
+│                                                                    │
+│A visual workspace for supervising AI coding tasks.                 │
+│                                                                    │
+│MOCK DATA: tasks, models, execution, and file operations            │
+│are simulated; no backend, AI calls, or task CLI yet.               │
+│                                                                    │
+│Development and production have separate app roots.                 │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [Esc Back] [? Help] [q Quit]
+
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HELP · 120x30 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Curre╭ Keyboard help ─────────────────────────────────────────────────────────────╮
+ Current #1 · Failed │0 Projects  1 Current  2 Queue  3 History  4 Config  5 About                │
+ Queue preference · N│Tab / Shift-Tab: next / previous screen                                     │
+ About               │Click tabs, rows, buttons, and fields; wheel scrolls.                       │
+                     │Drag body text to select; click Copy or press F6 for OSC 52.                │
+╭ About ─────────────│Ctrl-Shift-C copies selection when terminal reports modifiers.              │────────────────────╮
+│ktask RS · <ver>    │F2 selects a text pane; F2 again moves to the next pane.                    │                    │
+│Instance: ktask-dev │Shift-arrows extend selection; Enter copies; Esc clears.                    │                    │
+│                    │F7 releases mouse capture for native terminal selection.                    │                    │
+│A visual workspace f│Current: r Run / Resume / Retry / Answer, p pause, s stop (back to Pending) │                    │
+│                    │Current: D mark done, x cancel pending, R supersede pending                 │                    │
+│MOCK DATA: tasks, mo│Current: c models/limits, e edit, b break down; v approve, n reject         │                    │
+│are simulated; no ba│Current: w answer, o report / raw log, u readiness, m run mode              │                    │
+│                    │Queue: a add, i insert, e edit, m move, b break down, r run current         │                    │
+│Development and prod│Queue: s stop, D mark done, x cancel, R supersede, o import, E export       │                    │
+│Use --paths to inspe│Queue: c models/limits; v approve; n reject                                 │                    │
+│                    │Queue/History: / search, f filter, Esc clear                                │                    │
+│                    │History: C copy to queue, V reviews, F failures                             │                    │
+│                    │j/k or arrows: move/scroll; PgUp/PgDn: page                                 │                    │
+│                    │Home/End: first/last; End follows current output                            │                    │
+│                    │Enter: inspect selected task; [ / ]: inspect attempts                       │                    │
+│                    │Details: s summary, v reviews, f failures, g results, o output, t           │                    │
+│                    │transcripts                                                                 │                    │
+╰────────────────────│Wheel / PgUp / PgDn: scroll · Esc: close                                    │────────────────────╯
+[Copy] [Esc Back] [? │                                                                            │
+                     │[Copy] [Close] [Up] [Down]                                                  │
+                     │                                                                            │
+Mock workspace · chan╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

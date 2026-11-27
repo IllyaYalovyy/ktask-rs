@@ -614,8 +614,8 @@ impl DemoWorkspace {
             .get(STEP_DELAY)
             .parse::<u64>()
             .ok()
-            .filter(|n| (100..=2000).contains(n))
-            .ok_or("Step delay must be 100–2000 ms")?;
+            .filter(|n| (100..=10_000).contains(n))
+            .ok_or("Step delay must be 100–10000 ms")?;
         let dataset = dialog.get(DATASET).to_owned();
         if dataset != "Keep" && matches!(dialog.kind, DialogKind::Config) {
             dialog.kind = DialogKind::ResetConfig;

@@ -1,0 +1,148 @@
+@@ READINESS LIVE OWNERS · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · l╭ Execution readiness ───────────────────────────────────────────────────────╮
+ #1 Live ownership   │Run blocked · 3 blocker(s)                                                  │
+ Supervisor preparing│                                                                            │
+╭ Status · Enter: det│BLOCK · Execution state: The runner is working on it · p Pause, s Stop → v  │────────────────────╮
+│Pending · AI        │Approve / w Answer / r Run                                                  │                    │
+│No attempts yet     │OK · Project checks                                                         │                    │
+│Model codex/executio│OK · Approval                                                               │────────────────────╯
+│Budget 0 of 3 used  │OK · Task                                                                   │────────────────────╮
+│                    │OK · execution model                                                        │ a direct action.   │
+│                    │OK · review model                                                           │                    │
+│                    │OK · validation model                                                       │                    │
+│                    │OK · remediation model                                                      │                    │
+│                    │OK · Writable workers (execution and repair) · Agent network Off · Codex    │                    │
+│                    │OK · Codex CLI                                                              │                    │
+│                    │OK · Read-only sandbox                                                      │                    │
+│                    │OK · Commit identity: Project Author <project@example.com>                  │                    │
+│                    │BLOCK · Supervisor ownership: A live supervisor owns the workspace; wait    │                    │
+╰────────────────────│for release → wait for release                                              │                    │
+╭ Activity · #1 · l: │BLOCK · Worker ownership: A live worker owns the workspace; wait for        │                    │
+│• #1 created: Live o│release → wait for release                                                  │                    │
+│                    │OK · Workspace baseline                                                     │                    │
+│                    │                                                                            │                    │
+│                    │After fixing setup, Refresh here or press r on Current. Inspection creates  │                    │
+│                    │no attempt.                                                                 │                    │
+│                    │Wheel / PgUp / PgDn: scroll · Esc: close                                    │                    │
+│                    │                                                                            │                    │
+│                    │[c Checks] [m Models] [u Refresh] [Close]                                   │                    │
+╰────────────────────│                                                                            │────────────────────╯
+[Copy] [D Mark done] │                                                                            │un mode]
+[Enter Details] [a Ad╰────────────────────────────────────────────────────────────────────────────╯
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ READINESS CHECKS LINK · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live ownership
+ Supervisor preparing the next task · p Pause stops the queue
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                             │
+│No attempts yet                             ││Proof: result.txt contains verified                                     │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────────────────────────╯
+│Budget 0 of 3 used                          │╭ Log · following ───────────────────────────────────────────────────────╮
+│                                            ││Run is blocked. Press u Readiness for each cause and a direct action.   │
+│                    ╭ Project checks ────────────────────────────────────────────────────────────╮                    │
+│                    │Select a check, then Apply to edit or enable/disable.                       │                    │
+│                    │build [enabled]: test -f result.txt                                         │                    │
+│                    │                                                                            │                    │
+│                    │                                                                            │                    │
+│                    │Check to open                                                               │                    │
+│                    │< Add new check >   click / Space to change                                 │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+╰────────────────────│                                                                            │                    │
+╭ Activity · #1 · l: │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│• #1 created: Live o│                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness] [m Run mode]
+[Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ READINESS OWNERS RELEASED · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live ownership   ╭ Execution readiness ───────────────────────────────────────────────────────╮
+ Ready · r Run queue;│Can run · 0 blocker(s)                                                      │
+╭ Status · Enter: det│                                                                            │────────────────────╮
+│Pending · AI        │OK · Execution state                                                        │                    │
+│No attempts yet     │OK · Project checks                                                         │                    │
+│Can run · u Readines│OK · Approval                                                               │────────────────────╯
+│Model codex/executio│OK · Task                                                                   │────────────────────╮
+│Budget 0 of 3 used  │OK · execution model                                                        │sor; this pane      │
+│                    │OK · review model                                                           │                    │
+│                    │OK · validation model                                                       │r this task.        │
+│                    │OK · remediation model                                                      │                    │
+│                    │OK · Writable workers (execution and repair) · Agent network Off · Codex    │                    │
+│                    │OK · Codex CLI                                                              │                    │
+│                    │OK · Read-only sandbox                                                      │                    │
+│                    │OK · Commit identity: Project Author <project@example.com>                  │                    │
+│                    │OK · Supervisor ownership                                                   │                    │
+╰────────────────────│OK · Worker ownership                                                       │                    │
+╭ Activity · #1 · l: │OK · Workspace baseline                                                     │                    │
+│• #1 created: Live o│                                                                            │                    │
+│                    │After fixing setup, Refresh here or press r on Current. Inspection creates  │                    │
+│                    │no attempt.                                                                 │                    │
+│                    │Wheel / PgUp / PgDn: scroll · Esc: close                                    │                    │
+│                    │                                                                            │                    │
+│                    │[c Checks] [m Models] [r Run queue] [u Refresh] [Close]                     │                    │
+│                    │                                                                            │                    │
+│                    │                                                                            │                    │
+╰────────────────────╰────────────────────────────────────────────────────────────────────────────╯────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ READINESS OWNERS LAUNCHED · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                       │
+│Inspect results in History, or add more work.                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

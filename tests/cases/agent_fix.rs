@@ -860,31 +860,24 @@ fn press(t: &mut Terminal, mouse: bool, label: &str, key: &str) -> Result {
     if mouse { t.click(label) } else { t.send(key) }
 }
 
-fn shows(t: &mut Terminal, what: &str, parts: &[&str]) -> Result<String> {
+fn shows(t: &mut Terminal, mouse: bool, what: &str, parts: &[&str]) -> Result<String> {
     let screen = t.screen(what, |s| parts.iter().all(|part| s.contains(part)))?;
-    println!("{}\n{screen}", what.to_uppercase());
+    crate::support::record(&what.to_uppercase(), mouse, &screen);
     Ok(screen)
 }
 
-/// Keeps a real frame as visual evidence when the run collects it.
-fn keep(screen: &str, name: &str, cols: u16, rows: u16, mouse: bool) -> Result {
-    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-        let name = format!("agent-fix-{cols}x{rows}-mouse-{mouse}-{name}");
-        support::screen_png(
-            screen,
-            &PathBuf::from(directory).join(format!("{name}.png")),
-        )?;
-    }
-    Ok(())
+/// Keeps a frame in the golden set under its own step.
+fn keep(screen: &str, name: &str, mouse: bool) {
+    crate::support::record(name, mouse, screen);
 }
 
 /// Scrolls the open record until `part` is on screen, by wheel or by PgDn.
-fn scroll_to(t: &mut Terminal, mouse: bool, part: &str) -> Result {
+fn scroll_to(t: &mut Terminal, mouse: bool, part: &str) -> Result<String> {
     for _ in 0..30 {
         if t.current_screen().contains(part) {
             let screen = t.still(part, |s| s.contains(part))?;
-            println!("SCROLLED TO {part}\n{screen}");
-            return Ok(());
+            crate::support::record(&format!("SCROLLED TO {part}"), mouse, &screen);
+            return Ok(screen);
         }
         let before = t.current_screen();
         if mouse {
@@ -909,7 +902,6 @@ fn close(t: &mut Terminal, mouse: bool, back: &str) -> Result {
 fn fixes_are_confirmed_followed_stopped_and_read_by_keyboard_and_mouse_at_both_sizes() -> Result {
     for (cols, rows) in SIZES {
         for mouse in [false, true] {
-            println!("=== FIX {cols}x{rows} mouse={mouse} ===");
             drive(cols, rows, mouse)?;
         }
     }
@@ -933,13 +925,12 @@ fn drive(cols: u16, rows: u16, mouse: bool) -> Result {
     keep(
         &t.screen("form drawn", |s| s.contains("When verified"))?,
         "form",
-        cols,
-        rows,
         mouse,
-    )?;
+    );
     t.still("form", |s| s.contains("When verified"))?;
     shows(
         &mut t,
+        mouse,
         "fix form",
         &[
             "Agent fixes · project",
@@ -959,6 +950,7 @@ fn drive(cols: u16, rows: u16, mouse: bool) -> Result {
     press(&mut t, mouse, "[Apply]", "\r")?;
     shows(
         &mut t,
+        mouse,
         "confirmation",
         &[
             "Start agent fix · project?",
@@ -968,45 +960,49 @@ fn drive(cols: u16, rows: u16, mouse: bool) -> Result {
             "[Cancel]",
         ],
     )?;
-    scroll_to(&mut t, mouse, "write product code")?;
-    keep(&t.current_screen(), "confirm", cols, rows, mouse)?;
+    let confirm = scroll_to(&mut t, mouse, "write product code")?;
+    keep(&confirm, "confirm", mouse);
     // Nothing started before the confirmation.
     assert_eq!(fixture.ok(&["agent", "list"])?["count"], 1);
     press(&mut t, mouse, "[Start fix]", "\r")?;
     let live = shows(
         &mut t,
+        mouse,
         "live fix",
-        &["Agent fix #2 · Running · project", "Fix agent read"],
+        &["Agent fix #2 · Running · project", "Fix agent read", "$ ls"],
     )?;
-    keep(&live, "live", cols, rows, mouse)?;
+    keep(&live, "live", mouse);
     fs::write(&release, "")?;
     let done = shows(
         &mut t,
+        mouse,
         "finished fix",
         &["Agent fix #2 · Done · project", "VERIFICATION", "Verified:"],
     )?;
-    keep(&done, "done", cols, rows, mouse)?;
+    keep(&done, "done", mouse);
     scroll_to(&mut t, mouse, "STEPS")?;
     scroll_to(&mut t, mouse, "CHANGED")?;
-    scroll_to(&mut t, mouse, "WHAT REMAINS")?;
-    keep(&t.current_screen(), "remains", cols, rows, mouse)?;
+    let remains = scroll_to(&mut t, mouse, "WHAT REMAINS")?;
+    keep(&remains, "remains", mouse);
     close(&mut t, mouse, "Current #1")?;
     fs::remove_file(&release)?;
 
     // From a report: read it, then carry it out and stop the fix.
     press(&mut t, mouse, "i Investigate", "i")?;
-    shows(&mut t, "report form", &["Agent reports · project"])?;
+    shows(&mut t, mouse, "report form", &["Agent reports · project"])?;
     press(&mut t, mouse, "< New report", " ")?;
     t.screen("past report chosen", |s| s.contains("< #1 · Finished"))?;
     press(&mut t, mouse, "[Apply]", "\r")?;
     shows(
         &mut t,
+        mouse,
         "report with fix button",
         &["Agent report #1 · Finished", "[f Fix]"],
     )?;
     press(&mut t, mouse, "[f Fix]", "f")?;
     shows(
         &mut t,
+        mouse,
         "report preselected",
         &["Agent fixes · project", "< Report #1 ·", "1 fix(es):"],
     )?;
@@ -1019,6 +1015,7 @@ fn drive(cols: u16, rows: u16, mouse: bool) -> Result {
     press(&mut t, mouse, "[Apply]", "\r")?;
     shows(
         &mut t,
+        mouse,
         "report confirmation",
         &[
             "Start agent fix · project?",
@@ -1029,12 +1026,14 @@ fn drive(cols: u16, rows: u16, mouse: bool) -> Result {
     press(&mut t, mouse, "[Start fix]", "\r")?;
     shows(
         &mut t,
+        mouse,
         "second fix",
-        &["Agent fix #3 · Running · project", "Fix agent read"],
+        &["Agent fix #3 · Running · project", "Fix agent read", "$ ls"],
     )?;
     press(&mut t, mouse, "s Stop", "s")?;
     shows(
         &mut t,
+        mouse,
         "stopped fix",
         &[
             "Agent fix #3 · Stopped · project",
@@ -1042,9 +1041,9 @@ fn drive(cols: u16, rows: u16, mouse: bool) -> Result {
         ],
     )?;
     press(&mut t, mouse, "[Older]", "[")?;
-    shows(&mut t, "older fix", &["Agent fix #2 · Done"])?;
+    shows(&mut t, mouse, "older fix", &["Agent fix #2 · Done"])?;
     press(&mut t, mouse, "[Newer]", "]")?;
-    shows(&mut t, "newer fix", &["Agent fix #3 · Stopped"])?;
+    shows(&mut t, mouse, "newer fix", &["Agent fix #3 · Stopped"])?;
     close(&mut t, mouse, "Current #1")?;
 
     // Read a past fix from Projects.
@@ -1055,13 +1054,19 @@ fn drive(cols: u16, rows: u16, mouse: bool) -> Result {
     press(&mut t, mouse, "f Fix", "f")?;
     shows(
         &mut t,
+        mouse,
         "projects form",
         &["Agent fixes · project", "2 fix(es):"],
     )?;
     press(&mut t, mouse, "< New fix", " ")?;
     t.screen("past fix chosen", |s| s.contains("< #3 · fix · Stopped"))?;
     press(&mut t, mouse, "[Apply]", "\r")?;
-    shows(&mut t, "past fix", &["Agent fix #3 · Stopped · project"])?;
+    shows(
+        &mut t,
+        mouse,
+        "past fix",
+        &["Agent fix #3 · Stopped · project"],
+    )?;
     press(&mut t, mouse, "b Fixes", "b")?;
     t.screen("form again", |s| s.contains("< New fix >"))?;
     press(&mut t, mouse, "[Cancel]", "\x1b")?;
@@ -1073,6 +1078,7 @@ fn drive(cols: u16, rows: u16, mouse: bool) -> Result {
     press(&mut t, mouse, "i Report limits", "i")?;
     shows(
         &mut t,
+        mouse,
         "limits form",
         &["Agent report limits", "Time limit per fix", "5.00"],
     )?;
@@ -1108,13 +1114,13 @@ fn drive(cols: u16, rows: u16, mouse: bool) -> Result {
 fn demo_fixes_are_a_fixture_that_never_opens_storage_or_an_agent() -> Result {
     for (cols, rows) in SIZES {
         for mouse in [false, true] {
-            println!("=== DEMO FIX {cols}x{rows} mouse={mouse} ===");
             let sandbox = support::sandbox()?;
             let mut t = Terminal::open_at(DEV, sandbox.path(), cols, rows)?;
             t.screen("demo", |s| s.contains("Current #1 · Failed"))?;
             press(&mut t, mouse, "f Fix", "f")?;
             shows(
                 &mut t,
+                mouse,
                 "demo form",
                 &["Agent fixes · demo workspace", "1 fix(es):"],
             )?;
@@ -1122,6 +1128,7 @@ fn demo_fixes_are_a_fixture_that_never_opens_storage_or_an_agent() -> Result {
             press(&mut t, mouse, "[Apply]", "\r")?;
             shows(
                 &mut t,
+                mouse,
                 "demo refusal",
                 &["Type an instruction, or choose a report"],
             )?;
@@ -1134,26 +1141,38 @@ fn demo_fixes_are_a_fixture_that_never_opens_storage_or_an_agent() -> Result {
             press(&mut t, mouse, "[Apply]", "\r")?;
             shows(
                 &mut t,
+                mouse,
                 "demo confirmation",
                 &["Start agent fix · demo workspace?", "report #1"],
             )?;
             press(&mut t, mouse, "[Start fix]", "\r")?;
-            shows(&mut t, "demo running", &["Agent fix #4 · Running"])?;
-            shows(&mut t, "demo progress", &["The demo check command names"])?;
             shows(
                 &mut t,
+                mouse,
+                "demo running",
+                &["Agent fix #4 · Running", "No step yet."],
+            )?;
+            shows(
+                &mut t,
+                mouse,
+                "demo progress",
+                &["The demo check command names", "Nothing recorded."],
+            )?;
+            shows(
+                &mut t,
+                mouse,
                 "demo finished",
                 &["Agent fix #4 · Done", "Verified: check demo-check"],
             )?;
             press(&mut t, mouse, "[Older]", "[")?;
-            shows(&mut t, "demo older", &["Agent fix #3 · Done"])?;
+            shows(&mut t, mouse, "demo older", &["Agent fix #3 · Done"])?;
             close(&mut t, mouse, "Current #1")?;
             press(&mut t, mouse, "0 Projects", "0")?;
             t.screen("demo projects", |s| {
                 s.contains("The simulator has one mock workspace") && s.contains("[f Fix]")
             })?;
             press(&mut t, mouse, "f Fix", "f")?;
-            shows(&mut t, "demo projects form", &["2 fix(es):"])?;
+            shows(&mut t, mouse, "demo projects form", &["2 fix(es):"])?;
             press(&mut t, mouse, "[Cancel]", "\x1b")?;
             t.screen("closed", |s| !s.contains("[Cancel]"))?;
             t.send("q")?;

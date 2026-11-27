@@ -1,0 +1,140 @@
+@@ SUPERSEDE FORM · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 3 · History 0
+ Queue preference · Next #2: Replacement one · m: run mode in Current
+ #1 Replaced work
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Persist a real task                                               │
+│No attempts yet                             ││Proof: Survives restart                                                 │
+│Run blocked (9) · u Readiness               │╰────────────────────────────────────────────────────────────────────────╯
+│Model unconfigured / none                   │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 3 used  ╭ Supersede #1 Replaced work ────────────────────────────────────────────────╮ a direct action.   │
+│                    │Name the tasks that replace this one. It moves to History as superseded.    │                    │
+│                    │                                                                            │                    │
+│                    │Replaced by task IDs (comma separated)                                      │                    │
+│                    │▏                                                                           │                    │
+│                    │Reason (optional)                                                           │                    │
+╰────────────────────│                                                                            │                    │
+╭ Activity · #1 · l: │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│• #1 created: Replac│                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SUPERSEDE BLANK · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 3 · History 0
+ Queue preference · Next #2: Replacement one · m: run mode in Current
+ #1 Replaced work
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Persist a real task                                               │
+│No attempts yet                             ││Proof: Survives restart                                                 │
+│Run blocked (9) · u Readiness               │╰────────────────────────────────────────────────────────────────────────╯
+│Model unconfigured / none                   │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 3 used  ╭ Supersede #1 Replaced work ────────────────────────────────────────────────╮ a direct action.   │
+│                    │Name the tasks that replace this one. It moves to History as superseded.    │                    │
+│                    │                                                                            │                    │
+│                    │Replaced by task IDs (comma separated)                                      │                    │
+│                    │▏                                                                           │                    │
+│                    │Reason (optional)                                                           │                    │
+╰────────────────────│                                                                            │                    │
+╭ Activity · #1 · l: │Name at least one replacing task                                            │                    │
+│• #1 created: Replac│                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SUPERSEDE UNKNOWN · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 3 · History 0
+ Queue preference · Next #2: Replacement one · m: run mode in Current
+ #1 Replaced work
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Persist a real task                                               │
+│No attempts yet                             ││Proof: Survives restart                                                 │
+│Run blocked (9) · u Readiness               │╰────────────────────────────────────────────────────────────────────────╯
+│Model unconfigured / none                   │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 3 used  ╭ Supersede #1 Replaced work ────────────────────────────────────────────────╮ a direct action.   │
+│                    │Name the tasks that replace this one. It moves to History as superseded.    │                    │
+│                    │                                                                            │                    │
+│                    │Replaced by task IDs (comma separated)                                      │                    │
+│                    │99▏                                                                         │                    │
+│                    │Reason (optional)                                                           │                    │
+╰────────────────────│                                                                            │                    │
+╭ Activity · #1 · l: │command conflict: Task #99 is not in this project                           │                    │
+│• #1 created: Replac│                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SUPERSEDED HISTORY · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 2 · History 1
+ Queue preference · Next #3: Replacement two · m: run mode in Current
+ History · 1 shown / 1 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 1 · Finished Attempts Time Usage ────────────────────────────╮╭ Details · click for full ──────────────╮
+│› #1   Superseded Replaced work <date> 0 <t> -                              ││Replaced work                           │
+│                                                                            ││#1 · Superseded · AI · finished <date>  │
+│                                                                            ││<date>                                  │
+│                                                                            ││                                        │
+│                                                                            ││Goal: Persist a real task               │
+│                                                                            ││                                        │
+│                                                                            ││Check: Survives restart                 │
+│                                                                            ││                                        │
+│                                                                            ││Attempts: 0 · none yet                  │
+│                                                                            ││                                        │
+│                                                                            ││Models:                                 │
+│                                                                            ││Execution: unconfigured / none          │
+│                                                                            ││Review: unconfigured / none             │
+│                                                                            ││Validation: unconfigured / none         │
+│                                                                            ││Remediation: unconfigured / none        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+╰────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats]
+[? Help] [q Quit]
+
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

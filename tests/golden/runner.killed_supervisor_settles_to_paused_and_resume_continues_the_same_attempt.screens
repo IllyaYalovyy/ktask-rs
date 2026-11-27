@@ -1,0 +1,62 @@
+@@ KILLED SUPERVISOR SETTLED · 120x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · The supervisor stopped unexpectedly; Resume continues this attempt
+ #1 Survive a killed runner
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Model codex/review / none                   │╰────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
+│Tokens 60 new · 40 cached · 10 out          ││Execution started; results require checks, review and validation        │
+│70 new tokens + 1 call(s) unreported        ││execution: codex/execution · new session                                │
+│Budget 0 of 3 used                          ││Worker claim (unverified) · complete: Verified result                   │
+│Can run · u Readiness                       ││Worker criterion claim (unverified) #1 · claimed pass: Inspected        │
+│Execution   ✓ succeeded                     ││result.txt                                                              │
+│Checks      ✓ succeeded                     ││Check build: test -f result.txt (timeout 600000 ms)                     │
+╰────────────────────────────────────────────╯│review: codex/review · new session                                      │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• The supervisor stopped unexpectedly;      ││                                                                        │
+│  Resume continues this attempt             ││                                                                        │
+│• The supervisor stopped unexpectedly;      ││                                                                        │
+│  Resume continues this attempt             ││                                                                        │
+│• Workflow · Review · repair round 0/10     ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ KILLED SUPERVISOR RESUMED · 120x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                       │
+│Inspect results in History, or add more work.                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

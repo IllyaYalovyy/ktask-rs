@@ -1,0 +1,74 @@
+@@ AUTOMATIC REPAIR COMPLETE · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 2
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                       │
+│Inspect results in History, or add more work.                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOP BANNER · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 1 · History 0
+ Session: Queue · waiting · Task #1 stopped (agent): Active time limit reached (configured task-wide limit); work and e…
+ #1 Too little time
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: Active time limit reached (configured task-wide limit); work and evidence retained. Retry restarts the limit  ┃
+┃Not resolved automatically: The task time limit (200 ms) is used up; the supervisor never extends it by itself.       ┃
+┃Next: r Retry restarts the time limit; c Models raises or switches it off                                             ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Failed · AI                                 ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────╮
+│Tokens none reported yet                    ││Outcome: Active time limit reached (configured task-wide limit); work   │
+│? new tokens                                ││and evidence retained. Retry restarts the limit                         │
+│Budget 1 of 3 used                          ││                                                                        │
+│Can run · u Readiness                       ││Execution · failed · codex/execution verdict: Active time limit reached │
+│Execution   ✗ failed                        ││(configured task-wide limit); work and evidence retained. Retry         │
+│                                            ││restarts the limit                                                      │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│Supervisor outcome: Active time limit reached (configured task-wide     │
+│• Active time limit reached (configured     ││limit); work and evidence retained. Retry restarts the limit            │
+│  task-wide limit); work and evidence…      ││                                                                        │
+│• Workflow · Implement · repair round 0/10  ││                                                                        │
+│• Supervisor started                        ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #1 revision 2 saved                       ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

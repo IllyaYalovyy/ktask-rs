@@ -1,0 +1,54 @@
+@@ STARTUP ERROR · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Queue · stopped · Workspace has uncommitted work from outsi…
+ #1 Cannot start with unrelated work
+ Run blocked · u Readiness shows causes and actions
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: Workspace has uncommitted work from outside this task;      ┃
+┃commit or preserve it before switching tasks                        ┃
+┃Not resolved automatically: The supervisor could not start or       ┃
+┃continue this task.                                                 ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · AI                ││Goal: Create result.txt containing ve…│
+╰────────────────────────────╯╰──────────────────────────────────────╯
+╭ Activity · #1 · l: all ────╮╭ Log · following ─────────────────────╮
+│• command conflict:         ││Current.                              │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models]
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+command conflict: Workspace has uncommitted work from outside this ta…
+@@ STARTUP ERROR · 120x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Queue · stopped · Workspace has uncommitted work from outside this task; commit or preserve it before switchi…
+ #1 Cannot start with unrelated work
+ Run blocked · u Readiness shows causes and actions
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: Workspace has uncommitted work from outside this task; commit or preserve it before switching tasks           ┃
+┃Not resolved automatically: The supervisor could not start or continue this task.                                     ┃
+┃Next: Fix the cause, then r Run (u Readiness lists each blocker)                                                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                             │
+│No attempts yet                             ││Proof: result.txt contains verified                                     │
+│Run blocked (1) · u Readiness               │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Run is blocked. Press u Readiness for each cause and a direct action.   │
+│                                            ││Refresh after setup; Run retries from Current.                          │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• command conflict: Workspace has           ││                                                                        │
+│  uncommitted work from outside this task;… ││                                                                        │
+│• #1 created: Cannot start with unrelated   ││                                                                        │
+│  work                                      ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+command conflict: Workspace has uncommitted work from outside this task; commit or preserve it before switching tasks
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

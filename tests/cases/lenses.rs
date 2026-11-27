@@ -754,19 +754,27 @@ fn paused_lens_review_resumes_without_repeating_finished_lenses_in_real_terminal
                 .exists()
                 .then_some(()))
         })?;
-        println!(
-            "LENS REVIEW ACTIVE mouse={mouse}\n{}",
-            t.screen("review phase", |s| s.contains("Workflow · Review"))?
+        crate::support::record(
+            "LENS REVIEW ACTIVE",
+            mouse,
+            &t.screen("review phase", |s| {
+                s.contains("Workflow · Review")
+                    && s.contains("Step: Review")
+                    && s.contains("review (security lens): codex/review · new session")
+                    && s.contains("140 new tokens + 1 call(s) unreported")
+            })?,
         );
         if mouse {
             t.click("p Pause")?;
         } else {
             t.send("p")?;
         }
-        println!(
-            "LENS REVIEW PAUSED mouse={mouse}\n{}",
-            t.screen("paused", |s| s.contains("Paused · runner stopped")
-                && s.contains("r Resume"))?
+        crate::support::record(
+            "LENS REVIEW PAUSED",
+            mouse,
+            &t.screen("paused", |s| {
+                s.contains("Paused · runner stopped") && s.contains("r Resume")
+            })?,
         );
         assert_eq!(lens_count(&f, "concurrency"), 1);
         assert_eq!(lens_count(&f, "security"), 1);
@@ -807,7 +815,7 @@ fn paused_lens_review_resumes_without_repeating_finished_lenses_in_real_terminal
         let results = t.screen("lens results", |s| {
             s.contains("Role steps, findings") && s.contains("(concurrency lens)")
         })?;
-        println!("LENS RESULTS mouse={mouse}\n{results}");
+        crate::support::record("LENS RESULTS", mouse, &results);
         assert!(
             results.contains("concurrency lens: concurrency has only a polish note"),
             "{results}"
@@ -821,7 +829,7 @@ fn paused_lens_review_resumes_without_repeating_finished_lenses_in_real_terminal
                 && summary.contains("review (security lens)"),
             "{summary}"
         );
-        println!("LENS SUMMARY mouse={mouse}\n{summary}");
+        crate::support::record("LENS SUMMARY", mouse, &summary);
         t.send("\x1b")?;
         t.screen("details closed", |s| !s.contains("Task details"))?;
         t.send("q")?;
@@ -892,7 +900,7 @@ fn lens_screens_set_defaults_and_task_selection_by_keyboard_and_mouse() -> Resul
         t.screen("ready", |s| s.contains("a Add"))?;
         t.send("4")?;
         let config = t.screen("configuration", |s| s.contains("L Review lenses"))?;
-        println!("LENS CONFIG mouse={mouse}\n{config}");
+        crate::support::record("LENS CONFIG", mouse, &config);
         if mouse {
             t.click("L Review lenses")?;
         } else {
@@ -901,7 +909,7 @@ fn lens_screens_set_defaults_and_task_selection_by_keyboard_and_mouse() -> Resul
         let list = t.screen("lens list", |s| {
             s.contains("A review lens is a specialist review")
         })?;
-        println!("LENS LIST mouse={mouse}\n{list}");
+        crate::support::record("LENS LIST", mouse, &list);
         for line in [
             "concurrency · built-in scope",
             "security · built-in scope",
@@ -924,7 +932,7 @@ fn lens_screens_set_defaults_and_task_selection_by_keyboard_and_mouse() -> Resul
         let defaults = t.screen("defaults form", |s| {
             s.contains("The lenses new tasks of this project select")
         })?;
-        println!("LENS DEFAULTS FORM mouse={mouse}\n{defaults}");
+        crate::support::record("LENS DEFAULTS FORM", mouse, &defaults);
         let first: Vec<&str> = ["None (ordinary review)"]
             .into_iter()
             .chain(NAMES)
@@ -939,7 +947,7 @@ fn lens_screens_set_defaults_and_task_selection_by_keyboard_and_mouse() -> Resul
         let saved = t.screen("defaults saved", |s| {
             s.contains("Default review lenses: security, simplicity")
         })?;
-        println!("LENS DEFAULTS SAVED mouse={mouse}\n{saved}");
+        crate::support::record("LENS DEFAULTS SAVED", mouse, &saved);
         assert_eq!(
             f.ok(&["lens", "defaults"])?["defaults"],
             json_names(&["security", "simplicity"])
@@ -958,7 +966,7 @@ fn lens_screens_set_defaults_and_task_selection_by_keyboard_and_mouse() -> Resul
             t.send("a")?;
         }
         let form = t.screen("add form", |s| s.contains("Review lens 1"))?;
-        println!("LENS TASK FORM mouse={mouse}\n{form}");
+        crate::support::record("LENS TASK FORM", mouse, &form);
         assert!(form.contains("< Project default >"), "{form}");
         t.send(&format!(
             "Chosen lenses\t{}\tresult.txt contains verified",
@@ -979,7 +987,7 @@ fn lens_screens_set_defaults_and_task_selection_by_keyboard_and_mouse() -> Resul
         }
         cycle(&mut t, mouse, "Review lens 2", &later, 0, 2)?;
         let filled = t.current_screen();
-        println!("LENS TASK FORM FILLED mouse={mouse}\n{filled}");
+        crate::support::record("LENS TASK FORM FILLED", mouse, &filled);
         apply(&mut t, mouse)?;
         t.screen("task saved", |s| !s.contains("Add task"))?;
         let created = f.ok(&["show", "1"])?;
@@ -993,7 +1001,7 @@ fn lens_screens_set_defaults_and_task_selection_by_keyboard_and_mouse() -> Resul
         let details = t.screen("details", |s| {
             s.contains("Review lenses: concurrency, security")
         })?;
-        println!("LENS TASK DETAILS mouse={mouse}\n{details}");
+        crate::support::record("LENS TASK DETAILS", mouse, &details);
         t.send("\x1b")?;
         t.screen("details closed", |s| !s.contains("Task details"))?;
         t.send("q")?;
@@ -1040,7 +1048,7 @@ fn a_lens_is_created_previewed_and_deleted_by_keyboard_and_mouse() -> Result {
         let form = t.screen("new lens form", |s| {
             s.contains("A new lens starts as a copy of the security lens")
         })?;
-        println!("LENS NEW FORM mouse={mouse}\n{form}");
+        crate::support::record("LENS NEW FORM", mouse, &form);
         focus(&mut t, mouse, "Lens name", "")?;
         t.send("Lock misuse")?;
         // An unknown placeholder is reported and nothing is saved.
@@ -1049,7 +1057,7 @@ fn a_lens_is_created_previewed_and_deleted_by_keyboard_and_mouse() -> Result {
         let error = t.screen("invalid placeholder reported", |s| {
             s.contains("Unknown placeholder {{nope}}")
         })?;
-        println!("LENS INVALID PLACEHOLDER mouse={mouse}\n{error}");
+        crate::support::record("LENS INVALID PLACEHOLDER", mouse, &error);
         assert_eq!(exit(&f, &["lens", "show", "Lock misuse"])?.0, Some(3));
         replace(
             &mut t,
@@ -1067,7 +1075,7 @@ fn a_lens_is_created_previewed_and_deleted_by_keyboard_and_mouse() -> Result {
         let preview = t.screen("preview shown", |s| {
             s.contains("Preview of the Lock misuse lens prompt for an example task")
         })?;
-        println!("LENS PREVIEW mouse={mouse}\n{preview}");
+        crate::support::record("LENS PREVIEW", mouse, &preview);
         assert!(
             preview.contains("== Review lens Lock misuse (user scope) for work category code"),
             "{preview}"
@@ -1101,7 +1109,7 @@ fn a_lens_is_created_previewed_and_deleted_by_keyboard_and_mouse() -> Result {
         cycle(&mut t, mouse, "Action", &ACTIONS, 0, 2)?;
         apply(&mut t, mouse)?;
         let deleted = t.screen("deleted", |s| s.contains("Deleted user lens Lock misuse"))?;
-        println!("LENS DELETED mouse={mouse}\n{deleted}");
+        crate::support::record("LENS DELETED", mouse, &deleted);
         assert_eq!(exit(&f, &["lens", "show", "Lock misuse"])?.0, Some(3));
         t.send("q")?;
         t.finish()?;

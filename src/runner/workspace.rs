@@ -61,6 +61,10 @@ pub struct ReviewScope {
     truncated: bool,
 }
 impl ReviewScope {
+    /// The commit the reviewed change starts from.
+    pub fn base(&self) -> &str {
+        &self.base
+    }
     pub fn describe(&self) -> String {
         let (base, tree) = (&self.base, &self.tree);
         let mut text = format!(

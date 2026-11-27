@@ -1,0 +1,350 @@
+@@ PROVIDER WAIT REOPENED action=stop issuer=cli · 110x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Queue · stopped · Stopped: Provider wait verdict
+ #1 Provider wait control
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                   │
+│Attempt 1                                   ││Proof: result.txt contains verified                           │
+│Model codex/execution / none                │╰──────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ─────────────────────────────╮
+│Tokens none reported yet                    ││Outcome: Stopped: Provider wait verdict                       │
+│? new tokens                                ││                                                              │
+│Budget 0 of 3 used                          ││Execution · interrupted · codex/execution verdict: Provider   │
+│Can run · u Readiness                       ││rate limited; retrying <date> with the same attempt and       │
+│Execution   ! interrupted                   ││session                                                       │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯│Supervisor outcome: Stopped: Provider wait verdict            │
+╭ Activity · #1 · l: all ────────────────────╮│                                                              │
+│• Back to Pending; the next Run starts fresh││                                                              │
+│• Stopped: Provider wait verdict            ││                                                              │
+│• Uncommitted changes saved as git stash    ││                                                              │
+│  "ktask: task #1 attempt #1"               ││                                                              │
+│• Supervisor yielded this attempt for resume││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROVIDER WAIT REQUEST action=stop issuer=keyboard · 140x40 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Supervisor preparing the next step · Pause requested; stopping worker
+ #1 Provider wait control
+ Provider limit until <date> · resumes by itself · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Step: Supervisor preparing the next step    │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Resumes in <t>                              │╭ Log · following · attempt 1 · o: report ───────────────────────────────────────────────────╮
+│Model codex/execution / none                ││Execution started; results require checks, review and validation                            │
+│Active <t> · waited <t>                     ││execution: codex/execution · new session                                                    │
+│Tokens none reported yet                    ││{"error":{"message":"rate_limit reached"},"type":"turn.failed"}                             │
+│? new tokens                                ││Automatic rate-limit backoff; Pause stops the scheduler without discarding the wait or      │
+│Budget 0 of 3 used                          ││session                                                                                     │
+│Execution   ! waiting                       ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯│                                                                                            │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                            │
+│• Pause requested; stopping worker          ││                                                                                            │
+│• Provider rate limited; retrying <date>    ││                                                                                            │
+│ <date> with the same attempt and session   ││                                                                                            │
+│• Workflow · Implement · repair round 0/10  ││                                                                                            │
+│• Supervisor started                        ││                                                                                            │
+│• Current task attempt recorded             ││                                                                                            │
+│• #1 created: Provider wait control         ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [o Report] [a Add] [i Investigate] [f Fix]
+[S Stats] [? Help] [q Quit]
+
+#1: stopping the worker · Stop completes when it exits
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROVIDER WAIT REOPENED action=stop issuer=keyboard · 110x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Queue · stopped · Stopped: Provider wait verdict
+ #1 Provider wait control
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                   │
+│Attempt 1                                   ││Proof: result.txt contains verified                           │
+│Model codex/execution / none                │╰──────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ─────────────────────────────╮
+│Tokens none reported yet                    ││Outcome: Stopped: Provider wait verdict                       │
+│? new tokens                                ││                                                              │
+│Budget 0 of 3 used                          ││Execution · interrupted · codex/execution verdict: Provider   │
+│Can run · u Readiness                       ││rate limited; retrying <date> with the same attempt and       │
+│Execution   ! interrupted                   ││session                                                       │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯│Supervisor outcome: Stopped: Provider wait verdict            │
+╭ Activity · #1 · l: all ────────────────────╮│                                                              │
+│• Back to Pending; the next Run starts fresh││                                                              │
+│• Stopped: Provider wait verdict            ││                                                              │
+│• Uncommitted changes saved as git stash    ││                                                              │
+│  "ktask: task #1 attempt #1"               ││                                                              │
+│• Supervisor yielded this attempt for resume││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROVIDER WAIT REQUEST action=stop issuer=mouse · 140x40 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Supervisor preparing the next step · Pause requested; stopping worker
+ #1 Provider wait control
+ Provider limit until <date> · resumes by itself · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Step: Supervisor preparing the next step    │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Resumes in <t>                              │╭ Log · following · attempt 1 · o: report ───────────────────────────────────────────────────╮
+│Model codex/execution / none                ││Execution started; results require checks, review and validation                            │
+│Active <t> · waited <t>                     ││execution: codex/execution · new session                                                    │
+│Tokens none reported yet                    ││{"error":{"message":"rate_limit reached"},"type":"turn.failed"}                             │
+│? new tokens                                ││Automatic rate-limit backoff; Pause stops the scheduler without discarding the wait or      │
+│Budget 0 of 3 used                          ││session                                                                                     │
+│Execution   ! waiting                       ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯│                                                                                            │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                            │
+│• Pause requested; stopping worker          ││                                                                                            │
+│• Provider rate limited; retrying <date>    ││                                                                                            │
+│ <date> with the same attempt and session   ││                                                                                            │
+│• Workflow · Implement · repair round 0/10  ││                                                                                            │
+│• Supervisor started                        ││                                                                                            │
+│• Current task attempt recorded             ││                                                                                            │
+│• #1 created: Provider wait control         ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [o Report] [a Add] [i Investigate] [f Fix]
+[S Stats] [? Help] [q Quit]
+
+#1: stopping the worker · Stop completes when it exits
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROVIDER WAIT REOPENED action=stop issuer=mouse · 110x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Queue · stopped · Stopped: Provider wait verdict
+ #1 Provider wait control
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                   │
+│Attempt 1                                   ││Proof: result.txt contains verified                           │
+│Model codex/execution / none                │╰──────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ─────────────────────────────╮
+│Tokens none reported yet                    ││Outcome: Stopped: Provider wait verdict                       │
+│? new tokens                                ││                                                              │
+│Budget 0 of 3 used                          ││Execution · interrupted · codex/execution verdict: Provider   │
+│Can run · u Readiness                       ││rate limited; retrying <date> with the same attempt and       │
+│Execution   ! interrupted                   ││session                                                       │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯│Supervisor outcome: Stopped: Provider wait verdict            │
+╭ Activity · #1 · l: all ────────────────────╮│                                                              │
+│• Back to Pending; the next Run starts fresh││                                                              │
+│• Stopped: Provider wait verdict            ││                                                              │
+│• Uncommitted changes saved as git stash    ││                                                              │
+│  "ktask: task #1 attempt #1"               ││                                                              │
+│• Supervisor yielded this attempt for resume││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROVIDER WAIT REOPENED action=done issuer=cli · 110x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work · Provider wait verdict
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                             │
+│Inspect results in History, or add more work.                                                               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROVIDER WAIT REQUEST action=done issuer=keyboard · 140x40 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Supervisor preparing the next step · Pause requested; stopping worker
+ #1 Provider wait control
+ Provider limit until <date> · resumes by itself · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Step: Supervisor preparing the next step    │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Resumes in <t>                              │╭ Log · following · attempt 1 · o: report ───────────────────────────────────────────────────╮
+│Model codex/execution / none                ││Execution started; results require checks, review and validation                            │
+│Active <t> · waited <t>                     ││execution: codex/execution · new session                                                    │
+│Tokens none reported yet                    ││{"error":{"message":"rate_limit reached"},"type":"turn.failed"}                             │
+│? new tokens                                ││Automatic rate-limit backoff; Pause stops the scheduler without discarding the wait or      │
+│Budget 0 of 3 used                          ││session                                                                                     │
+│Execution   ! waiting                       ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯│                                                                                            │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                            │
+│• Pause requested; stopping worker          ││                                                                                            │
+│• Provider rate limited; retrying <date>    ││                                                                                            │
+│ <date> with the same attempt and session   ││                                                                                            │
+│• Workflow · Implement · repair round 0/10  ││                                                                                            │
+│• Supervisor started                        ││                                                                                            │
+│• Current task attempt recorded             ││                                                                                            │
+│• #1 created: Provider wait control         ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [o Report] [a Add] [i Investigate] [f Fix]
+[S Stats] [? Help] [q Quit]
+
+#1: stopping the worker · Mark done completes when it exits
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROVIDER WAIT REOPENED action=done issuer=keyboard · 110x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work · Provider wait verdict
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                             │
+│Inspect results in History, or add more work.                                                               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROVIDER WAIT REQUEST action=done issuer=mouse · 140x40 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Supervisor preparing the next step · Pause requested; stopping worker
+ #1 Provider wait control
+ Provider limit until <date> · resumes by itself · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Step: Supervisor preparing the next step    │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Resumes in <t>                              │╭ Log · following · attempt 1 · o: report ───────────────────────────────────────────────────╮
+│Model codex/execution / none                ││Execution started; results require checks, review and validation                            │
+│Active <t> · waited <t>                     ││execution: codex/execution · new session                                                    │
+│Tokens none reported yet                    ││{"error":{"message":"rate_limit reached"},"type":"turn.failed"}                             │
+│? new tokens                                ││Automatic rate-limit backoff; Pause stops the scheduler without discarding the wait or      │
+│Budget 0 of 3 used                          ││session                                                                                     │
+│Execution   ! waiting                       ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯│                                                                                            │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                            │
+│• Pause requested; stopping worker          ││                                                                                            │
+│• Provider rate limited; retrying <date>    ││                                                                                            │
+│ <date> with the same attempt and session   ││                                                                                            │
+│• Workflow · Implement · repair round 0/10  ││                                                                                            │
+│• Supervisor started                        ││                                                                                            │
+│• Current task attempt recorded             ││                                                                                            │
+│• #1 created: Provider wait control         ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [o Report] [a Add] [i Investigate] [f Fix]
+[S Stats] [? Help] [q Quit]
+
+#1: stopping the worker · Mark done completes when it exits
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROVIDER WAIT REOPENED action=done issuer=mouse · 110x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work · Provider wait verdict
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                             │
+│Inspect results in History, or add more work.                                                               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

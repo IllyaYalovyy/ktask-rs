@@ -1,0 +1,69 @@
+@@ BREAKDOWN QUEUE SELECTED · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 2 · History 0
+ Queue preference · Next #2: Pending after failure · m: run mode in C…
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 2 ─────────────────────────╮╭ Details · click for full ╮
+│  #1   Failed   Failed current          ││Pending after failure     │
+│› #2   Pending  Pending after failure   ││#2 · Pending · AI         │
+│                                        ││                          │
+│                                        ││Goal: Persist a real task │
+│                                        ││                          │
+│                                        ││Check: Survives restart   │
+│                                        ││                          │
+│                                        ││Attempts: 0 · none yet    │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [r Retry] [a Add] [i Insert] [e Edit] [m Move] [b Break down]
+[c Models] [D Mark done] [x Cancel] [R Supersede] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats]
+[? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ BREAKDOWN QUEUE PROPOSAL · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Breakdown proposal · replace task ─────────────────────────────────╮
+│2 subtask(s) before original:                                       │
+│• Plan the implementation                                           │
+│  Implement the first part                                          │
+│  Criteria: First part works                                        │
+│• Verify the result                                                 │
+│  Verify the second part                                            │
+│  Criteria: All checks pass                                         │
+│Reason: Work is easier to verify in two steps.                      │
+│                                                                    │
+│Apply supersedes the original; attempts stay in History. Approval   │
+│follows planner preference. Cancel changes nothing.                 │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ BREAKDOWN QUEUE APPLIED · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 3 · History 1
+ Queue preference · Next #3: Plan the implementation · m: run mode in…
+ Queue · 3 shown / 3 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 3 ─────────────────────────╮╭ Details · click for full ╮
+│  #1   Failed   Failed current          ││Plan the implementation   │
+│› #3   Pending  Plan the implementation ││#3 · Pending · AI         │
+│  #4   Pending  Verify the result       ││                          │
+│                                        ││Goal: Implement the first │
+│                                        ││part                      │
+│                                        ││                          │
+│                                        ││Check: First part works   │
+│                                        ││                          │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [r Retry] [a Add] [i Insert] [e Edit] [m Move] [b Break down]
+[c Models] [D Mark done] [x Cancel] [R Supersede] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats]
+[? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

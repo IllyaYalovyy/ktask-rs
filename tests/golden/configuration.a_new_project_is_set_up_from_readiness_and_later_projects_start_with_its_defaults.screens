@@ -1,0 +1,585 @@
+@@ Set up this project first · 110x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│No current task.                                                                                            │
+│Set up this project first: u Readiness lists what is missing.                                               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ BLOCK · Project check · 110x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│No current task.                                                                                            │
+│Set up this project first: u Readiness lists what is missing.                                               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│               ╭ Execution readiness ───────────────────────────────────────────────────────╮               │
+│               │Run blocked · 5 blocker(s)                                                  │               │
+│               │                                                                            │               │
+│               │OK · Commit identity: Test <test@example.com>                               │               │
+│               │BLOCK · Project check: No enabled check verifies the work → c Checks        │               │
+│               │BLOCK · execution model: No default for new tasks → d Defaults              │               │
+│               │BLOCK · review model: No default for new tasks → d Defaults                 │               │
+│               │BLOCK · validation model: No default for new tasks → d Defaults             │               │
+│               │BLOCK · remediation model: No default for new tasks → d Defaults            │               │
+│               │OK · Writable workers (execution and repair) · Agent network Off · provider │               │
+│               │unset                                                                       │               │
+│               │                                                                            │               │
+│               │After fixing setup, Refresh here or press r on Current. Inspection creates  │               │
+│               │no attempt.                                                                 │               │
+│               │Wheel / PgUp / PgDn: scroll · Esc: close                                    │               │
+│               │                                                                            │               │
+│               │[c Checks] [d Defaults] [u Refresh] [Close]                                 │               │
+│               │                                                                            │               │
+│               │                                                                            │               │
+│               ╰────────────────────────────────────────────────────────────────────────────╯               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ No checks configured · 110x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│No current task.                                                                                            │
+│Set up this project first: u Readiness lists what is missing.                                               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│               ╭ Project checks ────────────────────────────────────────────────────────────╮               │
+│               │Select a check, then Apply to edit or enable/disable.                       │               │
+│               │No checks configured.                                                       │               │
+│               │                                                                            │               │
+│               │                                                                            │               │
+│               │Check to open                                                               │               │
+│               │< Add new check >   click / Space to change                                 │               │
+│               │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │               │
+│               │                                                                            │               │
+│               │[Copy] [Apply] [Cancel] [Up] [Down]                                         │               │
+│               │                                                                            │               │
+│               ╰────────────────────────────────────────────────────────────────────────────╯               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Command suggested from Makefile · 110x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│No current task.                                                                                            │
+│Set up this project first: u Readiness lists what is missing.                                               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│               ╭ Edit project check ────────────────────────────────────────────────────────╮               │
+│               │Save validates all fields together. Cancel changes nothing.                 │               │
+│               │Checks cannot change during running, paused or waiting attempts.            │               │
+│               │Command suggested from Makefile; change it if your project checks           │               │
+│               │differently.                                                                │               │
+│               │Name                                                                        │               │
+│               │check▏                                                                      │               │
+│               │Command                                                                     │               │
+│               │make check                                                                  │               │
+│               │Working directory (relative)                                                │               │
+│               │.                                                                           │               │
+│               │Timeout (ms)                                                                │               │
+│               │600000                                                                      │               │
+│               │State                                                                       │               │
+│               │< Enabled >   click / Space to change                                       │               │
+│               │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │               │
+│               │                                                                            │               │
+│               │[Copy] [Apply] [Cancel] [Up] [Down]                                         │               │
+│               │                                                                            │               │
+│               ╰────────────────────────────────────────────────────────────────────────────╯               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project configuration saved · 110x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│No current task.                                                                                            │
+│Set up this project first: u Readiness lists what is missing.                                               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ BLOCK · execution model · 110x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│No current task.                                                                                            │
+│Set up this project first: u Readiness lists what is missing.                                               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│               ╭ Execution readiness ───────────────────────────────────────────────────────╮               │
+│               │Run blocked · 4 blocker(s)                                                  │               │
+│               │                                                                            │               │
+│               │OK · Commit identity: Test <test@example.com>                               │               │
+│               │BLOCK · execution model: No default for new tasks → d Defaults              │               │
+│               │BLOCK · review model: No default for new tasks → d Defaults                 │               │
+│               │BLOCK · validation model: No default for new tasks → d Defaults             │               │
+│               │BLOCK · remediation model: No default for new tasks → d Defaults            │               │
+│               │OK · Writable workers (execution and repair) · Agent network Off · provider │               │
+│               │unset                                                                       │               │
+│               │                                                                            │               │
+│               │After fixing setup, Refresh here or press r on Current. Inspection creates  │               │
+│               │no attempt.                                                                 │               │
+│               │Wheel / PgUp / PgDn: scroll · Esc: close                                    │               │
+│               │                                                                            │               │
+│               │[c Checks] [d Defaults] [u Refresh] [Close]                                 │               │
+│               │                                                                            │               │
+│               │                                                                            │               │
+│               ╰────────────────────────────────────────────────────────────────────────────╯               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project model defaults · 110x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 ╭ Project model defaults ────────────────────────────────────────────────────╮
+ No current task│Effective models for tasks defined now, and where each comes from (user     │
+ Queue preferenc│defaults, then the selected profile, then these overrides):                 │
+ Current Task   │planning: unconfigured [unset]                                              │
+                │execution: unconfigured [unset]                                             │
+╭ Ready ────────│review: unconfigured [unset]                                                │───────────────╮
+│No current task│validation: unconfigured [unset]                                            │               │
+│Set up this pro│remediation: unconfigured [unset]                                           │               │
+│               │operator: unconfigured [unset]                                              │               │
+│               │New tasks copy these; existing revisions stay pinned. Break down uses the   │               │
+│               │planning model.                                                             │               │
+│               │planning provider/model                                                     │               │
+│               │▏                                                                           │               │
+│               │planning effort (optional)                                                  │               │
+│               │                                                                            │               │
+│               │execution provider/model                                                    │               │
+│               │                                                                            │               │
+│               │execution effort (optional)                                                 │               │
+│               │                                                                            │               │
+│               │review provider/model                                                       │               │
+│               │                                                                            │               │
+│               │review effort (optional)                                                    │               │
+│               │                                                                            │               │
+│               │validation provider/model                                                   │               │
+│               │                                                                            │               │
+│               │validation effort (optional)                                                │               │
+│               │                                                                            │               │
+│               │remediation provider/model                                                  │               │
+│               │                                                                            │               │
+│               │remediation effort (optional)                                               │               │
+│               │                                                                            │               │
+│               │operator provider/model                                                     │               │
+│               │                                                                            │               │
+│               │operator effort (optional)                                                  │               │
+│               │                                                                            │               │
+│               │New projects                                                                │               │
+│               │< Keep their defaults >   click / Space to change                           │               │
+╰───────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │───────────────╯
+[Copy] [u Readin│                                                                            │
+                │[Copy] [Apply] [Cancel] [Up] [Down]                                         │
+                │                                                                            │
+Project configur╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ < Start with these > · 110x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 ╭ Project model defaults ────────────────────────────────────────────────────╮
+ No current task│Effective models for tasks defined now, and where each comes from (user     │
+ Queue preferenc│defaults, then the selected profile, then these overrides):                 │
+ Current Task   │planning: unconfigured [unset]                                              │
+                │execution: unconfigured [unset]                                             │
+╭ Ready ────────│review: unconfigured [unset]                                                │───────────────╮
+│No current task│validation: unconfigured [unset]                                            │               │
+│Set up this pro│remediation: unconfigured [unset]                                           │               │
+│               │operator: unconfigured [unset]                                              │               │
+│               │New tasks copy these; existing revisions stay pinned. Break down uses the   │               │
+│               │planning model.                                                             │               │
+│               │planning provider/model                                                     │               │
+│               │                                                                            │               │
+│               │planning effort (optional)                                                  │               │
+│               │                                                                            │               │
+│               │execution provider/model                                                    │               │
+│               │codex/gpt-6-sol                                                             │               │
+│               │execution effort (optional)                                                 │               │
+│               │                                                                            │               │
+│               │review provider/model                                                       │               │
+│               │codex/gpt-6-astra                                                           │               │
+│               │review effort (optional)                                                    │               │
+│               │                                                                            │               │
+│               │validation provider/model                                                   │               │
+│               │codex/gpt-6-astra                                                           │               │
+│               │validation effort (optional)                                                │               │
+│               │                                                                            │               │
+│               │remediation provider/model                                                  │               │
+│               │codex/gpt-6-astra                                                           │               │
+│               │remediation effort (optional)                                               │               │
+│               │                                                                            │               │
+│               │operator provider/model                                                     │               │
+│               │                                                                            │               │
+│               │operator effort (optional)                                                  │               │
+│               │                                                                            │               │
+│               │New projects                                                                │               │
+│               │< Start with these >   click / Space to change                              │               │
+╰───────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │───────────────╯
+[Copy] [u Readin│                                                                            │
+                │[Copy] [Apply] [Cancel] [Up] [Down]                                         │
+                │                                                                            │
+Project configur╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project configuration saved #2 · 110x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│No current task.                                                                                            │
+│Set up this project first: u Readiness lists what is missing.                                               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ OK · Project setup · 110x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│No current task.                                                                                            │
+│Add or import work to begin.                                                                                │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│               ╭ Execution readiness ───────────────────────────────────────────────────────╮               │
+│               │Can run · 0 blocker(s)                                                      │               │
+│               │                                                                            │               │
+│               │OK · Commit identity: Test <test@example.com>                               │               │
+│               │OK · Project setup: checks and model defaults are ready; add a task         │               │
+│               │OK · Writable workers (execution and repair) · Agent network Off · provider │               │
+│               │unset                                                                       │               │
+│               │                                                                            │               │
+│               │After fixing setup, Refresh here or press r on Current. Inspection creates  │               │
+│               │no attempt.                                                                 │               │
+│               │Wheel / PgUp / PgDn: scroll · Esc: close                                    │               │
+│               │                                                                            │               │
+│               │[c Checks] [d Defaults] [u Refresh] [Close]                                 │               │
+│               │                                                                            │               │
+│               │                                                                            │               │
+│               ╰────────────────────────────────────────────────────────────────────────────╯               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Storage: SQLite · 110x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                            │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
+│limits.                                                                                                     │
+│Preferences: saved per project and instance.                                                                │
+│                                                                                                            │
+│Mouse: Enabled                                                                                              │
+│Run mode: Continue queue                                                                                    │
+│Planner approval: Automatic                                                                                 │
+│Delivery: local via origin/main                                                                             │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is  │
+│missing. CLI require declares prerequisites before a task starts.                                           │
+│                                                                                                            │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                │
+│u User defaults: what new projects start with; preview and apply them here.                                 │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                      │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code,        │
+│documents or art; override per project.                                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's│
+│default selection.                                                                                          │
+│Checks: list, add, edit, enable or disable.                                                                 │
+│Keyboard remains available with mouse disabled.                                                             │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.  │
+│E Export settings and o Import settings move this project's settings to another computer.                   │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project preferences · 110x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                            │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
+│limits.        ╭ Project preferences ───────────────────────────────────────────────────────╮               │
+│Preferences: sa│Saved per project in this instance. Keyboard stays available.               │               │
+│               │This policy controls new breakdown and repair tasks.                        │               │
+│Mouse: Enabled │Run mode applies to the next Run/resume/retry.                              │               │
+│Run mode: Conti│Agent network applies to execution and repair workers. On permits network   │               │
+│Planner approva│access with Codex, Claude Code and OpenCode. Off is enforced by Codex;      │               │
+│Delivery: local│Claude Code and OpenCode cannot enforce Off, so their writable turns are    │               │
+│Dependencies: m│blocked.                                                                    │erequisite is  │
+│missing. CLI re│Check before task runs the project checks on a task's clean starting        │               │
+│               │commit; a red start enters bounded automatic repair with the original task  │               │
+│Defaults apply │goal.                                                                       │               │
+│u User defaults│Mouse                                                                       │               │
+│f Profiles: nam│< Enabled >   click / Space to change                                       │               │
+│w Work categori│Planner approval                                                            │e code,        │
+│documents or ar│< Automatic >   click / Space to change                                     │               │
+│L Review lenses│Run mode                                                                    │d the project's│
+│default selecti│< Continue queue >   click / Space to change                                │               │
+│Checks: list, a│Agent network                                                               │               │
+│Keyboard remain│< Off >   click / Space to change                                           │               │
+│i Report limits│Check before task                                                           │n m Defaults.  │
+│E Export settin│< On >   click / Space to change                                            │               │
+│               │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │               │
+│               │                                                                            │               │
+│               │[Copy] [Apply] [Cancel] [Up] [Down]                                         │               │
+│               │                                                                            │               │
+│               ╰────────────────────────────────────────────────────────────────────────────╯               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project configuration saved #3 · 110x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                            │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
+│limits.                                                                                                     │
+│Preferences: saved per project and instance.                                                                │
+│                                                                                                            │
+│Mouse: Enabled                                                                                              │
+│Run mode: Continue queue                                                                                    │
+│Planner approval: Automatic                                                                                 │
+│Delivery: local via origin/main                                                                             │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is  │
+│missing. CLI require declares prerequisites before a task starts.                                           │
+│                                                                                                            │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                │
+│u User defaults: what new projects start with; preview and apply them here.                                 │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                      │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code,        │
+│documents or art; override per project.                                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's│
+│default selection.                                                                                          │
+│Checks: list, add, edit, enable or disable.                                                                 │
+│Keyboard remains available with mouse disabled.                                                             │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.  │
+│E Export settings and o Import settings move this project's settings to another computer.                   │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

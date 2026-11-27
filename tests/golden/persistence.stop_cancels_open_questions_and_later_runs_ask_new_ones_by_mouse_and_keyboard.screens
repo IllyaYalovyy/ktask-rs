@@ -1,0 +1,175 @@
+@@ OTHER QUESTION STILL OPEN · 120x34 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Needs input · runner stopped · <t> |   Queue 2 · History 0
+ Queue preference · Next #1: Asks the owner · m: run mode in Current
+ #2 Other asking task
+ The worker needs your answer · r Answer · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Needs input · AI                            ││Goal: Persist a real task                                               │
+│Attempt 1                                   ││Proof: Survives restart                                                 │
+│Waiting for your answer · r Answer          │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/fixture-model / none            │╭ Question from the worker · r: answer ──────────────────────────────────╮
+│Active <t> · waited <t>                     ││Keep the other task question open?                                      │
+│Tokens none reported yet                    │╰────────────────────────────────────────────────────────────────────────╯
+│none yet                                    │╭ Log · following · attempt 1 ───────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││                                                                        │
+│Run blocked (6) · u Readiness               ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #2 · l: all ────────────────────╮│                                                                        │
+│• Keep the other task question open?        ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #2 moved                                  ││                                                                        │
+│• #2 created: Other asking task             ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Answer] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ OTHER QUESTION ANSWERED · 120x34 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Needs input · runner stopped · <t> |   Queue 2 · History 0
+ Queue preference · Next #1: Asks the owner · m: run mode in Current
+ #2 Other asking task
+ Answer saved · r Resume continues the attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Needs input · AI                            ││Goal: Persist a real task                                               │
+│Attempt 1                                   ││Proof: Survives restart                                                 │
+│Answered · r Resume continues               │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/fixture-model / none            │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────╮
+│Active <t> · waited <t>                     ││Outcome: Waiting                                                        │
+│Tokens none reported yet                    ││                                                                        │
+│none yet                                    ││Supervisor outcome: Keep the other task question open?                  │
+│Budget 0 of 3 used                          ││                                                                        │
+│Run blocked (6) · u Readiness               ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #2 · l: all ────────────────────╮│                                                                        │
+│• Answer saved; the task continues          ││                                                                        │
+│• Keep the other task question open?        ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #2 moved                                  ││                                                                        │
+│• #2 created: Other asking task             ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOPPED TASK PENDING · 120x34 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Needs input · runner stopped · <t> |   Queue 2 · History 0
+ Queue preference · Next #1: Asks the owner · m: run mode in Current
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 2 · Model ───────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│› #2   Needs input Other asking task               codex/fixture-model││Other asking task                             │
+│  #1   Pending     Asks the owner                  codex/fixture-model││#2 · Needs input · AI                         │
+│                                                                      ││                                              │
+│                                                                      ││Goal: Persist a real task                     │
+│                                                                      ││                                              │
+│                                                                      ││Check: Survives restart                       │
+│                                                                      ││                                              │
+│                                                                      ││Attempts: 1 · none yet                        │
+│                                                                      ││                                              │
+│                                                                      ││Models:                                       │
+│                                                                      ││Execution: codex/fixture-model / none         │
+│                                                                      ││Review: codex/fixture-judge-1 / none          │
+│                                                                      ││Validation: codex/fixture-judge-2 / none      │
+│                                                                      ││Remediation: codex/fixture-judge-3 / none     │
+│                                                                      ││Attempt 1 · Needs input · Active <t> · waited <t>│
+│                                                                      ││0 calls · uncached unknown · cache read       │
+│                                                                      ││unknown · cache write unknown · output unknown│
+│                                                                      ││· none yet                                    │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Resume] [a Add] [i Insert] [e Edit] [c Models] [s Stop] [T Restart] [D Mark done] [o Import] [E Export]
+[Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ NEW QUESTION · 120x34 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs input · runner stopped · <t> |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ #1 Asks the owner
+ The worker needs your answer · r Answer · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Needs input · AI                            ││Goal: Persist a real task                                               │
+│Attempt 2                                   ││Proof: Survives restart                                                 │
+│Waiting for your answer · r Answer          │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/fixture-model / none            │╭ Question from the worker · r: answer ──────────────────────────────────╮
+│Active <t> · waited <t>                     ││Which behavior should the new attempt use?                              │
+│Tokens none reported yet                    │╰────────────────────────────────────────────────────────────────────────╯
+│none yet                                    │╭ Log · following · attempt 2 ───────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││                                                                        │
+│Run blocked (6) · u Readiness               ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• Which behavior should the new attempt use?││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• Back to Pending; the next Run starts fresh││                                                                        │
+│• Stopped: Start over                       ││                                                                        │
+│• Which behavior should the first attempt   ││                                                                        │
+│  use?                                      ││                                                                        │
+│• Existing attempt resumed                  ││                                                                        │
+│• Answer saved; the task continues          ││                                                                        │
+│• What was the earlier owner decision?      ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Answer] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ NEW QUESTION ANSWERED · 120x34 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs input · runner stopped · <t> |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ #1 Asks the owner
+ Answer saved · r Resume continues the attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Needs input · AI                            ││Goal: Persist a real task                                               │
+│Attempt 2                                   ││Proof: Survives restart                                                 │
+│Answered · r Resume continues               │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/fixture-model / none            │╭ Report · attempt 2 · o: raw log ───────────────────────────────────────╮
+│Active <t> · waited <t>                     ││Outcome: Waiting                                                        │
+│Tokens none reported yet                    ││                                                                        │
+│none yet                                    ││Supervisor outcome: Which behavior should the new attempt use?          │
+│Budget 0 of 3 used                          ││                                                                        │
+│Run blocked (6) · u Readiness               ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• Answer saved; the task continues          ││                                                                        │
+│• Which behavior should the new attempt use?││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• Back to Pending; the next Run starts fresh││                                                                        │
+│• Stopped: Start over                       ││                                                                        │
+│• Which behavior should the first attempt   ││                                                                        │
+│  use?                                      ││                                                                        │
+│• Existing attempt resumed                  ││                                                                        │
+│• Answer saved; the task continues          ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

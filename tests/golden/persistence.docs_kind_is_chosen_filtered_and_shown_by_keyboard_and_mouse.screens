@@ -1,0 +1,124 @@
+@@ KEYBOARD DOCS TASK SAVED · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Queue preference · Next #2: Key docs · m: run mode in Current
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 2 · Model ───────────────────────────────────╮╭ Details · click for full ────────────╮
+│  #1   Pending  Plain AI task            unconfigured     ││Key docs                              │
+│› #2   Pending  [Docs] Key docs          codex/worker high││#2 · Pending · Docs                   │
+│                                                          ││                                      │
+│                                                          ││Goal: Goal                            │
+│                                                          ││                                      │
+│                                                          ││Check: Criterion                      │
+│                                                          ││                                      │
+│                                                          ││Attempts: 0 · none yet                │
+│                                                          ││                                      │
+│                                                          ││Models:                               │
+│                                                          ││Execution: codex/worker / high        │
+│                                                          ││Review: unconfigured / none           │
+│                                                          ││Validation: unconfigured / none       │
+│                                                          ││Remediation: unconfigured / none      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done]
+[x Cancel] [R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear]
+[S Stats] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MOUSE DOCS TASK SAVED · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 3 · History 0
+ Queue preference · Next #2: Key docs · m: run mode in Current
+ Queue · 3 shown / 3 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 3 / 3 · Model ───────────────────────────────────╮╭ Details · click for full ────────────╮
+│  #1   Pending  Plain AI task            unconfigured     ││Mouse docs                            │
+│  #2   Pending  [Docs] Key docs          codex/worker high││#3 · Pending · Docs                   │
+│› #3   Pending  [Docs] Mouse docs        codex/mouse      ││                                      │
+│                                                          ││Goal: Goal                            │
+│                                                          ││                                      │
+│                                                          ││Check: Criterion                      │
+│                                                          ││                                      │
+│                                                          ││Attempts: 0 · none yet                │
+│                                                          ││                                      │
+│                                                          ││Models:                               │
+│                                                          ││Execution: codex/mouse / none         │
+│                                                          ││Review: unconfigured / none           │
+│                                                          ││Validation: unconfigured / none       │
+│                                                          ││Remediation: unconfigured / none      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done]
+[x Cancel] [R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear]
+[S Stats] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ KEYBOARD DOCS FILTER · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 3 · History 0
+ Queue preference · Next #2: Key docs · m: run mode in Current
+ Queue · 2 shown / 3 total · execution order
+ Filter: Docs  |  Search: / to search
+╭ Queue · 1 / 2 · Model ───────────────────────────────────╮╭ Details · click for full ────────────╮
+│› #2   Pending  [Docs] Key docs          codex/worker high││Key docs                              │
+│  #3   Pending  [Docs] Mouse docs        codex/mouse      ││#2 · Pending · Docs                   │
+│                                                          ││                                      │
+│                                                          ││Goal: Goal                            │
+│                                                          ││                                      │
+│                                                          ││Check: Criterion                      │
+│                                                          ││                                      │
+│                                                          ││Attempts: 0 · none yet                │
+│                                                          ││                                      │
+│                                                          ││Models:                               │
+│                                                          ││Execution: codex/worker / high        │
+│                                                          ││Review: unconfigured / none           │
+│                                                          ││Validation: unconfigured / none       │
+│                                                          ││Remediation: unconfigured / none      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done]
+[x Cancel] [R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear]
+[S Stats] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MOUSE DOCS FILTER · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 3 · History 0
+ Queue preference · Next #2: Key docs · m: run mode in Current
+ Queue · 2 shown / 3 total · execution order
+ Filter: Docs  |  Search: / to search
+╭ Queue · 1 / 2 · Model ───────────────────────────────────╮╭ Details · click for full ────────────╮
+│› #2   Pending  [Docs] Key docs          codex/worker high││Key docs                              │
+│  #3   Pending  [Docs] Mouse docs        codex/mouse      ││#2 · Pending · Docs                   │
+│                                                          ││                                      │
+│                                                          ││Goal: Goal                            │
+│                                                          ││                                      │
+│                                                          ││Check: Criterion                      │
+│                                                          ││                                      │
+│                                                          ││Attempts: 0 · none yet                │
+│                                                          ││                                      │
+│                                                          ││Models:                               │
+│                                                          ││Execution: codex/worker / high        │
+│                                                          ││Review: unconfigured / none           │
+│                                                          ││Validation: unconfigured / none       │
+│                                                          ││Remediation: unconfigured / none      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done]
+[x Cancel] [R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear]
+[S Stats] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

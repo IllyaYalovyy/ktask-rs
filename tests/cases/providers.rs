@@ -447,14 +447,14 @@ fn real_tui_runs_a_claude_task_by_keyboard_and_mouse() -> Result {
         let ready = t.screen("claude readiness", |s| {
             s.contains("OK · Claude Code CLI") && s.contains("Can run")
         })?;
-        println!("CLAUDE READINESS mouse={mouse}\n{ready}");
+        crate::support::record("CLAUDE READINESS", mouse, &ready);
         if mouse {
             click_readiness_forward(&mut t)?;
         } else {
             t.send("r")?;
         }
         let done = t.screen("claude complete", |s| s.contains("Queue complete."))?;
-        println!("CLAUDE COMPLETE mouse={mouse}\n{done}");
+        crate::support::record("CLAUDE COMPLETE", mouse, &done);
         let task = f.ok(&["show", "1"])?;
         assert_eq!(task["lifecycle"], "succeeded");
         assert_eq!(
@@ -495,7 +495,7 @@ fn offline_claude_is_blocked_and_explained_in_readiness_and_configuration() -> R
                 && s.contains("Claude Code cannot enforce Agent network Off")
                 && s.contains("4 Config, e Preferences")
         })?;
-        println!("OFFLINE READINESS mouse={mouse}\n{readiness}");
+        crate::support::record("OFFLINE READINESS", mouse, &readiness);
         t.send("\x1b")?;
         t.screen("readiness closed", |s| !s.contains("Execution readiness"))?;
         if mouse {
@@ -509,7 +509,7 @@ fn offline_claude_is_blocked_and_explained_in_readiness_and_configuration() -> R
         let config = t.screen("offline network configuration", |s| {
             s.contains("Agent network") && s.contains("cannot enforce Off")
         })?;
-        println!("OFFLINE CONFIGURATION mouse={mouse}\n{config}");
+        crate::support::record("OFFLINE CONFIGURATION", mouse, &config);
         t.send("\x03")?;
         t.finish()?;
         let result = f.process().args(["--json", "run", "--one"]).output()?;

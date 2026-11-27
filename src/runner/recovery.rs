@@ -48,8 +48,14 @@ pub(super) fn run(
         service.note(run, &format!("Supervisor needs remediation: {reason}"))?;
         let packet = crate::scratch::Scratch::new(&ctx.paths.state.join("review-packets"))?;
         let tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
-        let evidence =
-            service.review_bundle(run.attempt, &ctx.paths.state, packet.path(), &tree, &reason)?;
+        let evidence = service.review_bundle(
+            run.attempt,
+            &ctx.paths.state,
+            packet.path(),
+            &tree,
+            &reason,
+            false,
+        )?;
         let answers = service.answers(run)?;
         let attempts_used = service
             .task(run.task)?

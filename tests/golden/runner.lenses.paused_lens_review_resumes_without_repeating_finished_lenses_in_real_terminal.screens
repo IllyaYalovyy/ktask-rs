@@ -1,0 +1,140 @@
+@@ LENS REVIEW ACTIVE · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 1 · History 0
+ Session: Queue · running · Workflow · Review · repair round 0/10 · Run requested
+ #1 Pause between lenses
+ Workflow · Review · repair round 0/10 · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Step: Review                                │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/review / none                   │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
+│Active <t>                                  ││Execution started; results require checks, review and validation        │
+│Tokens 120 new · 80 cached · 20 out         ││execution: codex/execution · new session                                │
+│140 new tokens + 1 call(s) unreported       ││Worker claim (unverified) · complete: Verified result                   │
+│Budget 0 of 3 used                          ││Worker criterion claim (unverified) #1 · claimed pass: Inspected        │
+│Execution   ✓ succeeded                     ││result.txt                                                              │
+│Checks      ✓ succeeded                     ││Check build: test -f result.txt (timeout 600000 ms)                     │
+╰────────────────────────────────────────────╯│review (concurrency lens): codex/review · new session                   │
+╭ Activity · #1 · l: all ────────────────────╮│Review verdict · complete: concurrency has only a polish note           │
+│• Workflow · Review · repair round 0/10     ││Review criterion verdict #1 · claimed pass: Inspected result.txt        │
+│• Workflow · Check · repair round 0/10      ││review (security lens): codex/review · new session                      │
+│• Workflow · Implement · repair round 0/10  ││                                                                        │
+│• Supervisor started                        ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #1 created: Pause between lenses          ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [o Report] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LENS REVIEW PAUSED · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused; worker stopped, Resume continues the same attempt
+ #1 Pause between lenses
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Model codex/review / none                   │╰────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
+│Tokens 120 new · 80 cached · 20 out         ││Execution started; results require checks, review and validation        │
+│140 new tokens + 1 call(s) unreported       ││execution: codex/execution · new session                                │
+│Budget 0 of 3 used                          ││Worker claim (unverified) · complete: Verified result                   │
+│Can run · u Readiness                       ││Worker criterion claim (unverified) #1 · claimed pass: Inspected        │
+│Execution   ✓ succeeded                     ││result.txt                                                              │
+│Checks      ✓ succeeded                     ││Check build: test -f result.txt (timeout 600000 ms)                     │
+╰────────────────────────────────────────────╯│review (concurrency lens): codex/review · new session                   │
+╭ Activity · #1 · l: all ────────────────────╮│Review verdict · complete: concurrency has only a polish note           │
+│• Supervisor yielded this attempt for resume││Review criterion verdict #1 · claimed pass: Inspected result.txt        │
+│• Paused; useful work and session retained  ││review (security lens): codex/review · new session                      │
+│• Pause requested; stopping worker          ││                                                                        │
+│• Workflow · Review · repair round 0/10     ││                                                                        │
+│• Workflow · Check · repair round 0/10      ││                                                                        │
+│• Workflow · Implement · repair round 0/10  ││                                                                        │
+│• Supervisor started                        ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #1 created: Pause between lenses          ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Pause requested · waiting for worker shutdown and cleanup
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LENS RESULTS · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Task details / attempts ───────────────────────────────────────────────────╮
+ No current task   | │Attempt 1 / 1 · #1 · revision 1 · succeeded                                 │
+ Session: Queue · com│Outcome: Checks, independent review and validation passed after 0 repair    │
+ History · 1 shown / │rounds                                                                      │
+ Filter: All  |  Sear│Role steps, findings and acceptance results                                 │
+╭ History · 1 / 1 · F│                                                                            │ full ──────────────╮
+│› #1   Done     Paus│Step 1 · execution · codex/execution · succeeded                            │                    │
+│                    │Worker claim (unverified): Verified result                                  │ished <date>        │
+│                    │Criterion 1 · passed: Inspected result.txt                                  │                    │
+│                    │                                                                            │txt containing      │
+│                    │Step 2 · check · build · succeeded                                          │                    │
+│                    │Supervisor check result: Check exited 0                                     │                    │
+│                    │Suite results: {"suites":[],"errors":[]}                                    │ntains verified     │
+│                    │Command: test -f result.txt                                                 │                    │
+│                    │Exit code: 0                                                                │w tokens + 1 call(s)│
+│                    │                                                                            │                    │
+│                    │Step 3 · review (concurrency lens) · codex/review · succeeded               │                    │
+│                    │Review verdict: concurrency lens: concurrency has only a polish note        │                    │
+│                    │Minor: result.txt:1: optional concurrency polish                            │cution / none       │
+│                    │Criterion 1 · passed: Inspected result.txt                                  │ / none             │
+│                    │                                                                            │lidation / none     │
+│                    │Step 4 · review · codex/review · interrupted                                │emediation / none   │
+│                    │Review verdict: Paused; useful work and session retained                    │ctive <t> · waited <t>│
+│                    │                                                                            │40 · cache read 160 │
+│                    │Step 5 · review (security lens) · codex/review · succeeded                  │tput 40 (+1 call(s) │
+│                    │Find results                                                                │w tokens + 1 call(s)│
+│                    │▏                                                                           │                    │
+╰────────────────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │────────────────────╯
+[Copy] [C Copy to que│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │ [E Export] [S Stats]
+[? Help] [q Quit]    │[Prev attempt] [Next attempt] [Find] [Up] [Down] [Close] [Copy]             │
+                     │                                                                            │
+Runs happen in a back╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LENS SUMMARY · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Task details / attempts ───────────────────────────────────────────────────╮
+ No current task   | │#1 Pause between lenses                                                     │
+ Session: Queue · com│Attempt 1 / 1 · #1 · revision 1 · succeeded                                 │
+ History · 1 shown / │Outcome: Checks, independent review and validation passed after 0 repair    │
+ Filter: All  |  Sear│rounds                                                                      │
+╭ History · 1 / 1 · F│                                                                            │ full ──────────────╮
+│› #1   Done     Paus│Recorded steps (select Reviews or Failures for findings)                    │                    │
+│                    │Step 1 · execution · succeeded · codex/execution                            │ished <date>        │
+│                    │Worker claim (unverified): Verified result                                  │                    │
+│                    │Step 2 · check · succeeded                                                  │txt containing      │
+│                    │Supervisor check build · succeeded: Check exited 0                          │                    │
+│                    │Suite results: {"suites":[],"errors":[]}                                    │                    │
+│                    │Step 3 · review (concurrency lens) · succeeded · codex/review               │ntains verified     │
+│                    │review verdict · succeeded (open Reviews or Results for findings)           │                    │
+│                    │Step 4 · review · interrupted · codex/review                                │w tokens + 1 call(s)│
+│                    │review verdict · interrupted (open Reviews or Results for findings)         │                    │
+│                    │Step 5 · review (security lens) · succeeded · codex/review                  │                    │
+│                    │review verdict · succeeded (open Reviews or Results for findings)           │                    │
+│                    │Step 6 · validation · succeeded · codex/validation                          │cution / none       │
+│                    │validation verdict · succeeded (open Reviews or Results for findings)       │ / none             │
+│                    │Accepted: validation passed                                                 │lidation / none     │
+│                    │                                                                            │emediation / none   │
+│                    │Artifacts (open text in Transcripts; ,/. selects file)                      │ctive <t> · waited <t>│
+│                    │#1 build · text/plain · 0 bytes                                             │40 · cache read 160 │
+│                    │  sha256 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx · │tput 40 (+1 call(s) │
+│                    │tree xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx                               │w tokens + 1 call(s)│
+│                    │                                                                            │                    │
+╰────────────────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │────────────────────╯
+[Copy] [C Copy to que│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │ [E Export] [S Stats]
+[? Help] [q Quit]    │[Prev attempt] [Next attempt] [Up] [Down] [Close] [Copy]                    │
+                     │                                                                            │
+Runs happen in a back╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

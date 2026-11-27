@@ -176,20 +176,27 @@ fn mcp_reads_one_project_and_files_a_draft_the_owner_can_review() -> Result {
     let shown = cli(root, &project, &["show", &id.to_string()])?;
     assert_eq!(shown["data"]["revisions"][0]["actor"], "ai: test-client");
 
+    let needs_approval = |screen: &str| screen.contains("Projects: 1 need you · 0 running");
     let draft_screen = tui.screen("MCP draft appears live", |screen| {
-        screen.contains("Draft from MCP") && screen.contains("Needs approval")
+        screen.contains("Draft from MCP")
+            && screen.contains("Needs approval")
+            && needs_approval(screen)
     })?;
     tui.click("2 Queue")?;
     let queue_screen = tui.screen("queue shows MCP draft", |screen| {
-        screen.contains("Queue · 1 shown") && screen.contains("Draft from MCP")
+        screen.contains("Queue · 1 shown")
+            && screen.contains("Draft from MCP")
+            && needs_approval(screen)
     })?;
     tui.send("1v")?;
     let approved_screen = tui.screen("owner approves by keyboard", |screen| {
-        screen.contains("approved by human: owner") && screen.contains("Pending")
+        screen.contains("approved by human: owner")
+            && screen.contains("Pending")
+            && screen.contains("Projects: 0 need you · 0 running")
     })?;
-    println!(
-        "MCP DRAFT\n{draft_screen}\nMCP QUEUE\n{queue_screen}\nMCP APPROVED\n{approved_screen}"
-    );
+    crate::support::record("MCP DRAFT", false, &draft_screen);
+    crate::support::record("MCP QUEUE", true, &queue_screen);
+    crate::support::record("MCP APPROVED", true, &approved_screen);
     tui.send("\x03")?;
     tui.finish()?;
     let approved = cli(root, &project, &["show", &id.to_string()])?;

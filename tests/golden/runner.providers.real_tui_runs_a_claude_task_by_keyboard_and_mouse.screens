@@ -1,0 +1,74 @@
+@@ CLAUDE READINESS · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Claude in the TUI╭ Execution readiness ───────────────────────────────────────────────────────╮
+ Ready · r Run queue;│Can run · 0 blocker(s)                                                      │
+╭ Status · Enter: det│                                                                            │────────────────────╮
+│Pending · AI        │OK · Execution state                                                        │                    │
+│No attempts yet     │OK · Project checks                                                         │                    │
+│Can run · u Readines│OK · Approval                                                               │────────────────────╯
+│Model claude/executi│OK · Task                                                                   │────────────────────╮
+│Budget 0 of 3 used  │OK · execution model                                                        │sor; this pane      │
+│                    │OK · review model                                                           │                    │
+│                    │OK · validation model                                                       │r this task.        │
+│                    │OK · remediation model                                                      │                    │
+│                    │OK · Writable workers (execution and repair) · Agent network On · Claude    │                    │
+│                    │Code                                                                        │                    │
+│                    │OK · Claude Code CLI                                                        │                    │
+│                    │OK · Read-only sandbox                                                      │                    │
+│                    │OK · Commit identity: Project Author <project@example.com>                  │                    │
+╰────────────────────│OK · Supervisor ownership                                                   │                    │
+╭ Activity · #1 · l: │OK · Worker ownership                                                       │                    │
+│• #1 created: Claude│OK · Workspace baseline                                                     │                    │
+│                    │                                                                            │                    │
+│                    │After fixing setup, Refresh here or press r on Current. Inspection creates  │                    │
+│                    │no attempt.                                                                 │                    │
+│                    │Wheel / PgUp / PgDn: scroll · Esc: close                                    │                    │
+│                    │                                                                            │                    │
+│                    │[c Checks] [m Models] [r Run queue] [u Refresh] [Close]                     │                    │
+│                    │                                                                            │                    │
+╰────────────────────│                                                                            │────────────────────╯
+[Copy] [r Run queue] ╰────────────────────────────────────────────────────────────────────────────╯eadiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CLAUDE COMPLETE · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                       │
+│Inspect results in History, or add more work.                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

@@ -1,0 +1,125 @@
+@@ No current task · 80x24 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────╮
+│No current task.                                                              │
+│Set up this project first: u Readiness lists what is missing.                 │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+@@ Storage: SQLite · 80x24 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                           │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b:│
+│build caches · R: resource limits.                                            │
+│Preferences: saved per project and instance.                                  │
+│                                                                              │
+│Mouse: Enabled                                                                │
+│Run mode: Continue queue                                                      │
+│Planner approval: Automatic                                                   │
+│Delivery: local via origin/main                                               │
+│Dependencies: manual external setup; Current Task and Configuration offer r   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ GIT DELIVERY FORM · 80x24 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ ╭ Git delivery ──────────────────────────────────────────────────────────────╮
+ │Local commits only. Direct pushes verified commits to the base branch. Pull │
+╭│request uses a project branch and updates one PR. Remote and base default   │╮
+││to origin/main.                                                             ││
+││Mode                                                                        ││
+││< Local >   click / Space to change                                         ││
+││Git remote                                                                  ││
+││origin                                                                      ││
+││Base branch                                                                 ││
+││main                                                                        ││
+││Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  ││
+││                                                                            ││
+││[Copy] [Apply] [Cancel] [Up] [Down]                                         ││
+╰│                                                                            │╯
+[╰────────────────────────────────────────────────────────────────────────────╯
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Delivery: direct via upstream/trunk · 80x24 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                           │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b:│
+│build caches · R: resource limits.                                            │
+│Preferences: saved per project and instance.                                  │
+│                                                                              │
+│Mouse: Enabled                                                                │
+│Run mode: Continue queue                                                      │
+│Planner approval: Automatic                                                   │
+│Delivery: direct via upstream/trunk                                           │
+│Dependencies: manual external setup; Current Task and Configuration offer r   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ GIT DELIVERY CONFIG · 80x24 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                           │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b:│
+│build caches · R: resource limits.                                            │
+│Preferences: saved per project and instance.                                  │
+│                                                                              │
+│Mouse: Enabled                                                                │
+│Run mode: Continue queue                                                      │
+│Planner approval: Automatic                                                   │
+│Delivery: direct via upstream/trunk                                           │
+│Dependencies: manual external setup; Current Task and Configuration offer r   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

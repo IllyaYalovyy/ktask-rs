@@ -1,0 +1,161 @@
+@@ HISTORY NAVIGATION START · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Queue preference · no queued work · m: run mode in Current
+ History · 1 shown / 1 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 1 · Finished Attempts Time Usage ────────────────────╮
+│› #1   Done     Failed current <date> 2 <t> ? tkn                   │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures]
+[f Filter] [/ Search] [Esc Clear] [E Export] [S Stats] [? Help]
+[q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY DIRECT REVIEW · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│#1 Failed current                                                   │
+│Attempt 2 / 2 · #2 · revision 1 · failed                            │
+│Outcome: Retry failed after review                                  │
+│                                                                    │
+│Reviews · 1 / 2                                                     │
+│Step 1 · review · failed                                            │
+│First review finding                                                │
+│review detail                                                       │
+│review detail                                                       │
+│review detail                                                       │
+│review detail                                                       │
+│review detail                                                       │
+│review detail                                                       │
+│review detail                                                       │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Prev step] [Next step] [Up] [Down]   │
+│[Close] [Copy]                                                      │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY ATTEMPT SUMMARY · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│#1 Failed current                                                   │
+│Attempt 2 / 2 · #2 · revision 1 · failed                            │
+│Outcome: Retry failed after review                                  │
+│                                                                    │
+│Recorded steps (select Reviews or Failures for findings)            │
+│Step 1 · review · failed · codex/fixture-judge                      │
+│review verdict · failed (open Reviews or Results for findings)      │
+│Step 2 · review · failed · codex/fixture-judge                      │
+│review verdict · failed (open Reviews or Results for findings)      │
+│                                                                    │
+│Artifacts (open text in Transcripts; ,/. selects file)              │
+│No artifacts recorded.                                              │
+│                                                                    │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Up] [Down] [Close] [Copy]            │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY FIRST REVIEW · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│#1 Failed current                                                   │
+│Attempt 2 / 2 · #2 · revision 1 · failed                            │
+│Outcome: Retry failed after review                                  │
+│                                                                    │
+│Reviews · 1 / 2                                                     │
+│Step 1 · review · failed                                            │
+│First review finding                                                │
+│review detail                                                       │
+│review detail                                                       │
+│review detail                                                       │
+│review detail                                                       │
+│review detail                                                       │
+│review detail                                                       │
+│review detail                                                       │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Prev step] [Next step] [Up] [Down]   │
+│[Close] [Copy]                                                      │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY SECOND REVIEW · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+╭ Task details / attempts ───────────────────────────────────────────╮
+│#1 Failed current                                                   │
+│Attempt 2 / 2 · #2 · revision 1 · failed                            │
+│Outcome: Retry failed after review                                  │
+│                                                                    │
+│Reviews · 2 / 2                                                     │
+│Step 2 · review · failed                                            │
+│Second review finding                                               │
+│                                                                    │
+│Other steps: 1 review failed · *2 review failed                     │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Prev step] [Next step] [Up] [Down]   │
+│[Close] [Copy]                                                      │
+╰────────────────────────────────────────────────────────────────────╯
+[f Filter] [/ Search] [Esc Clear] [E Export] [S Stats] [? Help]
+[q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY FAILURE REASON · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│#1 Failed current                                                   │
+│Attempt 2 / 2 · #2 · revision 1 · failed                            │
+│Outcome: Retry failed after review                                  │
+│Failure category: review                                            │
+│Reason: Retry failed after review                                   │
+│                                                                    │
+│Failures and requested fixes · 1 / 2                                │
+│Step 1 · review · failed                                            │
+│First review finding                                                │
+│review detail                                                       │
+│review detail                                                       │
+│review detail                                                       │
+│review detail                                                       │
+│review detail                                                       │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Prev step] [Next step] [Up] [Down]   │
+│[Close] [Copy]                                                      │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY EARLIER REVIEW · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+╭ Task details / attempts ───────────────────────────────────────────╮
+│#1 Failed current                                                   │
+│Attempt 1 / 2 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│                                                                    │
+│Reviews · 1 / 1                                                     │
+│Step 1 · review · failed                                            │
+│review structured finding                                           │
+│Criterion 1 · needs_work: review criterion evidence                 │
+│                                                                    │
+│Other steps: *1 review failed                                       │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Prev step] [Next step] [Up] [Down]   │
+│[Close] [Copy]                                                      │
+╰────────────────────────────────────────────────────────────────────╯
+[q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

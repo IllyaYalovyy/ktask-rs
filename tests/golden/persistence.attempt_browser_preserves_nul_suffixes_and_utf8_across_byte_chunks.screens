@@ -1,0 +1,552 @@
+@@ CURRENT NUL OUTPUT FIRST BYTE CHUNK · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Output page 1 / 1 · chunk 1 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout]                                                       │
+│BEFORE_NUL␀␀pppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…
+@@ CURRENT KEYBOARD BROWSE AFTER NUL · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Output page 1 / 1 · chunk 2 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│àAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…
+@@ CURRENT KEYBOARD SELECT AFTER NUL · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Output page 1 / 1 · chunk 2 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│àAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…
+@@ CURRENT MOUSE BROWSE AFTER NUL · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Output page 1 / 1 · chunk 2 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│àAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 14 characters via OSC 52 · F7: native selection fallback
+@@ CURRENT MOUSE BROWSE SELECTION · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Output page 1 / 1 · chunk 2 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│àAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 14 characters via OSC 52 · F7: native selection fallback
+@@ CURRENT KEYBOARD SEARCH AFTER NUL · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│ppppppppppppppppppppppppppppppéàAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqq                                                          │
+│Output page 1 / 1 · chunk 2 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│àAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│AFTER_NUL_COPY▏                                                     │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 14 characters via OSC 52 · F7: native selection fallback
+@@ CURRENT KEYBOARD SEARCH SELECTION · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│ppppppppppppppppppppppppppppppéàAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqq                                                          │
+│Output page 1 / 1 · chunk 2 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│àAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│AFTER_NUL_COPY▏                                                     │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 14 characters via OSC 52 · F7: native selection fallback
+@@ CURRENT MOUSE SEARCH AFTER NUL · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│ppppppppppppppppppppppppppppppéàAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqq                                                          │
+│Output page 1 / 1 · chunk 2 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│àAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│AFTER_NUL_COPY▏                                                     │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 14 characters via OSC 52 · F7: native selection fallback
+@@ CURRENT MOUSE SEARCH SELECTION · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│ppppppppppppppppppppppppppppppéàAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqq                                                          │
+│Output page 1 / 1 · chunk 2 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│àAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│AFTER_NUL_COPY▏                                                     │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 14 characters via OSC 52 · F7: native selection fallback
+@@ CURRENT UTF8 MATCH LANDS IN CHUNK OWNING FIRST BYTE · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│ppppppppppppppppppppppppppppppppéàAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqq                                                        │
+│Output page 1 / 1 · chunk 1 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│Match in #200: éàAFTER_NUL_COPY                                     │
+│                                                                    │
+│#200 [stdout]                                                       │
+│BEFORE_NUL␀␀pppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│Find output                                                         │
+│éàAFTER_NUL_COPY▏                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 14 characters via OSC 52 · F7: native selection fallback
+@@ CURRENT UTF8 SEARCH ACROSS BYTE READ BOUNDARY · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Match: qqqqqqqq界éSCAN_END␀␀TAIL_AFTER_NUL                          │
+│Output page 1 / 1 · chunk 16 / 17 · 8 records · newest first ·      │
+│snapshot #200                                                       │
+│                                                                    │
+│Match in #200: 界éSCAN_END                                          │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│界éSCAN_END▏                                                        │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 14 characters via OSC 52 · F7: native selection fallback
+@@ CURRENT NUL AND UTF8 SEARCH ACROSS INTERLEAVED RECORDS · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Match: dddd🦀LEFT␀␀é界CROSS_RECORD_AFTER                            │
+│Output page 1 / 1 · chunk 1 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout]                                                       │
+│BEFORE_NUL␀␀pppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│Find output                                                         │
+│é界CROSS_RECORD_AFTER▏                                              │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 14 characters via OSC 52 · F7: native selection fallback
+@@ HISTORY NUL OUTPUT FIRST BYTE CHUNK · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Output page 1 / 1 · chunk 1 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout]                                                       │
+│BEFORE_NUL␀␀pppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY KEYBOARD BROWSE AFTER NUL · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Output page 1 / 1 · chunk 2 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│àAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY KEYBOARD SELECT AFTER NUL · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Output page 1 / 1 · chunk 2 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│àAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY MOUSE BROWSE AFTER NUL · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Output page 1 / 1 · chunk 2 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│àAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY MOUSE BROWSE SELECTION · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Output page 1 / 1 · chunk 2 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│àAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY KEYBOARD SEARCH AFTER NUL · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│ppppppppppppppppppppppppppppppéàAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqq                                                          │
+│Output page 1 / 1 · chunk 2 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│àAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│AFTER_NUL_COPY▏                                                     │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY KEYBOARD SEARCH SELECTION · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│ppppppppppppppppppppppppppppppéàAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqq                                                          │
+│Output page 1 / 1 · chunk 2 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│àAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│AFTER_NUL_COPY▏                                                     │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY MOUSE SEARCH AFTER NUL · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│ppppppppppppppppppppppppppppppéàAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqq                                                          │
+│Output page 1 / 1 · chunk 2 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│àAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│AFTER_NUL_COPY▏                                                     │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY MOUSE SEARCH SELECTION · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│ppppppppppppppppppppppppppppppéàAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqq                                                          │
+│Output page 1 / 1 · chunk 2 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│àAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│AFTER_NUL_COPY▏                                                     │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY UTF8 MATCH LANDS IN CHUNK OWNING FIRST BYTE · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│ppppppppppppppppppppppppppppppppéàAFTER_NUL_COPY␀␀qqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqq                                                        │
+│Output page 1 / 1 · chunk 1 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│Match in #200: éàAFTER_NUL_COPY                                     │
+│                                                                    │
+│#200 [stdout]                                                       │
+│BEFORE_NUL␀␀pppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│Find output                                                         │
+│éàAFTER_NUL_COPY▏                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY UTF8 SEARCH ACROSS BYTE READ BOUNDARY · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Match: qqqqqqqq界éSCAN_END␀␀TAIL_AFTER_NUL                          │
+│Output page 1 / 1 · chunk 16 / 17 · 8 records · newest first ·      │
+│snapshot #200                                                       │
+│                                                                    │
+│Match in #200: 界éSCAN_END                                          │
+│                                                                    │
+│#200 [stdout] [continued]                                           │
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq│
+│Find output                                                         │
+│界éSCAN_END▏                                                        │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY NUL AND UTF8 SEARCH ACROSS INTERLEAVED RECORDS · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Match: dddd🦀LEFT␀␀é界CROSS_RECORD_AFTER                            │
+│Output page 1 / 1 · chunk 1 / 17 · 8 records · newest first ·       │
+│snapshot #200                                                       │
+│                                                                    │
+│#200 [stdout]                                                       │
+│BEFORE_NUL␀␀pppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp│
+│Find output                                                         │
+│é界CROSS_RECORD_AFTER▏                                              │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

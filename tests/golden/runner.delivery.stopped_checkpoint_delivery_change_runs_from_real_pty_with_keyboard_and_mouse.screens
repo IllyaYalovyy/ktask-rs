@@ -1,0 +1,72 @@
+@@ RECONFIGURED DELIVERY · 120x35 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                       │
+│Inspect results in History, or add more work.                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ stopped delivery configuration after save · 120x35 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Run one · stopped · Stopped: Change delivery settings
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                      │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                                                                                                                      │
+│Mouse: Enabled                                                                                                        │
+│Run mode: Continue queue                                                                                              │
+│Planner approval: Automatic                                                                                           │
+│Delivery: local via origin/main                                                                                       │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing.   │
+│CLI require declares prerequisites before a task starts.                                                              │
+│                                                                                                                      │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                          │
+│u User defaults: what new projects start with; preview and apply them here.                                           │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                                │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art;│
+│override per project.                                                                                                 │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default  │
+│selection.                                                                                                            │
+│Checks: list, add, edit, enable or disable.                                                                           │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

@@ -1,0 +1,31 @@
+@@ HISTORY DETAILS · 120x30 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Curre╭ Task details / attempts ───────────────────────────────────────────────────╮
+ Current #1 · Failed │#240 Instance isolation · case 240                                          │
+ Queue preference · N│Done · AI                                                                   │
+ History · 120 shown │                                                                            │
+ Filter: All  |  Sear│Goal: Make the requested change.                                            │
+╭ History · 120 / 120│Acceptance check: Automated checks pass.                                    │ full ──────────────╮
+│  #224 Done     Keyb│Total cost: $0.03 (simulated)                                               │ case 240           │
+│  #225 Done     Sear│Answer: None                                                                │                    │
+│  #226 Done     Fail│                                                                            │                    │
+│  #227 Done     Work│Attempt 1 / 1                                                               │sted change.        │
+│  #228 Done     Inst│Completed                                                                   │                    │
+│  #229 Done     Queu│Executor: implemented the change                                            │cks pass.           │
+│  #230 Done     Keyb│Checks: passed                                                              │                    │
+│  #231 Done     Sear│Review: approved; change recorded (mock)                                    │                    │
+│  #232 Done     Fail│                                                                            │                    │
+│  #233 Done     Work│Revision 1 · Human: owner                                                   │                    │
+│  #234 Done     Inst│Execution: economy / medium                                                 │ medium             │
+│  #235 Done     Queu│Review: capable / high                                                      │gh                  │
+│  #236 Done     Keyb│Validation: capable / high                                                  │/ high              │
+│  #237 Done     Sear│Remediation: capable / high                                                 │ / high             │
+│  #238 Done     Fail│Attempt limit: 3 · task limit: Off · stage limit: Off                       │                    │
+│  #239 Done     Work│Resolution:                                                                 │                    │
+│› #240 Done     Inst│Attempt inputs: revision 1 · session 240                                    │                    │
+╰────────────────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │────────────────────╯
+[Copy] [C Copy to que│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │ [E Export] [S Stats]
+[? Help] [q Quit]    │[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │
+                     │[Refresh] [Up] [Down] [Close] [Copy]                                        │
+#240: Edit is not ava╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

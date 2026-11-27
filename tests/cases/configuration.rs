@@ -140,11 +140,11 @@ fn real_git_delivery_form_supports_keyboard_and_mouse() -> Result {
         let scratch = support::sandbox()?;
         let root = scratch.path();
         let mut t = Terminal::open_real(BIN, root, 80, 24)?;
-        screen(&t, "No current task")?;
+        screen(&t, mouse, "No current task")?;
         open(&mut t, mouse, "4", "4 Config", "Storage: SQLite")?;
         activate(&mut t, mouse, "g", "g Git delivery")?;
         let opened = t.screen("Git delivery form", |s| s.contains("╭ Git delivery"))?;
-        println!("GIT DELIVERY FORM mouse={mouse}\n{opened}");
+        crate::support::record("GIT DELIVERY FORM", mouse, &opened);
         if mouse {
             t.click("< Local >")?;
             t.click("Git remote")?;
@@ -155,8 +155,8 @@ fn real_git_delivery_form_supports_keyboard_and_mouse() -> Result {
         } else {
             t.send(" \t\x01upstream\t\x01trunk\x13")?;
         }
-        let saved = screen(&t, "Delivery: direct via upstream/trunk")?;
-        println!("GIT DELIVERY CONFIG mouse={mouse}\n{saved}");
+        let saved = screen(&t, mouse, "Delivery: direct via upstream/trunk")?;
+        crate::support::record("GIT DELIVERY CONFIG", mouse, &saved);
         let config = service(root)?.delivery_config()?;
         assert_eq!(
             (
@@ -177,9 +177,9 @@ fn service(root: &Path) -> Result<Service> {
         None,
     )?)
 }
-fn screen(t: &Terminal, label: &str) -> Result<String> {
+fn screen(t: &Terminal, mouse: bool, label: &str) -> Result<String> {
     let rendered = t.screen(label, |s| s.contains(label))?;
-    println!("{label}\n{rendered}");
+    crate::support::record(label, mouse, &rendered);
     Ok(rendered)
 }
 /// The value line under a form field's `label`.
@@ -197,7 +197,7 @@ fn activate(t: &mut Terminal, mouse: bool, key: &str, label: &str) -> Result {
 }
 fn open(t: &mut Terminal, mouse: bool, key: &str, label: &str, title: &str) -> Result {
     activate(t, mouse, key, label)?;
-    screen(t, title)?;
+    screen(t, mouse, title)?;
     Ok(())
 }
 fn apply(t: &mut Terminal, mouse: bool) -> Result {
@@ -205,7 +205,7 @@ fn apply(t: &mut Terminal, mouse: bool) -> Result {
     let rendered = t.screen("saved", |s| {
         s.contains("Project configuration saved") && !s.contains("[Apply]")
     })?;
-    println!("Project configuration saved\n{rendered}");
+    crate::support::record("Project configuration saved", mouse, &rendered);
     Ok(())
 }
 fn cancel(t: &mut Terminal, mouse: bool) -> Result {
@@ -223,7 +223,7 @@ fn model_defaults_accept_any_name_and_reject_bad_structure(
 ) -> Result {
     open(t, mouse, "m", "m Defaults", "Project model defaults")?;
     t.send("invalid\x13")?;
-    screen(t, "Use provider/model")?;
+    screen(t, mouse, "Use provider/model")?;
     assert!(
         service(root)?
             .project_defaults()?
@@ -266,7 +266,7 @@ fn model_defaults_accept_any_name_and_reject_bad_structure(
             && s.contains("high")
             && s.contains("ultra")
     })?;
-    println!("INVALID EFFORT FORM mouse={mouse}\n{invalid}");
+    crate::support::record("INVALID EFFORT FORM", mouse, &invalid);
     assert_eq!(service(root)?.project_defaults()?, saved);
     cancel(t, mouse)?;
     Ok(())
@@ -278,7 +278,7 @@ fn real_configuration_forms_mouse_keyboard_restart_and_validation() -> Result {
         let scratch = support::sandbox()?;
         let root = scratch.path();
         let mut t = Terminal::open_real(BIN, root, 70, 22)?;
-        screen(&t, "No current task")?;
+        screen(&t, mouse, "No current task")?;
         open(&mut t, mouse, "4", "4 Config", "Storage: SQLite")?;
         model_defaults_accept_any_name_and_reject_bad_structure(&mut t, root, mouse)?;
         open(&mut t, mouse, "m", "m Defaults", "Project model defaults")?;
@@ -289,7 +289,7 @@ fn real_configuration_forms_mouse_keyboard_restart_and_validation() -> Result {
                 let rendered = t.screen("form", |s| s.contains("Project model defaults"))?;
                 if !rendered.contains(&label) {
                     t.click("Fields +")?;
-                    screen(&t, &label)?;
+                    screen(&t, mouse, &label)?;
                 }
                 t.click(&label)?;
             }
@@ -304,10 +304,19 @@ fn real_configuration_forms_mouse_keyboard_restart_and_validation() -> Result {
                 t.send("\t")?;
             }
             let (model, effort) = (format!("codex/{role}"), format!("{role} effort"));
+            // The keyboard's last Tab moves on; the screen is settled once its cursor has.
+            let next = MODEL_ROLES
+                .get(i + 1)
+                .filter(|_| !mouse)
+                .map(|role| format!("{role} provider/model"));
             let rendered = t.screen(&effort, |s| {
-                field(s, &label).contains(&model) && field(s, &effort).contains("high")
+                field(s, &label).contains(&model)
+                    && field(s, &effort).contains("high")
+                    && next
+                        .as_ref()
+                        .is_none_or(|next| field(s, next).contains('▏'))
             })?;
-            println!("{effort}\n{rendered}");
+            crate::support::record(&effort.to_string(), mouse, &rendered);
         }
         apply(&mut t, mouse)?;
         let saved = service(root)?.project_defaults()?;
@@ -324,7 +333,7 @@ fn real_configuration_forms_mouse_keyboard_restart_and_validation() -> Result {
         open(&mut t, mouse, "c", "c Checks", "No checks configured")?;
         open(&mut t, mouse, "\r", "Apply", "Edit project check")?;
         t.send("\x13")?;
-        screen(&t, "Check needs a name")?;
+        screen(&t, mouse, "Check needs a name")?;
         assert!(service(root)?.project_checks()?.is_empty());
         cancel(&mut t, mouse)?;
         open(&mut t, mouse, "c", "c Checks", "Project checks")?;
@@ -334,7 +343,7 @@ fn real_configuration_forms_mouse_keyboard_restart_and_validation() -> Result {
         t.send("test -f Cargo.toml")?;
         activate(&mut t, mouse, "\t\t", "Timeout (ms)")?;
         t.send("\x01zero\x13")?;
-        screen(&t, "Timeout must be a positive integer")?;
+        screen(&t, mouse, "Timeout must be a positive integer")?;
         t.send("\x011000")?;
         apply(&mut t, mouse)?;
         let checks = service(root)?.project_checks()?;
@@ -385,18 +394,18 @@ fn real_configuration_forms_mouse_keyboard_restart_and_validation() -> Result {
         } else {
             t.send(" \x13")?;
         }
-        screen(&t, "Mouse: Disabled")?;
+        screen(&t, mouse, "Mouse: Disabled")?;
         quit(&mut t)?;
         let mut t = Terminal::open_real(BIN, root, 70, 22)?;
-        screen(&t, "No current task")?;
+        screen(&t, mouse, "No current task")?;
         t.send("4")?;
-        let restored = screen(&t, "Mouse: Disabled")?;
+        let restored = screen(&t, mouse, "Mouse: Disabled")?;
         assert!(restored.contains("Run mode: Run one"));
         assert!(restored.contains("Planner approval: Review required"));
         t.send("e")?; // Keyboard re-enables mouse.
-        screen(&t, "Project preferences")?;
+        screen(&t, mouse, "Project preferences")?;
         t.send(" \x13")?;
-        screen(&t, "Mouse: Enabled")?;
+        screen(&t, mouse, "Mouse: Enabled")?;
         assert_eq!(saved, service(root)?.project_defaults()?);
         assert_eq!(checks, service(root)?.project_checks()?);
         quit(&mut t)?;
@@ -515,9 +524,9 @@ fn real_configuration_rejects_stale_open_forms() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();
     let mut t = Terminal::open_real(BIN, root, 70, 22)?;
-    screen(&t, "No current task")?;
+    screen(&t, false, "No current task")?;
     t.send("4m")?;
-    screen(&t, "Project model defaults")?;
+    screen(&t, false, "Project model defaults")?;
     let mut other = service(root)?;
     other.set_default(
         "planning",
@@ -529,23 +538,23 @@ fn real_configuration_rejects_stale_open_forms() -> Result {
         false,
     )?;
     t.send("codex/stale\x13")?;
-    screen(&t, "Defaults changed elsewhere")?;
+    screen(&t, false, "Defaults changed elsewhere")?;
     cancel(&mut t, false)?;
     t.send("c\r")?;
-    screen(&t, "Edit project check")?;
+    screen(&t, false, "Edit project check")?;
     other.set_check("other", "true", 1000)?;
     t.send("stale\tfalse\x13")?;
-    screen(&t, "Checks changed elsewhere")?;
+    screen(&t, false, "Checks changed elsewhere")?;
     cancel(&mut t, false)?;
     t.send("e")?;
-    screen(&t, "Project preferences")?;
+    screen(&t, false, "Project preferences")?;
     let config = root.join("config/ktask-dev");
     let original = other.preferences(&config)?;
     let mut next = original.clone();
     next.continuation = Continuation::Queue;
     other.save_preferences(&config, &original, &next)?;
     t.send(" \x13")?;
-    screen(&t, "Preferences changed elsewhere")?;
+    screen(&t, false, "Preferences changed elsewhere")?;
     assert!(other.preferences(&config)?.mouse);
     cancel(&mut t, false)?;
     quit(&mut t)
@@ -573,7 +582,7 @@ fn a_new_project_is_set_up_from_readiness_and_later_projects_start_with_its_defa
             )?)
         };
         let mut t = Terminal::open_project(BIN, root, &project, 110, 44)?;
-        screen(&t, "Set up this project first")?;
+        screen(&t, mouse, "Set up this project first")?;
         open(&mut t, mouse, "u", "u Readiness", "BLOCK · Project check")?;
         // The first check starts from the command the project's Makefile defines.
         open(&mut t, mouse, "c", "c Checks", "No checks configured")?;
@@ -603,7 +612,7 @@ fn a_new_project_is_set_up_from_readiness_and_later_projects_start_with_its_defa
         // Clicking a choice's label cycles it; the keyboard moves there and presses Space.
         // Past the remediation effort and both operator fields.
         activate(&mut t, mouse, "\t\t\t\t ", "New projects")?;
-        screen(&t, "< Start with these >")?;
+        screen(&t, mouse, "< Start with these >")?;
         apply(&mut t, mouse)?;
         let saved = at(&project)?.project_defaults()?;
         open(&mut t, mouse, "u", "u Readiness", "OK · Project setup")?;
@@ -854,10 +863,10 @@ fn real_user_defaults_form_saves_previews_and_applies_with_keyboard_and_mouse() 
         let root = scratch.path();
         let config = root.join("config/ktask-dev");
         let mut t = Terminal::open_real(BIN, root, 100, 70)?;
-        screen(&t, "No current task")?;
+        screen(&t, mouse, "No current task")?;
         open(&mut t, mouse, "4", "4 Config", "Storage: SQLite")?;
         activate(&mut t, mouse, "u", "u User defaults")?;
-        let opened = screen(&t, "User defaults for new projects")?;
+        let opened = screen(&t, mouse, "User defaults for new projects")?;
         assert!(opened.contains("Never inherited: the check command"));
         for label in [
             "planning provider/model",
@@ -900,7 +909,7 @@ fn real_user_defaults_form_saves_previews_and_applies_with_keyboard_and_mouse() 
         let filled = t.screen("filled", |s| {
             dfield(s, "After saving").contains("Preview applying")
         })?;
-        println!("USER DEFAULTS FORM mouse={mouse}\n{filled}");
+        crate::support::record("USER DEFAULTS FORM", mouse, &filled);
         for (label, shown) in [
             ("Agent network", "< On >"),
             ("Baseline checks", "< Off >"),
@@ -915,8 +924,8 @@ fn real_user_defaults_form_saves_previews_and_applies_with_keyboard_and_mouse() 
             );
         }
         activate(&mut t, mouse, "\x13", "Apply")?;
-        let preview = screen(&t, "Apply user defaults to this project?")?;
-        println!("USER DEFAULTS PREVIEW mouse={mouse}\n{preview}");
+        let preview = screen(&t, mouse, "Apply user defaults to this project?")?;
+        crate::support::record("USER DEFAULTS PREVIEW", mouse, &preview);
         for line in [
             "agent network: off -> on",
             "baseline checks: on -> off",
@@ -941,7 +950,7 @@ fn real_user_defaults_form_saves_previews_and_applies_with_keyboard_and_mouse() 
             dfield(s, "Project settings").contains("< Apply user defaults >")
         })?;
         activate(&mut t, mouse, "\x13", "Apply")?;
-        screen(&t, "User defaults applied to this project")?;
+        screen(&t, mouse, "User defaults applied to this project")?;
         assert!(service.agent_network()? && !service.check_before_task()?);
         assert_eq!(service.delivery_config()?.mode, "direct");
         assert_eq!(
@@ -952,7 +961,7 @@ fn real_user_defaults_form_saves_previews_and_applies_with_keyboard_and_mouse() 
             service.preferences(&config)?.continuation,
             Continuation::Single
         );
-        screen(&t, "Run mode: Run one")?;
+        screen(&t, mouse, "Run mode: Run one")?;
         // Reopening shows the saved values.
         open(
             &mut t,
@@ -970,7 +979,7 @@ fn real_user_defaults_form_saves_previews_and_applies_with_keyboard_and_mouse() 
         open(&mut t, mouse, "c", "c Checks", "No checks configured")?;
         open(&mut t, mouse, "\r", "Apply", "Edit project check")?;
         let form = t.current_screen();
-        println!("FIRST CHECK FORM mouse={mouse}\n{form}");
+        crate::support::record("FIRST CHECK FORM", mouse, &form);
         assert_eq!(
             dfield(&form, "Timeout (ms)").trim_matches(['│', ' ']),
             "45000"
@@ -1242,7 +1251,7 @@ fn real_stale_user_defaults_form_keeps_a_newer_model_with_keyboard_and_mouse() -
         let start = other.user_defaults()?;
         other.save_new_project_setup(&start, &start, &models)?;
         let mut t = Terminal::open_real(BIN, root, 100, 70)?;
-        screen(&t, "No current task")?;
+        screen(&t, mouse, "No current task")?;
         open(&mut t, mouse, "4", "4 Config", "Storage: SQLite")?;
         open(
             &mut t,
@@ -1273,8 +1282,8 @@ fn real_stale_user_defaults_form_keeps_a_newer_model_with_keyboard_and_mouse() -
         };
         edit_timeout(&mut t, "77000")?;
         activate(&mut t, mouse, "\x13", "Apply")?;
-        let stale = screen(&t, "User defaults changed elsewhere")?;
-        println!("STALE USER DEFAULTS mouse={mouse}\n{stale}");
+        let stale = screen(&t, mouse, "User defaults changed elsewhere")?;
+        crate::support::record("STALE USER DEFAULTS", mouse, &stale);
         assert_eq!(other.user_defaults()?, saved);
         assert_eq!(other.new_project_defaults()?[2], newer);
         activate(&mut t, mouse, "\x1b", "Cancel")?;
@@ -1290,7 +1299,7 @@ fn real_stale_user_defaults_form_keeps_a_newer_model_with_keyboard_and_mouse() -
             "User defaults for new projects",
         )?;
         let reopened = t.current_screen();
-        println!("REOPENED USER DEFAULTS mouse={mouse}\n{reopened}");
+        crate::support::record("REOPENED USER DEFAULTS", mouse, &reopened);
         assert!(
             dfield(&reopened, "review effort (optional)").contains("low"),
             "{reopened}"

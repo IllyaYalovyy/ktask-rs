@@ -1,0 +1,69 @@
+@@ SAVED SINGLE MODE · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Run one preference · Next #2: Second visible mode task · m: run mode…
+ #1 First visible mode task
+ Run one selected · m Run mode to continue the queue
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · AI                ││Goal: Create result.txt containing ve…│
+│No attempts yet             ││Proof: result.txt contains verified   │
+│Can run · u Readiness       │╰──────────────────────────────────────╯
+│Model codex/execution / none│╭ Log · following ─────────────────────╮
+│Budget 0 of 3 used          ││Ready. r starts an attempt in the     │
+╰────────────────────────────╯│background supervisor; this pane      │
+╭ Activity · #1 · l: all ────╮│follows its log.                      │
+│• #1 created: First visible ││Defaults and checks live in Config; c │
+│  mode task                 ││pins models for this task.            │
+│                            ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run one] [D Mark done] [x Cancel] [R Supersede] [c Models]
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ CURRENT MODE FORM · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Project preferences ───────────────────────────────────────────────╮
+│Saved per project in this instance. Keyboard stays available.       │
+│This policy controls new breakdown and repair tasks.                │
+│Run mode applies to the next Run/resume/retry.                      │
+│Agent network applies to execution and repair workers. On permits   │
+│Mouse                                                               │
+│< Enabled >   click / Space to change                               │
+│Planner approval                                                    │
+│< Automatic >   click / Space to change                             │
+│Run mode                                                            │
+│< Run one >   click / Space to change                               │
+│Agent network                                                       │
+│< Off >   click / Space to change                                   │
+│Check before task                                                   │
+│< Off >   click / Space to change                                   │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…
+@@ MODE CHANGED RESULT · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 2
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────╮
+│Queue complete.                                                     │
+│Inspect results in History, or add more work.                       │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix]
+[S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution

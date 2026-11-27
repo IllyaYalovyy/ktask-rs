@@ -397,7 +397,17 @@ impl Service {
     /// Short index for History. Reports stay in their individual step views.
     pub fn browse_step_outline(&self, attempt: i64) -> Result<String> {
         let db = self.db.connection();
-        let mut text = String::from("Recorded steps (select Reviews or Failures for findings)\n");
+        let report: Option<i64> = db
+            .query_row(
+                "SELECT id FROM artifacts WHERE attempt_id=?1 AND name=?2 AND pruned_at_ms IS NULL ORDER BY id DESC LIMIT 1",
+                params![attempt, super::SCREEN_REPORT],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let mut text = report.map_or_else(String::new, |id| {
+            format!("Changed-screens report: artifact #{id} (its text is in Transcripts)\n")
+        });
+        text.push_str("Recorded steps (select Reviews or Failures for findings)\n");
         let mut stmt = db.prepare("SELECT ordinal,role,state,coalesce(failed_count,0),report,provider,model,check_name,(SELECT lens FROM lens_reviews WHERE step_id=attempt_steps.id) FROM attempt_steps WHERE attempt_id=?1 ORDER BY ordinal")?;
         let mut count = 0;
         for row in stmt.query_map([attempt], |r| {

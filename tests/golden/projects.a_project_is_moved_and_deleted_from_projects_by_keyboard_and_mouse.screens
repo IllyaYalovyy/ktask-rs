@@ -1,0 +1,248 @@
+@@ MOVE FORM · 110x30 · keyboard
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 1 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #111 · Pending   |   Queue 110 · History 110
+ Queue preference · Next #112: Projects fixture 112 · m: run mode in Current
+ Projects · 4 registered · 0 running · 1 need you
+ /tmp/ktask-screens---------------------… is not a project · n adds it
+╭ Projects · 3 / 4 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│  * alpha-app  Ready          110 queued · #111 Projects fixtur…││delta-gone                                │
+│    beta-lib   ╭ Move project delta-gone ───────────────────────────────────────────────────╮--------------/│
+│›   delta-gone │Now:                                                                        │ec/delta-gone  │
+│    gamma-docs │/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/delt│               │
+│               │a-gone                                                                      │               │
+│               │ktask moves no files. Move or clone the repository yourself, then enter its │               │
+│               │folder here. Tasks, history and settings follow the project.                │               │
+│               │New folder                                                                  │ry: 0 finished │
+│               │screens-----------------------/ktask-test-scratch/run-000000/delta-restored▏│               │
+│               │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │this project;  │
+│               │                                                                            │ept.           │
+│               │[Copy] [Apply] [Cancel] [Up] [Down]                                         │               │
+│               │                                                                            │               │
+│               ╰────────────────────────────────────────────────────────────────────────────╯               │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [n Add this folder] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+This folder is not a project · Enter opens one, n adds this folder
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MOVED · 110x30 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 1 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #111 · Pending   |   Queue 110 · History 110
+ Queue preference · Next #112: Projects fixture 112 · m: run mode in Current
+ Projects · 4 registered · 0 running · 1 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 3 / 4 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│  * alpha-app  Ready          110 queued · #111 Projects fixtur…││delta-gone                                │
+│    beta-lib   Needs approval   1 queued · #221 Approve the bet…││/tmp/ktask-screens-----------------------/│
+│›   delta-gone Idle             0 queued · No unfinished task   ││ktask-test-scratch/run-000000/delta-restor│
+│    gamma-docs Idle             0 queued · No unfinished task   ││ed                                        │
+│                                                                ││                                          │
+│                                                                ││State: Idle                               │
+│                                                                ││Runner: not running                       │
+│                                                                ││Current: No unfinished task               │
+│                                                                ││Queue: 0 unfinished · History: 0 finished │
+│                                                                ││                                          │
+│                                                                ││Enter opens it.                           │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Project moved to /tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/delta-restored
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DELETE FORM · 110x30 · keyboard
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 1 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #111 · Pending   |   Queue 110 · History 110
+ Queue preference · Next #112: Projects fixture 112 · m: run mode in Current
+ Projects · 4 registered · 0 running · 1 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 2 / 4 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│  * alpha-app  ╭ DANGER · Delete project beta-lib ──────────────────────────────────────────╮               │
+│›   beta-lib   │This cannot be undone. It permanently deletes 1 unfinished and 0 finished   │--------------/│
+│    delta-gone │tasks with their attempts, output, evidence, usage and settings, and        │ec/beta-lib    │
+│    gamma-docs │ktask's own files for this project (logs, evidence, preferences, caches).   │               │
+│               │                                                                            │               │
+│               │Nothing in                                                                  │               │
+│               │/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/beta│eta plan ·     │
+│               │-lib is touched: the repository, its commits and stashes stay as they are.  │               │
+│               │Type the project name to delete it                                          │ry: 0 finished │
+│               │▏                                                                           │               │
+│               │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │ns it.         │
+│               │                                                                            │               │
+│               │[Copy] [Apply] [Cancel] [Up] [Down]                                         │               │
+│               │                                                                            │               │
+│               ╰────────────────────────────────────────────────────────────────────────────╯               │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+The open project cannot be deleted · open another one first, or use ktask project-delete
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ WRONG NAME · 110x30 · keyboard
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 1 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #111 · Pending   |   Queue 110 · History 110
+ Queue preference · Next #112: Projects fixture 112 · m: run mode in Current
+ Projects · 4 registered · 0 running · 1 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 2 / 4 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│  * alpha-app  ╭ DANGER · Delete project beta-lib ──────────────────────────────────────────╮               │
+│›   beta-lib   │This cannot be undone. It permanently deletes 1 unfinished and 0 finished   │--------------/│
+│    delta-gone │tasks with their attempts, output, evidence, usage and settings, and        │ec/beta-lib    │
+│    gamma-docs │ktask's own files for this project (logs, evidence, preferences, caches).   │               │
+│               │                                                                            │               │
+│               │Nothing in                                                                  │               │
+│               │/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/beta│eta plan ·     │
+│               │-lib is touched: the repository, its commits and stashes stay as they are.  │               │
+│               │Type the project name to delete it                                          │ry: 0 finished │
+│               │beta▏                                                                       │               │
+│               │command conflict: Type the project's exact name to delete it                │ns it.         │
+│               │                                                                            │               │
+│               │[Copy] [Apply] [Cancel] [Up] [Down]                                         │               │
+│               │                                                                            │               │
+│               ╰────────────────────────────────────────────────────────────────────────────╯               │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+The open project cannot be deleted · open another one first, or use ktask project-delete
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DELETED · 110x30 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #111 · Pending   |   Queue 110 · History 110
+ Queue preference · Next #112: Projects fixture 112 · m: run mode in Current
+ Projects · 3 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 1 / 3 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│› * alpha-app  Ready 110 queued · #111 Projects fixture 111     ││alpha-app · open                          │
+│    delta-gone Idle    0 queued · No unfinished task            ││/tmp/ktask-screens-----------------------/│
+│    gamma-docs Idle    0 queued · No unfinished task            ││ktask-test-scratch/run-000000/alpha-app   │
+│                                                                ││                                          │
+│                                                                ││State: Ready                              │
+│                                                                ││Runner: not running                       │
+│                                                                ││Current: #111 Projects fixture 111 ·      │
+│                                                                ││Pending                                   │
+│                                                                ││Queue: 110 unfinished · History: 110      │
+│                                                                ││finished                                  │
+│                                                                ││                                          │
+│                                                                ││This project is open · Enter returns to   │
+│                                                                ││it.                                       │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Deleted project beta-lib: 1 tasks, 0 attempts · its folder was not touched
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MOVE FORM · 110x30 · mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 1 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #111 · Pending   |   Queue 110 · History 110
+ Queue preference · Next #112: Projects fixture 112 · m: run mode in Current
+ Projects · 4 registered · 0 running · 1 need you
+ /tmp/ktask-screens---------------------… is not a project · n adds it
+╭ Projects · 3 / 4 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│  * alpha-app  Ready          110 queued · #111 Projects fixtur…││delta-gone                                │
+│    beta-lib   ╭ Move project delta-gone ───────────────────────────────────────────────────╮--------------/│
+│›   delta-gone │Now:                                                                        │9f/delta-gone  │
+│    gamma-docs │/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/delt│               │
+│               │a-gone                                                                      │               │
+│               │ktask moves no files. Move or clone the repository yourself, then enter its │               │
+│               │folder here. Tasks, history and settings follow the project.                │               │
+│               │New folder                                                                  │ry: 0 finished │
+│               │screens-----------------------/ktask-test-scratch/run-000000/delta-restored▏│               │
+│               │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │this project;  │
+│               │                                                                            │ept.           │
+│               │[Copy] [Apply] [Cancel] [Up] [Down]                                         │               │
+│               │                                                                            │               │
+│               ╰────────────────────────────────────────────────────────────────────────────╯               │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [n Add this folder] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+This folder is not a project · Enter opens one, n adds this folder
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DELETE FORM · 110x30 · mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 1 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #111 · Pending   |   Queue 110 · History 110
+ Queue preference · Next #112: Projects fixture 112 · m: run mode in Current
+ Projects · 4 registered · 0 running · 1 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 2 / 4 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│  * alpha-app  ╭ DANGER · Delete project beta-lib ──────────────────────────────────────────╮               │
+│›   beta-lib   │This cannot be undone. It permanently deletes 1 unfinished and 0 finished   │--------------/│
+│    delta-gone │tasks with their attempts, output, evidence, usage and settings, and        │9f/beta-lib    │
+│    gamma-docs │ktask's own files for this project (logs, evidence, preferences, caches).   │               │
+│               │                                                                            │               │
+│               │Nothing in                                                                  │               │
+│               │/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/beta│eta plan ·     │
+│               │-lib is touched: the repository, its commits and stashes stay as they are.  │               │
+│               │Type the project name to delete it                                          │ry: 0 finished │
+│               │▏                                                                           │               │
+│               │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │ns it.         │
+│               │                                                                            │               │
+│               │[Copy] [Apply] [Cancel] [Up] [Down]                                         │               │
+│               │                                                                            │               │
+│               ╰────────────────────────────────────────────────────────────────────────────╯               │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+The open project cannot be deleted · open another one first, or use ktask project-delete
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ WRONG NAME · 110x30 · mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 1 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #111 · Pending   |   Queue 110 · History 110
+ Queue preference · Next #112: Projects fixture 112 · m: run mode in Current
+ Projects · 4 registered · 0 running · 1 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 2 / 4 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│  * alpha-app  ╭ DANGER · Delete project beta-lib ──────────────────────────────────────────╮               │
+│›   beta-lib   │This cannot be undone. It permanently deletes 1 unfinished and 0 finished   │--------------/│
+│    delta-gone │tasks with their attempts, output, evidence, usage and settings, and        │9f/beta-lib    │
+│    gamma-docs │ktask's own files for this project (logs, evidence, preferences, caches).   │               │
+│               │                                                                            │               │
+│               │Nothing in                                                                  │               │
+│               │/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/beta│eta plan ·     │
+│               │-lib is touched: the repository, its commits and stashes stay as they are.  │               │
+│               │Type the project name to delete it                                          │ry: 0 finished │
+│               │beta▏                                                                       │               │
+│               │command conflict: Type the project's exact name to delete it                │ns it.         │
+│               │                                                                            │               │
+│               │[Copy] [Apply] [Cancel] [Up] [Down]                                         │               │
+│               │                                                                            │               │
+│               ╰────────────────────────────────────────────────────────────────────────────╯               │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+The open project cannot be deleted · open another one first, or use ktask project-delete
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

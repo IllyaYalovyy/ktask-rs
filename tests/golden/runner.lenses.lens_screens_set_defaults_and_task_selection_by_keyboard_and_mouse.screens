@@ -1,0 +1,315 @@
+@@ LENS CONFIG · 120x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                      │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                                                                                                                      │
+│Mouse: Enabled                                                                                                        │
+│Run mode: Continue queue                                                                                              │
+│Planner approval: Automatic                                                                                           │
+│Delivery: local via origin/main                                                                                       │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing.   │
+│CLI require declares prerequisites before a task starts.                                                              │
+│                                                                                                                      │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                          │
+│u User defaults: what new projects start with; preview and apply them here.                                           │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                                │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art;│
+│override per project.                                                                                                 │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default  │
+│selection.                                                                                                            │
+│Checks: list, add, edit, enable or disable.                                                                           │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LENS LIST · 120x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────╭ Review lenses ─────────────────────────────────────────────────────────────╮────────────────────╮
+│Project: project    │A review lens is a specialist review, such as concurrency, security or      │                    │
+│Storage: SQLite outp│simplicity. A task that selects lenses is reviewed once per lens, each in   │esource limits.     │
+│Preferences: saved p│its own read-only session, instead of by the single ordinary review; one    │                    │
+│                    │repair is requested only after every lens has finished. Specialist reviews  │                    │
+│Mouse: Enabled      │are opt-in: choose lenses on a task's form or as the project's defaults.    │                    │
+│Run mode: Continue q│                                                                            │                    │
+│Planner approval: Au│Default lenses of this project: none (ordinary single review)               │                    │
+│Delivery: local via │                                                                            │                    │
+│Dependencies: manual│Lenses:                                                                     │isite is missing.   │
+│CLI require declares│concurrency · built-in scope · Races, locking, atomicity, cancellation and  │                    │
+│                    │cleanup, each with a concrete interleaving.                                 │                    │
+│Defaults apply to ne│security · built-in scope · Trust boundaries, injection, permissions and    │                    │
+│u User defaults: wha│secrets, each with a reachable abuse.                                       │                    │
+│f Profiles: named ro│simplicity · built-in scope · Duplication, speculative generality and       │                    │
+│w Work categories: t│needless complexity, each with its maintenance cost.                        │e, documents or art;│
+│override per project│Changes reach only tasks defined afterwards; a task revision keeps the      │                    │
+│L Review lenses: opt│instructions it was defined with.                                           │ project's default  │
+│selection.          │Select a lens and choose Apply to edit, preview, override or delete it.     │                    │
+│Checks: list, add, e│Placeholders: {{title}}, {{goal}}, {{criteria}}, {{category}}, {{context}}. │                    │
+│Keyboard remains ava│Task fields and context are always delivered; a placeholder only chooses    │                    │
+│i Report limits: tim│where. {{context}} is runtime-only: previews show a labelled stand-in.      │efaults.            │
+│E Export settings an│In the instructions line, \n is a line break; write \{{ for a literal {{.   │                    │
+│                    │The supervisor's rules, evidence handling and response schema are added     │                    │
+│                    │around every lens and cannot be edited here.                                │                    │
+│                    │Lens                                                                        │                    │
+│                    │< New lens >   click / Space to change                                      │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LENS DEFAULTS FORM · 120x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                      │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                                                                                                                      │
+│Mouse: Enabled                                                                                                        │
+│Run mode: Continue q╭ Project default lenses ────────────────────────────────────────────────────╮                    │
+│Planner approval: Au│The lenses new tasks of this project select, in review order. Choose None   │                    │
+│Delivery: local via │to keep the ordinary single review for new tasks. A task can always choose  │                    │
+│Dependencies: manual│its own; existing tasks keep the lenses their revisions pinned.             │isite is missing.   │
+│CLI require declares│Review lens 1                                                               │                    │
+│                    │< None (ordinary review) >   click / Space to change                        │                    │
+│Defaults apply to ne│Review lens 2                                                               │                    │
+│u User defaults: wha│< - >   click / Space to change                                             │                    │
+│f Profiles: named ro│Review lens 3                                                               │                    │
+│w Work categories: t│< - >   click / Space to change                                             │e, documents or art;│
+│override per project│Review lens 4                                                               │                    │
+│L Review lenses: opt│< - >   click / Space to change                                             │ project's default  │
+│selection.          │Review lens 5                                                               │                    │
+│Checks: list, add, e│< - >   click / Space to change                                             │                    │
+│Keyboard remains ava│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│i Report limits: tim│                                                                            │efaults.            │
+│E Export settings an│[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LENS DEFAULTS SAVED · 120x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                      │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                                                                                                                      │
+│Mouse: Enabled                                                                                                        │
+│Run mode: Continue queue                                                                                              │
+│Planner approval: Automatic                                                                                           │
+│Delivery: local via origin/main                                                                                       │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing.   │
+│CLI require declares prerequisites before a task starts.                                                              │
+│                                                                                                                      │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                          │
+│u User defaults: what new projects start with; preview and apply them here.                                           │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                                │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art;│
+│override per project.                                                                                                 │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default  │
+│selection.                                                                                                            │
+│Checks: list, add, edit, enable or disable.                                                                           │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Default review lenses: security, simplicity; only tasks defined afterwards use them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LENS TASK FORM · 120x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Queue · 0 shown / 0 ╭ Add task ──────────────────────────────────────────────────────────────────╮
+ Filter: All  |  Sear│Save creates a task in SQLite. Blank execution fields use project defaults; │
+╭ Queue · 0 / 0 · Mod│with a new model, blank effort means none.                                  │────────────────────╮
+│No tasks here.      │Needs review creates a draft.                                               │                    │
+│                    │Title                                                                       │                    │
+│                    │▏                                                                           │                    │
+│                    │Goal                                                                        │                    │
+│                    │                                                                            │                    │
+│                    │Acceptance check                                                            │                    │
+│                    │                                                                            │                    │
+│                    │Kind                                                                        │                    │
+│                    │< AI >   click / Space to change                                            │                    │
+│                    │Execution provider/model (blank = default)                                  │                    │
+│                    │                                                                            │                    │
+│                    │Execution effort (optional)                                                 │                    │
+│                    │                                                                            │                    │
+│                    │Approval                                                                    │                    │
+│                    │< Ready >   click / Space to change                                         │                    │
+│                    │Work category                                                               │                    │
+│                    │< Default >   click / Space to change                                       │                    │
+│                    │Review lens 1                                                               │                    │
+│                    │< Project default >   click / Space to change                               │                    │
+│                    │Review lens 2                                                               │                    │
+│                    │< - >   click / Space to change                                             │                    │
+│                    │Review lens 3                                                               │                    │
+│                    │< - >   click / Space to change                                             │                    │
+│                    │Review lens 4                                                               │                    │
+│                    │< - >   click / Space to change                                             │                    │
+│                    │Review lens 5                                                               │                    │
+│                    │< - >   click / Space to change                                             │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+╰────────────────────╰────────────────────────────────────────────────────────────────────────────╯────────────────────╯
+[Copy] [a Add] [i Insert] [o Import] [E Export] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+
+Default review lenses: security, simplicity; only tasks defined afterwards use them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LENS TASK FORM FILLED · 120x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Queue · 0 shown / 0 ╭ Add task ──────────────────────────────────────────────────────────────────╮
+ Filter: All  |  Sear│Save creates a task in SQLite. Blank execution fields use project defaults; │
+╭ Queue · 0 / 0 · Mod│with a new model, blank effort means none.                                  │────────────────────╮
+│No tasks here.      │Needs review creates a draft.                                               │                    │
+│                    │Title                                                                       │                    │
+│                    │Chosen lenses                                                               │                    │
+│                    │Goal                                                                        │                    │
+│                    │Create result.txt containing verified                                       │                    │
+│                    │Acceptance check                                                            │                    │
+│                    │result.txt contains verified                                                │                    │
+│                    │Kind                                                                        │                    │
+│                    │< AI >   click / Space to change                                            │                    │
+│                    │Execution provider/model (blank = default)                                  │                    │
+│                    │                                                                            │                    │
+│                    │Execution effort (optional)                                                 │                    │
+│                    │                                                                            │                    │
+│                    │Approval                                                                    │                    │
+│                    │< Ready >   click / Space to change                                         │                    │
+│                    │Work category                                                               │                    │
+│                    │< Default >   click / Space to change                                       │                    │
+│                    │Review lens 1                                                               │                    │
+│                    │< concurrency >   click / Space to change                                   │                    │
+│                    │Review lens 2                                                               │                    │
+│                    │< security >   click / Space to change                                      │                    │
+│                    │Review lens 3                                                               │                    │
+│                    │< - >   click / Space to change                                             │                    │
+│                    │Review lens 4                                                               │                    │
+│                    │< - >   click / Space to change                                             │                    │
+│                    │Review lens 5                                                               │                    │
+│                    │< - >   click / Space to change                                             │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+╰────────────────────╰────────────────────────────────────────────────────────────────────────────╯────────────────────╯
+[Copy] [a Add] [i Insert] [o Import] [E Export] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+
+Default review lenses: security, simplicity; only tasks defined afterwards use them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LENS TASK DETAILS · 120x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Queue · 1 shown / 1 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 1 · Model ───────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│› #1   Pending  Chosen lenses                          codex/execution││Chosen lenses                                 │
+│                                                                      ││#1 · Pending · AI                             │
+│                                                                      ││                                              │
+│                    ╭ Task details / attempts ───────────────────────────────────────────────────╮ntaining verified   │
+│                    │#1 v1 · Pending · ai                                                        │                    │
+│                    │Chosen lenses                                                               │ verified           │
+│                    │Actions: Run, Edit, Move, Cancel, Supersede, Mark done                      │                    │
+│                    │Current Revision 1 · Chosen lenses                                          │                    │
+│                    │Approval: ready · human: owner · Category: code (built-in, checks apply) ·  │                    │
+│                    │Review lenses: concurrency, security                                        │                    │
+│                    │Goal: Create result.txt containing verified                                 │ / none             │
+│                    │Acceptance: 1: result.txt contains verified                                 │e                   │
+│                    │execution: codex/execution / none                                           │on / none           │
+│                    │review: codex/review / none                                                 │tion / none         │
+│                    │validation: codex/validation / none                                         │                    │
+│                    │remediation: codex/remediation / none                                       │                    │
+│                    │Attempt limit: 3 · Task limit: Off · Stage limit: Off                       │                    │
+│                    │Task usage: none yet                                                        │                    │
+│                    │No attempt evidence recorded.                                               │                    │
+│                    │Find output                                                                 │                    │
+│                    │▏                                                                           │                    │
+│                    │[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │                    │
+│                    │[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │                    │
+│                    │[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │                    │
+│                    │[Refresh] [Up] [Down] [Close] [Copy]                                        │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel]
+[R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

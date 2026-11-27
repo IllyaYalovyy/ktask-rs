@@ -272,13 +272,15 @@ The supervisor records sessions, normalized usage, checks and criterion evidence
 - `src/demo.rs`, `src/mock.rs`: the `--demo` workspace and its deterministic fake tasks
 - `src/ui/`: terminal layout: frame chrome, Current, Queue/History, dialogs, text fitting
 - `src/presentation.rs`: terminal read projections and formatters; `task_text` renders tasks
+- `tests/golden/`, `tests/support/{screens,golden,gate,normalise}.rs`, `examples/screens.rs`: the
+  [golden screen set](#golden-screens), how tests record it and the gate that compares it
 - `tests/cases/workflows.rs`: real-binary mouse and keyboard interaction tests
 - `tests/cases/lifecycle.rs`: revised approval, models, resolutions, waits, and handoff flows
 - `tests/cases/persistence.rs`: durable terminal flows, restart, conflicts, disk transfer, isolation
 - `tests/cases/cli.rs`: real-binary CLI contracts, concurrent writers, and live TUI interoperation
 
-Run `make check` for formatting, Clippy, terminal flows, storage/migrations, isolation,
-cleanup, and build checks.
+Run `make check` for formatting, Clippy, terminal flows, golden screens, storage/migrations,
+isolation, cleanup, and build checks. `make golden` regenerates the golden screens.
 The normal tests use deterministic provider processes; the opt-in live test uses authenticated Codex.
 
 ## Configure ktask
@@ -728,19 +730,64 @@ before another worker starts. Repository files and provider session history are 
 Codex execution excludes general `/tmp` writes while allowing the owned `TMPDIR`.
 Supervisor check transcripts are durable artifacts under the instance state directory, with
 relational artifact records. Read-only reviewers receive their paths and inspect actual output,
-not just an executor's summary. `make check` retains passing-test output, including rendered PTY
-screens. Include `--show-output` or `--nocapture` in custom PTY checks to preserve those screens.
+not just an executor's summary. Include `--show-output` or `--nocapture` in custom checks whose
+passing output reviewers need. Terminal screens are verified separately, against the
+[golden screen set](#golden-screens).
 
 Reviewers start with an evidence packet, not raw log tails. Its inline result preview is at
 most 12 KiB regardless of archive size. Read-only JSONL indexes list every criterion,
 latest check, prior step and artifact, with source-tree identity, checksums and missing/pruned
 status. Full reports and workflow context remain accessible separately. Review and validation
-must inspect each criterion's cited proof, unresolved critical findings and required images;
-old assessments and executor claims do not establish a pass.
+must inspect each criterion's cited proof, unresolved critical findings and required images or
+screens; old assessments and executor claims do not establish a pass.
 
 `ktask evidence FILE --offset 0 --limit 4096` reads a bounded page without opening the database.
 Add `--search TEXT` for literal search. Follow `next_offset` until `eof`; each search scans at
 most 1 MiB. The maximum page is 8192 bytes. Use the image viewer for image evidence.
+
+### Golden screens
+
+Terminal screens are text, not images. The PTY tests record each screen of the real binary
+through one helper (`support::record`), and `tests/golden` holds the approved set: one
+`.screens` file per test with its frames in order, each under `@@ step · COLSxROWS · input`.
+A frame that is identical for keyboard and mouse is stored once as `keyboard+mouse`.
+Only a settled frame can be recorded: after the store the TUI shows changes (apart from a
+running worker's active-time heartbeat), a wait returns a screen only once two refresh
+intervals have passed without a further change to the store or to the words on the screen.
+A frame of a terminal that has received mouse input is refused with a keyboard label.
+
+Before comparison the helper normalises only volatile tokens, by the named rules documented in
+`tests/support/normalise.rs`: temporary paths, scratch names, the checkout path, the version,
+dates and clock times, elapsed and waiting durations, the demo simulator's timed progress, the
+host's disk space, what a storage-budget pause measured, and generated hashes and operation
+IDs. Configured values stay as shown, and no line, frame or test is masked. A rule cannot make a screen that was taken too early stable:
+wait for the state the screen has when the work behind it has settled, then record it.
+
+`make check` records the screens afresh and fails, with the differing lines, on a screen that
+differs from its golden, a screen without a golden, and a golden that no test produced. It never
+rewrites golden files. After an intended change, regenerate the set and keep the result in the
+same change:
+
+```sh
+make golden
+```
+
+The golden files in a change become approved when its task passes review and validation and is
+committed. The check compares the recorded screens with the set committed at the task's starting
+commit (`KTASK_BASE_COMMIT`, which ktask passes to every check; `HEAD` otherwise) and archives
+one `changed-screens.txt` report: the before and after text of every new, changed or removed
+screen, and how many matched. A task that changes no screen archives no screen file. In any
+project with `tests/golden/*.screens`, ktask tells review and validation that matched screens
+were verified in code and that they judge only the new and changed screens in that report.
+They are told that no screen changed only when the check's evidence was archived completely
+without a report; a report that is missing, pruned or possibly among files left out is named
+unavailable, and that blocks acceptance.
+Attempt details and CLI `show` name the report; `artifact ID` prints it, and review turns page
+it with `ktask evidence`.
+
+Screens are compared as laid out. Test sandboxes are named after their test and padded to one
+path length, so `TMPDIR` must be at most 41 characters long (a ktask worker's scratch directory
+and `/tmp` both are).
 
 Checks can print one `KTASK_CHECK_RESULT ` line per suite followed by JSON, for example:
 ```text

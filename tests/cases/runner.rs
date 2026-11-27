@@ -110,14 +110,11 @@ fn bound_tool_probes_protect_installations_on_admission_and_recheck() -> Result 
                 screen.contains("Dependency not verified")
                     && screen.contains("Current #1 · Needs dependency")
             })?;
-            if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-                support::screen_png(
-                    &screen,
-                    &PathBuf::from(directory).join(format!(
-                        "bound-probe-wait-managed-{managed}-mouse-{mouse}.png"
-                    )),
-                )?;
-            }
+            crate::support::record(
+                &format!("bound probe wait managed={managed}"),
+                mouse,
+                &screen,
+            );
             terminal.send("q")?;
             terminal.finish()?;
             assert_eq!(fs::read_to_string(runtime.join("probe-starts"))?, "xx");
@@ -280,12 +277,7 @@ fn bound_adb_provider_denial_waits_until_a_replacement_is_accessible() -> Result
         let waiting = terminal.screen("provider denial retained after recheck", |s| {
             s.contains("Dependency not verified") && s.contains("Current #1 · Needs dependency")
         })?;
-        if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            support::screen_png(
-                &waiting,
-                &PathBuf::from(directory).join(format!("provider-denial-wait-mouse-{mouse}.png")),
-            )?;
-        }
+        crate::support::record("provider denial wait", mouse, &waiting);
         service.bind_tool("android-sdk", ids[1], Some(1))?;
         if mouse {
             terminal.click("r Recheck")?;
@@ -295,13 +287,7 @@ fn bound_adb_provider_denial_waits_until_a_replacement_is_accessible() -> Result
         let paused = terminal.screen("provider access repaired", |s| {
             s.contains("Current #1 · Paused") && s.contains("Dependencies verified")
         })?;
-        if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            support::screen_png(
-                &paused,
-                &PathBuf::from(directory)
-                    .join(format!("provider-denial-repaired-mouse-{mouse}.png")),
-            )?;
-        }
+        crate::support::record("provider denial repaired", mouse, &paused);
         terminal.send("q")?;
         terminal.finish()?;
         assert_eq!(service.dependencies(run.task)?[0].state, "satisfied");
@@ -412,12 +398,7 @@ fn provider_denial_recheck_accepts_runtime_repair_without_binding_change() -> Re
         let waiting = terminal.screen("runtime still missing", |s| {
             s.contains("Dependency not verified") && s.contains("Current #1 · Needs dependency")
         })?;
-        if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            support::screen_png(
-                &waiting,
-                &PathBuf::from(directory).join(format!("provider-runtime-wait-mouse-{mouse}.png")),
-            )?;
-        }
+        crate::support::record("provider runtime wait", mouse, &waiting);
         fs::create_dir_all(Path::new(&runtime).join("startup"))?;
         assert_eq!(service.resolve_tools(&paths)?.fingerprint, fingerprint);
         if mouse {
@@ -428,13 +409,7 @@ fn provider_denial_recheck_accepts_runtime_repair_without_binding_change() -> Re
         let paused = terminal.screen("runtime repaired", |s| {
             s.contains("Current #1 · Paused") && s.contains("Dependencies verified")
         })?;
-        if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            support::screen_png(
-                &paused,
-                &PathBuf::from(directory)
-                    .join(format!("provider-runtime-repaired-mouse-{mouse}.png")),
-            )?;
-        }
+        crate::support::record("provider runtime repaired", mouse, &paused);
         terminal.send("q")?;
         terminal.finish()?;
         assert!(Path::new(&runtime).join("startup/probe").exists());
@@ -687,22 +662,20 @@ printf image > "$ANDROID_HOME/system-images/android-36/google_apis/x86_64/system
                     .ok_or("later attempts")?
                     .is_empty()
             );
-            if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-                support::screen_png(
-                    &progress,
-                    &PathBuf::from(dir)
-                        .join(format!("android-progress-queue-{queue}-mouse-{mouse}.png")),
-                )?;
+            crate::support::record(&format!("android progress queue={queue}"), mouse, &progress);
+            if mouse {
+                terminal.click("Close")?;
+            } else {
+                terminal.send("\x1b")?;
             }
-            terminal.click("Close")?;
             let resumed = terminal.screen("installer continued saved session", |s| {
                 s.contains("resumed: true")
+                    && s.contains("Workflow · Implement · repair round 0/10")
+                    && !s.contains("Android install progress")
             })?;
-            if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-                let path = PathBuf::from(dir)
-                    .join(format!("android-resumed-queue-{queue}-mouse-{mouse}.png"));
-                support::screen_png(&resumed, &path)?;
-            }
+            crate::support::record(&format!("android resumed queue={queue}"), mouse, &resumed);
+            // The resumed turn holds until its screen is kept.
+            fs::write(root.join("release-resumed"), "")?;
             let first_done = support::eventually("original attempt complete", || {
                 let shown = f.ok(&["show", "1"])?;
                 Ok((shown["status"] == "succeeded").then_some(shown))
@@ -725,16 +698,12 @@ printf image > "$ANDROID_HOME/system-images/android-36/google_apis/x86_64/system
                 if queue {
                     s.contains("History 2") && s.contains("Queue · complete")
                 } else {
-                    s.contains("History 1") && s.contains("Queue 1")
+                    s.contains("History 1")
+                        && s.contains("Queue 1")
+                        && s.contains("Session: Run one · stopped")
                 }
             })?;
-            if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-                support::screen_png(
-                    &finished,
-                    &PathBuf::from(dir)
-                        .join(format!("android-finished-queue-{queue}-mouse-{mouse}.png")),
-                )?;
-            }
+            crate::support::record(&format!("android finished queue={queue}"), mouse, &finished);
             terminal.send("q")?;
             terminal.finish()?;
         }
@@ -1353,11 +1322,7 @@ fn duplicate_live_callback_and_supervisor_crash_restore_dependency_wait() -> Res
     let restored = terminal.screen("crash-restored dependency Current", |s| {
         s.contains("Current #1 · Needs dependency") && s.contains("[r Recheck]")
     })?;
-    if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-        let dir = PathBuf::from(dir);
-        fs::write(dir.join("dependency-crash-restored.txt"), &restored)?;
-        support::screen_png(&restored, &dir.join("dependency-crash-restored.png"))?;
-    }
+    crate::support::record("dependency crash restored", false, &restored);
     terminal.send("q")?;
     terminal.finish()?;
     let recovery = f.process().args(["run", "--one"]).output()?;
@@ -1460,29 +1425,14 @@ fn dependency_wait_rechecks_and_resumes_same_attempt_in_real_terminal() -> Resul
         let wait_screen = t.screen("dependency Current wait", |s| {
             s.contains("Current #1 · Needs dependency") && s.contains("[r Recheck]")
         })?;
-        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            let dir = PathBuf::from(dir);
-            fs::write(
-                dir.join(format!("dependency-live-wait-mouse-{mouse}.txt")),
-                &wait_screen,
-            )?;
-            support::screen_png(
-                &wait_screen,
-                &dir.join(format!("dependency-live-wait-mouse-{mouse}.png")),
-            )?;
-        }
+        crate::support::record("dependency live wait", mouse, &wait_screen);
         let tool = f.scratch.path().join("bin/missing-runtime-tool");
         support::write_executable(&tool, b"#!/bin/sh\necho 'runtime-tool 1.2.3'\n")?;
         press(&mut t, mouse, "r Recheck", "r")?;
         let paused = t.screen("dependency explicitly rechecked", |s| {
             s.contains("Current #1 · Paused") && s.contains("[r Resume]")
         })?;
-        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            fs::write(
-                PathBuf::from(dir).join(format!("dependency-live-paused-mouse-{mouse}.txt")),
-                &paused,
-            )?;
-        }
+        crate::support::record("dependency live paused", mouse, &paused);
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
             calls_before
@@ -1495,17 +1445,7 @@ fn dependency_wait_rechecks_and_resumes_same_attempt_in_real_terminal() -> Resul
         })?;
         assert!(admission_wait.contains("Dependency not verified"));
         assert!(!admission_wait.contains("Runner exited before startup"));
-        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            let dir = PathBuf::from(dir);
-            fs::write(
-                dir.join(format!("dependency-admission-wait-mouse-{mouse}.txt")),
-                &admission_wait,
-            )?;
-            support::screen_png(
-                &admission_wait,
-                &dir.join(format!("dependency-admission-wait-mouse-{mouse}.png")),
-            )?;
-        }
+        crate::support::record("dependency admission wait", mouse, &admission_wait);
         assert_eq!(
             fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
             calls_before
@@ -1519,12 +1459,7 @@ fn dependency_wait_rechecks_and_resumes_same_attempt_in_real_terminal() -> Resul
         let complete = t.screen("dependency resumed completion", |s| {
             s.contains("Queue complete")
         })?;
-        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            fs::write(
-                PathBuf::from(dir).join(format!("dependency-live-complete-mouse-{mouse}.txt")),
-                &complete,
-            )?;
-        }
+        crate::support::record("dependency live complete", mouse, &complete);
         let done = f.ok(&["show", "1"])?;
         assert_eq!(done["status"], "succeeded");
         assert_eq!(done["attempts"].as_array().unwrap().len(), 1);
@@ -1560,12 +1495,7 @@ fn live_dependency_wait_stops_and_stashes_by_mouse_and_keyboard() -> Result {
         let stopped = t.screen("live dependency stopped", |s| {
             s.contains("Current #1 · Pending") && s.contains("[r Run")
         })?;
-        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            fs::write(
-                PathBuf::from(dir).join(format!("dependency-live-stop-mouse-{mouse}.txt")),
-                &stopped,
-            )?;
-        }
+        crate::support::record("dependency live stop", mouse, &stopped);
         assert!(!f.root.join("partial.txt").exists());
         assert!(
             f.git(&["stash", "list"])?
@@ -1957,7 +1887,7 @@ fn storage_view_shows_age_protection_by_keyboard_and_mouse() -> Result {
         let dialog = terminal.screen("age protection visible", |s| {
             s.contains("Protected evidence") && s.contains("WORK PAUSED AT CAPACITY")
         })?;
-        println!("STORAGE AGE PROTECTION mouse={mouse}\n{dialog}");
+        crate::support::record("STORAGE AGE PROTECTION", mouse, &dialog);
         assert!(dialog.contains("minimum age"), "{dialog}");
         assert!(dialog.contains("eligible: 0 bytes"), "{dialog}");
         if mouse {
@@ -2126,7 +2056,7 @@ fn capacity_wait_and_resume_are_visible_in_real_terminal_by_keyboard_and_mouse()
         let waiting = terminal.screen("capacity wait visible", |s| {
             s.contains("Storage capacity reserve reached")
         })?;
-        println!("CAPACITY WAIT mouse={mouse} size={cols}x{rows}\n{waiting}");
+        crate::support::record("CAPACITY WAIT", mouse, &waiting);
         assert_eq!(f.ok(&["show", "1"])?["status"], "ready");
         f.ok(&["retention", "30", "--max-bytes", "1073741824"])?;
         if mouse {
@@ -2138,7 +2068,7 @@ fn capacity_wait_and_resume_are_visible_in_real_terminal_by_keyboard_and_mouse()
             s.contains("Session: Queue · complete · no queued work")
                 && s.contains("Queue complete.")
         })?;
-        println!("CAPACITY RESUMED mouse={mouse} size={cols}x{rows}\n{resumed}");
+        crate::support::record("CAPACITY RESUMED", mouse, &resumed);
         terminal.send("q")?;
         terminal.finish()?;
         assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
@@ -2180,10 +2110,13 @@ fn bounded_reconciliation_remains_pausable_in_real_terminal() -> Result {
             let active:bool=db.connection().query_row("SELECT EXISTS(SELECT 1 FROM instance_allocation_scan WHERE complete=0 AND entries_visited>0)",[],|r|r.get(0))?;
             Ok(active.then_some(()))
         })?;
+        // Held, so the scan cannot finish or keep storing progress while it is shown.
+        let held = pause_supervisor_when_db_idle(&f)?;
         let running = terminal.screen("bounded accounting active", |s| {
             s.contains("Session: Queue · running") && s.contains("p Pause")
         })?;
-        println!("BOUNDED ACCOUNTING RUNNING mouse={mouse} size={cols}x{rows}\n{running}");
+        crate::support::record("BOUNDED ACCOUNTING RUNNING", mouse, &running);
+        drop(held);
         let started = Instant::now();
         if mouse {
             terminal.click("p Pause")?;
@@ -2191,12 +2124,12 @@ fn bounded_reconciliation_remains_pausable_in_real_terminal() -> Result {
             terminal.send("p")?;
         }
         let paused = terminal.screen("bounded accounting paused", |s| {
-            s.contains("Session: Queue · paused")
+            s.contains("Paused; no later task started") && s.contains("u Readiness") && {
+                s.contains("Session: Queue · paused")
+            }
         })?;
-        println!(
-            "BOUNDED ACCOUNTING PAUSED mouse={mouse} elapsed_ms={}\n{paused}",
-            started.elapsed().as_millis()
-        );
+        println!("bounded accounting paused after {:?}", started.elapsed());
+        crate::support::record("BOUNDED ACCOUNTING PAUSED", mouse, &paused);
         assert!(started.elapsed() < Duration::from_secs(5));
         assert_eq!(f.ok(&["show", "1"])?["status"], "ready");
         assert!(evidence.join("held-79999").is_dir());
@@ -2543,7 +2476,7 @@ fn worker_artifact_survives_scratch_and_reaches_later_judge_and_attempt() -> Res
         let opened = terminal.screen("worker artifact in real terminal", |screen| {
             screen.contains("CAPTURE FROM FIRST TURN")
         })?;
-        println!("RETAINED ARTIFACT OPEN mouse={mouse}\n{opened}");
+        crate::support::record("RETAINED ARTIFACT OPEN", mouse, &opened);
         if mouse {
             terminal.click("Summary")?;
         } else {
@@ -2552,7 +2485,7 @@ fn worker_artifact_survives_scratch_and_reaches_later_judge_and_attempt() -> Res
         let listed = terminal.screen("artifact listed in attempt summary", |screen| {
             screen.contains("capture.txt") && screen.contains("sha256")
         })?;
-        println!("RETAINED ARTIFACT LIST mouse={mouse}\n{listed}");
+        crate::support::record("RETAINED ARTIFACT LIST", mouse, &listed);
         terminal.send("q")?;
         terminal.kill()?;
     }
@@ -3235,7 +3168,7 @@ fn blocked_supervisor_delivery_pauses_and_resumes_same_attempt() -> Result {
     for mouse in [false, true] {
         let f = Fixture::new()?;
         f.provider("scratch-blocked-supervisor")?;
-        f.add("Keep a blocked resource outcome")?;
+        f.add("Keep blocked outcome")?;
         f.add("Do not advance the queue")?;
         let mut supervisor = f
             .process()
@@ -3346,11 +3279,12 @@ fn blocked_supervisor_delivery_pauses_and_resumes_same_attempt() -> Result {
         );
         f.no_scratch()?;
 
-        let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 34)?;
+        // Taller than the History details, so none is lost when a long attempt time wraps.
+        let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
         let paused = terminal.screen("blocked delivery resource pause", |screen| {
             screen.contains("[r Resume]") && screen.contains("managed scratch exceeded")
         })?;
-        println!("BLOCKED SUPERVISOR PTY mouse={mouse} paused\n{paused}");
+        crate::support::record("BLOCKED SUPERVISOR PTY paused", mouse, &paused);
         if mouse {
             terminal.click("r Resume")?;
         } else {
@@ -3363,11 +3297,12 @@ fn blocked_supervisor_delivery_pauses_and_resumes_same_attempt() -> Result {
             terminal.send("3")?;
         }
         let history = terminal.screen("blocked delivery recovered history", |screen| {
-            screen.contains("History · 1 shown")
-                && screen.contains("Keep a blocked resource outcome")
+            screen.contains("Session: Run one · stopped")
+                && screen.contains("History · 1 shown")
+                && screen.contains("Keep blocked outcome")
                 && screen.contains("Done")
         })?;
-        println!("BLOCKED SUPERVISOR PTY mouse={mouse} recovered\n{history}");
+        crate::support::record("BLOCKED SUPERVISOR PTY recovered", mouse, &history);
         terminal.send("q")?;
         terminal.kill()?;
         let final_state = f.ok(&["show", "1"])?;
@@ -3537,9 +3472,11 @@ fn startup_output_pause_refused_resume_and_recovery_render_in_real_terminal() ->
             t.send("r")?;
         }
         let paused = t.screen("startup resource pause", |s| {
-            s.contains("[r Resume]") && s.contains("Resource limit: attempt output")
+            s.contains("Session: Queue · paused") && {
+                s.contains("[r Resume]") && s.contains("Resource limit: attempt output")
+            }
         })?;
-        println!("STARTUP RESOURCE PTY mouse={mouse} first\n{paused}");
+        crate::support::record("STARTUP RESOURCE PTY first", mouse, &paused);
         f.supervisor_stopped()?;
         t.still("resume action ready", |s| s.contains("[r Resume]"))?;
         if mouse {
@@ -3550,7 +3487,7 @@ fn startup_output_pause_refused_resume_and_recovery_render_in_real_terminal() ->
         let refused = t.screen("unchanged resume refused", |s| {
             s.contains("Raise and resume") && s.contains("Resume refused")
         })?;
-        println!("STARTUP RESOURCE PTY mouse={mouse} refused\n{refused}");
+        crate::support::record("STARTUP RESOURCE PTY refused", mouse, &refused);
         if mouse {
             t.click("Cancel")?;
         } else {
@@ -3584,11 +3521,13 @@ fn startup_output_pause_refused_resume_and_recovery_render_in_real_terminal() ->
             recovered.send("3")?;
         }
         let screen = recovered.screen("resource recovery succeeded in history", |s| {
-            s.contains("History · 1 shown")
-                && s.contains("Inspect startup output pressure")
-                && s.contains("Done")
+            crate::support::finished(s) && {
+                s.contains("History · 1 shown")
+                    && s.contains("Inspect startup output pressure")
+                    && s.contains("Done")
+            }
         })?;
-        println!("STARTUP RESOURCE PTY mouse={mouse} recovered\n{screen}");
+        crate::support::record("STARTUP RESOURCE PTY recovered", mouse, &screen);
         assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
         f.supervisor_stopped()?;
         recovered.send("q")?;
@@ -3953,9 +3892,11 @@ fn start_and_pause_worker(f: &Fixture, t: &mut Terminal, mouse: bool) -> Result<
             .then_some(()))
     })?;
     let running = t.screen("execution and checks reached review", |s| {
-        s.contains("Running · supervisor alive") && s.contains("Step: Review")
+        s.contains("Running · supervisor alive")
+            && s.contains("Step: Review")
+            && s.contains("review: codex/review · new session")
     })?;
-    println!("STOP REAL WORK BEFORE PAUSE mouse={mouse}\n{running}");
+    crate::support::record("STOP REAL WORK BEFORE PAUSE", mouse, &running);
     assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
     // Reproduce an invalid stored setting only after the worker has made progress.
     f.db()?.connection().execute(
@@ -3970,7 +3911,7 @@ fn start_and_pause_worker(f: &Fixture, t: &mut Terminal, mouse: bool) -> Result<
     let paused = t.screen("real worker paused and released", |s| {
         s.contains("Paused · runner stopped") && s.contains("[s Stop]")
     })?;
-    println!("STOP PAUSED mouse={mouse}\n{paused}");
+    crate::support::record("STOP PAUSED", mouse, &paused);
     f.guardian_finished()?;
     f.supervisor_stopped()?;
     let before = f.ok(&["show", "1"])?;
@@ -4045,7 +3986,7 @@ fn stop_current(t: &mut Terminal, mouse: bool, title: &str, reason: &str) -> Res
     let dialog = t.screen("stop dialog", |s| {
         s.contains(&format!("Stop #1 {title}")) && s.contains("Reason (optional)")
     })?;
-    println!("STOP DIALOG mouse={mouse}\n{dialog}");
+    crate::support::record("STOP DIALOG", mouse, &dialog);
     if mouse {
         t.click("Apply")?;
     } else {
@@ -4088,7 +4029,7 @@ fn mark_done(t: &mut Terminal, mouse: bool, task: &str) -> Result {
     let dialog = t.screen("mark done dialog", |s| {
         s.contains(&format!("Mark done {task}"))
     })?;
-    println!("MARK DONE DIALOG mouse={mouse}\n{dialog}");
+    crate::support::record("MARK DONE DIALOG", mouse, &dialog);
     if mouse {
         t.click("Apply")
     } else {
@@ -4113,7 +4054,7 @@ fn stop_and_correct_task(
     evidence: &StopEvidence,
 ) -> Result {
     let pending = stop_current(t, mouse, "Stop invalid effort", "Correct the effort")?;
-    println!("STOP PENDING mouse={mouse}\n{pending}");
+    crate::support::record("STOP PENDING", mouse, &pending);
     let stopped = f.ok(&["show", "1"])?;
     assert_eq!(stopped["id"], evidence.before["id"]);
     assert_eq!(stopped["state"], "pending");
@@ -4155,7 +4096,7 @@ fn stop_and_correct_task(
             && s.contains("Remediation: codex/remediation")
             && s.contains("hight")
     })?;
-    println!("STOP DEFAULTS mouse={mouse}\n{preview}");
+    crate::support::record("STOP DEFAULTS", mouse, &preview);
     if mouse {
         t.click("Fields +")?;
         t.screen("model field page advanced", |s| {
@@ -4170,11 +4111,12 @@ fn stop_and_correct_task(
         t.send(&"\t".repeat(11))?;
         t.send(" ")?;
     }
-    println!(
-        "STOP DEFAULTS SELECTED mouse={mouse}\n{}",
-        t.screen("defaults selected", |s| {
+    crate::support::record(
+        "STOP DEFAULTS SELECTED",
+        mouse,
+        &t.screen("defaults selected", |s| {
             s.contains("< Apply current project defaults >")
-        })?
+        })?,
     );
     if mouse {
         t.click("Apply")?;
@@ -4216,9 +4158,12 @@ fn run_stopped_task_and_inspect_history(f: &Fixture, t: &mut Terminal, mouse: bo
     } else {
         t.send("r")?;
     }
-    println!(
-        "STOP EXPLICIT RUN COMPLETE mouse={mouse}\n{}",
-        t.screen("new attempt completed", |s| s.contains("Queue complete."))?
+    crate::support::record(
+        "STOP EXPLICIT RUN COMPLETE",
+        mouse,
+        &t.screen("new attempt completed", |s| {
+            crate::support::finished(s) && s.contains("Queue complete.")
+        })?,
     );
     assert_eq!(f.ok(&["show", "1"])?["state"], "done");
     if mouse {
@@ -4246,7 +4191,7 @@ fn run_stopped_task_and_inspect_history(f: &Fixture, t: &mut Terminal, mouse: bo
     let history = t.screen("stopped attempt remains terminal in history", |s| {
         s.contains("Attempt 1 / 2") && s.contains("interrupted") && s.contains("Stopped")
     })?;
-    println!("STOP HISTORY TERMINAL ATTEMPT mouse={mouse}\n{history}");
+    crate::support::record("STOP HISTORY TERMINAL ATTEMPT", mouse, &history);
     t.send("\x1b")?;
     t.screen("history closed details", |s| !s.contains("Attempt 1 / 2"))?;
     t.send("q")?;
@@ -4334,11 +4279,12 @@ fn stop_needs_input_cancels_the_question_and_cli_changes_reach_the_open_tui() ->
         } else {
             t.send("r")?;
         }
-        println!(
-            "STOP WAITING mouse={mouse}\n{}",
-            t.screen("real question waiting", |s| {
+        crate::support::record(
+            "STOP WAITING",
+            mouse,
+            &t.screen("real question waiting", |s| {
                 s.contains("Needs input · runner stopped") && s.contains("[s Stop]")
-            })?
+            })?,
         );
         let old = f.ok(&["show", "1"])?;
         assert_eq!(old["state"], "needs_input");
@@ -4349,7 +4295,7 @@ fn stop_needs_input_cancels_the_question_and_cli_changes_reach_the_open_tui() ->
             "Asked the wrong thing",
         )?;
         assert!(!pending.contains("Question from the worker"), "{pending}");
-        println!("STOP WAITING NOW PENDING mouse={mouse}\n{pending}");
+        crate::support::record("STOP WAITING NOW PENDING", mouse, &pending);
         let after = f.ok(&["show", "1"])?;
         assert_eq!(after["id"], old["id"]);
         assert_eq!(after["attempts"][0]["id"], old["attempts"][0]["id"]);
@@ -4370,18 +4316,20 @@ fn stop_needs_input_cancels_the_question_and_cli_changes_reach_the_open_tui() ->
             ("Which content?".into(), "cancelled".into())
         );
         f.ok(&["cancel", "1", "--reason", "Not needed now"])?;
-        println!(
-            "STOPPED TASK CANCELLED mouse={mouse}\n{}",
-            t.screen("cancelled from queue", |s| {
+        crate::support::record(
+            "STOPPED TASK CANCELLED",
+            mouse,
+            &t.screen("cancelled from queue", |s| {
                 s.contains("Queue 0 · History 1")
-            })?
+            })?,
         );
         assert_eq!(f.ok(&["show", "1"])?["status"], "cancelled");
         let copy = f.ok(&["copy", "1"])?;
         assert_eq!(copy["tasks"][0]["id"], 2, "{copy}");
-        println!(
-            "STOPPED TASK COPIED mouse={mouse}\n{}",
-            t.screen("copy is current", |s| s.contains("Current #2 · Pending"))?
+        crate::support::record(
+            "STOPPED TASK COPIED",
+            mouse,
+            &t.screen("copy is current", |s| s.contains("Current #2 · Pending"))?,
         );
         // Supply an explicitly synthetic planner definition through the same shared
         // application command used by the CLI/TUI, then inspect its persisted result.
@@ -4398,6 +4346,8 @@ fn stop_needs_input_cancels_the_question_and_cli_changes_reach_the_open_tui() ->
             "Synthetic planner fixture after stop",
             true,
         )?;
+        // History opens on its first row only once the TUI knows of both closed tasks.
+        t.still("superseded copy known", |s| s.contains("History 2"))?;
         if mouse {
             t.click("3 History")?;
         } else {
@@ -4408,7 +4358,7 @@ fn stop_needs_input_cancels_the_question_and_cli_changes_reach_the_open_tui() ->
                 && s.lines()
                     .any(|line| line.contains("#2") && line.contains("Superseded"))
         })?;
-        println!("STOPPED COPY SUPERSEDED HISTORY mouse={mouse}\n{history}");
+        crate::support::record("STOPPED COPY SUPERSEDED HISTORY", mouse, &history);
         assert!(
             history
                 .lines()
@@ -4451,7 +4401,7 @@ fn stop_mouse_control_applies_without_starting_work() -> Result {
         s.contains("Current #1 · Paused") && s.contains("[s Stop]")
     })?;
     let pending = stop_current(&mut t, true, "Mouse stop", "")?;
-    println!("MOUSE STOP PENDING\n{pending}");
+    crate::support::record("MOUSE STOP PENDING", true, &pending);
     assert_eq!(
         f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
         1
@@ -4492,9 +4442,11 @@ fn stop_running_task_in_real_pty_reaps_worker_stashes_changes_and_runs_fresh() -
         }
         let worker = f.dirty_worker()?;
         let running = t.screen("running stop control", |s| {
-            s.contains("Current #1 · Running · supervisor alive") && s.contains("[s Stop]")
+            s.contains("execution: codex/execution · new session") && {
+                s.contains("Current #1 · Running · supervisor alive") && s.contains("[s Stop]")
+            }
         })?;
-        println!("RUNNING STOP mouse={mouse}\n{running}");
+        crate::support::record("RUNNING STOP", mouse, &running);
         assert!(!running.contains("[e Edit]"), "{running}");
         t.send("e")?;
         t.screen("edit refused while running", |s| {
@@ -4503,7 +4455,7 @@ fn stop_running_task_in_real_pty_reaps_worker_stashes_changes_and_runs_fresh() -
             )
         })?;
         let pending = stop_current(&mut t, mouse, "Running stop", "Wrong approach")?;
-        println!("RUNNING STOP PENDING mouse={mouse}\n{pending}");
+        crate::support::record("RUNNING STOP PENDING", mouse, &pending);
         // Stop completes only after the runner exited and its guardian reaped the worker.
         f.supervisor_stopped()?;
         f.guardian_finished()?;
@@ -4575,7 +4527,10 @@ fn run_after_stop_refuses_unrelated_edits_in_real_pty_and_cli() -> Result {
             t.send("r")?;
         }
         f.dirty_worker()?;
-        t.screen("running", |s| s.contains("Current #1 · Running"))?;
+        t.screen("running", |s| {
+            s.contains("Current #1 · Running")
+                && s.contains("execution: codex/execution · new session")
+        })?;
         stop_current(&mut t, mouse, "Stopped then edited", "Rethink")?;
         f.supervisor_stopped()?;
         f.guardian_finished()?;
@@ -4591,7 +4546,7 @@ fn run_after_stop_refuses_unrelated_edits_in_real_pty_and_cli() -> Result {
         let refused = t.screen("run refused", |s| {
             s.contains("uncommitted work from outside this task")
         })?;
-        println!("RUN AFTER STOP REFUSED mouse={mouse}\n{refused}");
+        crate::support::record("RUN AFTER STOP REFUSED", mouse, &refused);
         let blocked = f.process().args(["--json", "run", "--one"]).output()?;
         assert_eq!(blocked.status.code(), Some(4));
         assert!(
@@ -4820,6 +4775,39 @@ fn pause_when_db_idle(f: &Fixture, supervisor: i32) -> Result<PausedSupervisor> 
     Err("supervisor never released SQLite write lock".into())
 }
 
+/// Holds the supervisor as soon as it announced automatic retry `retry`, so that backoff
+/// cannot elapse while the screen is drawn and Pause is asked, however loaded the host is.
+fn pause_supervisor_in_backoff(f: &Fixture, retry: usize) -> Result<PausedSupervisor> {
+    support::eventually("automatic retry announced", || {
+        let announced: i64 = f.db()?.connection().query_row(
+            "SELECT count(*) FROM attempt_output WHERE stream='system' AND content LIKE ?1",
+            [format!("%automatic retry {retry}/2%")],
+            |r| r.get(0),
+        )?;
+        Ok((announced > 0).then_some(()))
+    })?;
+    pause_supervisor_when_db_idle(f)
+}
+
+/// Asks the TUI to pause a held supervisor and lets it go once the request is recorded.
+fn pause_held(f: &Fixture, t: &mut Terminal, mouse: bool, held: PausedSupervisor) -> Result {
+    if mouse {
+        t.click("p Pause")?;
+    } else {
+        t.send("p")?;
+    }
+    support::eventually("pause requested", || {
+        let requested: i64 = f.db()?.connection().query_row(
+            "SELECT count(*) FROM events WHERE message='Pause requested; stopping worker'",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok((requested > 0).then_some(()))
+    })?;
+    drop(held);
+    Ok(())
+}
+
 fn wait_for_control_cleanup(f: &Fixture, worker: i32) -> Result {
     support::eventually(
         "controlled runner and guardian released their leases",
@@ -4898,8 +4886,10 @@ fn control_request_survives_cli_or_tui_exit_and_finishes_once() -> Result {
                 let intent = t.screen("control intent persisted", |s| {
                     s.contains("stopping the worker")
                 })?;
-                println!(
-                    "CONTROL REQUEST BEFORE TUI EXIT action={action} issuer={issuer}\n{intent}"
+                crate::support::record(
+                    &format!("CONTROL REQUEST BEFORE TUI EXIT action={action} issuer={issuer}"),
+                    issuer == "mouse",
+                    &intent,
                 );
                 t.send("q")?;
                 t.finish()?;
@@ -4968,7 +4958,11 @@ fn control_request_survives_cli_or_tui_exit_and_finishes_once() -> Result {
                     "History 1"
                 })
             })?;
-            println!("REOPENED AFTER CONTROL action={action} issuer={issuer}\n{screen}");
+            crate::support::record(
+                &format!("REOPENED AFTER CONTROL action={action} issuer={issuer}"),
+                issuer == "mouse",
+                &screen,
+            );
             if action == "stop" {
                 assert!(screen.contains("ktask: task #1 attempt #1"), "{screen}");
             } else {
@@ -4976,7 +4970,11 @@ fn control_request_survives_cli_or_tui_exit_and_finishes_once() -> Result {
                 let history = reopened.screen("history after durable done", |s| {
                     s.contains("Durable control")
                 })?;
-                println!("HISTORY AFTER CONTROL issuer={issuer}\n{history}");
+                crate::support::record(
+                    &format!("HISTORY AFTER CONTROL issuer={issuer}"),
+                    issuer == "mouse",
+                    &history,
+                );
             }
             reopened.send("q")?;
             reopened.finish()?;
@@ -5057,7 +5055,11 @@ fn control_during_provider_wait(action: &str, issuer: &str) -> Result {
         let screen = t.screen("provider wait request stored", |s| {
             s.contains("stopping the worker")
         })?;
-        println!("PROVIDER WAIT REQUEST action={action} issuer={issuer}\n{screen}");
+        crate::support::record(
+            &format!("PROVIDER WAIT REQUEST action={action} issuer={issuer}"),
+            issuer == "mouse",
+            &screen,
+        );
         t.send("q")?;
         t.finish()?;
     }
@@ -5097,7 +5099,11 @@ fn control_during_provider_wait(action: &str, issuer: &str) -> Result {
             "History 1"
         })
     })?;
-    println!("PROVIDER WAIT REOPENED action={action} issuer={issuer}\n{screen}");
+    crate::support::record(
+        &format!("PROVIDER WAIT REOPENED action={action} issuer={issuer}"),
+        issuer == "mouse",
+        &screen,
+    );
     reopened.send("q")?;
     reopened.finish()?;
     f.no_scratch()?;
@@ -5258,7 +5264,11 @@ fn resumed_a_control_after_issuer_exit(action: &str, issuer: &str) -> Result {
         let screen = t.screen("resumed A request saved", |s| {
             s.contains("stopping the worker")
         })?;
-        println!("RESUMED A REQUEST action={action} issuer={issuer}\n{screen}");
+        crate::support::record(
+            &format!("RESUMED A REQUEST action={action} issuer={issuer}"),
+            issuer == "mouse",
+            &screen,
+        );
         t.send("q")?;
         t.finish()?;
     }
@@ -5295,7 +5305,11 @@ fn resumed_a_control_after_issuer_exit(action: &str, issuer: &str) -> Result {
             "History 2"
         })
     })?;
-    println!("RESUMED A REOPENED action={action} issuer={issuer}\n{screen}");
+    crate::support::record(
+        &format!("RESUMED A REOPENED action={action} issuer={issuer}"),
+        issuer == "mouse",
+        &screen,
+    );
     reopened.send("q")?;
     reopened.finish()?;
     f.no_scratch()?;
@@ -5357,7 +5371,11 @@ fn paused_resumed_a_control(action: &str, issuer: &str) -> Result {
         let screen = t.screen("paused resumed A saved", |s| {
             s.contains("changes stashed as \"ktask: task #1 attempt #1\"")
         })?;
-        println!("PAUSED RESUMED A CONTROL action={action} issuer={issuer}\n{screen}");
+        crate::support::record(
+            &format!("PAUSED RESUMED A CONTROL action={action} issuer={issuer}"),
+            issuer == "mouse",
+            &screen,
+        );
         t.send("q")?;
         t.finish()?;
     }
@@ -5417,7 +5435,7 @@ fn killed_supervisor_settles_to_paused_and_resume_continues_the_same_attempt() -
         let paused = t.screen("orphan settled to paused", |s| {
             s.contains("Current #1 · Paused · runner stopped") && s.contains("[r Resume]")
         })?;
-        println!("KILLED SUPERVISOR SETTLED mouse={mouse}\n{paused}");
+        crate::support::record("KILLED SUPERVISOR SETTLED", mouse, &paused);
         assert!(!paused.contains("Running"), "{paused}");
         let before = f.ok(&["show", "1"])?;
         assert_eq!(before["state"], "paused");
@@ -5428,10 +5446,12 @@ fn killed_supervisor_settles_to_paused_and_resume_continues_the_same_attempt() -
         } else {
             t.send("r")?;
         }
-        println!(
-            "KILLED SUPERVISOR RESUMED mouse={mouse}\n{}",
-            t.screen("resumed attempt completed", |s| s
-                .contains("Queue complete."))?
+        crate::support::record(
+            "KILLED SUPERVISOR RESUMED",
+            mouse,
+            &t.screen("resumed attempt completed", |s| {
+                s.contains("Queue complete.")
+            })?,
         );
         let after = f.ok(&["show", "1"])?;
         assert_eq!(after["state"], "done");
@@ -5642,8 +5662,10 @@ fn invalid_models_preflight_every_role_before_start_or_resume() -> Result {
                         && s.contains(role)
                         && s.contains("typo-model")
                 })?;
-                println!(
-                    "INVALID MODEL CURRENT role={role} resume={resume} mouse={mouse}\n{screen}"
+                crate::support::record(
+                    &format!("INVALID MODEL CURRENT role={role} resume={resume}"),
+                    mouse,
+                    &screen,
                 );
                 terminal.send("q")?;
                 terminal.finish()?;
@@ -5724,7 +5746,11 @@ exit 1
             && s.contains(&format!("execution {setting}"))
             && s.contains("codex/execution")
     })?;
-    println!("PROVIDER REJECTION CURRENT setting={setting}\n{screen}");
+    crate::support::record(
+        &format!("PROVIDER REJECTION CURRENT setting={setting}"),
+        false,
+        &screen,
+    );
     terminal.send("q")?;
     terminal.finish()?;
     f.no_scratch()?;
@@ -5836,7 +5862,7 @@ exit 2
             && s.contains("execution")
             && s.contains("effort")
     })?;
-    println!("CURRENT CONFIGURATION FAILURE\n{screen}");
+    crate::support::record("CURRENT CONFIGURATION FAILURE", false, &screen);
     terminal.send("q")?;
     terminal.finish()?;
     Ok(())
@@ -5891,7 +5917,7 @@ fn resume_preflights_the_revision_it_will_run() -> Result {
                 && s.contains("hight")
                 && s.contains("accepted values")
         })?;
-        println!("PINNED EFFORT READINESS mouse={mouse}\n{screen}");
+        crate::support::record("PINNED EFFORT READINESS", mouse, &screen);
         terminal.send("\x1b")?;
         terminal.screen("pinned readiness closed", |s| {
             !s.contains("Execution readiness")
@@ -5919,7 +5945,7 @@ fn resume_preflights_the_revision_it_will_run() -> Result {
     let screen = terminal.screen("edited revision readiness", |s| {
         s.contains("Can run · 0 blocker")
     })?;
-    println!("EDITED REVISION READINESS\n{screen}");
+    crate::support::record("EDITED REVISION READINESS", false, &screen);
     assert!(screen.contains("OK · review model"), "{screen}");
     terminal.send("\x1b")?;
     terminal.screen("edited readiness closed", |s| {
@@ -6282,6 +6308,9 @@ exec /usr/bin/git "$@"
     assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
     Ok(())
 }
+#[path = "screen_evidence.rs"]
+mod screen_evidence;
+
 #[path = "delivery.rs"]
 mod delivery;
 #[path = "lenses.rs"]
@@ -6732,6 +6761,9 @@ case '{mode}' in
    if (printf tamper >> "$artifact") 2>/dev/null; then exit 24; fi
   fi;;
  dependency-request|dependency-baseline|dependency-crash|android-dependency-request)
+  if [ '{mode}' = android-dependency-request ] && [ "$model" = execution ] && [ -f "$HOME/dependency-requested" ]; then
+   until [ -f "$HOME/release-resumed" ]; do sleep 0.05; done
+  fi
   if [ "$model" = execution ] && [ ! -f "$HOME/dependency-requested" ]; then
    if [ '{mode}' = dependency-crash ]; then
     touch "$HOME/dependency-worker-ready"
@@ -7303,11 +7335,12 @@ fn worker_callback_appends_linked_drafts_without_interrupting_queued_work() -> R
         assert_eq!(unchanged["tasks"], queue["tasks"]);
         for (cols, rows, mouse) in [(105, 30, false), (70, 22, true)] {
             let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
-            println!(
-                "FOLLOW-UP RUNNING CURRENT {cols}x{rows}\n{}",
-                t.screen("running source with both follow-ups", |s| {
+            crate::support::record(
+                "FOLLOW-UP RUNNING CURRENT",
+                false,
+                &t.screen("running source with both follow-ups", |s| {
                     s.contains("Current #1 · Running") && s.contains("Follow-ups: #3, #4")
-                })?
+                })?,
             );
             if mouse {
                 t.click("2 Queue")?;
@@ -7323,7 +7356,7 @@ fn worker_callback_appends_linked_drafts_without_interrupting_queued_work() -> R
             assert!(queue.find("Origin task") < queue.find("Later task"));
             assert!(queue.find("Later task") < queue.find("Discovered follow"));
             assert!(queue.find("Discovered follow") < queue.find("Second discovery"));
-            println!("FOLLOW-UP APPENDED QUEUE mouse={mouse} {cols}x{rows}\n{queue}");
+            crate::support::record("FOLLOW-UP APPENDED QUEUE", mouse, &queue);
             if mouse {
                 t.click("1 Current")?;
             } else {
@@ -7341,12 +7374,13 @@ fn worker_callback_appends_linked_drafts_without_interrupting_queued_work() -> R
                 s.contains("Task details / attempts")
             })?;
             t.send("\x1b[F")?;
-            println!(
-                "FOLLOW-UP RUNNING SOURCE DETAIL mouse={mouse} {cols}x{rows}\n{}",
-                t.screen("running source details link both drafts", |s| {
+            crate::support::record(
+                "FOLLOW-UP RUNNING SOURCE DETAIL",
+                mouse,
+                &t.screen("running source details link both drafts", |s| {
                     s.contains("Follow-up #3: Discovered follow-up")
                         && s.contains("Follow-up #4: Second discovery")
-                })?
+                })?,
             );
             t.send("\x1b")?;
             t.screen("running source details closed", |s| {
@@ -7388,23 +7422,28 @@ fn worker_callback_appends_linked_drafts_without_interrupting_queued_work() -> R
     assert_eq!(stale.status.code(), Some(4));
     assert_eq!(f.ok(&["current"])?["id"], 3);
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 105, 30)?;
-    println!(
-        "FOLLOW-UP CURRENT\n{}",
-        t.screen("draft current", |s| s
-            .contains("Current #3 · Needs approval"))?
+    crate::support::record(
+        "FOLLOW-UP CURRENT",
+        false,
+        &t.screen("draft current", |s| {
+            s.contains("Current #3 · Needs approval")
+        })?,
     );
     t.send("2")?;
-    println!(
-        "FOLLOW-UP QUEUE KEYBOARD\n{}",
-        t.screen("linked queue", |s| s
-            .contains("Follow-up from task #1, attempt"))?
+    crate::support::record(
+        "FOLLOW-UP QUEUE KEYBOARD",
+        false,
+        &t.screen("linked queue", |s| {
+            s.contains("Follow-up from task #1, attempt")
+        })?,
     );
     t.send("\r")?;
-    println!(
-        "FOLLOW-UP DETAIL KEYBOARD\n{}",
-        t.screen("linked detail", |s| {
+    crate::support::record(
+        "FOLLOW-UP DETAIL KEYBOARD",
+        false,
+        &t.screen("linked detail", |s| {
             s.contains("Task details / attempts") && s.contains("Follow-up from task #1, attempt")
-        })?
+        })?,
     );
     t.send("\x1b")?;
     t.screen("detail closed", |s| {
@@ -7415,19 +7454,22 @@ fn worker_callback_appends_linked_drafts_without_interrupting_queued_work() -> R
         s.contains("Later task") && s.contains("Origin task")
     })?;
     t.click("Origin task")?;
-    println!(
-        "FOLLOW-UP HISTORY MOUSE\n{}",
-        t.screen("source link", |s| s
-            .contains("Follow-up #3: Discovered follow-up"))?
+    crate::support::record(
+        "FOLLOW-UP HISTORY MOUSE",
+        true,
+        &t.screen("source link", |s| {
+            s.contains("Follow-up #3: Discovered follow-up")
+        })?,
     );
     t.click("Enter Details")?;
     t.send("\x1b[F")?;
-    println!(
-        "FOLLOW-UP SOURCE DETAIL MOUSE\n{}",
-        t.screen("source detail", |s| {
+    crate::support::record(
+        "FOLLOW-UP SOURCE DETAIL MOUSE",
+        true,
+        &t.screen("source detail", |s| {
             s.contains("Task details / attempts")
                 && s.contains("Follow-up #3: Discovered follow-up")
-        })?
+        })?,
     );
     t.send("\x1b")?;
     t.send("q")?;
@@ -7450,24 +7492,30 @@ fn review_rounds_repair_only_critical_findings_in_real_tui() -> Result {
             f.add("Next task")?;
             f.ok(&["edit", "1", "--attempt-limit", "1"])?;
             let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
-            println!(
-                "REVIEW LOOP READY mouse={mouse} critical={critical}\n{}",
-                t.screen("ready", |s| s.contains("r Run queue"))?
+            crate::support::record(
+                &format!("REVIEW LOOP READY critical={critical}"),
+                mouse,
+                &t.screen("ready", |s| s.contains("r Run queue"))?,
             );
             press(&mut t, mouse, "r Run queue", "r")?;
             if critical {
                 f.await_critical_review_decision()?;
             }
             f.state(if critical { "failed" } else { "succeeded" })?;
-            println!(
-                "REVIEW LOOP DECISION mouse={mouse} critical={critical}\n{}",
-                t.screen("decision", |s| {
-                    if critical {
-                        s.contains("Critical findings remain")
-                    } else {
-                        s.contains("Queue complete.")
-                    }
-                })?
+            crate::support::record(
+                &format!("REVIEW LOOP DECISION critical={critical}"),
+                mouse,
+                &t.screen("decision", |s| {
+                    (!critical || s.contains("Session: Queue · waiting"))
+                        && (critical || crate::support::finished(s))
+                        && {
+                            if critical {
+                                s.contains("Critical findings remain")
+                            } else {
+                                s.contains("Queue complete.")
+                            }
+                        }
+                })?,
             );
             let task = f.ok(&["show", "1"])?;
             assert_eq!(task["attempts"].as_array().unwrap().len(), 1, "{task}");
@@ -7660,21 +7708,27 @@ fn pause_at_tenth_review_resumes_the_phase_without_an_eleventh_repair() -> Resul
         f.await_review_progress("tenth review started", |_| {
             Ok(f.scratch.path().join("tenth-review-started").exists())
         })?;
-        println!(
-            "TENTH REVIEW ACTIVE mouse={mouse}\n{}",
-            t.screen("tenth review", |s| s
-                .contains("Workflow · Review · repair round 10/10"))?
+        crate::support::record(
+            "TENTH REVIEW ACTIVE",
+            mouse,
+            &t.screen("tenth review", |s| {
+                s.contains("Workflow · Review · repair round 10/10")
+                    && s.contains("Step: Review")
+                    && s.contains("1 call(s) unreported")
+                    && s.contains("review: codex/review · resume session")
+            })?,
         );
         if mouse {
             t.click("p Pause")?;
         } else {
             t.send("p")?;
         }
-        println!(
-            "TENTH REVIEW PAUSED mouse={mouse}\n{}",
-            t.screen("paused", |s| {
+        crate::support::record(
+            "TENTH REVIEW PAUSED",
+            mouse,
+            &t.screen("paused", |s| {
                 s.contains("Paused · runner stopped") && s.contains("r Resume")
-            })?
+            })?,
         );
         f.provider("review-critical")?;
         if mouse {
@@ -7683,10 +7737,12 @@ fn pause_at_tenth_review_resumes_the_phase_without_an_eleventh_repair() -> Resul
             t.send("r")?;
         }
         f.state("failed")?;
-        println!(
-            "TENTH REVIEW RESUMED mouse={mouse}\n{}",
-            t.screen("critical decision", |s| s
-                .contains("Critical findings remain"))?
+        crate::support::record(
+            "TENTH REVIEW RESUMED",
+            mouse,
+            &t.screen("critical decision", |s| {
+                s.contains("Session: Queue · waiting") && s.contains("Critical findings remain")
+            })?,
         );
         let db = f.db()?;
         assert_eq!(
@@ -7751,7 +7807,7 @@ fn explicitly_selected_execution_model_can_fill_each_judge_role() -> Result {
                 s.contains("Execution readiness") && s.contains("OK · validation model")
             })?;
             assert!(!screen.contains("BLOCK"), "{screen}");
-            println!("EXPLICIT MODEL READINESS {role} mouse={mouse}\n{screen}");
+            crate::support::record(&format!("EXPLICIT MODEL READINESS {role}"), mouse, &screen);
             t.send("\x1b")?;
             t.screen("ready again", |s| {
                 s.contains("r Run queue") && !s.contains("Execution readiness")
@@ -7761,8 +7817,10 @@ fn explicitly_selected_execution_model_can_fill_each_judge_role() -> Result {
             } else {
                 t.send("r")?;
             }
-            let screen = t.screen("task completes", |s| s.contains("Queue complete."))?;
-            println!("EXPLICIT MODEL COMPLETE {role} mouse={mouse}\n{screen}");
+            let screen = t.screen("task completes", |s| {
+                crate::support::finished(s) && s.contains("Queue complete.")
+            })?;
+            crate::support::record(&format!("EXPLICIT MODEL COMPLETE {role}"), mouse, &screen);
             assert_eq!(f.ok(&["show", "1"])?["state"], "done");
             t.send("q")?;
             t.finish()?;
@@ -7807,20 +7865,24 @@ fn mandatory_criteria_and_validation_findings_still_block_after_ten_rounds() -> 
             );
         }
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
-        println!(
-            "MANDATORY DECISION {mode}\n{}",
-            t.screen("failure", |s| s.contains("Current #1 · Failed"))?
+        crate::support::record(
+            &format!("MANDATORY DECISION {mode}"),
+            mouse,
+            &t.screen("failure", |s| s.contains("Current #1 · Failed"))?,
         );
         if mouse {
             t.click("Enter Details")?;
         } else {
             t.send("\r")?;
         }
-        println!(
-            "MANDATORY DECISION DETAILS {mode}\n{}",
-            t.screen("full decision", |s| s.contains("Task details / attempts")
-                && (s.contains("Required boundary behavior")
-                    || s.contains("Critical findings remain")))?
+        crate::support::record(
+            &format!("MANDATORY DECISION DETAILS {mode}"),
+            mouse,
+            &t.screen("full decision", |s| {
+                s.contains("Task details / attempts")
+                    && (s.contains("Required boundary behavior")
+                        || s.contains("Critical findings remain"))
+            })?,
         );
         t.send("\x1b")?;
         t.screen("details closed", |s| {
@@ -7854,9 +7916,15 @@ fn changing_source_while_review_is_paused_invalidates_saved_proof() -> Result {
             .exists()
             .then_some(()))
     })?;
-    println!(
-        "PROVEN SOURCE BEFORE PAUSE\n{}",
-        t.screen("review", |s| s.contains("Workflow · Review"))?
+    crate::support::record(
+        "PROVEN SOURCE BEFORE PAUSE",
+        false,
+        &t.screen("review", |s| {
+            s.contains("Workflow · Review")
+                && s.contains("Step: Review")
+                && s.contains("1 call(s) unreported")
+                && s.contains("review: codex/review · new session")
+        })?,
     );
     assert!(
         f.git(&["diff", "--cached", "--name-only"])?.is_empty(),
@@ -7873,9 +7941,12 @@ fn changing_source_while_review_is_paused_invalidates_saved_proof() -> Result {
     f.provider("normal")?;
     t.send("r")?;
     f.state("succeeded")?;
-    println!(
-        "CHANGED SOURCE RECHECKED\n{}",
-        t.screen("verified after repair", |s| s.contains("Queue complete."))?
+    crate::support::record(
+        "CHANGED SOURCE RECHECKED",
+        true,
+        &t.screen("verified after repair", |s| {
+            crate::support::finished(s) && s.contains("Queue complete.")
+        })?,
     );
     let task = f.ok(&["show", "1"])?;
     assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
@@ -8370,7 +8441,7 @@ fn failing_supervisor_check_keeps_worker_claim_separate_in_cli_and_real_terminal
                 && screen.contains("all checks pass")
                 && screen.contains("Supervisor check build")
         })?;
-        println!("CLAIM CURRENT mouse={mouse}\n{current}");
+        crate::support::record("CLAIM CURRENT", mouse, &current);
         if mouse {
             terminal.click("o Log")?;
         } else {
@@ -8388,7 +8459,7 @@ fn failing_supervisor_check_keeps_worker_claim_separate_in_cli_and_real_terminal
             }
             log = terminal.screen("scroll toward the worker claim", |s| s != log)?;
         }
-        println!("CLAIM RAW LOG mouse={mouse}\n{log}");
+        crate::support::record("CLAIM RAW LOG", mouse, &log);
         if mouse {
             terminal.click("Enter Details")?;
         } else {
@@ -8415,7 +8486,7 @@ fn failing_supervisor_check_keeps_worker_claim_separate_in_cli_and_real_terminal
                 && screen.contains("Worker claim (unverified)")
                 && screen.contains("all checks pass")
         })?;
-        println!("CLAIM ATTEMPT OUTPUT mouse={mouse}\n{output}");
+        crate::support::record("CLAIM ATTEMPT OUTPUT", mouse, &output);
         if mouse {
             terminal.click("Results")?;
         } else {
@@ -8425,7 +8496,7 @@ fn failing_supervisor_check_keeps_worker_claim_separate_in_cli_and_real_terminal
             screen.contains("Worker claim (unverified): all checks pass")
                 && screen.contains("Supervisor check result")
         })?;
-        println!("CLAIM RESULTS mouse={mouse}\n{results}");
+        crate::support::record("CLAIM RESULTS", mouse, &results);
         terminal.send("q")?;
         terminal.kill()?;
     }
@@ -8444,7 +8515,7 @@ fn failing_supervisor_check_keeps_worker_claim_separate_in_cli_and_real_terminal
         screen.contains("Worker claim (unverified): all checks pass")
             && screen.contains("Supervisor check build")
     })?;
-    println!("CLAIM HISTORY\n{summary}");
+    crate::support::record("CLAIM HISTORY", false, &summary);
     history.send("q")?;
     history.kill()?;
     f.no_scratch()?;
@@ -8487,7 +8558,7 @@ fn accepted_history_shows_independent_verdict_models() -> Result {
             && screen.contains("codex/validation")
             && screen.contains("Accepted: validation passed")
     })?;
-    println!("ACCEPTED HISTORY\n{summary}");
+    crate::support::record("ACCEPTED HISTORY", false, &summary);
     terminal.send("q")?;
     terminal.kill()?;
     f.no_scratch()?;
@@ -8542,7 +8613,7 @@ fn history_still_shows_attempts_that_recorded_a_model_escalation() -> Result {
         screen.contains("Step 5 · remediation · succeeded · codex/remediation")
             && screen.contains("Accepted: validation passed")
     })?;
-    println!("HISTORICAL ESCALATION\n{summary}");
+    crate::support::record("HISTORICAL ESCALATION", false, &summary);
     terminal.send("q")?;
     terminal.kill()?;
     f.no_scratch()?;
@@ -8587,7 +8658,7 @@ fn worker_workflow_markers_cannot_change_supervisor_phase_or_model() -> Result {
     fs::write(f.scratch.path().join("release-check"), "go")?;
     let status = runner.wait()?;
     let screen = screen?;
-    println!("SPOOFED WORKER STATUS DURING REAL CHECK\n{screen}");
+    crate::support::record("SPOOFED WORKER STATUS DURING REAL CHECK", false, &screen);
     assert!(status.success(), "runner: {status}");
     f.no_scratch()?;
     Ok(())
@@ -8646,9 +8717,11 @@ fn real_terminal_checkpoints_attribute_change_after_verified_checks() -> Result 
     })?;
     t.send("3")?;
     let screen = t.screen("attribute task checkpointed", |s| {
-        s.contains(" Done ") && s.contains("Checkpoint attribute change")
+        crate::support::finished(s) && {
+            s.contains(" Done ") && s.contains("Checkpoint attribute change")
+        }
     })?;
-    println!("ATTRIBUTE CHECKPOINT PTY\n{screen}");
+    crate::support::record("ATTRIBUTE CHECKPOINT PTY", false, &screen);
     t.send("q")?;
     t.finish()?;
     assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
@@ -8692,9 +8765,11 @@ fn real_terminal_checkpoints_sparse_checkout_after_verified_checks() -> Result {
     })?;
     t.send("3")?;
     let screen = t.screen("sparse task checkpointed", |s| {
-        s.contains(" Done ") && s.contains("Checkpoint sparse worktree")
+        crate::support::finished(s) && {
+            s.contains(" Done ") && s.contains("Checkpoint sparse worktree")
+        }
     })?;
-    println!("SPARSE CHECKPOINT PTY\n{screen}");
+    crate::support::record("SPARSE CHECKPOINT PTY", false, &screen);
     t.send("q")?;
     t.finish()?;
     assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
@@ -9078,8 +9153,9 @@ fn current_screen_shows_recorded_check_counts_in_real_terminal() -> Result {
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 35)?;
     let screen = t.screen("current check counts", |s| {
         s.contains("Check build: 3 passed, 0 failed, 1 ignored")
+            && s.contains("review: codex/review · new session")
     })?;
-    println!("CURRENT COUNTS\n{screen}");
+    crate::support::record("CURRENT COUNTS", false, &screen);
     f.ok(&["pause"])?;
     assert!(runner.wait()?.success());
     t.screen("paused current", |s| {
@@ -9089,7 +9165,7 @@ fn current_screen_shows_recorded_check_counts_in_real_terminal() -> Result {
     let report = t.screen("paused current count report", |s| {
         s.contains("Report · attempt 1") && s.contains("Check build: 3 passed, 0 failed, 1 ignored")
     })?;
-    println!("PAUSED COUNT REPORT\n{report}");
+    crate::support::record("PAUSED COUNT REPORT", false, &report);
     t.click("o Log")?;
     t.screen("mouse switches counts report to log", |s| {
         s.contains("Log ·") && s.contains("attempt 1") && !s.contains("Report · attempt 1")
@@ -9098,7 +9174,7 @@ fn current_screen_shows_recorded_check_counts_in_real_terminal() -> Result {
     let report = t.screen("mouse reopens paused current count report", |s| {
         s.contains("Report · attempt 1") && s.contains("Check build: 3 passed, 0 failed, 1 ignored")
     })?;
-    println!("PAUSED COUNT REPORT MOUSE\n{report}");
+    crate::support::record("PAUSED COUNT REPORT MOUSE", true, &report);
     t.send("q")?;
     t.finish()?;
     f.no_scratch()?;
@@ -9389,7 +9465,7 @@ fn failure_judge_may_ask_the_owner_after_exhausted_check_repair() -> Result {
         let waiting = t.screen("judge question", |s| {
             s.contains("Needs input · runner stopped") && s.contains("[r Answer]")
         })?;
-        println!("EXHAUSTED CHECK REPAIR QUESTION (mouse={mouse})\n{waiting}");
+        crate::support::record("EXHAUSTED CHECK REPAIR QUESTION", mouse, &waiting);
         assert!(waiting.contains(QUESTION), "{waiting}");
         let task = f.ok(&["show", "1"])?;
         assert_eq!(task["status"], "waiting");
@@ -9417,12 +9493,12 @@ fn failure_judge_may_ask_the_owner_after_exhausted_check_repair() -> Result {
         let form = t.screen("answer form", |s| {
             s.contains("Answer AI question") && s.contains(QUESTION)
         })?;
-        println!("ANSWER JUDGE QUESTION (mouse={mouse})\n{form}");
+        crate::support::record("ANSWER JUDGE QUESTION", mouse, &form);
         t.send("Human answer: keep it")?;
         t.screen("entered answer", |s| s.contains("Human answer: keep it"))?;
         press(&mut t, mouse, "Apply", "\r")?;
         let complete = t.screen("complete", |s| s.contains("Queue complete."))?;
-        println!("ANSWERED RECOVERY COMPLETE (mouse={mouse})\n{complete}");
+        crate::support::record("ANSWERED RECOVERY COMPLETE", mouse, &complete);
         let done = f.ok(&["show", "1"])?;
         assert_eq!(done["status"], "succeeded", "{done}");
         assert_eq!(done["attempts"].as_array().unwrap().len(), 2);
@@ -9495,17 +9571,22 @@ fn paused_repair_resumes_its_reserved_round_and_same_attempt() -> Result {
                 && s.contains("p Pause")
                 && s.contains("Attempt 1")
                 && s.contains("Step: Repair")
+                && s.contains("repair: codex/execution · resume session")
         })?;
-        println!("REPAIR RUNNING mouse={mouse}\n{running}");
+        crate::support::record("REPAIR RUNNING", mouse, &running);
         if mouse {
             t.click("p Pause")?;
         } else {
             t.send("p")?;
         }
-        println!(
-            "REPAIR PAUSED mouse={mouse}\n{}",
-            t.screen("repair paused", |s| s.contains("[r Resume]")
-                && s.contains("Paused · runner stopped"))?
+        crate::support::record(
+            "REPAIR PAUSED",
+            mouse,
+            &t.screen("repair paused", |s| {
+                s.contains("[r Resume]")
+                    && s.contains("Paused · runner stopped")
+                    && s.contains("Paused; worker stopped, Resume continues")
+            })?,
         );
         let before = f.ok(&["show", "1"])?;
         let attempt = before["attempts"][0]["id"].clone();
@@ -9515,9 +9596,12 @@ fn paused_repair_resumes_its_reserved_round_and_same_attempt() -> Result {
         } else {
             t.send("r")?;
         }
-        println!(
-            "REPAIR RESUMED mouse={mouse}\n{}",
-            t.screen("repair complete", |s| s.contains("Queue complete."))?
+        crate::support::record(
+            "REPAIR RESUMED",
+            mouse,
+            &t.screen("repair complete", |s| {
+                crate::support::finished(s) && s.contains("Queue complete.")
+            })?,
         );
         let after = f.ok(&["show", "1"])?;
         assert_eq!(after["attempts"].as_array().unwrap().len(), 1);
@@ -9563,8 +9647,10 @@ fn resume_continues_the_paused_attempt_after_the_owner_commits_on_top() -> Resul
         } else {
             t.send("r")?;
         }
-        let done = t.screen("resumed to completion", |s| s.contains("Queue complete."))?;
-        println!("RESUMED AFTER OWNER COMMIT mouse={mouse}\n{done}");
+        let done = t.screen("resumed to completion", |s| {
+            crate::support::finished(s) && s.contains("Queue complete.")
+        })?;
+        crate::support::record("RESUMED AFTER OWNER COMMIT", mouse, &done);
         let task = f.ok(&["show", "1"])?;
         assert_eq!(task["lifecycle"], "succeeded", "{task}");
         assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
@@ -9760,7 +9846,7 @@ fn real_tui_shows_the_open_question_and_stops_or_marks_done_by_keyboard_and_mous
         let waiting = t.screen("question panel", |s| {
             s.contains("Question from the worker") && s.contains("Which content?")
         })?;
-        println!("QUESTION SCREEN (mouse={mouse})\n{waiting}");
+        crate::support::record("QUESTION SCREEN", mouse, &waiting);
         assert!(waiting.contains("The worker needs your answer"));
         assert!(waiting.contains("Attempt 1"));
         assert!(waiting.contains("Execution   ✓ succeeded"));
@@ -9779,18 +9865,18 @@ fn real_tui_shows_the_open_question_and_stops_or_marks_done_by_keyboard_and_mous
             let form = t.screen("mark done form", |s| {
                 s.contains("Mark done #1 Ask owner") && s.contains("Reason (optional)")
             })?;
-            println!("MARK DONE FORM (mouse={mouse})\n{form}");
+            crate::support::record("MARK DONE FORM", mouse, &form);
             t.send("Not worth answering")?;
             t.screen("reason typed", |s| s.contains("Not worth answering"))?;
             t.click("Apply")?;
             let empty = t.screen("queue empty", |s| s.contains("No current task"))?;
-            println!("AFTER MARK DONE (mouse={mouse})\n{empty}");
+            crate::support::record("AFTER MARK DONE", mouse, &empty);
             t.click("3 History")?;
             let history = t.screen("history", |s| {
                 s.lines()
                     .any(|line| line.contains(" Done ") && line.contains("Ask owner"))
             })?;
-            println!("DONE IN HISTORY (mouse={mouse})\n{history}");
+            crate::support::record("DONE IN HISTORY", mouse, &history);
             assert_eq!(f.ok(&["show", "1"])?["state"], "done");
         } else {
             t.send("s")?;
@@ -9799,7 +9885,7 @@ fn real_tui_shows_the_open_question_and_stops_or_marks_done_by_keyboard_and_mous
             let stopped = t.screen("stopped", |s| {
                 s.contains("Current #1 · Pending") && s.contains("Report · attempt 1")
             })?;
-            println!("ATTEMPT STOPPED (mouse={mouse})\n{stopped}");
+            crate::support::record("ATTEMPT STOPPED", mouse, &stopped);
             assert!(stopped.contains("Stopped: Not worth answering"));
             assert!(stopped.contains("[r Run queue]") && stopped.contains("[x Cancel]"));
             assert!(!stopped.contains("Question from the worker"));
@@ -9874,16 +9960,19 @@ fn supervisor_death_stops_worker_and_stop_ends_its_unfinished_work() -> Result {
 fn real_tui_shows_liveness_and_settles_a_dead_supervisor_on_every_screen() -> Result {
     for mouse in [true, false] {
         let f = Fixture::new()?;
-        f.provider("slow")?;
+        // The turn is held, so the task still runs however long its screen takes to settle.
+        f.provider("slow-interrupt")?;
         f.add("Settle orphaned attempt")?;
         let mut run = Running(f.process().arg("run").stdout(Stdio::null()).spawn()?);
         f.state("running")?;
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
-        println!(
-            "LIVE\n{}",
-            t.screen("live supervisor", |s| {
+        crate::support::record(
+            "LIVE",
+            mouse,
+            &t.screen("live supervisor", |s| {
                 s.contains("Running · supervisor alive")
-            })?
+                    && s.contains("execution: codex/execution · new session")
+            })?,
         );
         let before = f.ok(&["show", "1"])?;
         let head = f.git(&["rev-parse", "HEAD"])?;
@@ -9893,7 +9982,7 @@ fn real_tui_shows_liveness_and_settles_a_dead_supervisor_on_every_screen() -> Re
         let paused = t.screen("orphan settled", |s| {
             s.contains("Current #1 · Paused · runner stopped") && s.contains("[r Resume]")
         })?;
-        println!("SETTLED\n{paused}");
+        crate::support::record("SETTLED", mouse, &paused);
         for (key, name) in [
             ("2", "Queue"),
             ("3", "History"),
@@ -9904,7 +9993,7 @@ fn real_tui_shows_liveness_and_settles_a_dead_supervisor_on_every_screen() -> Re
             let screen = t.screen(name, |s| {
                 s.contains("Paused · runner stopped") && shows_view(s, name)
             })?;
-            println!("{name}\n{screen}");
+            crate::support::record(name, mouse, &screen);
         }
         t.send("1")?;
         t.screen("current again", |s| s.contains("[r Resume]"))?;
@@ -9927,9 +10016,10 @@ fn real_tui_shows_liveness_and_settles_a_dead_supervisor_on_every_screen() -> Re
         } else {
             t.send("r")?;
         }
-        println!(
-            "RESUMED\n{}",
-            t.screen("resumed", |s| s.contains("Queue complete."))?
+        crate::support::record(
+            "RESUMED",
+            mouse,
+            &t.screen("resumed", |s| s.contains("Queue complete."))?,
         );
         let after = f.ok(&["show", "1"])?;
         assert_eq!(after["state"], "done");
@@ -9945,10 +10035,18 @@ fn real_tui_shows_liveness_and_settles_a_dead_supervisor_on_every_screen() -> Re
 #[test]
 fn real_tui_retries_orphan_settlement_after_guardian_lease_releases() -> Result {
     let f = Fixture::new()?;
-    f.provider("slow")?;
+    // The turn is held, so the task still runs however long its screen takes to settle.
+    f.provider("slow-interrupt")?;
     f.add("Settle after guardian cleanup")?;
     let mut run = Running(f.process().arg("run").stdout(Stdio::null()).spawn()?);
     f.state("running")?;
+    // The turn has begun, so what the TUI shows of it does not depend on when it is killed.
+    support::eventually("the execution turn", || {
+        let shown = f.ok(&["show", "1"])?.to_string();
+        Ok(shown
+            .contains("execution: codex/execution · new session")
+            .then_some(()))
+    })?;
     run.0.kill()?;
     run.0.wait()?;
     f.guardian_finished()?;
@@ -9964,24 +10062,12 @@ fn real_tui_retries_orphan_settlement_after_guardian_lease_releases() -> Result 
     let waiting = t.screen("guardian lease still held", |s| {
         s.contains("Current #1 · Running · runner stopped")
     })?;
-    println!("WAITING FOR GUARDIAN LEASE\n{waiting}");
-    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-        support::screen_png(
-            &waiting,
-            &PathBuf::from(directory).join("orphan-worker-reclaim-wait.png"),
-        )?;
-    }
+    crate::support::record("WAITING FOR GUARDIAN LEASE", false, &waiting);
     drop(worker);
     let settled = t.screen("orphan settled after guardian lease", |s| {
         s.contains("Current #1 · Paused · runner stopped") && s.contains("[r Resume]")
     })?;
-    println!("SETTLED AFTER GUARDIAN LEASE\n{settled}");
-    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-        support::screen_png(
-            &settled,
-            &PathBuf::from(directory).join("orphan-worker-reclaim-settled.png"),
-        )?;
-    }
+    crate::support::record("SETTLED AFTER GUARDIAN LEASE", false, &settled);
     t.send("q")?;
     t.finish()?;
     f.no_scratch()?;
@@ -10013,11 +10099,12 @@ fn real_tui_shows_lost_paused_and_rate_wait_supervisors_as_paused() -> Result {
         } else {
             f.state("waiting")?;
             let mut live = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
-            println!(
-                "LIVE WAIT\n{}",
-                live.screen("waiting supervisor alive", |s| {
+            crate::support::record(
+                "LIVE WAIT",
+                false,
+                &live.screen("waiting supervisor alive", |s| {
                     s.contains("Current #1 · Running · supervisor alive")
-                })?
+                })?,
             );
             live.send("q")?;
             live.finish()?;
@@ -10029,11 +10116,12 @@ fn real_tui_shows_lost_paused_and_rate_wait_supervisors_as_paused() -> Result {
         let head = f.git(&["rev-parse", "HEAD"])?;
         let files = f.git(&["status", "--porcelain"])?;
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
-        println!(
-            "LOST {state}\n{}",
-            t.screen("lost supervisor shows paused", |s| {
+        crate::support::record(
+            &format!("LOST {state}"),
+            false,
+            &t.screen("lost supervisor shows paused", |s| {
                 s.contains("Current #1 · Paused · runner stopped") && s.contains("[r Resume]")
-            })?
+            })?,
         );
         for (key, screen_name) in [
             ("2", "Queue"),
@@ -10042,10 +10130,12 @@ fn real_tui_shows_lost_paused_and_rate_wait_supervisors_as_paused() -> Result {
             ("5", "About"),
         ] {
             t.send(key)?;
-            println!(
-                "{state} {screen_name}\n{}",
-                t.screen(screen_name, |s| s.contains("Paused · runner stopped")
-                    && shows_view(s, screen_name))?
+            crate::support::record(
+                &format!("{state} {screen_name}"),
+                false,
+                &t.screen(screen_name, |s| {
+                    s.contains("Paused · runner stopped") && shows_view(s, screen_name)
+                })?,
             );
         }
         t.send("1")?;
@@ -10064,10 +10154,12 @@ fn real_tui_shows_lost_paused_and_rate_wait_supervisors_as_paused() -> Result {
         } else {
             t.send("r")?;
         }
-        println!(
-            "RESUMED {state}\n{}",
-            t.screen("resumed attempt completed", |s| s
-                .contains("Queue complete."))?
+        crate::support::record(
+            &format!("RESUMED {state}"),
+            mouse,
+            &t.screen("resumed attempt completed", |s| {
+                crate::support::finished(s) && { s.contains("Queue complete.") }
+            })?,
         );
         let done = f.ok(&["show", "1"])?;
         assert_eq!(done["state"], "done");
@@ -10091,25 +10183,29 @@ fn real_tui_lost_question_handoff_keeps_the_question_and_rejects_a_stale_stop() 
         [],
     )?;
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
-    println!(
-        "LOST QUESTION HANDOFF\n{}",
-        t.screen("question still needs input", |s| {
+    crate::support::record(
+        "LOST QUESTION HANDOFF",
+        false,
+        &t.screen("question still needs input", |s| {
             s.contains("Current #1 · Needs input · runner stopped")
                 && s.contains("Which content?")
                 && s.contains("[s Stop]")
-        })?
+        })?,
     );
     t.send("s")?;
-    println!(
-        "QUESTION STOP DIALOG\n{}",
-        t.screen("stop dialog", |s| s.contains("Stop #1 Unanswered question"))?
+    crate::support::record(
+        "QUESTION STOP DIALOG",
+        false,
+        &t.screen("stop dialog", |s| s.contains("Stop #1 Unanswered question"))?,
     );
     f.ok(&["answer", "1", "--text", "Human answer: verified"])?;
     t.send("\r")?;
-    println!(
-        "STALE STOP REFUSED\n{}",
-        t.screen("stale stop", |s| s
-            .contains("Task changed elsewhere; refresh the task"))?
+    crate::support::record(
+        "STALE STOP REFUSED",
+        false,
+        &t.screen("stale stop", |s| {
+            s.contains("Task changed elsewhere; refresh the task")
+        })?,
     );
     assert_eq!(f.ok(&["show", "1"])?["status"], "waiting");
     t.send("\x1b")?;
@@ -10122,9 +10218,10 @@ fn real_tui_lost_question_handoff_keeps_the_question_and_rejects_a_stale_stop() 
         s.contains("Stop #1 Unanswered question")
     })?;
     t.send("\r")?;
-    println!(
-        "STOPPED QUESTION\n{}",
-        t.screen("stopped question", |s| s.contains("Current #1 · Pending"))?
+    crate::support::record(
+        "STOPPED QUESTION",
+        false,
+        &t.screen("stopped question", |s| s.contains("Current #1 · Pending"))?,
     );
     let after = f.ok(&["show", "1"])?;
     assert_eq!(after["attempts"][0]["state"], "interrupted");
@@ -10148,34 +10245,43 @@ fn real_tui_lost_question_handoff_keeps_the_question_and_rejects_a_stale_stop() 
 #[test]
 fn real_tui_runner_mouse_pause_keyboard_resume_and_live_history() -> Result {
     let f = Fixture::new()?;
-    f.provider("slow")?;
+    // The turn is held, so the task still runs however long its screen takes to settle.
+    f.provider("slow-interrupt")?;
     f.add("Observed execution")?;
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
     t.screen("ready", |s| s.contains("Observed execution"))?;
     t.click("r Run queue")?;
-    println!(
-        "RUNNING\n{}",
-        t.screen("running", |s| s.contains("Current #1 · Running")
-            && s.contains("new session"))?
+    crate::support::record(
+        "RUNNING",
+        true,
+        &t.screen("running", |s| {
+            s.contains("Current #1 · Running") && s.contains("new session")
+        })?,
     );
     t.click("p Pause")?;
-    println!(
-        "PAUSED\n{}",
-        t.screen("paused", |s| s.contains("Paused · runner stopped")
-            && s.contains("[r Resume]"))?
+    crate::support::record(
+        "PAUSED",
+        true,
+        &t.screen("paused", |s| {
+            s.contains("Paused · runner stopped") && s.contains("[r Resume]")
+        })?,
     );
     f.provider("normal")?;
     t.send("r")?;
-    println!(
-        "COMPLETE\n{}",
-        t.screen("complete", |s| s.contains("Queue complete.")
-            && s.contains("History 1"))?
+    crate::support::record(
+        "COMPLETE",
+        true,
+        &t.screen("complete", |s| {
+            s.contains("Queue complete.") && s.contains("History 1")
+        })?,
     );
     t.click("3 History")?;
-    println!(
-        "HISTORY\n{}",
-        t.screen("history", |s| s.contains("Observed execution")
-            && s.contains(" Done "))?
+    crate::support::record(
+        "HISTORY",
+        true,
+        &t.screen("history", |s| {
+            s.contains("Observed execution") && s.contains(" Done ")
+        })?,
     );
     t.send("q")?;
     t.finish()?;
@@ -10293,22 +10399,26 @@ fn live_codex_executes_reviews_and_validates_an_isolated_project() -> Result {
         );
     }
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &project, 120, 30)?;
-    println!(
-        "LIVE QUEUE COMPLETE\n{}",
-        t.screen("live completion", |s| s.contains("Queue complete.")
-            && s.contains("History 2"))?
+    crate::support::record(
+        "LIVE QUEUE COMPLETE",
+        false,
+        &t.screen("live completion", |s| {
+            s.contains("Queue complete.") && s.contains("History 2")
+        })?,
     );
     t.click("3 History")?;
-    println!(
-        "LIVE HISTORY MOUSE\n{}",
-        t.screen("live history", |s| s
-            .contains("Live automatic continuation")
-            && s.contains(" Done "))?
+    crate::support::record(
+        "LIVE HISTORY MOUSE",
+        false,
+        &t.screen("live history", |s| {
+            s.contains("Live automatic continuation") && s.contains(" Done ")
+        })?,
     );
     t.send("1")?;
-    println!(
-        "LIVE CURRENT KEYBOARD\n{}",
-        t.screen("live current", |s| s.contains("Queue complete."))?
+    crate::support::record(
+        "LIVE CURRENT KEYBOARD",
+        false,
+        &t.screen("live current", |s| s.contains("Queue complete."))?,
     );
     t.send("q")?;
     t.finish()?;
@@ -10363,8 +10473,10 @@ fn failed_attempts_are_repaired_automatically_and_real_stops_show_a_red_banner()
         } else {
             t.send("r")?;
         }
-        let done = t.screen("queue complete", |s| s.contains("Queue complete."))?;
-        println!("AUTOMATIC REPAIR COMPLETE mouse={mouse}\n{done}");
+        let done = t.screen("queue complete", |s| {
+            crate::support::finished(s) && s.contains("Queue complete.")
+        })?;
+        crate::support::record("AUTOMATIC REPAIR COMPLETE", mouse, &done);
         let first = f.ok(&["show", "1"])?;
         assert_eq!(first["lifecycle"], "succeeded");
         // Only the successful attempt counts; the provider failure spent no budget.
@@ -10400,7 +10512,7 @@ fn failed_attempts_are_repaired_automatically_and_real_stops_show_a_red_banner()
                 && s.contains("Not resolved automatically: The task time limit (200 ms")
                 && s.contains("Next: r Retry restarts the time limit")
         })?;
-        println!("STOP BANNER mouse={mouse}\n{stopped}");
+        crate::support::record("STOP BANNER", mouse, &stopped);
         assert_eq!(
             f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
             1
@@ -10473,7 +10585,7 @@ fn real_tui_switches_the_stage_limit_on_by_keyboard_and_mouse() -> Result {
         let off = t.screen("stage limit field", |s| {
             s.contains("Stage time limit") && s.contains("< Off >") && !s.contains('▏')
         })?;
-        println!("STAGE LIMIT OFF mouse={mouse}\n{off}");
+        crate::support::record("STAGE LIMIT OFF", mouse, &off);
         if mouse {
             t.click_after("Stage time limit", "< Off >")?;
         } else {
@@ -10523,7 +10635,7 @@ fn queue_shows_the_model_each_task_will_use_by_keyboard_and_mouse() -> Result {
                 && s.contains("codex/execution")
                 && s.contains("codex/gpt-6-sol high")
         })?;
-        println!("QUEUE MODELS mouse={mouse}\n{queue}");
+        crate::support::record("QUEUE MODELS", mouse, &queue);
         let row = |id: &str| {
             queue
                 .lines()
@@ -10634,7 +10746,7 @@ fn real_tui_question_answer_mouse_and_keyboard_automatically_resume() -> Result 
         }
         // The supervisor records the question, then releases the session and exits.
         let waiting = t.screen("question", |s| s.contains("Needs input · runner stopped"))?;
-        println!("QUESTION CONTROLS (mouse={mouse})\n{waiting}");
+        crate::support::record("QUESTION CONTROLS", mouse, &waiting);
         assert!(waiting.contains("[r Answer]"));
         assert!(!waiting.contains("[r R"));
         let waiting_task = f.ok(&["show", "1"])?;
@@ -10656,7 +10768,7 @@ fn real_tui_question_answer_mouse_and_keyboard_automatically_resume() -> Result 
         let form = t.screen("forward opens the answer", |s| {
             s.contains("Answer AI question") && s.contains("Which content?")
         })?;
-        println!("FORWARD ASKS FOR THE ANSWER (mouse={mouse})\n{form}");
+        crate::support::record("FORWARD ASKS FOR THE ANSWER", mouse, &form);
         t.send("\x1b")?;
         let still_waiting = t.screen("answer form closed", |s| {
             !s.contains("Answer AI question") && s.contains("[r Answer]")
@@ -10695,11 +10807,12 @@ fn real_tui_question_answer_mouse_and_keyboard_automatically_resume() -> Result 
         } else {
             t.send("w")?;
         }
-        println!(
-            "ANSWER FORM (mouse={mouse})\n{}",
-            t.screen("answer", |s| {
+        crate::support::record(
+            "ANSWER FORM",
+            mouse,
+            &t.screen("answer", |s| {
                 s.contains("Answer AI question") && s.contains("Which content?")
-            })?
+            })?,
         );
         t.send("Human answer: verified")?;
         t.screen("entered answer", |s| s.contains("Human answer: verified"))?;
@@ -10708,8 +10821,10 @@ fn real_tui_question_answer_mouse_and_keyboard_automatically_resume() -> Result 
         } else {
             t.send("\r")?;
         }
-        let complete = t.screen("complete", |s| s.contains("Queue complete."))?;
-        println!("RESUMED SAME ATTEMPT (mouse={mouse})\n{complete}");
+        let complete = t.screen("complete", |s| {
+            crate::support::finished(s) && s.contains("Queue complete.")
+        })?;
+        crate::support::record("RESUMED SAME ATTEMPT", mouse, &complete);
         let completed = f.ok(&["show", "1"])?;
         assert_eq!(completed["status"], "succeeded");
         assert_eq!(completed["attempts"][0]["id"], attempt_id);
@@ -10884,7 +10999,8 @@ fn failed_check_on_unchanged_tree_is_run_again() -> Result {
 #[test]
 fn closing_tui_does_not_stop_supervisor() -> Result {
     let f = Fixture::new()?;
-    f.provider("slow")?;
+    // The turn is held until the terminal is gone.
+    f.provider("overlap")?;
     f.add("Keep running")?;
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
     t.screen("current", |s| s.contains("Keep running"))?;
@@ -10898,6 +11014,7 @@ fn closing_tui_does_not_stop_supervisor() -> Result {
     );
     t.send("q")?;
     t.finish()?;
+    fs::write(f.scratch.path().join("release"), "")?;
     f.state("succeeded")?;
     f.no_scratch()?;
     Ok(())
@@ -10927,7 +11044,7 @@ fn live_usage_keeps_step_and_pause_visible_at_minimum_size() -> Result {
                 && s.contains("in 123G, cache 186G, out 76G")
                 && s.contains("p Pause")
         })?;
-        println!("LIVE USAGE 70x22 mouse={mouse}\n{screen}");
+        crate::support::record("LIVE USAGE", mouse, &screen);
         if mouse {
             t.click("p Pause")?;
         } else {
@@ -10936,7 +11053,7 @@ fn live_usage_keeps_step_and_pause_visible_at_minimum_size() -> Result {
         let paused = t.screen("paused live usage", |s| {
             s.contains("Paused · runner stopped")
         })?;
-        println!("LIVE USAGE PAUSED 70x22 mouse={mouse}\n{paused}");
+        crate::support::record("LIVE USAGE PAUSED", mouse, &paused);
         run.0.wait()?;
         f.state("paused")?;
         t.send("q")?;
@@ -10990,22 +11107,25 @@ fn real_tui_rate_wait_pause_with_mouse_and_keyboard_stops_automatic_retry() -> R
         })?;
         t.send("1")?;
         t.send("r")?;
-        println!(
-            "RATE WAIT mouse={mouse}\n{}",
-            t.screen("waiting", |s| s.contains("Current #1 · Running")
-                && s.contains("Resumes in"))?
+        crate::support::record(
+            "RATE WAIT",
+            mouse,
+            &t.screen("waiting", |s| {
+                s.contains("Current #1 · Running") && s.contains("Resumes in")
+            })?,
         );
         if mouse {
             t.click("p Pause")?;
         } else {
             t.send("p")?;
         }
-        println!(
-            "RATE WAIT PAUSED mouse={mouse}\n{}",
-            t.screen("scheduler stopped", |s| {
+        crate::support::record(
+            "RATE WAIT PAUSED",
+            mouse,
+            &t.screen("scheduler stopped", |s| {
                 s.contains("Automatic continuation stopped")
-                    && s.contains("Session: Queue · paused")
-            })?
+                    && s.contains("Session: Queue · paused · Paused; worker stopped")
+            })?,
         );
         t.send("q")?;
         t.finish()?;
@@ -11047,9 +11167,10 @@ fn real_tui_queue_runs_current_with_keyboard_and_mouse_in_both_modes() -> Result
             } else {
                 t.send("e")?;
             }
-            println!(
-                "RUN PREFERENCES mouse={mouse} queue={queue}\n{}",
-                t.screen("preferences", |s| s.contains("Project preferences"))?
+            crate::support::record(
+                &format!("RUN PREFERENCES queue={queue}"),
+                mouse,
+                &t.screen("preferences", |s| s.contains("Project preferences"))?,
             );
             // Continuing the queue is the default; running one task is the opt-in.
             if !queue {
@@ -11084,7 +11205,7 @@ fn real_tui_queue_runs_current_with_keyboard_and_mouse_in_both_modes() -> Result
                     && s.contains("Current #1 · Pending")
                     && s.contains("#2 · Pending · AI")
             })?;
-            println!("QUEUE BEFORE RUN mouse={mouse} queue={queue}\n{selected}");
+            crate::support::record(&format!("QUEUE BEFORE RUN queue={queue}"), mouse, &selected);
             if mouse {
                 t.click(if queue { "r Run queue" } else { "r Run one" })?;
             } else {
@@ -11094,10 +11215,12 @@ fn real_tui_queue_runs_current_with_keyboard_and_mouse_in_both_modes() -> Result
                 if queue {
                     s.contains("Queue 0") && s.contains("History 2")
                 } else {
-                    s.contains("Second configured task") && s.contains("History 1")
+                    s.contains("Second configured task")
+                        && s.contains("History 1")
+                        && s.contains("Session: Run one · stopped")
                 }
             })?;
-            println!("RUN RESULT mouse={mouse} queue={queue}\n{final_screen}");
+            crate::support::record(&format!("RUN RESULT queue={queue}"), mouse, &final_screen);
             assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
             let second = f.ok(&["show", "2"])?;
             assert_eq!(second["status"], if queue { "succeeded" } else { "ready" });
@@ -11138,17 +11261,21 @@ fn real_tui_configuration_errors_and_live_check_guard() -> Result {
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
     t.screen("startup", |s| s.contains("Configuration preflight"))?;
     t.send("r")?;
-    println!(
-        "MISSING CHECKS\n{}",
-        t.screen("missing checks", |s| s
-            .contains("Configure an enabled check"))?
+    crate::support::record(
+        "MISSING CHECKS",
+        false,
+        &t.screen("missing checks", |s| {
+            s.contains("Configure an enabled check")
+        })?,
     );
     service.save_check(&service.project_checks()?, &checks[0])?;
     t.send("r")?;
-    println!(
-        "MISSING MODELS\n{}",
-        t.screen("missing models", |s| s
-            .contains("Configure all four task roles"))?
+    crate::support::record(
+        "MISSING MODELS",
+        false,
+        &t.screen("missing models", |s| {
+            s.contains("Configure all four task roles")
+        })?,
     );
     assert!(service.task(1)?.unwrap().attempts.is_empty());
     let task = service.task(1)?.unwrap();
@@ -11166,10 +11293,12 @@ fn real_tui_configuration_errors_and_live_check_guard() -> Result {
     t.send("4c \r")?;
     t.screen("edit check", |s| s.contains("Edit project check"))?;
     t.send("\t\x01false\x13")?;
-    println!(
-        "LIVE CHECK GUARD\n{}",
-        t.screen("live inputs guarded", |s| s
-            .contains("Cannot change checks during a live attempt"))?
+    crate::support::record(
+        "LIVE CHECK GUARD",
+        false,
+        &t.screen("live inputs guarded", |s| {
+            s.contains("Cannot change checks during a live attempt")
+        })?,
     );
     assert_eq!(service.project_checks()?, checks);
     t.send("\x1b\x03")?;
@@ -11190,7 +11319,7 @@ fn readiness_launch_failure_reopens_and_retries_with_mouse_and_keyboard() -> Res
         let original = fs::read(f.root.join("README.md"))?;
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
         let initial = t.screen("readiness before launch", |s| s.contains("Run blocked (1)"))?;
-        println!("READINESS CURRENT mouse={mouse}\n{initial}");
+        crate::support::record("READINESS CURRENT", mouse, &initial);
         if mouse {
             t.click("u Readiness")?;
         } else {
@@ -11201,7 +11330,7 @@ fn readiness_launch_failure_reopens_and_retries_with_mouse_and_keyboard() -> Res
         })?;
         assert!(details.contains("OK · Project checks"));
         assert!(details.contains("OK · Workspace baseline"));
-        println!("READINESS DETAILS mouse={mouse}\n{details}");
+        crate::support::record("READINESS DETAILS", mouse, &details);
         if mouse {
             t.click("m Models")?;
         } else {
@@ -11222,7 +11351,7 @@ fn readiness_launch_failure_reopens_and_retries_with_mouse_and_keyboard() -> Res
         let failed = t.screen("launch failure", |s| {
             s.contains("codex executable not found on PATH")
         })?;
-        println!("READINESS LAUNCH FAILED mouse={mouse}\n{failed}");
+        crate::support::record("READINESS LAUNCH FAILED", mouse, &failed);
         assert!(
             f.ok(&["show", "1"])?["attempts"]
                 .as_array()
@@ -11244,7 +11373,7 @@ fn readiness_launch_failure_reopens_and_retries_with_mouse_and_keyboard() -> Res
             s.contains("Last launch failure:")
         })?;
         assert!(retained.contains("codex executable not found on PATH"));
-        println!("READINESS REOPENED mouse={mouse}\n{retained}");
+        crate::support::record("READINESS REOPENED", mouse, &retained);
         f.provider("normal")?;
         if mouse {
             reopened.click("u Refresh")?;
@@ -11253,14 +11382,14 @@ fn readiness_launch_failure_reopens_and_retries_with_mouse_and_keyboard() -> Res
         }
         let ready =
             reopened.screen("readiness refreshed", |s| s.contains("Can run · 0 blocker"))?;
-        println!("READINESS REPAIRED mouse={mouse}\n{ready}");
+        crate::support::record("READINESS REPAIRED", mouse, &ready);
         if mouse {
             click_readiness_forward(&mut reopened)?;
         } else {
             reopened.send("r")?;
         }
         let completed = reopened.screen("run after repair", |s| s.contains("Queue complete."))?;
-        println!("READINESS RETRIED mouse={mouse}\n{completed}");
+        crate::support::record("READINESS RETRIED", mouse, &completed);
         reopened.send("q")?;
         reopened.finish()?;
         f.no_scratch()?;
@@ -11307,10 +11436,10 @@ fn readiness_lists_independent_blockers_and_ignores_a_dead_workers_marker() -> R
     ] {
         assert!(details.contains(cause), "{cause} absent:\n{details}");
     }
-    println!("READINESS MULTIPLE BLOCKERS\n{details}");
+    crate::support::record("READINESS MULTIPLE BLOCKERS", false, &details);
     t.click("c Checks")?;
     let check_form = t.screen("checks link", |s| s.contains("Check to open"))?;
-    println!("READINESS CHECK ACTION\n{check_form}");
+    crate::support::record("READINESS CHECK ACTION", true, &check_form);
     t.send("\x1b")?;
     t.screen("checks closed", |s| !s.contains("Project checks"))?;
     // Inspection changes nothing: the next runner stops what the dead guardian left and
@@ -11346,7 +11475,7 @@ fn missing_project_git_identity_blocks_init_readiness_and_run_before_attempt() -
     let screen = terminal.screen("missing Git identity", |s| {
         s.contains("Execution readiness")
     })?;
-    println!("MISSING IDENTITY SCREEN\n{screen}");
+    crate::support::record("MISSING IDENTITY SCREEN", false, &screen);
     assert!(screen.contains("git config user.name"), "{screen}");
     terminal.send("\x1b")?;
     terminal.screen("readiness closed", |s| !s.contains("Execution readiness"))?;
@@ -11372,7 +11501,7 @@ fn missing_project_git_identity_blocks_init_readiness_and_run_before_attempt() -
     let screen = terminal.screen("resolved Git identity", |s| {
         s.contains("Execution readiness")
     })?;
-    println!("RESOLVED IDENTITY SCREEN\n{screen}");
+    crate::support::record("RESOLVED IDENTITY SCREEN", false, &screen);
     assert!(screen.contains("OK · Commit identity"), "{screen}");
     terminal.send("\x1b")?;
     terminal.screen("readiness closed", |s| !s.contains("Execution readiness"))?;
@@ -11403,7 +11532,7 @@ fn failed_current_with_a_dead_workers_marker_retries_without_losing_attempts() -
         let ready = t.screen("dead worker is no blocker", |s| {
             s.contains("OK · Worker ownership") && s.contains("Can run")
         })?;
-        println!("READINESS FAILED WORKER mouse={mouse}\n{ready}");
+        crate::support::record("READINESS FAILED WORKER", mouse, &ready);
         t.send("\x1b")?;
         t.screen("readiness closed", |s| !s.contains("Execution readiness"))?;
         if mouse {
@@ -11411,8 +11540,10 @@ fn failed_current_with_a_dead_workers_marker_retries_without_losing_attempts() -
         } else {
             t.send("r")?;
         }
-        let retried = t.screen("retry completed", |s| s.contains("Queue complete."))?;
-        println!("FAILED WORKER RETRIED mouse={mouse}\n{retried}");
+        let retried = t.screen("retry completed", |s| {
+            crate::support::finished(s) && s.contains("Queue complete.")
+        })?;
+        crate::support::record("FAILED WORKER RETRIED", mouse, &retried);
         assert_eq!(fs::metadata(&marker)?.len(), 0);
         let after = f.ok(&["show", "1"])?;
         assert_eq!(after["state"], "done");
@@ -11454,9 +11585,11 @@ fn readiness_retains_next_task_preflight_failure_after_reopen() -> Result {
             t.send("r")?;
         }
         let stopped = t.screen("next task preflight stopped", |s| {
-            s.contains("Second task needs review model") && s.contains("Run blocked")
+            s.contains("Session: Queue · stopped · Configure all four task roles")
+                && s.contains("Second task needs review model")
+                && s.contains("Run blocked")
         })?;
-        println!("READINESS NEXT TASK STOPPED mouse={mouse}\n{stopped}");
+        crate::support::record("READINESS NEXT TASK STOPPED", mouse, &stopped);
         assert!(
             f.ok(&["show", "2"])?["attempts"]
                 .as_array()
@@ -11478,7 +11611,7 @@ fn readiness_retains_next_task_preflight_failure_after_reopen() -> Result {
         let retained = reopened.screen("next task reason retained", |s| {
             s.contains("review model") && s.contains("Queue: stopped")
         })?;
-        println!("READINESS NEXT TASK REOPENED mouse={mouse}\n{retained}");
+        crate::support::record("READINESS NEXT TASK REOPENED", mouse, &retained);
         if mouse {
             reopened.click("m Models")?;
         } else {
@@ -11495,14 +11628,16 @@ fn readiness_retains_next_task_preflight_failure_after_reopen() -> Result {
             reopened.send("\t\tcodex/review\x13")?;
         }
         let saved = reopened.screen("second model saved", |s| s.contains("Saved to SQLite"))?;
-        println!("READINESS NEXT TASK REPAIRED mouse={mouse}\n{saved}");
+        crate::support::record("READINESS NEXT TASK REPAIRED", mouse, &saved);
         if mouse {
             reopened.click("r Run queue")?;
         } else {
             reopened.send("r")?;
         }
-        let complete = reopened.screen("second task run", |s| s.contains("Queue complete."))?;
-        println!("READINESS NEXT TASK COMPLETE mouse={mouse}\n{complete}");
+        let complete = reopened.screen("second task run", |s| {
+            crate::support::finished(s) && s.contains("Queue complete.")
+        })?;
+        crate::support::record("READINESS NEXT TASK COMPLETE", mouse, &complete);
         reopened.send("q")?;
         reopened.finish()?;
         f.no_scratch()?;
@@ -11536,14 +11671,14 @@ fn readiness_approval_action_is_available_with_mouse_and_keyboard() -> Result {
             s.contains("Current revision needs approval")
         })?;
         assert!(blocked.contains("v Approve"));
-        println!("READINESS APPROVAL BLOCKED mouse={mouse}\n{blocked}");
+        crate::support::record("READINESS APPROVAL BLOCKED", mouse, &blocked);
         if mouse {
             t.click("v Approve")?;
         } else {
             t.send("v")?;
         }
         let ready = t.screen("approved current", |s| s.contains("Can run · u Readiness"))?;
-        println!("READINESS APPROVED mouse={mouse}\n{ready}");
+        crate::support::record("READINESS APPROVED", mouse, &ready);
         assert!(
             f.ok(&["show", "1"])?["attempts"]
                 .as_array()
@@ -11576,7 +11711,7 @@ fn readiness_offers_answer_and_the_answer_continues_the_attempt() -> Result {
         let waiting = t.screen("open question asks for the answer", |s| {
             s.contains("Can run · 0 blocker") && s.contains("[r Answer] [u Refresh]")
         })?;
-        println!("READINESS QUESTION OPEN mouse={mouse}\n{waiting}");
+        crate::support::record("READINESS QUESTION OPEN", mouse, &waiting);
         if mouse {
             click_readiness_forward(&mut t)?;
         } else {
@@ -11612,13 +11747,15 @@ fn cli_answer_while_browsing_queue_continues_and_current_refreshes() -> Result {
     })?;
     t.send("2")?;
     let queue = t.screen("browsing queue", |s| s.contains("Queue · 1 shown"))?;
-    println!("READINESS QUEUE BEFORE ANSWER\n{queue}");
+    crate::support::record("READINESS QUEUE BEFORE ANSWER", false, &queue);
     f.provider("normal")?;
     // An answer from the CLI continues the attempt; Current shows it when the owner returns.
     f.ok(&["answer", "1", "--text", "Human answer: verified"])?;
     t.send("1")?;
-    let current = t.screen("answered task completes", |s| s.contains("Queue complete."))?;
-    println!("CURRENT AFTER QUEUE ANSWER\n{current}");
+    let current = t.screen("answered task completes", |s| {
+        crate::support::finished(s) && s.contains("Queue complete.")
+    })?;
+    crate::support::record("CURRENT AFTER QUEUE ANSWER", false, &current);
     assert_eq!(f.ok(&["show", "1"])?["state"], "done");
     t.send("q")?;
     t.finish()?;
@@ -11657,7 +11794,7 @@ fn readiness_shows_live_supervisor_and_worker_owners_without_taking_their_locks(
         let blocked = t.screen("both live owners", |s| {
             s.contains("A live supervisor owns") && s.contains("A live worker owns")
         })?;
-        println!("READINESS LIVE OWNERS mouse={mouse}\n{blocked}");
+        crate::support::record("READINESS LIVE OWNERS", mouse, &blocked);
         assert!(
             f.ok(&["show", "1"])?["attempts"]
                 .as_array()
@@ -11673,7 +11810,7 @@ fn readiness_shows_live_supervisor_and_worker_owners_without_taking_their_locks(
             t.send("c")?;
         }
         let checks = t.screen("linked checks action", |s| s.contains("Check to open"))?;
-        println!("READINESS CHECKS LINK mouse={mouse}\n{checks}");
+        crate::support::record("READINESS CHECKS LINK", mouse, &checks);
         t.send("\x1b")?;
         t.screen("checks action closed", |s| !s.contains("Project checks"))?;
         drop(worker);
@@ -11684,7 +11821,7 @@ fn readiness_shows_live_supervisor_and_worker_owners_without_taking_their_locks(
             t.send("u")?;
         }
         let ready = t.screen("owners released", |s| s.contains("Can run · 0 blocker"))?;
-        println!("READINESS OWNERS RELEASED mouse={mouse}\n{ready}");
+        crate::support::record("READINESS OWNERS RELEASED", mouse, &ready);
         assert_eq!(fs::read(f.root.join("README.md"))?, original);
         if mouse {
             click_readiness_forward(&mut t)?;
@@ -11694,7 +11831,7 @@ fn readiness_shows_live_supervisor_and_worker_owners_without_taking_their_locks(
         let completed = t.screen("run after ownership release", |s| {
             s.contains("Queue complete.")
         })?;
-        println!("READINESS OWNERS LAUNCHED mouse={mouse}\n{completed}");
+        crate::support::record("READINESS OWNERS LAUNCHED", mouse, &completed);
         assert_eq!(
             f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
             1
@@ -11716,7 +11853,7 @@ fn real_tui_recovers_connection_and_checks_then_continues_queue() -> Result {
         f.add("Continue without another Run")?;
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
         let ready = t.screen("queue overview", |s| s.contains("r Run queue"))?;
-        println!("AUTONOMOUS QUEUE mouse={mouse}\n{ready}");
+        crate::support::record("AUTONOMOUS QUEUE", mouse, &ready);
         assert!(ready.contains("Goal: Create result.txt"));
         assert!(ready.contains("Proof: result.txt contains verified"));
         assert!(ready.contains("Next #2: Continue without another Run"));
@@ -11725,14 +11862,19 @@ fn real_tui_recovers_connection_and_checks_then_continues_queue() -> Result {
         } else {
             t.send("r")?;
         }
-        println!(
-            "CONNECTION RECOVERY mouse={mouse}\n{}",
-            t.screen("bounded retry", |s| s.contains("automatic retry 1/2"))?
+        let held = pause_supervisor_in_backoff(&f, 1)?;
+        crate::support::record(
+            "CONNECTION RECOVERY",
+            mouse,
+            &t.screen("bounded retry", |s| s.contains("automatic retry 1/2"))?,
         );
+        drop(held);
         let complete = t.screen("two verified tasks", |s| {
-            s.contains("Queue complete.") && s.contains("History 2")
+            crate::support::finished(s) && {
+                s.contains("Queue complete.") && s.contains("History 2")
+            }
         })?;
-        println!("AUTONOMOUS RESULT mouse={mouse}\n{complete}");
+        crate::support::record("AUTONOMOUS RESULT", mouse, &complete);
         assert!(complete.contains("no queued work"));
         let first = f.ok(&["show", "1"])?;
         assert_eq!(first["status"], "succeeded");
@@ -11779,10 +11921,14 @@ fn real_tui_approval_and_human_mark_done_continue_with_mouse_and_keyboard() -> R
             } else {
                 t.send("r")?;
             }
-            println!(
-                "OWNER GATE mouse={mouse} human={human}\n{}",
-                t.screen("owner gate", |s| s.contains("Current #2")
-                    && s.contains("Owner gate"))?
+            crate::support::record(
+                &format!("OWNER GATE human={human}"),
+                mouse,
+                &t.screen("owner gate", |s| {
+                    s.contains("u Readines") && s.contains("Queue stopped for human work") && {
+                        s.contains("Current #2") && s.contains("Owner gate")
+                    }
+                })?,
             );
             if human {
                 mark_done(&mut t, mouse, "#2 Owner gate")?;
@@ -11791,10 +11937,14 @@ fn real_tui_approval_and_human_mark_done_continue_with_mouse_and_keyboard() -> R
             } else {
                 t.send("v")?;
             }
-            println!(
-                "GATE CLEARED mouse={mouse} human={human}\n{}",
-                t.screen("automatic continuation", |s| s.contains("Queue complete.")
-                    && s.contains("History 3"))?
+            crate::support::record(
+                &format!("GATE CLEARED human={human}"),
+                mouse,
+                &t.screen("automatic continuation", |s| {
+                    crate::support::finished(s) && {
+                        s.contains("Queue complete.") && s.contains("History 3")
+                    }
+                })?,
             );
             assert_eq!(f.ok(&["show", "3"])?["status"], "succeeded");
             t.send("q")?;
@@ -11859,7 +12009,11 @@ fn durable_session_survives_closed_tui_and_cli_intervention() -> Result {
                     "Session: Run one · stopped"
                 })
         })?;
-        println!("DURABLE GATE queue={queue} human={human} mouse={mouse}\n{gate}");
+        crate::support::record(
+            &format!("DURABLE GATE queue={queue} human={human}"),
+            mouse,
+            &gate,
+        );
         t.send("q")?;
         t.finish()?;
         f.ok(&[if human { "done" } else { "approve" }, "2"])?;
@@ -11872,7 +12026,11 @@ fn durable_session_survives_closed_tui_and_cli_intervention() -> Result {
                     && s.contains(if human { "Current #3" } else { "Current #2" })
             }
         })?;
-        println!("RESTORED SESSION queue={queue} human={human} mouse={mouse}\n{after}");
+        crate::support::record(
+            &format!("RESTORED SESSION queue={queue} human={human}"),
+            mouse,
+            &after,
+        );
         assert_eq!(
             f.ok(&["show", "3"])?["attempts"].as_array().unwrap().len(),
             usize::from(queue)
@@ -11887,7 +12045,8 @@ fn durable_session_survives_closed_tui_and_cli_intervention() -> Result {
 #[test]
 fn two_windows_share_one_session_and_pause_blocks_handoff() -> Result {
     let f = Fixture::new()?;
-    f.provider("slow")?;
+    // The turn is held, so the task still runs however long its screen takes to settle.
+    f.provider("slow-interrupt")?;
     f.add("Slow current")?;
     f.add("Must not start after pause")?;
     let mut first = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
@@ -11895,16 +12054,21 @@ fn two_windows_share_one_session_and_pause_blocks_handoff() -> Result {
     first.screen("ready", |s| s.contains("r Run queue"))?;
     first.send("r")?;
     let live = second.screen("shared live session", |s| {
-        s.contains("Current #1 · Running") && s.contains("Session: Queue · running")
+        s.contains("Current #1 · Running")
+            && s.contains("Session: Queue · running")
+            && s.contains("Execution started; results require")
+            && s.contains("execution: codex/execution · new session")
+            && s.contains("Step: Execution")
+            && s.contains("Execution   … running")
     })?;
-    println!("SECOND WINDOW LIVE\n{live}");
+    crate::support::record("SECOND WINDOW LIVE", false, &live);
     let duplicate = f.process().args(["run", "--background"]).output()?;
     assert_eq!(duplicate.status.code(), Some(4));
     second.click("p Pause")?;
     let paused = first.screen("cross window pause", |s| {
         s.contains("Current #1 · Paused") && s.contains("Session: Queue · paused")
     })?;
-    println!("FIRST WINDOW PAUSED\n{paused}");
+    crate::support::record("FIRST WINDOW PAUSED", false, &paused);
     assert!(
         f.ok(&["show", "2"])?["attempts"]
             .as_array()
@@ -11917,7 +12081,7 @@ fn two_windows_share_one_session_and_pause_blocks_handoff() -> Result {
     second.finish()?;
     let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
     let restored = reopened.screen("pause retained", |s| s.contains("Session: Queue · paused"))?;
-    println!("REOPENED PAUSE\n{restored}");
+    crate::support::record("REOPENED PAUSE", false, &restored);
     reopened.send("q")?;
     reopened.finish()?;
     f.no_scratch()?;
@@ -11962,14 +12126,14 @@ exec /usr/bin/git "$@"
             && s.contains("Session: Queue · running")
             && s.contains("p Pause")
     })?;
-    println!("READY HANDOFF\n{handoff}");
+    crate::support::record("READY HANDOFF", false, &handoff);
     t.click("p Pause")?;
     let paused = t.screen("handoff paused", |s| {
         s.contains("Session: Queue · paused")
             && s.contains("Queue paused before the next task")
             && !s.contains("Supervisor preparing the next task")
     })?;
-    println!("PAUSED AT HANDOFF\n{paused}");
+    crate::support::record("PAUSED AT HANDOFF", true, &paused);
     fs::write(release, "release after pause")?;
     f.supervisor_stopped()?;
     assert!(
@@ -11995,7 +12159,7 @@ fn cli_answer_after_tui_exit_resumes_the_same_queue_attempt() -> Result {
     let question = t.screen("question waiting", |s| {
         s.contains("Needs input · runner stopped") && s.contains("Session: Queue · waiting")
     })?;
-    println!("QUESTION BEFORE EXIT\n{question}");
+    crate::support::record("QUESTION BEFORE EXIT", false, &question);
     let attempt = f.ok(&["show", "1"])?["attempts"][0]["id"].clone();
     t.send("q")?;
     t.finish()?;
@@ -12005,7 +12169,7 @@ fn cli_answer_after_tui_exit_resumes_the_same_queue_attempt() -> Result {
     let done = reopened.screen("automatic answer continuation", |s| {
         s.contains("History 2") && s.contains("Session: Queue · complete")
     })?;
-    println!("ANSWER AFTER EXIT\n{done}");
+    crate::support::record("ANSWER AFTER EXIT", false, &done);
     let first = f.ok(&["show", "1"])?;
     assert_eq!(first["attempts"].as_array().unwrap().len(), 1);
     assert_eq!(first["attempts"][0]["id"], attempt);
@@ -12139,14 +12303,14 @@ fn final_human_mark_done_completes_queue_session_with_mouse_and_keyboard() -> Re
         let complete = t.screen("final human mark done", |s| {
             s.contains("Queue complete.") && s.contains("Session: Queue · complete")
         })?;
-        println!("FINAL HUMAN ACK mouse={mouse}\n{complete}");
+        crate::support::record("FINAL HUMAN ACK", mouse, &complete);
         t.send("q")?;
         t.finish()?;
         let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
         let restored = reopened.screen("final ack retained", |s| {
             s.contains("Session: Queue · complete · no queued work")
         })?;
-        println!("FINAL HUMAN ACK REOPENED mouse={mouse}\n{restored}");
+        crate::support::record("FINAL HUMAN ACK REOPENED", mouse, &restored);
         reopened.send("q")?;
         reopened.finish()?;
         f.no_scratch()?;
@@ -12182,9 +12346,11 @@ fn run_one_answer_continues_that_task_and_never_the_next() -> Result {
     f.ok(&["answer", "1", "--text", "Human answer: verified"])?;
     let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 30)?;
     let next = reopened.screen("answered task finished; Run one stops", |s| {
-        s.contains("Current #2 · Pending") && s.contains("History 1")
+        s.contains("Session: Run one · stopped")
+            && s.contains("Current #2 · Pending")
+            && s.contains("History 1")
     })?;
-    println!("RUN ONE ANSWER CONTINUED\n{next}");
+    crate::support::record("RUN ONE ANSWER CONTINUED", false, &next);
     let done = f.ok(&["show", "1"])?;
     assert_eq!(done["state"], "done");
     assert_eq!(done["attempts"].as_array().unwrap().len(), 1);
@@ -12245,12 +12411,12 @@ fn cli_intervention_records_lease_inspection_failure_on_reopened_screen() -> Res
         s.contains("Session: Queue · supervisor absent")
             && s.contains("Continuation could not be confirmed")
     })?;
-    println!("CONTINUATION ERROR AFTER REOPEN\n{screen}");
+    crate::support::record("CONTINUATION ERROR AFTER REOPEN", false, &screen);
     reopened.send("r")?;
     let complete = reopened.screen("explicit recovery after inspection error", |s| {
         s.contains("Queue complete.") && s.contains("Session: Queue · complete")
     })?;
-    println!("CONTINUATION ERROR RECOVERED\n{complete}");
+    crate::support::record("CONTINUATION ERROR RECOVERED", false, &complete);
     reopened.send("q")?;
     reopened.finish()?;
     f.no_scratch()?;
@@ -12292,20 +12458,21 @@ fn real_tui_pause_during_connection_recovery_stops_queue() -> Result {
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
         t.screen("ready", |s| s.contains("r Run queue"))?;
         t.send("r")?;
-        println!(
-            "RETRY BEFORE PAUSE mouse={mouse}\n{}",
-            t.screen("retrying", |s| s.contains("retry 1/2")
-                && s.contains("Current #1 · Running"))?
+        let held = pause_supervisor_in_backoff(&f, 1)?;
+        crate::support::record(
+            "RETRY BEFORE PAUSE",
+            mouse,
+            &t.screen("retrying", |s| {
+                s.contains("retry 1/2") && s.contains("Current #1 · Running")
+            })?,
         );
-        if mouse {
-            t.click("p Pause")?;
-        } else {
-            t.send("p")?;
-        }
-        println!(
-            "RETRY PAUSED mouse={mouse}\n{}",
-            t.screen("paused", |s| s.contains("Current #1 · Paused")
-                && s.contains("runner stopped"))?
+        pause_held(&f, &mut t, mouse, held)?;
+        crate::support::record(
+            "RETRY PAUSED",
+            mouse,
+            &t.screen("paused", |s| {
+                s.contains("Current #1 · Paused") && s.contains("runner stopped")
+            })?,
         );
         let task = f.ok(&["show", "1"])?;
         assert_eq!(task["attempts_used"], 0);
@@ -12337,19 +12504,22 @@ fn real_tui_current_run_mode_control_changes_saved_single_preference() -> Result
         single.continuation = Continuation::Single;
         service.save_preferences(&config, &original, &single)?;
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
-        println!(
-            "SAVED SINGLE MODE mouse={mouse}\n{}",
-            t.screen("single visible", |s| s.contains("r Run one")
-                && s.contains("Run one selected"))?
+        crate::support::record(
+            "SAVED SINGLE MODE",
+            mouse,
+            &t.screen("single visible", |s| {
+                s.contains("r Run one") && s.contains("Run one selected")
+            })?,
         );
         if mouse {
             t.click("m Run mode")?;
         } else {
             t.send("m")?;
         }
-        println!(
-            "CURRENT MODE FORM mouse={mouse}\n{}",
-            t.screen("mode form", |s| s.contains("Project preferences"))?
+        crate::support::record(
+            "CURRENT MODE FORM",
+            mouse,
+            &t.screen("mode form", |s| s.contains("Project preferences"))?,
         );
         if mouse {
             t.click("< Run one >")?;
@@ -12367,10 +12537,12 @@ fn real_tui_current_run_mode_control_changes_saved_single_preference() -> Result
         } else {
             t.send("r")?;
         }
-        println!(
-            "MODE CHANGED RESULT mouse={mouse}\n{}",
-            t.screen("queue finished", |s| s.contains("Queue complete.")
-                && s.contains("History 2"))?
+        crate::support::record(
+            "MODE CHANGED RESULT",
+            mouse,
+            &t.screen("queue finished", |s| {
+                s.contains("Queue complete.") && s.contains("History 2")
+            })?,
         );
         t.send("q")?;
         t.finish()?;
@@ -12451,21 +12623,28 @@ fn exhausted_original_retries_with_restarted_limits_in_mouse_and_keyboard_tuis()
         assert_eq!(f.ok(&["show", "1"])?["attempts_used"], 1);
         f.provider("normal")?;
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 40)?;
-        println!(
-            "EXHAUSTED CURRENT mouse={mouse}\n{}",
-            t.screen("failed current", |s| s.contains("EXECUTION STOPPED")
-                && s.contains("Ten repair rounds left critical findings")
-                && s.contains("Budget 1 of 1 used"))?
+        crate::support::record(
+            "EXHAUSTED CURRENT",
+            mouse,
+            &t.screen("failed current", |s| {
+                s.contains("EXECUTION STOPPED")
+                    && s.contains("Ten repair rounds left critical findings")
+                    && s.contains("Budget 1 of 1 used")
+            })?,
         );
         if mouse {
             t.click("r Retry")?;
         } else {
             t.send("r")?;
         }
-        println!(
-            "RETRIED CURRENT mouse={mouse}\n{}",
-            t.screen("original completed", |s| s.contains("Queue complete.")
-                && s.contains("History 1"))?
+        crate::support::record(
+            "RETRIED CURRENT",
+            mouse,
+            &t.screen("original completed", |s| {
+                crate::support::finished(s) && {
+                    s.contains("Queue complete.") && s.contains("History 1")
+                }
+            })?,
         );
         t.send("q")?;
         t.finish()?;
@@ -12593,12 +12772,14 @@ fn real_tui_individual_check_timeout_remains_separate_from_task_deadline() -> Re
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 34)?;
         t.screen("check timeout fixture ready", |s| s.contains("r Run queue"))?;
         press(&mut t, mouse, "r Run queue", "r")?;
-        println!(
-            "INDIVIDUAL CHECK TIMEOUT mouse={mouse}\n{}",
-            t.screen("individual check timeout", |s| s
-                .contains("EXECUTION STOPPED")
-                && s.contains("Supervisor check timeout needs attention")
-                && s.contains("Retry"))?
+        crate::support::record(
+            "INDIVIDUAL CHECK TIMEOUT",
+            mouse,
+            &t.screen("individual check timeout", |s| {
+                s.contains("EXECUTION STOPPED")
+                    && s.contains("Supervisor check timeout needs attention")
+                    && s.contains("Retry")
+            })?,
         );
         f.supervisor_stopped()?;
         let failed = f.ok(&["show", "1"])?;
@@ -12637,9 +12818,11 @@ fn real_tui_individual_check_timeout_remains_separate_from_task_deadline() -> Re
         ])?;
         press(&mut t, mouse, "r Retry", "r")?;
         let recovered = t.screen("retry after check configuration edit", |s| {
-            s.contains("Queue complete.") && s.contains("History 2")
+            crate::support::finished(s) && {
+                s.contains("Queue complete.") && s.contains("History 2")
+            }
         })?;
-        println!("CHECK TIMEOUT MANUAL RETRY mouse={mouse}\n{recovered}");
+        crate::support::record("CHECK TIMEOUT MANUAL RETRY", mouse, &recovered);
         assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
         f.supervisor_stopped()?;
         t.send("q")?;
@@ -12668,7 +12851,9 @@ fn real_tui_check_timeout_extension_survives_pause_and_preserves_configuration()
             command.push_str("if test -f result.txt; then exit 0; fi; ");
         }
         command.push_str(
-            "printf 'suite started\\nstage 1 complete\\n'; sleep 1.3; printf 'suite completed\\n'",
+            // The external printf writes once; a shell builtin may split the two lines into
+            // two captured records from one run to the next.
+            "/usr/bin/printf 'suite started\\nstage 1 complete\\n'; sleep 1.3; printf 'suite completed\\n'",
         );
         f.ok(&[
             "check-set",
@@ -12696,13 +12881,15 @@ fn real_tui_check_timeout_extension_survives_pause_and_preserves_configuration()
                 && s.contains("[r Resume]")
         })?;
         f.supervisor_stopped()?;
-        println!("CHECK TIMEOUT REMEDIATION PAUSED mouse={mouse}\n{paused}");
+        crate::support::record("CHECK TIMEOUT REMEDIATION PAUSED", mouse, &paused);
         fs::remove_file(&hold)?;
         press(&mut t, mouse, "r Resume", "r")?;
         let done = t.screen("check passed with granted time", |s| {
-            s.contains("Queue complete.") && s.contains("History 1")
+            crate::support::finished(s) && {
+                s.contains("Queue complete.") && s.contains("History 1")
+            }
         })?;
-        println!("CHECK TIMEOUT EXTENSION PASSED mouse={mouse}\n{done}");
+        crate::support::record("CHECK TIMEOUT EXTENSION PASSED", mouse, &done);
         let task = f.ok(&["show", "1"])?;
         assert_eq!(task["attempts"].as_array().unwrap().len(), 1, "{task}");
         assert_eq!(task["status"], "succeeded");
@@ -13158,7 +13345,7 @@ fn usage_limit_waits_for_the_reset_but_owner_resume_asks_the_provider_now() -> R
         let current = t.screen("usage limit current", |s| {
             s.contains("Provider limit until Oct 26 2099 23:33") && s.contains("Resumes in 2")
         })?;
-        println!("USAGE LIMIT CURRENT mouse={mouse}\n{current}");
+        crate::support::record("USAGE LIMIT CURRENT", mouse, &current);
         let resets = current.split("Resumes in ").nth(1).unwrap_or_default();
         assert!(
             resets.split(' ').next().is_some_and(|n| n.ends_with('d')),
@@ -13183,7 +13370,7 @@ fn usage_limit_waits_for_the_reset_but_owner_resume_asks_the_provider_now() -> R
         let ready = t.screen("usage limit readiness", |s| {
             s.contains("Can run · 0 blocker") && s.contains("[r Resume]")
         })?;
-        println!("USAGE LIMIT READINESS mouse={mouse}\n{ready}");
+        crate::support::record("USAGE LIMIT READINESS", mouse, &ready);
         f.provider("normal")?;
         if mouse {
             click_readiness_forward(&mut t)?;
@@ -13191,7 +13378,7 @@ fn usage_limit_waits_for_the_reset_but_owner_resume_asks_the_provider_now() -> R
             t.send("r")?;
         }
         let complete = t.screen("resumed before reset", |s| s.contains("Queue complete."))?;
-        println!("USAGE LIMIT RESUMED NOW mouse={mouse}\n{complete}");
+        crate::support::record("USAGE LIMIT RESUMED NOW", mouse, &complete);
         let done = f.ok(&["show", "1"])?;
         assert_eq!(done["lifecycle"], "succeeded");
         assert_eq!(done["attempts"].as_array().unwrap().len(), 1);
@@ -13311,11 +13498,12 @@ fn background_startup_returns_actual_error_in_cli_and_tui() -> Result {
         } else {
             t.send("r")?;
         }
-        println!(
-            "STARTUP ERROR mouse={mouse}\n{}",
-            t.screen("real startup reason", |s| {
+        crate::support::record(
+            "STARTUP ERROR",
+            mouse,
+            &t.screen("real startup reason", |s| {
                 s.contains("command conflict: Workspace has uncommitted work")
-            })?
+            })?,
         );
         assert!(
             f.ok(&["show", "1"])?["attempts"]
@@ -13372,19 +13560,24 @@ fn real_tui_preserves_large_output_and_full_review_evidence_through_queue() -> R
         f.add("Large output and independent evidence")?;
         f.add("Following task")?;
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
-        println!(
-            "LARGE EVIDENCE START mouse={mouse}\n{}",
-            t.screen("ready", |s| s.contains("r Run queue"))?
+        crate::support::record(
+            "LARGE EVIDENCE START",
+            mouse,
+            &t.screen("ready", |s| s.contains("r Run queue"))?,
         );
         if mouse {
             t.click("r Run queue")?;
         } else {
             t.send("r")?;
         }
-        println!(
-            "LARGE EVIDENCE COMPLETE mouse={mouse}\n{}",
-            t.screen("verified queue", |s| s.contains("Queue complete.")
-                && s.contains("History 2"))?
+        crate::support::record(
+            "LARGE EVIDENCE COMPLETE",
+            mouse,
+            &t.screen("verified queue", |s| {
+                crate::support::finished(s) && {
+                    s.contains("Queue complete.") && s.contains("History 2")
+                }
+            })?,
         );
         t.send("q")?;
         t.finish()?;
@@ -13429,20 +13622,22 @@ fn review_failure_is_judged_repaired_and_queue_continues_automatically() -> Resu
         f.add("Review repair")?;
         f.add("Following task")?;
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
-        println!(
-            "REVIEW RECOVERY START mouse={mouse}\n{}",
-            t.screen("ready", |s| s.contains("r Run queue"))?
+        crate::support::record(
+            "REVIEW RECOVERY START",
+            mouse,
+            &t.screen("ready", |s| s.contains("r Run queue"))?,
         );
         if mouse {
             t.click("r Run queue")?;
         } else {
             t.send("r")?;
         }
-        println!(
-            "REVIEW RECOVERY COMPLETE mouse={mouse}\n{}",
-            t.screen("queue completed after review repair", |s| s
-                .contains("Queue complete.")
-                && s.contains("History 2"))?
+        crate::support::record(
+            "REVIEW RECOVERY COMPLETE",
+            mouse,
+            &t.screen("queue completed after review repair", |s| {
+                s.contains("Queue complete.") && s.contains("History 2")
+            })?,
         );
         t.send("q")?;
         t.finish()?;
@@ -13596,21 +13791,29 @@ fn real_tui_check_launch_failure_recovers_same_attempt_and_continues_queue() -> 
         } else {
             t.send("r")?;
         }
-        println!(
-            "CHECK LAUNCH TRANSIENT mouse={mouse}\n{}",
-            t.screen("check launch backoff", |s| s
-                .contains("Check infrastructure failed")
-                && s.contains("retry 1/2 after 1s"))?
+        // Held in the first backoff, so no second retry replaces the first on screen.
+        let held = pause_supervisor_in_backoff(&f, 1)?;
+        crate::support::record(
+            "CHECK LAUNCH TRANSIENT",
+            mouse,
+            &t.screen("check launch backoff", |s| {
+                s.contains("Check infrastructure failed") && s.contains("retry 1/2 after 1s")
+            })?,
         );
-        // Restore launches before anything else: the two retries leave 3 s for it.
+        // Restore launches while held, so the first retry finds them.
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
+        drop(held);
         let retrying = f.ok(&["show", "1"])?;
         assert_eq!(retrying["attempts_used"], 0);
         assert_eq!(retrying["attempts"].as_array().unwrap().len(), 1);
-        println!(
-            "CHECK LAUNCH TRANSIENT COMPLETE mouse={mouse}\n{}",
-            t.screen("queue recovered", |s| s.contains("Queue complete.")
-                && s.contains("History 2"))?
+        crate::support::record(
+            "CHECK LAUNCH TRANSIENT COMPLETE",
+            mouse,
+            &t.screen("queue recovered", |s| {
+                crate::support::finished(s) && {
+                    s.contains("Queue complete.") && s.contains("History 2")
+                }
+            })?,
         );
         let first = f.ok(&["show", "1"])?;
         assert_eq!(first["status"], "succeeded");
@@ -13647,19 +13850,25 @@ fn real_tui_check_launch_failure_exhausts_three_launches_and_blocks_queue() -> R
             t.send("r")?;
         }
         for (retry, seconds) in [(1, 1), (2, 2)] {
-            println!(
-                "CHECK LAUNCH PERSISTENT mouse={mouse} retry={retry}\n{}",
-                t.screen("check launch bounded backoff", |s| s
-                    .contains("Check infrastructure failed")
-                    && s.contains(&format!("retry {retry}/2 after {seconds}s")))?
+            let held = pause_supervisor_in_backoff(&f, retry)?;
+            crate::support::record(
+                &format!("CHECK LAUNCH PERSISTENT retry={retry}"),
+                mouse,
+                &t.screen("check launch bounded backoff", |s| {
+                    s.contains("Check infrastructure failed")
+                        && s.contains(&format!("retry {retry}/2 after {seconds}s"))
+                })?,
             );
+            drop(held);
         }
-        println!(
-            "CHECK LAUNCH EXHAUSTED mouse={mouse}\n{}",
-            t.screen("launch retries exhausted", |s| s
-                .contains("EXECUTION STOPPED")
-                && s.contains("Permission denied")
-                && s.contains("failed 3 attempts in a row"))?
+        crate::support::record(
+            "CHECK LAUNCH EXHAUSTED",
+            mouse,
+            &t.screen("launch retries exhausted", |s| {
+                s.contains("EXECUTION STOPPED")
+                    && s.contains("Permission denied")
+                    && s.contains("failed 3 attempts in a row")
+            })?,
         );
         let first = f.ok(&["show", "1"])?;
         println!("CHECK LAUNCH EXHAUSTED TASK {first}");
@@ -13696,11 +13905,12 @@ fn real_tui_check_launch_failure_exhausts_three_launches_and_blocks_queue() -> R
         t.send("q")?;
         t.finish()?;
         let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 34)?;
-        println!(
-            "CHECK LAUNCH FAILURE RETAINED mouse={mouse}\n{}",
-            reopened.screen("retained environment failure", |s| s
-                .contains("EXECUTION STOPPED")
-                && s.contains("Permission denied"))?
+        crate::support::record(
+            "CHECK LAUNCH FAILURE RETAINED",
+            mouse,
+            &reopened.screen("retained environment failure", |s| {
+                s.contains("EXECUTION STOPPED") && s.contains("Permission denied")
+            })?,
         );
         assert_check_launch_records(&f, 3..=3, LastLaunch::Fails)?;
         reopened.send("q")?;
@@ -13724,27 +13934,29 @@ fn real_tui_check_launch_failure_pause_cancels_backoff_and_resumes_same_attempt(
             t.send("r")?;
         }
         let failures = if mouse { 2 } else { 1 };
-        println!(
-            "CHECK LAUNCH BEFORE PAUSE mouse={mouse}\n{}",
-            t.screen("check launch backoff before pause", |s| s
-                .contains("Check infrastructure failed")
-                && s.contains(&format!("retry {failures}/2")))?
+        let held = pause_supervisor_in_backoff(&f, failures)?;
+        crate::support::record(
+            "CHECK LAUNCH BEFORE PAUSE",
+            mouse,
+            &t.screen("check launch backoff before pause", |s| {
+                s.contains("Check infrastructure failed")
+                    && s.contains(&format!("retry {failures}/2"))
+            })?,
         );
         let active_before_pause = f.ok(&["show", "1"])?["attempts"][0]["active_ms"]
             .as_i64()
             .unwrap();
         thread::sleep(Duration::from_millis(250));
-        if mouse {
-            t.click("p Pause")?;
-        } else {
-            t.send("p")?;
-        }
-        println!(
-            "CHECK LAUNCH PAUSED mouse={mouse}\n{}",
-            t.screen("paused launch retries", |s| s
-                .contains("Current #1 · Paused")
-                && s.contains("runner stopped")
-                && s.contains("r Resume"))?
+        pause_held(&f, &mut t, mouse, held)?;
+        crate::support::record(
+            "CHECK LAUNCH PAUSED",
+            mouse,
+            &t.screen("paused launch retries", |s| {
+                s.contains("Check infrastructure failed · automatic retry")
+                    && s.contains("Current #1 · Paused")
+                    && s.contains("runner stopped")
+                    && s.contains("r Resume")
+            })?,
         );
         let first = f.ok(&["show", "1"])?;
         let paused_active = first["attempts"][0]["active_ms"].as_i64().unwrap();
@@ -13784,10 +13996,14 @@ fn real_tui_check_launch_failure_pause_cancels_backoff_and_resumes_same_attempt(
         } else {
             t.send("r")?;
         }
-        println!(
-            "CHECK LAUNCH RESUMED mouse={mouse}\n{}",
-            t.screen("resumed launch recovery", |s| s.contains("Queue complete.")
-                && s.contains("History 2"))?
+        crate::support::record(
+            "CHECK LAUNCH RESUMED",
+            mouse,
+            &t.screen("resumed launch recovery", |s| {
+                crate::support::finished(s) && {
+                    s.contains("Queue complete.") && s.contains("History 2")
+                }
+            })?,
         );
         let first = f.ok(&["show", "1"])?;
         assert_eq!(first["status"], "succeeded");
@@ -13842,11 +14058,15 @@ fn real_tui_check_launch_backoff_deadline_survives_restart_and_retry_restarts_th
         } else {
             t.send("r")?;
         }
-        println!(
-            "CHECK LAUNCH DEADLINE BACKOFF mouse={mouse}\n{}",
-            t.screen("launch backoff", |s| s
-                .contains("Check infrastructure failed"))?
+        let held = pause_supervisor_in_backoff(&f, 1)?;
+        crate::support::record(
+            "CHECK LAUNCH DEADLINE BACKOFF",
+            mouse,
+            &t.screen("launch backoff", |s| {
+                s.contains("Check infrastructure failed")
+            })?,
         );
+        drop(held);
         let expired = t
             .screen("configured deadline expired", |s| {
                 s.contains("Current #1 · Failed") && s.contains("configured task-wide limit")
@@ -13855,7 +14075,7 @@ fn real_tui_check_launch_backoff_deadline_survives_restart_and_retry_restarts_th
                 let show = |id| f.ok(&["show", id]).map(|task| task.to_string());
                 format!("{error}\ntask 1: {:?}\ntask 2: {:?}", show("1"), show("2"))
             })?;
-        println!("CHECK LAUNCH DEADLINE EXPIRED mouse={mouse}\n{expired}");
+        crate::support::record("CHECK LAUNCH DEADLINE EXPIRED", mouse, &expired);
         f.supervisor_stopped()?;
         let failed = f.ok(&["show", "1"])?;
         let first_attempt = failed["attempts"][0].clone();
@@ -13885,12 +14105,14 @@ fn real_tui_check_launch_backoff_deadline_survives_restart_and_retry_restarts_th
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
         let mut t =
             Terminal::open_project(binary.to_str().unwrap(), f.scratch.path(), &f.root, 120, 34)?;
-        println!(
-            "CHECK LAUNCH DEADLINE RESTART mouse={mouse}\n{}",
-            t.screen("restart retains configured deadline failure", |s| s
-                .contains("Current #1 · Failed")
-                && s.contains("[r Retry]")
-                && s.contains("configured task-wide limit"))?
+        crate::support::record(
+            "CHECK LAUNCH DEADLINE RESTART",
+            mouse,
+            &t.screen("restart retains configured deadline failure", |s| {
+                s.contains("Current #1 · Failed")
+                    && s.contains("[r Retry]")
+                    && s.contains("configured task-wide limit")
+            })?,
         );
         // Retry restarts the limit: the kept work is checked and judged with fresh time.
         if mouse {
@@ -13898,11 +14120,14 @@ fn real_tui_check_launch_backoff_deadline_survives_restart_and_retry_restarts_th
         } else {
             t.send("r")?;
         }
-        println!(
-            "CHECK LAUNCH DEADLINE RETRY RECOVERED mouse={mouse}\n{}",
-            t.screen("retry with a restarted limit recovers", |s| s
-                .contains("Queue complete.")
-                && s.contains("History 2"))?
+        crate::support::record(
+            "CHECK LAUNCH DEADLINE RETRY RECOVERED",
+            mouse,
+            &t.screen("retry with a restarted limit recovers", |s| {
+                crate::support::finished(s) && {
+                    s.contains("Queue complete.") && s.contains("History 2")
+                }
+            })?,
         );
         let recovered = f.ok(&["show", "1"])?;
         assert_eq!(recovered["status"], "succeeded");
@@ -13974,7 +14199,7 @@ fn readiness_refreshes_external_models_and_reports_reload_errors() -> Result {
         let blocked = t.screen("external missing role", |s| {
             s.contains("review model: No model selected")
         })?;
-        println!("READINESS EXTERNAL MODEL BLOCKED mouse={mouse}\n{blocked}");
+        crate::support::record("READINESS EXTERNAL MODEL BLOCKED", mouse, &blocked);
         let task = service.task(1)?.unwrap();
         service.revise(
             VersionedTask {
@@ -13992,7 +14217,7 @@ fn readiness_refreshes_external_models_and_reports_reload_errors() -> Result {
         let refreshed = t.screen("external model fixed in dialog", |s| {
             s.contains("Can run · 0 blocker")
         })?;
-        println!("READINESS EXTERNAL MODEL REFRESHED mouse={mouse}\n{refreshed}");
+        crate::support::record("READINESS EXTERNAL MODEL REFRESHED", mouse, &refreshed);
         let db = f.db()?;
         db.connection()
             .execute_batch("ALTER TABLE execution_sessions RENAME TO unavailable_sessions")?;
@@ -14006,7 +14231,7 @@ fn readiness_refreshes_external_models_and_reports_reload_errors() -> Result {
         })?;
         assert!(!error.contains("Can run · 0 blocker"));
         assert!(!error.contains("[r Run queue]"));
-        println!("READINESS REFRESH ERROR mouse={mouse}\n{error}");
+        crate::support::record("READINESS REFRESH ERROR", mouse, &error);
         db.connection()
             .execute_batch("ALTER TABLE unavailable_sessions RENAME TO execution_sessions")?;
         if mouse {
@@ -14021,7 +14246,7 @@ fn readiness_refreshes_external_models_and_reports_reload_errors() -> Result {
             t.send("r")?;
         }
         let complete = t.screen("external model run", |s| s.contains("Queue complete."))?;
-        println!("READINESS EXTERNAL MODEL COMPLETE mouse={mouse}\n{complete}");
+        crate::support::record("READINESS EXTERNAL MODEL COMPLETE", mouse, &complete);
         t.send("q")?;
         t.finish()?;
         f.no_scratch()?;
@@ -14053,7 +14278,7 @@ fn readiness_lets_the_owner_resume_a_rate_limit_wait_at_once() -> Result {
         let live = t.screen("live rate wait readiness", |s| {
             s.contains("The runner is working on it · p Pause, s Stop")
         })?;
-        println!("READINESS LIVE RATE WAIT mouse={mouse}\n{live}");
+        crate::support::record("READINESS LIVE RATE WAIT", mouse, &live);
         t.send("\x1b")?;
         t.screen("readiness closed", |s| !s.contains("Execution readiness"))?;
         if mouse {
@@ -14072,7 +14297,7 @@ fn readiness_lets_the_owner_resume_a_rate_limit_wait_at_once() -> Result {
         let ready = t.screen("rate limit readiness", |s| {
             s.contains("Can run · 0 blocker") && s.contains("[r Resume]")
         })?;
-        println!("READINESS RATE WAIT mouse={mouse}\n{ready}");
+        crate::support::record("READINESS RATE WAIT", mouse, &ready);
         f.provider("normal")?;
         if mouse {
             click_readiness_forward(&mut t)?;
@@ -14080,7 +14305,7 @@ fn readiness_lets_the_owner_resume_a_rate_limit_wait_at_once() -> Result {
             t.send("r")?;
         }
         let complete = t.screen("rate limit resumed", |s| s.contains("Queue complete."))?;
-        println!("READINESS RATE RESUMED mouse={mouse}\n{complete}");
+        crate::support::record("READINESS RATE RESUMED", mouse, &complete);
         let after = f.ok(&["show", "1"])?;
         assert_eq!(after["attempts"].as_array().unwrap().len(), 1);
         assert_eq!(after["attempts"][0]["id"], attempt);
@@ -14327,9 +14552,12 @@ fn pause_ends_runners_gracefully_from_the_cli_and_any_tui_screen() -> Result {
             t.send("2")?;
         }
         let queue = t.screen("queue offers pause", |s| {
-            shows_view(s, "Queue") && s.contains("p Pause")
+            shows_view(s, "Queue")
+                && s.contains("p Pause")
+                && s.contains("Workflow · Implement · repair round 0/10")
+                && s.contains("? new tokens")
         })?;
-        println!("QUEUE WHILE RUNNING mouse={mouse}\n{queue}");
+        crate::support::record("QUEUE WHILE RUNNING", mouse, &queue);
         if mouse {
             t.click("p Pause")?;
         } else {
@@ -14337,7 +14565,7 @@ fn pause_ends_runners_gracefully_from_the_cli_and_any_tui_screen() -> Result {
         }
         f.supervisor_stopped()?;
         let paused = t.screen("paused from queue", |s| s.contains("Current #1 · Paused"))?;
-        println!("PAUSED FROM QUEUE mouse={mouse}\n{paused}");
+        crate::support::record("PAUSED FROM QUEUE", mouse, &paused);
         assert_eq!(f.ok(&["show", "1"])?["status"], "paused");
         t.send("q")?;
         t.finish()?;
@@ -14380,32 +14608,47 @@ fn two_projects_run_at_once_and_stay_separate() -> Result {
     projects.sort();
     assert_eq!(ran_in, projects);
     for (t, name) in [(&a, "first"), (&b, "second")] {
-        println!(
-            "{name} RUNNING\n{}",
-            t.screen(name, |s| s.contains("Running · supervisor alive"))?
+        crate::support::record(
+            &format!("{name} RUNNING"),
+            name == "second",
+            &t.screen(name, |s| {
+                // The header counts both once it has seen the other project start.
+                s.contains("0 need you · 2 running")
+                    && s.contains("Running · supervisor alive")
+                    && s.contains("execution: codex/execution · new session")
+            })?,
         );
     }
     // Pausing one project leaves the other one running.
     b.click("p Pause")?;
-    println!(
-        "SECOND PAUSED\n{}",
-        b.screen("second paused", |s| {
-            s.contains("Paused · runner stopped")
+    crate::support::record(
+        "SECOND PAUSED",
+        true,
+        &b.screen("second paused", |s| {
+            // The header counts the project that is still running.
+            s.contains("0 need you · 1 running")
+                && s.contains("Paused · runner stopped")
                 && s.contains("r Resume")
                 && s.contains("Paused; worker stopped, Resume continues the same attempt")
-        })?
+        })?,
     );
     assert_eq!(f.ok(&["current"])?["status"], "running");
     fs::write(f.scratch.path().join("release"), "")?;
-    println!(
-        "FIRST COMPLETE\n{}",
-        a.screen("first complete", |s| s.contains("Queue complete."))?
+    crate::support::record(
+        "FIRST COMPLETE",
+        false,
+        &a.screen("first complete", |s| {
+            s.contains("0 need you · 0 running") && s.contains("Queue complete.")
+        })?,
     );
     assert_eq!(f.ok_in(&second, &["current"])?["status"], "paused");
     b.send("r")?;
-    println!(
-        "SECOND COMPLETE\n{}",
-        b.screen("second complete", |s| s.contains("Queue complete."))?
+    crate::support::record(
+        "SECOND COMPLETE",
+        true,
+        &b.screen("second complete", |s| {
+            s.contains("0 need you · 0 running") && s.contains("Queue complete.")
+        })?,
     );
     // Neither project's tasks, events or commits appear in the other.
     for (project, own, other) in [
@@ -14455,10 +14698,12 @@ fn red_start_is_repaired_and_the_original_task_is_verified() -> Result {
         } else {
             t.send("r")?;
         }
-        println!(
-            "RED BASELINE RECOVERED mouse={mouse}\n{}",
-            t.screen("baseline repaired and verified", |s| s
-                .contains("Queue complete."))?
+        crate::support::record(
+            "RED BASELINE RECOVERED",
+            mouse,
+            &t.screen("baseline repaired and verified", |s| {
+                crate::support::finished(s) && { s.contains("Queue complete.") }
+            })?,
         );
         f.state("succeeded")?;
         let task = f.ok(&["show", "1"])?;
@@ -14701,11 +14946,12 @@ fn failing_checks_return_to_the_worker_with_their_errors_and_no_judge() -> Resul
 fn a_running_fix_round_shows_why_in_status_and_activity() -> Result {
     let f = Fixture::new()?;
     f.provider("hold-repair")?;
+    // The external printf writes once, so the log shows these lines the same way each run.
     f.ok(&[
         "check-set",
         "build",
         "--command",
-        r#"test -f result.txt || exit 1; [ -f "$HOME/check-failed-once" ] && exit 0; touch "$HOME/check-failed-once"; printf "test demo::adds ... FAILED\nthread 'demo::adds' (7) panicked at src/demo.rs:3:5:\nexpected 2, got 3\n"; exit 101"#,
+        r#"test -f result.txt || exit 1; [ -f "$HOME/check-failed-once" ] && exit 0; touch "$HOME/check-failed-once"; /usr/bin/printf "test demo::adds ... FAILED\nthread 'demo::adds' (7) panicked at src/demo.rs:3:5:\nexpected 2, got 3\n"; exit 101"#,
     ])?;
     f.add("Show why the round runs")?;
     let mut runner = Running(f.process().args(["run", "--one"]).spawn()?);
@@ -14718,9 +14964,12 @@ fn a_running_fix_round_shows_why_in_status_and_activity() -> Result {
     })?;
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 40)?;
     let screen = t.screen("why in status", |s| {
-        s.contains("Why: Check build failed (exit 101) ·")
+        s.contains("Check build failed (exit 101) · worker fixing, round 1/10") && {
+            s.contains("Why: Check build failed (exit 101) ·")
+                && s.contains("repair: codex/execution · resume session")
+        }
     })?;
-    println!("WHY ON CURRENT\n{screen}");
+    crate::support::record("WHY ON CURRENT", false, &screen);
     assert!(
         screen.contains("Model codex/execution"),
         "the worker fixes with the execution model"

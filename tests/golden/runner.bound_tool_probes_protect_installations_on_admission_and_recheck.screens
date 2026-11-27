@@ -1,0 +1,66 @@
+@@ bound probe wait managed=false · 110x32 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 1 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs dependency   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Probe bound rg safely
+ Dependency setup needed · r Recheck after setup · u Readiness · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Needs dependency · AI                       ││Goal: Create result.txt containing verified                   │
+│No attempts yet                             ││Proof: result.txt contains verified                           │
+│Run blocked (1) · u Readiness               │╰──────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ─────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Run is blocked. Press u Readiness for each cause and a direct │
+│                                            ││action. Refresh after setup; Run retries from Current.        │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯│                                                              │
+╭ Activity · #1 · l: all ────────────────────╮│                                                              │
+│• Prerequisite probe did not pass:          ││                                                              │
+│  executable rg: FAILED: found, but…        ││                                                              │
+│• Prerequisite probe did not pass:          ││                                                              │
+│  executable rg: FAILED: found, but…        ││                                                              │
+│• executable rg required for baseline:      ││                                                              │
+│  registered rg must not write its…         ││                                                              │
+│• #1 created: Probe bound rg safely         ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Recheck] [t Tools and install plan] [s Stop] [D Mark done] [u Readiness] [m Run mode]
+[Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Dependency not verified · u Readiness shows the observed result
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ bound probe wait managed=true · 110x32 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 1 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs dependency   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Probe bound rg safely
+ Dependency setup needed · r Recheck after setup · u Readiness · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Needs dependency · AI                       ││Goal: Create result.txt containing verified                   │
+│No attempts yet                             ││Proof: result.txt contains verified                           │
+│Run blocked (1) · u Readiness               │╰──────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ─────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Run is blocked. Press u Readiness for each cause and a direct │
+│                                            ││action. Refresh after setup; Run retries from Current.        │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯│                                                              │
+╭ Activity · #1 · l: all ────────────────────╮│                                                              │
+│• Prerequisite probe did not pass:          ││                                                              │
+│  executable rg: FAILED: found, but…        ││                                                              │
+│• Prerequisite probe did not pass:          ││                                                              │
+│  executable rg: FAILED: found, but…        ││                                                              │
+│• executable rg required for baseline:      ││                                                              │
+│  registered rg must not write its…         ││                                                              │
+│• #1 created: Probe bound rg safely         ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Recheck] [t Tools and install plan] [s Stop] [D Mark done] [u Readiness] [m Run mode]
+[Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Dependency not verified · u Readiness shows the observed result
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

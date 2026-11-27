@@ -1,0 +1,108 @@
+@@ CURRENT COUNTS · 120x35 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 1 · History 0
+ Session: Run one · running · Workflow · Review · repair round 0/10 · Run requested
+ #1 Visible check counts
+ Workflow · Review · repair round 0/10 · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Step: Review                                │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/review / none                   │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
+│Active <t>                                  ││Execution started; results require checks, review and validation        │
+│Tokens 60 new · 40 cached · 10 out          ││execution: codex/execution · new session                                │
+│70 new tokens + 1 call(s) unreported        ││Worker claim (unverified) · complete: Verified result                   │
+│Budget 0 of 3 used                          ││Worker criterion claim (unverified) #1 · claimed pass: Inspected        │
+│Execution   ✓ succeeded                     ││result.txt                                                              │
+│Checks      ✓ succeeded                     ││Check build: printf 'test result: ok. 3 passed; 0 failed; 1 ignored; 0  │
+╰────────────────────────────────────────────╯│measured; 0 filtered out\n'; test -f result.txt (timeout 600000 ms)     │
+╭ Activity · #1 · l: all ────────────────────╮│test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered  │
+│• Workflow · Review · repair round 0/10     ││out                                                                     │
+│• Workflow · Check · repair round 0/10      ││                                                                        │
+│• Workflow · Implement · repair round 0/10  ││Check build: 3 passed, 0 failed, 1 ignored                              │
+│• Current task attempt recorded             ││review: codex/review · new session                                      │
+│• #1 created: Visible check counts          ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [o Report] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PAUSED COUNT REPORT · 120x35 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Run one · paused · Paused; worker stopped, Resume continues the same attempt
+ #1 Visible check counts
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Model codex/review / none                   │╰────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────╮
+│Tokens 60 new · 40 cached · 10 out          ││Outcome: paused                                                         │
+│70 new tokens + 1 call(s) unreported        ││                                                                        │
+│Budget 0 of 3 used                          ││Worker claim (unverified):                                              │
+│Can run · u Readiness                       ││Verified result                                                         │
+│Execution   ✓ succeeded                     ││                                                                        │
+│Checks      ✓ succeeded                     ││Supervisor check build · succeeded                                      │
+╰────────────────────────────────────────────╯│Check build: 3 passed, 0 failed, 1 ignored                              │
+╭ Activity · #1 · l: all ────────────────────╮│Check exited 0                                                          │
+│• Supervisor yielded this attempt for resume││                                                                        │
+│• Paused; useful work and session retained  ││Review · interrupted · codex/review verdict: Paused; useful work and    │
+│• Pause requested; stopping worker          ││session retained                                                        │
+│• Workflow · Review · repair round 0/10     ││                                                                        │
+│• Workflow · Check · repair round 0/10      ││Supervisor outcome: Paused; useful work and session retained            │
+│• Workflow · Implement · repair round 0/10  ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #1 created: Visible check counts          ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PAUSED COUNT REPORT MOUSE · 120x35 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Run one · paused · Paused; worker stopped, Resume continues the same attempt
+ #1 Visible check counts
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Model codex/review / none                   │╰────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────╮
+│Tokens 60 new · 40 cached · 10 out          ││Outcome: paused                                                         │
+│70 new tokens + 1 call(s) unreported        ││                                                                        │
+│Budget 0 of 3 used                          ││Worker claim (unverified):                                              │
+│Can run · u Readiness                       ││Verified result                                                         │
+│Execution   ✓ succeeded                     ││                                                                        │
+│Checks      ✓ succeeded                     ││Supervisor check build · succeeded                                      │
+╰────────────────────────────────────────────╯│Check build: 3 passed, 0 failed, 1 ignored                              │
+╭ Activity · #1 · l: all ────────────────────╮│Check exited 0                                                          │
+│• Supervisor yielded this attempt for resume││                                                                        │
+│• Paused; useful work and session retained  ││Review · interrupted · codex/review verdict: Paused; useful work and    │
+│• Pause requested; stopping worker          ││session retained                                                        │
+│• Workflow · Review · repair round 0/10     ││                                                                        │
+│• Workflow · Check · repair round 0/10      ││Supervisor outcome: Paused; useful work and session retained            │
+│• Workflow · Implement · repair round 0/10  ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #1 created: Visible check counts          ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

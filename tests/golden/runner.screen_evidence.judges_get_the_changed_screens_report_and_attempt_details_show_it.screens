@@ -1,0 +1,124 @@
+@@ changed screens report in attempt summary · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   | ╭ Task details / attempts ───────────────────────────────────────────────────╮
+ Session: Run one · c│#1 Change a screen                                                          │ter 0 repair rounds
+ History · 1 shown / │Attempt 1 / 1 · #1 · revision 1 · succeeded                                 │
+ Filter: All  |  Sear│Outcome: Checks, independent review and validation passed after 0 repair    │
+╭ History · 1 / 1 · F│rounds                                                                      │ full ──────────────╮
+│› #1   Done     Chan│                                                                            │                    │
+│                    │Changed-screens report: artifact #1 (its text is in Transcripts)            │ished <date>        │
+│                    │Recorded steps (select Reviews or Failures for findings)                    │                    │
+│                    │Step 1 · execution · succeeded · codex/execution                            │txt containing      │
+│                    │Worker claim (unverified): Verified result                                  │                    │
+│                    │Step 2 · check · succeeded                                                  │                    │
+│                    │Supervisor check build · succeeded: Check exited 0                          │ntains verified     │
+│                    │Suite results: {"suites":[],"errors":[]}                                    │                    │
+│                    │Step 3 · review · succeeded · codex/review                                  │w tokens            │
+│                    │review verdict · succeeded (open Reviews or Results for findings)           │                    │
+│                    │Step 4 · validation · succeeded · codex/validation                          │                    │
+│                    │validation verdict · succeeded (open Reviews or Results for findings)       │cution / none       │
+│                    │Accepted: validation passed                                                 │ / none             │
+│                    │                                                                            │lidation / none     │
+│                    │Artifacts (open text in Transcripts; ,/. selects file)                      │emediation / none   │
+│                    │#1 changed-screens.txt · text/plain · 106 bytes                             │ctive <t>           │
+│                    │  sha256 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx · │80 · cache read 120 │
+│                    │tree xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx                               │tput 30 · 210 new   │
+│                    │#2 build · text/plain · 0 bytes                                             │                    │
+│                    │  sha256 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx · │                    │
+│                    │tree xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx                               │                    │
+│                    │                                                                            │                    │
+│                    │[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │                    │
+╰────────────────────│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │────────────────────╯
+[Copy] [C Copy to que│[Prev attempt] [Next attempt] [Up] [Down] [Close] [Copy]                    │ [E Export] [S Stats]
+[? Help] [q Quit]    │                                                                            │
+                     ╰────────────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ changed screens report text · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Task details / attempts ───────────────────────────────────────────────────╮
+ No current task   | │Attempt 1 / 1 · #1 · revision 1 · succeeded                                 │
+ Session: Run one · c│Outcome: Checks, independent review and validation passed after 0 repair    │ter 0 repair rounds
+ History · 1 shown / │rounds                                                                      │
+ Filter: All  |  Sear│Supervisor check transcripts · 2 artifact(s)                                │
+╭ History · 1 / 1 · F│Artifact 1 / 2 · changed-screens.txt · 106 bytes                            │ full ──────────────╮
+│› #1   Done     Chan│Chunk 1 / 1                                                                 │                    │
+│                    │Changed screens report.                                                     │ished <date>        │
+│                    │=== NEW ui · opened · 80x24 · keyboard ===                                  │                    │
+│                    │+++ after                                                                   │txt containing      │
+│                    │hello from the new screen                                                   │                    │
+│                    │                                                                            │                    │
+│                    │                                                                            │ntains verified     │
+│                    │Attempt inputs: revision 1 · session 1                                      │                    │
+│                    │Revision 1 · Change a screen                                                │w tokens            │
+│                    │Approval: ready · human: owner · Category: code (built-in, checks apply)    │                    │
+│                    │Goal: Create result.txt containing verified                                 │                    │
+│                    │Acceptance: 1: result.txt contains verified                                 │cution / none       │
+│                    │execution: codex/execution / none                                           │ / none             │
+│                    │review: codex/review / none                                                 │lidation / none     │
+│                    │validation: codex/validation / none                                         │emediation / none   │
+│                    │remediation: codex/remediation / none                                       │ctive <t>           │
+│                    │Attempt limit: 3 · Task limit: Off · Stage limit: Off                       │80 · cache read 120 │
+│                    │Active <t> · waiting <t>                                                    │tput 30 · 210 new   │
+│                    │Usage: 3 calls · uncached 180 · cache read 120 · cache write 0 · output 30  │                    │
+│                    │· 210 new tokens                                                            │                    │
+│                    │execution: codex/execution / none · 1 calls · uncached 60 · cache read 40 · │                    │
+│                    │Find transcript                                                             │                    │
+│                    │▏                                                                           │                    │
+╰────────────────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │────────────────────╯
+[Copy] [C Copy to que│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │ [E Export] [S Stats]
+[? Help] [q Quit]    │[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer] [Find]    │
+                     │[Up] [Down] [Close] [Copy]                                                  │
+Runs happen in a back╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ changed screens report in attempt summary · 80x24 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ ╭ Task details / attempts ───────────────────────────────────────────────────╮
+ │#1 Change a screen                                                          │
+ │Attempt 1 / 1 · #1 · revision 1 · succeeded                                 │…
+ │Outcome: Checks, independent review and validation passed after 0 repair    │
+ │rounds                                                                      │
+╭│                                                                            │╮
+││Changed-screens report: artifact #1 (its text is in Transcripts)            ││
+││Recorded steps (select Reviews or Failures for findings)                    ││
+││Step 1 · execution · succeeded · codex/execution                            ││
+││Worker claim (unverified): Verified result                                  ││
+││Step 2 · check · succeeded                                                  ││
+││Supervisor check build · succeeded: Check exited 0                          ││
+││Suite results: {"suites":[],"errors":[]}                                    ││
+││Step 3 · review · succeeded · codex/review                                  ││
+││review verdict · succeeded (open Reviews or Results for findings)           ││
+││Step 4 · validation · succeeded · codex/validation                          ││
+││validation verdict · succeeded (open Reviews or Results for findings)       ││
+╰│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │╯
+[│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │
+[│[Prev attempt] [Next attempt] [Up] [Down] [Close] [Copy]                    │
+ │                                                                            │
+R╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ changed screens report text · 80x24 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ ╭ Task details / attempts ───────────────────────────────────────────────────╮
+ │Attempt 1 / 1 · #1 · revision 1 · succeeded                                 │
+ │Outcome: Checks, independent review and validation passed after 0 repair    │…
+ │rounds                                                                      │
+ │Supervisor check transcripts · 2 artifact(s)                                │
+╭│Artifact 1 / 2 · changed-screens.txt · 106 bytes                            │╮
+││Chunk 1 / 1                                                                 ││
+││Changed screens report.                                                     ││
+││=== NEW ui · opened · 80x24 · keyboard ===                                  ││
+││+++ after                                                                   ││
+││hello from the new screen                                                   ││
+││                                                                            ││
+││                                                                            ││
+││Attempt inputs: revision 1 · session 1                                      ││
+││Revision 1 · Change a screen                                                ││
+││Find transcript                                                             ││
+││▏                                                                           ││
+╰│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │╯
+[│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │
+[│[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer] [Find]    │
+ │[Up] [Down] [Close] [Copy]                                                  │
+R╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

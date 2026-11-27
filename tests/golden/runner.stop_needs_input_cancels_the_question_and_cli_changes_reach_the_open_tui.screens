@@ -1,0 +1,410 @@
+@@ STOP WAITING · 140x40 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs input · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · waiting · Awaiting answer to current task
+ #1 Stop waiting question
+ The worker needs your answer · r Answer · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Needs input · AI                            ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Waiting for your answer · r Answer          │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Model codex/remediation / none              │╭ Question from the worker · r: answer ──────────────────────────────────────────────────────╮
+│Active <t> · waited <t>                     ││Which content?                                                                              │
+│Tokens 60 new · 40 cached · 10 out          │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│70 new tokens + 1 call(s) unreported        │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Outcome: Waiting                                                                            │
+│Can run · u Readiness                       ││                                                                                            │
+│Execution   ✓ succeeded                     ││Worker claim (unverified):                                                                  │
+│Repair      ✓ succeeded                     ││Need direction                                                                              │
+│Remediation ! waiting                       ││                                                                                            │
+│                                            ││Remediation · waiting · codex/remediation verdict: Owner action is required before delivery │
+╰────────────────────────────────────────────╯│can continue                                                                                │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                            │
+│• Supervisor yielded this attempt for resume││                                                                                            │
+│• Which content?                            ││                                                                                            │
+│• Workflow · Implement · repair round 0/10  ││                                                                                            │
+│• Supervisor started                        ││                                                                                            │
+│• Current task attempt recorded             ││                                                                                            │
+│• #1 created: Stop waiting question         ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Answer] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details] [o Log] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOP DIALOG · 140x40 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs input · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · waiting · Awaiting answer to current task
+ #1 Stop waiting question
+ The worker needs your answer · r Answer · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Needs input · AI                            ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Waiting for your answer · r Answer          │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Model codex/remediation / none              │╭ Question from the worker · r: answer ──────────────────────────────────────────────────────╮
+│Active <t> · waited <t>                     ││Which content?                                                                              │
+│Tokens 60 new · 40 cached · 10 out          │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│70 new tokens + 1 call(s) unreported        │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────────────────────────╮
+│Budget 0 of 3 used            ╭ Stop #1 Stop waiting question ─────────────────────────────────────────────╮                              │
+│Can run · u Readiness         │The worker stops and this attempt ends. Its uncommitted changes are saved   │                              │
+│Execution   ✓ succeeded       │as a git stash (git stash pop restores them).                               │                              │
+│Repair      ✓ succeeded       │The task returns to Pending; Run starts it fresh with full limits.          │                              │
+│Remediation ! waiting         │                                                                            │                              │
+│                              │Reason (optional)                                                           │n is required before delivery │
+╰──────────────────────────────│▏                                                                           │                              │
+╭ Activity · #1 · l: all ──────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                              │
+│• Supervisor yielded this atte│                                                                            │                              │
+│• Which content?              │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                              │
+│• Workflow · Implement · repai│                                                                            │                              │
+│• Supervisor started          ╰────────────────────────────────────────────────────────────────────────────╯                              │
+│• Current task attempt recorded             ││                                                                                            │
+│• #1 created: Stop waiting question         ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Answer] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details] [o Log] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOP WAITING NOW PENDING · 140x40 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Queue · stopped · Stopped: Asked the wrong thing
+ #1 Stop waiting question
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Model codex/remediation / none              │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────────────────────────╮
+│Tokens 60 new · 40 cached · 10 out          ││Outcome: Stopped: Asked the wrong thing                                                     │
+│70 new tokens + 1 call(s) unreported        ││                                                                                            │
+│Budget 0 of 3 used                          ││Worker claim (unverified):                                                                  │
+│Can run · u Readiness                       ││Need direction                                                                              │
+│Execution   ✓ succeeded                     ││                                                                                            │
+│Repair      ✓ succeeded                     ││Remediation · succeeded · codex/remediation verdict: Owner action is required before        │
+│Remediation ✓ succeeded                     ││delivery can continue                                                                       │
+│                                            ││                                                                                            │
+│                                            ││Supervisor outcome: Stopped: Asked the wrong thing                                          │
+╰────────────────────────────────────────────╯│                                                                                            │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                            │
+│• Back to Pending; the next Run starts fresh││                                                                                            │
+│• Stopped: Asked the wrong thing            ││                                                                                            │
+│• Supervisor yielded this attempt for resume││                                                                                            │
+│• Which content?                            ││                                                                                            │
+│• Workflow · Implement · repair round 0/10  ││                                                                                            │
+│• Supervisor started                        ││                                                                                            │
+│• Current task attempt recorded             ││                                                                                            │
+│• #1 created: Stop waiting question         ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+#1 stopped · back to Pending
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOPPED TASK CANCELLED · 140x40 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · stopped · no queued work · Stopped: Asked the wrong thing
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                                           │
+│Inspect results in History, or add more work.                                                                                             │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+#1 stopped · back to Pending
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOPPED TASK COPIED · 140x40 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Session: Queue · stopped · Stopped: Asked the wrong thing
+ #2 Stop waiting question
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                                                 │
+│No attempts yet                             ││Proof: result.txt contains verified                                                         │
+│Can run · u Readiness                       │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Ready. r starts an attempt in the background supervisor; this pane follows its log.         │
+│                                            ││Defaults and checks live in Config; c pins models for this task.                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯│                                                                                            │
+╭ Activity · #2 · l: all ────────────────────╮│                                                                                            │
+│• #2 created: Stop waiting question         ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+#1 stopped · back to Pending
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOPPED COPY SUPERSEDED HISTORY · 140x40 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #3 · Pending   |   Queue 1 · History 2
+ Session: Queue · stopped · Stopped: Asked the wrong thing
+ History · 2 shown / 2 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 2 · Finished Attempts Time Usage ─────────────────────────────────────────╮╭ Details · click for full ─────────────────────╮
+│› #2   Superseded Stop waiting question <date> 0 <t> -                                   ││Stop waiting question                          │
+│  #1   Cancelled  Stop waiting question <date> 1 <t> 70 tkn +1 ?                         ││#2 · Superseded · AI · finished <date>         │
+│                                                                                         ││                                               │
+│                                                                                         ││Goal: Create result.txt containing verified    │
+│                                                                                         ││                                               │
+│                                                                                         ││Check: result.txt contains verified            │
+│                                                                                         ││                                               │
+│                                                                                         ││Attempts: 0 · none yet                         │
+│                                                                                         ││                                               │
+│                                                                                         ││Models:                                        │
+│                                                                                         ││Execution: codex/execution / none              │
+│                                                                                         ││Review: codex/review / none                    │
+│                                                                                         ││Validation: codex/validation / none            │
+│                                                                                         ││Remediation: codex/remediation / none          │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯╰───────────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats] [? Help] [q Quit]
+
+
+#1 stopped · back to Pending
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOP WAITING NOW PENDING · 140x40 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Queue · stopped · Stopped by owner
+ #1 Stop waiting question
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Model codex/remediation / none              │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────────────────────────╮
+│Tokens 60 new · 40 cached · 10 out          ││Outcome: Stopped by owner                                                                   │
+│70 new tokens + 1 call(s) unreported        ││                                                                                            │
+│Budget 0 of 3 used                          ││Worker claim (unverified):                                                                  │
+│Can run · u Readiness                       ││Need direction                                                                              │
+│Execution   ✓ succeeded                     ││                                                                                            │
+│Repair      ✓ succeeded                     ││Remediation · succeeded · codex/remediation verdict: Owner action is required before        │
+│Remediation ✓ succeeded                     ││delivery can continue                                                                       │
+│                                            ││                                                                                            │
+│                                            ││Supervisor outcome: Stopped by owner                                                        │
+╰────────────────────────────────────────────╯│                                                                                            │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                            │
+│• Back to Pending; the next Run starts fresh││                                                                                            │
+│• Stopped by owner                          ││                                                                                            │
+│• Supervisor yielded this attempt for resume││                                                                                            │
+│• Which content?                            ││                                                                                            │
+│• Workflow · Implement · repair round 0/10  ││                                                                                            │
+│• Supervisor started                        ││                                                                                            │
+│• Current task attempt recorded             ││                                                                                            │
+│• #1 created: Stop waiting question         ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+#1 stopped · back to Pending
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOPPED TASK CANCELLED · 140x40 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · stopped · no queued work · Stopped by owner
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                                           │
+│Inspect results in History, or add more work.                                                                                             │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+#1 stopped · back to Pending
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOPPED TASK COPIED · 140x40 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Session: Queue · stopped · Stopped by owner
+ #2 Stop waiting question
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                                                 │
+│No attempts yet                             ││Proof: result.txt contains verified                                                         │
+│Can run · u Readiness                       │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Ready. r starts an attempt in the background supervisor; this pane follows its log.         │
+│                                            ││Defaults and checks live in Config; c pins models for this task.                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯│                                                                                            │
+╭ Activity · #2 · l: all ────────────────────╮│                                                                                            │
+│• #2 created: Stop waiting question         ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+#1 stopped · back to Pending
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOPPED COPY SUPERSEDED HISTORY · 140x40 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #3 · Pending   |   Queue 1 · History 2
+ Session: Queue · stopped · Stopped by owner
+ History · 2 shown / 2 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 2 · Finished Attempts Time Usage ─────────────────────────────────────────╮╭ Details · click for full ─────────────────────╮
+│› #2   Superseded Stop waiting question <date> 0 <t> -                                   ││Stop waiting question                          │
+│  #1   Cancelled  Stop waiting question <date> 1 <t> 70 tkn +1 ?                         ││#2 · Superseded · AI · finished <date>         │
+│                                                                                         ││                                               │
+│                                                                                         ││Goal: Create result.txt containing verified    │
+│                                                                                         ││                                               │
+│                                                                                         ││Check: result.txt contains verified            │
+│                                                                                         ││                                               │
+│                                                                                         ││Attempts: 0 · none yet                         │
+│                                                                                         ││                                               │
+│                                                                                         ││Models:                                        │
+│                                                                                         ││Execution: codex/execution / none              │
+│                                                                                         ││Review: codex/review / none                    │
+│                                                                                         ││Validation: codex/validation / none            │
+│                                                                                         ││Remediation: codex/remediation / none          │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+│                                                                                         ││                                               │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯╰───────────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats] [? Help] [q Quit]
+
+
+#1 stopped · back to Pending
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

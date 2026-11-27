@@ -1,0 +1,51 @@
+@@ HISTORICAL ESCALATION · 120x50 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Run one · complete · no queued work · Checks, independent review and validation passed after 0 repair rounds
+ History · 1 shown / 1 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 1 · Finished Attempts Time Usage ────────────────────────────╮╭ Details · click for full ──────────────╮
+│› #1   Done     Earlier escalation <date> 1 <t> 210 tkn                     ││Earlier escalation                      │
+│                                                                            ││#1 · Done · AI · finished <date>        │
+│                                                                            ││                                        │
+│                    ╭ Task details / attempts ───────────────────────────────────────────────────╮txt containing      │
+│                    │#1 Earlier escalation                                                       │                    │
+│                    │Attempt 1 / 1 · #1 · revision 1 · succeeded                                 │                    │
+│                    │Outcome: Checks, independent review and validation passed after 0 repair    │ntains verified     │
+│                    │rounds                                                                      │                    │
+│                    │                                                                            │w tokens            │
+│                    │Recorded steps (select Reviews or Failures for findings)                    │                    │
+│                    │Step 1 · execution · succeeded · codex/execution                            │                    │
+│                    │Worker claim (unverified): Verified result                                  │cution / none       │
+│                    │Step 2 · check · succeeded                                                  │ / none             │
+│                    │Supervisor check build · succeeded: Check exited 0                          │lidation / none     │
+│                    │Suite results: {"suites":[],"errors":[]}                                    │emediation / none   │
+│                    │Step 3 · review · succeeded · codex/review                                  │ctive <t>           │
+│                    │review verdict · succeeded (open Reviews or Results for findings)           │80 · cache read 120 │
+│                    │Step 4 · validation · succeeded · codex/validation                          │tput 30 · 210 new   │
+│                    │validation verdict · succeeded (open Reviews or Results for findings)       │                    │
+│                    │Step 5 · remediation · succeeded · codex/remediation                        │                    │
+│                    │Accepted: validation passed                                                 │                    │
+│                    │                                                                            │                    │
+│                    │Artifacts (open text in Transcripts; ,/. selects file)                      │                    │
+│                    │#1 build · text/plain · 0 bytes                                             │                    │
+│                    │  sha256 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx · │                    │
+│                    │tree xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx                               │                    │
+│                    │                                                                            │                    │
+│                    │[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │                    │
+│                    │[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │                    │
+│                    │[Prev attempt] [Next attempt] [Up] [Down] [Close] [Copy]                    │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+╰────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats]
+[? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

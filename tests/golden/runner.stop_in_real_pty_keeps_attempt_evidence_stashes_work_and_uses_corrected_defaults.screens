@@ -1,0 +1,492 @@
+@@ STOP REAL WORK BEFORE PAUSE · 140x40 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 2 · History 0
+ Session: Queue · running · Workflow · Review · repair round 0/10 · Next #2 · Run requested
+ #1 Stop invalid effort
+ Workflow · Review · repair round 0/10 · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Step: Review                                │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Model codex/review / none                   │╭ Log · following · attempt 1 · o: report ───────────────────────────────────────────────────╮
+│Active <t>                                  ││Execution started; results require checks, review and validation                            │
+│Tokens 60 new · 40 cached · 10 out          ││execution: codex/execution · new session                                                    │
+│70 new tokens + 1 call(s) unreported        ││Worker claim (unverified) · complete: Verified result                                       │
+│Budget 0 of 3 used                          ││Worker criterion claim (unverified) #1 · claimed pass: Inspected result.txt                 │
+│Execution   ✓ succeeded                     ││Check build: test -f result.txt (timeout 600000 ms)                                         │
+│Checks      ✓ succeeded                     ││review: codex/review · new session                                                          │
+│Review      … running                       ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯│                                                                                            │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                            │
+│• Workflow · Review · repair round 0/10     ││                                                                                            │
+│• Workflow · Check · repair round 0/10      ││                                                                                            │
+│• Workflow · Implement · repair round 0/10  ││                                                                                            │
+│• Supervisor started                        ││                                                                                            │
+│• Current task attempt recorded             ││                                                                                            │
+│• #1 created: Stop invalid effort           ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [o Report] [a Add] [i Investigate] [f Fix]
+[S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOP PAUSED · 140x40 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 2 · History 0
+ Session: Queue · paused · Next #2 · Paused; worker stopped, Resume continues the same attempt
+ #1 Stop invalid effort
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Model codex/review / hight                  │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ───────────────────────────────────────────────────╮
+│Tokens 60 new · 40 cached · 10 out          ││Execution started; results require checks, review and validation                            │
+│70 new tokens + 1 call(s) unreported        ││execution: codex/execution · new session                                                    │
+│Budget 0 of 3 used                          ││Worker claim (unverified) · complete: Verified result                                       │
+│Run blocked (1) · u Readiness               ││Worker criterion claim (unverified) #1 · claimed pass: Inspected result.txt                 │
+│Execution   ✓ succeeded                     ││Check build: test -f result.txt (timeout 600000 ms)                                         │
+│Checks      ✓ succeeded                     ││review: codex/review · new session                                                          │
+│Review      ! interrupted                   ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯│                                                                                            │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                            │
+│• Supervisor yielded this attempt for resume││                                                                                            │
+│• Paused; useful work and session retained  ││                                                                                            │
+│• Pause requested; stopping worker          ││                                                                                            │
+│• Workflow · Review · repair round 0/10     ││                                                                                            │
+│• Workflow · Check · repair round 0/10      ││                                                                                            │
+│• Workflow · Implement · repair round 0/10  ││                                                                                            │
+│• Supervisor started                        ││                                                                                            │
+│• Current task attempt recorded             ││                                                                                            │
+│• #1 created: Stop invalid effort           ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details] [o Report] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Pause requested · waiting for worker shutdown and cleanup
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOP DIALOG · 140x40 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 2 · History 0
+ Session: Queue · paused · Next #2 · Paused; worker stopped, Resume continues the same attempt
+ #1 Stop invalid effort
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Model codex/review / hight                  │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ───────────────────────────────────────────────────╮
+│Tokens 60 new · 40 cached · 10 out          ││Execution started; results require checks, review and validation                            │
+│70 new tokens + 1 call(s) unreported        ││execution: codex/execution · new session                                                    │
+│Budget 0 of 3 used                          ││Worker claim (unverified) · complete: Verified result                                       │
+│Run blocked (1) · u Readiness ╭ Stop #1 Stop invalid effort ───────────────────────────────────────────────╮ed result.txt                 │
+│Execution   ✓ succeeded       │The worker stops and this attempt ends. Its uncommitted changes are saved   │                              │
+│Checks      ✓ succeeded       │as a git stash (git stash pop restores them).                               │                              │
+│Review      ! interrupted     │The task returns to Pending; Run starts it fresh with full limits.          │                              │
+│                              │                                                                            │                              │
+│                              │Reason (optional)                                                           │                              │
+╰──────────────────────────────│▏                                                                           │                              │
+╭ Activity · #1 · l: all ──────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                              │
+│• Supervisor yielded this atte│                                                                            │                              │
+│• Paused; useful work and sess│[Copy] [Apply] [Cancel] [Up] [Down]                                         │                              │
+│• Pause requested; stopping wo│                                                                            │                              │
+│• Workflow · Review · repair r╰────────────────────────────────────────────────────────────────────────────╯                              │
+│• Workflow · Check · repair round 0/10      ││                                                                                            │
+│• Workflow · Implement · repair round 0/10  ││                                                                                            │
+│• Supervisor started                        ││                                                                                            │
+│• Current task attempt recorded             ││                                                                                            │
+│• #1 created: Stop invalid effort           ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details] [o Report] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Pause requested · waiting for worker shutdown and cleanup
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOP PENDING · 140x40 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Session: Queue · stopped · Next #2 · Stopped: Correct the effort
+ #1 Stop invalid effort
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Model codex/review / hight                  │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────────────────────────╮
+│Tokens 60 new · 40 cached · 10 out          ││Outcome: Stopped: Correct the effort                                                        │
+│70 new tokens + 1 call(s) unreported        ││                                                                                            │
+│Budget 0 of 3 used                          ││Worker claim (unverified):                                                                  │
+│Run blocked (1) · u Readiness               ││Verified result                                                                             │
+│Execution   ✓ succeeded                     ││                                                                                            │
+│Checks      ✓ succeeded                     ││Supervisor check build · succeeded                                                          │
+│Review      ! interrupted                   ││Check build: test counts unavailable                                                        │
+│                                            ││Check exited 0                                                                              │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯│Review · interrupted · codex/review verdict: Paused; useful work and session retained       │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                            │
+│• Back to Pending; the next Run starts fresh││Supervisor outcome: Stopped: Correct the effort                                             │
+│• Stopped: Correct the effort               ││                                                                                            │
+│• Uncommitted changes saved as git stash    ││                                                                                            │
+│  "ktask: task #1 attempt #1"               ││                                                                                            │
+│• Supervisor yielded this attempt for resume││                                                                                            │
+│• Paused; useful work and session retained  ││                                                                                            │
+│• Pause requested; stopping worker          ││                                                                                            │
+│• Workflow · Review · repair round 0/10     ││                                                                                            │
+│• Workflow · Check · repair round 0/10      ││                                                                                            │
+│• Workflow · Implement · repair round 0/10  ││                                                                                            │
+│• Supervisor started                        ││                                                                                            │
+│• Current task attempt recorded             ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+#1 stopped · back to Pending · changes stashed as "ktask: task #1 attempt #1" (git stash list)
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOP DEFAULTS · 140x40 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Que╭ Task models and limits ────────────────────────────────────────────────────╮
+ Current #1 · Pending   |   Que│Use provider/model: codex/…, claude/sonnet, opencode/vendor/model; blank    │
+ Session: Queue · stopped · Nex│means unconfigured.                                                         │
+ #1 Stop invalid effort        │Apply current project defaults replaces all four role settings on Save.     │
+ Run blocked · u Readiness show│Effective defaults preview:                                                 │
+╭ Status · Enter: details ─────│Execution: codex/execution / none                                           │──────────────────────────────╮
+│Pending · AI                  │Review: codex/review / none                                                 │                              │
+│Attempt 1                     │Validation: codex/validation / none                                         │                              │
+│Model codex/review / hight    │Remediation: codex/remediation / none                                       │──────────────────────────────╯
+│Active <t> · waited <t>       │Save approves a new revision.                                               │──────────────────────────────╮
+│Tokens 60 new · 40 cached · 10│                                                                            │                              │
+│70 new tokens + 1 call(s) unre│                                                                            │                              │
+│Budget 0 of 3 used            │                                                                            │                              │
+│Run blocked (1) · u Readiness │                                                                            │                              │
+│Execution   ✓ succeeded       │                                                                            │                              │
+│Checks      ✓ succeeded       │                                                                            │                              │
+│Review      ! interrupted     │                                                                            │                              │
+│                              │                                                                            │                              │
+│                              │                                                                            │                              │
+╰──────────────────────────────│Execution provider/model                                                    │rk and session retained       │
+╭ Activity · #1 · l: all ──────│codex/execution▏                                                            │                              │
+│• Back to Pending; the next Ru│Execution effort (blank = none)                                             │                              │
+│• Stopped: Correct the effort │                                                                            │                              │
+│• Uncommitted changes saved as│Review provider/model                                                       │                              │
+│  "ktask: task #1 attempt #1" │codex/review                                                                │                              │
+│• Supervisor yielded this atte│Review effort (blank = none)                                                │                              │
+│• Paused; useful work and sess│hight                                                                       │                              │
+│• Pause requested; stopping wo│Validation provider/model                                                   │                              │
+│• Workflow · Review · repair r│codex/validation                                                            │                              │
+│• Workflow · Check · repair ro│Validation effort (blank = none)                                            │                              │
+│• Workflow · Implement · repai│                                                                            │                              │
+│• Supervisor started          │Remediation provider/model                                                  │                              │
+│• Current task attempt recorde│codex/remediation                                                           │                              │
+╰──────────────────────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────────────────────────╯
+[Copy] [r Run queue] [D Mark do│                                                                            │[m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate]│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]                   │
+                               │                                                                            │
+#1 stopped · back to Pending · ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOP DEFAULTS SELECTED · 140x40 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Que╭ Task models and limits ────────────────────────────────────────────────────╮
+ Current #1 · Pending   |   Que│Use provider/model: codex/…, claude/sonnet, opencode/vendor/model; blank    │
+ Session: Queue · stopped · Nex│means unconfigured.                                                         │
+ #1 Stop invalid effort        │Apply current project defaults replaces all four role settings on Save.     │
+ Run blocked · u Readiness show│Effective defaults preview:                                                 │
+╭ Status · Enter: details ─────│Execution: codex/execution / none                                           │──────────────────────────────╮
+│Pending · AI                  │Review: codex/review / none                                                 │                              │
+│Attempt 1                     │Validation: codex/validation / none                                         │                              │
+│Model codex/review / hight    │Remediation: codex/remediation / none                                       │──────────────────────────────╯
+│Active <t> · waited <t>       │Save approves a new revision.                                               │──────────────────────────────╮
+│Tokens 60 new · 40 cached · 10│                                                                            │                              │
+│70 new tokens + 1 call(s) unre│                                                                            │                              │
+│Budget 0 of 3 used            │                                                                            │                              │
+│Run blocked (1) · u Readiness │                                                                            │                              │
+│Execution   ✓ succeeded       │                                                                            │                              │
+│Checks      ✓ succeeded       │                                                                            │                              │
+│Review      ! interrupted     │                                                                            │                              │
+│                              │                                                                            │                              │
+│                              │                                                                            │                              │
+╰──────────────────────────────│Validation effort (blank = none)                                            │rk and session retained       │
+╭ Activity · #1 · l: all ──────│                                                                            │                              │
+│• Back to Pending; the next Ru│Remediation provider/model                                                  │                              │
+│• Stopped: Correct the effort │codex/remediation                                                           │                              │
+│• Uncommitted changes saved as│Remediation effort (blank = none)                                           │                              │
+│  "ktask: task #1 attempt #1" │                                                                            │                              │
+│• Supervisor yielded this atte│Attempt limit (blank = unlimited)                                           │                              │
+│• Paused; useful work and sess│3                                                                           │                              │
+│• Pause requested; stopping wo│Task time limit (all attempts)                                              │                              │
+│• Workflow · Review · repair r│< Off >   click / Space to change                                           │                              │
+│• Workflow · Check · repair ro│Stage time limit (one agent turn)                                           │                              │
+│• Workflow · Implement · repai│< Off >   click / Space to change                                           │                              │
+│• Supervisor started          │Project defaults                                                            │                              │
+│• Current task attempt recorde│< Apply current project defaults >   click / Space to change                │                              │
+╰──────────────────────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────────────────────────╯
+[Copy] [r Run queue] [D Mark do│                                                                            │[m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate]│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]                   │
+                               │                                                                            │
+#1 stopped · back to Pending · ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOP EXPLICIT RUN COMPLETE · 140x40 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 2
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                                           │
+│Inspect results in History, or add more work.                                                                                             │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOP HISTORY TERMINAL ATTEMPT · 140x40 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Que╭ Task details / attempts ───────────────────────────────────────────────────╮
+ No current task   |   Queue 0 │Attempt 1 / 2 · #1 · revision 1 · interrupted                               │
+ Session: Queue · complete · no│Outcome: Stopped: Correct the effort                                        │
+ History · 1 shown / 2 total · │Output page 1 / 1 · chunk 1 / 1 · 5 records · newest first · snapshot #5    │
+ Filter: All  |  Search: Stop i│                                                                            │
+╭ History · 1 / 1 · Finished At│#5 [system] review: codex/review · new session                              │for full ─────────────────────╮
+│› #1   Done     Stop invalid e│#4 [system] Check build: test -f result.txt (timeout 600000 ms)             │rt                            │
+│                              │#3 [stdout] Worker claim (unverified) · complete: Verified result           │finished <date>               │
+│                              │Worker criterion claim (unverified) #1 · claimed pass: Inspected result.txt │                              │
+│                              │#2 [system] execution: codex/execution · new session                        │revised goal after Stop       │
+│                              │#1 [system] Execution started; results require checks, review and validation│                              │
+│                              │                                                                            │ contains verified            │
+│                              │Attempt inputs: revision 1 · session 1                                      │                              │
+│                              │Revision 1 · Stop invalid effort                                            │ new tokens + 1 call(s)       │
+│                              │Approval: ready · human: owner · Category: code (built-in, checks apply)    │                              │
+│                              │Goal: Create result.txt containing verified                                 │                              │
+│                              │Acceptance: 1: result.txt contains verified                                 │                              │
+│                              │execution: codex/execution / none                                           │execution / none              │
+│                              │review: codex/review / hight                                                │iew / none                    │
+│                              │validation: codex/validation / none                                         │/validation / none            │
+│                              │remediation: codex/remediation / none                                       │x/remediation / none          │
+│                              │Attempt limit: 3 · Task limit: Off · Stage limit: Off                       │lled · Active <t> · waited <t>│
+│                              │Active <t> · waiting <t>                                                    │d 60 · cache read 40 · cache  │
+│                              │Usage: 2 calls · uncached 60 · cache read 40 · cache write 0 · output 10    │10 (+1 call(s) unreported) ·  │
+│                              │(+1 call(s) unreported) · 70 new tokens + 1 call(s) unreported              │ call(s) unreported           │
+│                              │execution: codex/execution / none · 1 calls · uncached 60 · cache read 40 · │· Active <t>                  │
+│                              │cache write 0 · output 10 · 70 new tokens · provider time <t>               │d 180 · cache read 120 · cache│
+│                              │review: codex/review / none · 1 calls · uncached unknown · cache read       │30 · 210 new tokens           │
+│                              │unknown · cache write unknown · output unknown · ? new tokens · provider    │                              │
+│                              │time <t>                                                                    │                              │
+│                              │                                                                            │                              │
+│                              │Find output                                                                 │                              │
+│                              │▏                                                                           │                              │
+╰──────────────────────────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │──────────────────────────────╯
+[Copy] [C Copy to queue] [Enter│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │] [S Stats] [? Help] [q Quit]
+                               │[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │
+                               │[Refresh] [Up] [Down] [Close] [Copy]                                        │
+Supervisor started · close TUI ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOP PENDING · 140x40 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Session: Queue · stopped · Next #2 · Stopped by owner
+ #1 Stop invalid effort
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Model codex/review / hight                  │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────────────────────────╮
+│Tokens 60 new · 40 cached · 10 out          ││Outcome: Stopped by owner                                                                   │
+│70 new tokens + 1 call(s) unreported        ││                                                                                            │
+│Budget 0 of 3 used                          ││Worker claim (unverified):                                                                  │
+│Run blocked (1) · u Readiness               ││Verified result                                                                             │
+│Execution   ✓ succeeded                     ││                                                                                            │
+│Checks      ✓ succeeded                     ││Supervisor check build · succeeded                                                          │
+│Review      ! interrupted                   ││Check build: test counts unavailable                                                        │
+│                                            ││Check exited 0                                                                              │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯│Review · interrupted · codex/review verdict: Paused; useful work and session retained       │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                            │
+│• Back to Pending; the next Run starts fresh││Supervisor outcome: Stopped by owner                                                        │
+│• Stopped by owner                          ││                                                                                            │
+│• Uncommitted changes saved as git stash    ││                                                                                            │
+│  "ktask: task #1 attempt #1"               ││                                                                                            │
+│• Supervisor yielded this attempt for resume││                                                                                            │
+│• Paused; useful work and session retained  ││                                                                                            │
+│• Pause requested; stopping worker          ││                                                                                            │
+│• Workflow · Review · repair round 0/10     ││                                                                                            │
+│• Workflow · Check · repair round 0/10      ││                                                                                            │
+│• Workflow · Implement · repair round 0/10  ││                                                                                            │
+│• Supervisor started                        ││                                                                                            │
+│• Current task attempt recorded             ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+#1 stopped · back to Pending · changes stashed as "ktask: task #1 attempt #1" (git stash list)
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOP DEFAULTS · 140x40 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Que╭ Task models and limits ────────────────────────────────────────────────────╮
+ Current #1 · Pending   |   Que│Use provider/model: codex/…, claude/sonnet, opencode/vendor/model; blank    │
+ Session: Queue · stopped · Nex│means unconfigured.                                                         │
+ #1 Stop invalid effort        │Apply current project defaults replaces all four role settings on Save.     │
+ Run blocked · u Readiness show│Effective defaults preview:                                                 │
+╭ Status · Enter: details ─────│Execution: codex/execution / none                                           │──────────────────────────────╮
+│Pending · AI                  │Review: codex/review / none                                                 │                              │
+│Attempt 1                     │Validation: codex/validation / none                                         │                              │
+│Model codex/review / hight    │Remediation: codex/remediation / none                                       │──────────────────────────────╯
+│Active <t> · waited <t>       │Save approves a new revision.                                               │──────────────────────────────╮
+│Tokens 60 new · 40 cached · 10│                                                                            │                              │
+│70 new tokens + 1 call(s) unre│                                                                            │                              │
+│Budget 0 of 3 used            │                                                                            │                              │
+│Run blocked (1) · u Readiness │                                                                            │                              │
+│Execution   ✓ succeeded       │                                                                            │                              │
+│Checks      ✓ succeeded       │                                                                            │                              │
+│Review      ! interrupted     │                                                                            │                              │
+│                              │                                                                            │                              │
+│                              │                                                                            │                              │
+╰──────────────────────────────│Execution provider/model                                                    │rk and session retained       │
+╭ Activity · #1 · l: all ──────│codex/execution▏                                                            │                              │
+│• Back to Pending; the next Ru│Execution effort (blank = none)                                             │                              │
+│• Stopped by owner            │                                                                            │                              │
+│• Uncommitted changes saved as│Review provider/model                                                       │                              │
+│  "ktask: task #1 attempt #1" │codex/review                                                                │                              │
+│• Supervisor yielded this atte│Review effort (blank = none)                                                │                              │
+│• Paused; useful work and sess│hight                                                                       │                              │
+│• Pause requested; stopping wo│Validation provider/model                                                   │                              │
+│• Workflow · Review · repair r│codex/validation                                                            │                              │
+│• Workflow · Check · repair ro│Validation effort (blank = none)                                            │                              │
+│• Workflow · Implement · repai│                                                                            │                              │
+│• Supervisor started          │Remediation provider/model                                                  │                              │
+│• Current task attempt recorde│codex/remediation                                                           │                              │
+╰──────────────────────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────────────────────────╯
+[Copy] [r Run queue] [D Mark do│                                                                            │[m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate]│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]                   │
+                               │                                                                            │
+#1 stopped · back to Pending · ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOP DEFAULTS SELECTED · 140x40 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Que╭ Task models and limits ────────────────────────────────────────────────────╮
+ Current #1 · Pending   |   Que│Use provider/model: codex/…, claude/sonnet, opencode/vendor/model; blank    │
+ Session: Queue · stopped · Nex│means unconfigured.                                                         │
+ #1 Stop invalid effort        │Apply current project defaults replaces all four role settings on Save.     │
+ Run blocked · u Readiness show│Effective defaults preview:                                                 │
+╭ Status · Enter: details ─────│Execution: codex/execution / none                                           │──────────────────────────────╮
+│Pending · AI                  │Review: codex/review / none                                                 │                              │
+│Attempt 1                     │Validation: codex/validation / none                                         │                              │
+│Model codex/review / hight    │Remediation: codex/remediation / none                                       │──────────────────────────────╯
+│Active <t> · waited <t>       │Save approves a new revision.                                               │──────────────────────────────╮
+│Tokens 60 new · 40 cached · 10│                                                                            │                              │
+│70 new tokens + 1 call(s) unre│                                                                            │                              │
+│Budget 0 of 3 used            │                                                                            │                              │
+│Run blocked (1) · u Readiness │                                                                            │                              │
+│Execution   ✓ succeeded       │                                                                            │                              │
+│Checks      ✓ succeeded       │                                                                            │                              │
+│Review      ! interrupted     │                                                                            │                              │
+│                              │                                                                            │                              │
+│                              │                                                                            │                              │
+╰──────────────────────────────│Validation effort (blank = none)                                            │rk and session retained       │
+╭ Activity · #1 · l: all ──────│                                                                            │                              │
+│• Back to Pending; the next Ru│Remediation provider/model                                                  │                              │
+│• Stopped by owner            │codex/remediation                                                           │                              │
+│• Uncommitted changes saved as│Remediation effort (blank = none)                                           │                              │
+│  "ktask: task #1 attempt #1" │                                                                            │                              │
+│• Supervisor yielded this atte│Attempt limit (blank = unlimited)                                           │                              │
+│• Paused; useful work and sess│3                                                                           │                              │
+│• Pause requested; stopping wo│Task time limit (all attempts)                                              │                              │
+│• Workflow · Review · repair r│< Off >   click / Space to change                                           │                              │
+│• Workflow · Check · repair ro│Stage time limit (one agent turn)                                           │                              │
+│• Workflow · Implement · repai│< Off >   click / Space to change                                           │                              │
+│• Supervisor started          │Project defaults                                                            │                              │
+│• Current task attempt recorde│< Apply current project defaults >   click / Space to change                │                              │
+╰──────────────────────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────────────────────────╯
+[Copy] [r Run queue] [D Mark do│                                                                            │[m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate]│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]                   │
+                               │                                                                            │
+#1 stopped · back to Pending · ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOP HISTORY TERMINAL ATTEMPT · 140x40 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Que╭ Task details / attempts ───────────────────────────────────────────────────╮
+ No current task   |   Queue 0 │Attempt 1 / 2 · #1 · revision 1 · interrupted                               │
+ Session: Queue · complete · no│Outcome: Stopped by owner                                                   │
+ History · 1 shown / 2 total · │Output page 1 / 1 · chunk 1 / 1 · 5 records · newest first · snapshot #5    │
+ Filter: All  |  Search: Stop i│                                                                            │
+╭ History · 1 / 1 · Finished At│#5 [system] review: codex/review · new session                              │for full ─────────────────────╮
+│› #1   Done     Stop invalid e│#4 [system] Check build: test -f result.txt (timeout 600000 ms)             │rt                            │
+│                              │#3 [stdout] Worker claim (unverified) · complete: Verified result           │finished <date>               │
+│                              │Worker criterion claim (unverified) #1 · claimed pass: Inspected result.txt │                              │
+│                              │#2 [system] execution: codex/execution · new session                        │revised goal after Stop       │
+│                              │#1 [system] Execution started; results require checks, review and validation│                              │
+│                              │                                                                            │ contains verified            │
+│                              │Attempt inputs: revision 1 · session 1                                      │                              │
+│                              │Revision 1 · Stop invalid effort                                            │ new tokens + 1 call(s)       │
+│                              │Approval: ready · human: owner · Category: code (built-in, checks apply)    │                              │
+│                              │Goal: Create result.txt containing verified                                 │                              │
+│                              │Acceptance: 1: result.txt contains verified                                 │                              │
+│                              │execution: codex/execution / none                                           │execution / none              │
+│                              │review: codex/review / hight                                                │iew / none                    │
+│                              │validation: codex/validation / none                                         │/validation / none            │
+│                              │remediation: codex/remediation / none                                       │x/remediation / none          │
+│                              │Attempt limit: 3 · Task limit: Off · Stage limit: Off                       │lled · Active <t> · waited <t>│
+│                              │Active <t> · waiting <t>                                                    │d 60 · cache read 40 · cache  │
+│                              │Usage: 2 calls · uncached 60 · cache read 40 · cache write 0 · output 10    │10 (+1 call(s) unreported) ·  │
+│                              │(+1 call(s) unreported) · 70 new tokens + 1 call(s) unreported              │ call(s) unreported           │
+│                              │execution: codex/execution / none · 1 calls · uncached 60 · cache read 40 · │· Active <t>                  │
+│                              │cache write 0 · output 10 · 70 new tokens · provider time <t>               │d 180 · cache read 120 · cache│
+│                              │review: codex/review / none · 1 calls · uncached unknown · cache read       │30 · 210 new tokens           │
+│                              │unknown · cache write unknown · output unknown · ? new tokens · provider    │                              │
+│                              │time <t>                                                                    │                              │
+│                              │                                                                            │                              │
+│                              │Find output                                                                 │                              │
+│                              │▏                                                                           │                              │
+╰──────────────────────────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │──────────────────────────────╯
+[Copy] [C Copy to queue] [Enter│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │] [S Stats] [? Help] [q Quit]
+                               │[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │
+                               │[Refresh] [Up] [Down] [Close] [Copy]                                        │
+Supervisor started · close TUI ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

@@ -1,0 +1,1288 @@
+@@ No current task · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────╮
+│No current task.                                                    │
+│Set up this project first: u Readiness lists what is missing.       │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix]
+[S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not…
+@@ Storage: SQLite · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                 │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Continue queue                                            │
+│Planner approval: Automatic                                         │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project model defaults · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│planning provider/model                                             │
+│▏                                                                   │
+│planning effort (optional)                                          │
+│                                                                    │
+│execution provider/model                                            │
+│                                                                    │
+│execution effort (optional)                                         │
+│                                                                    │
+│review provider/model                                               │
+│                                                                    │
+│review effort (optional)                                            │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Use provider/model · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│planning provider/model                                             │
+│invalid▏                                                            │
+│planning effort (optional)                                          │
+│                                                                    │
+│execution provider/model                                            │
+│                                                                    │
+│execution effort (optional)                                         │
+│                                                                    │
+│review provider/model                                               │
+│                                                                    │
+│review effort (optional)                                            │
+│                                                                    │
+│Use provider/model (for example claude/sonnet), or leave blank      │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Storage: SQLite #2 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                 │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Continue queue                                            │
+│Planner approval: Automatic                                         │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project model defaults #2 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│planning provider/model                                             │
+│▏                                                                   │
+│planning effort (optional)                                          │
+│                                                                    │
+│execution provider/model                                            │
+│                                                                    │
+│execution effort (optional)                                         │
+│                                                                    │
+│review provider/model                                               │
+│                                                                    │
+│review effort (optional)                                            │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project configuration saved · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                 │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Continue queue                                            │
+│Planner approval: Automatic                                         │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project model defaults #3 · 70x22 · keyboard
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│planning provider/model                                             │
+│codex/typo-model▏                                                   │
+│planning effort (optional)                                          │
+│                                                                    │
+│execution provider/model                                            │
+│                                                                    │
+│execution effort (optional)                                         │
+│                                                                    │
+│review provider/model                                               │
+│                                                                    │
+│review effort (optional)                                            │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ INVALID EFFORT FORM · 70x22 · keyboard
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│planning provider/model                                             │
+│codex/executor                                                      │
+│planning effort (optional)                                          │
+│hight▏                                                              │
+│execution provider/model                                            │
+│                                                                    │
+│execution effort (optional)                                         │
+│                                                                    │
+│review provider/model                                               │
+│                                                                    │
+│review effort (optional)                                            │
+│                                                                    │
+│command conflict: planning effort "hight" is invalid                │
+│accepted values: minimal, low, medium, high, xhigh, max, ultra      │
+│Model codex/executor                                                │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Storage: SQLite #3 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                 │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Continue queue                                            │
+│Planner approval: Automatic                                         │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project model defaults #4 · 70x22 · keyboard
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│planning provider/model                                             │
+│codex/typo-model▏                                                   │
+│planning effort (optional)                                          │
+│                                                                    │
+│execution provider/model                                            │
+│                                                                    │
+│execution effort (optional)                                         │
+│                                                                    │
+│review provider/model                                               │
+│                                                                    │
+│review effort (optional)                                            │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ planning effort · 70x22 · keyboard
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│planning provider/model                                             │
+│codex/planning                                                      │
+│planning effort (optional)                                          │
+│high                                                                │
+│execution provider/model                                            │
+│▏                                                                   │
+│execution effort (optional)                                         │
+│                                                                    │
+│review provider/model                                               │
+│                                                                    │
+│review effort (optional)                                            │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ execution effort · 70x22 · keyboard
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│planning provider/model                                             │
+│codex/planning                                                      │
+│planning effort (optional)                                          │
+│high                                                                │
+│execution provider/model                                            │
+│codex/execution                                                     │
+│execution effort (optional)                                         │
+│high                                                                │
+│review provider/model                                               │
+│▏                                                                   │
+│review effort (optional)                                            │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ review effort · 70x22 · keyboard
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│planning effort (optional)                                          │
+│high                                                                │
+│execution provider/model                                            │
+│codex/execution                                                     │
+│execution effort (optional)                                         │
+│high                                                                │
+│review provider/model                                               │
+│codex/review                                                        │
+│review effort (optional)                                            │
+│high                                                                │
+│validation provider/model                                           │
+│▏                                                                   │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ validation effort · 70x22 · keyboard
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│execution effort (optional)                                         │
+│high                                                                │
+│review provider/model                                               │
+│codex/review                                                        │
+│review effort (optional)                                            │
+│high                                                                │
+│validation provider/model                                           │
+│codex/validation                                                    │
+│validation effort (optional)                                        │
+│high                                                                │
+│remediation provider/model                                          │
+│▏                                                                   │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ remediation effort · 70x22 · keyboard
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│review effort (optional)                                            │
+│high                                                                │
+│validation provider/model                                           │
+│codex/validation                                                    │
+│validation effort (optional)                                        │
+│high                                                                │
+│remediation provider/model                                          │
+│codex/remediation                                                   │
+│remediation effort (optional)                                       │
+│high                                                                │
+│operator provider/model                                             │
+│▏                                                                   │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ operator effort · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│validation provider/model                                           │
+│codex/validation                                                    │
+│validation effort (optional)                                        │
+│high                                                                │
+│remediation provider/model                                          │
+│codex/remediation                                                   │
+│remediation effort (optional)                                       │
+│high                                                                │
+│operator provider/model                                             │
+│codex/operator                                                      │
+│operator effort (optional)                                          │
+│high▏                                                               │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project configuration saved #2 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                 │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Continue queue                                            │
+│Planner approval: Automatic                                         │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project model defaults #5 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│planning provider/model                                             │
+│codex/planning▏                                                     │
+│planning effort (optional)                                          │
+│high                                                                │
+│execution provider/model                                            │
+│codex/execution                                                     │
+│execution effort (optional)                                         │
+│high                                                                │
+│review provider/model                                               │
+│codex/review                                                        │
+│review effort (optional)                                            │
+│high                                                                │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Storage: SQLite #4 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                 │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Continue queue                                            │
+│Planner approval: Automatic                                         │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ No checks configured · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+╭ Project checks ────────────────────────────────────────────────────╮
+│Select a check, then Apply to edit or enable/disable.               │
+│No checks configured.                                               │
+│                                                                    │
+│                                                                    │
+│Check to open                                                       │
+│< Add new check >   click / Space to change                         │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Edit project check · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Edit project check ────────────────────────────────────────────────╮
+│Save validates all fields together. Cancel changes nothing.         │
+│Checks cannot change during running, paused or waiting attempts.    │
+│Name                                                                │
+│▏                                                                   │
+│Command                                                             │
+│                                                                    │
+│Working directory (relative)                                        │
+│.                                                                   │
+│Timeout (ms)                                                        │
+│600000                                                              │
+│State                                                               │
+│< Enabled >   click / Space to change                               │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Check needs a name · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Edit project check ────────────────────────────────────────────────╮
+│Save validates all fields together. Cancel changes nothing.         │
+│Checks cannot change during running, paused or waiting attempts.    │
+│Name                                                                │
+│▏                                                                   │
+│Command                                                             │
+│                                                                    │
+│Working directory (relative)                                        │
+│.                                                                   │
+│Timeout (ms)                                                        │
+│600000                                                              │
+│State                                                               │
+│< Enabled >   click / Space to change                               │
+│command conflict: Check needs a name, command and positive timeout  │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Storage: SQLite #5 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                 │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Continue queue                                            │
+│Planner approval: Automatic                                         │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project checks · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+╭ Project checks ────────────────────────────────────────────────────╮
+│Select a check, then Apply to edit or enable/disable.               │
+│No checks configured.                                               │
+│                                                                    │
+│                                                                    │
+│Check to open                                                       │
+│< Add new check >   click / Space to change                         │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Edit project check #2 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Edit project check ────────────────────────────────────────────────╮
+│Save validates all fields together. Cancel changes nothing.         │
+│Checks cannot change during running, paused or waiting attempts.    │
+│Name                                                                │
+│▏                                                                   │
+│Command                                                             │
+│                                                                    │
+│Working directory (relative)                                        │
+│.                                                                   │
+│Timeout (ms)                                                        │
+│600000                                                              │
+│State                                                               │
+│< Enabled >   click / Space to change                               │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Timeout must be a positive integer · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Edit project check ────────────────────────────────────────────────╮
+│Save validates all fields together. Cancel changes nothing.         │
+│Checks cannot change during running, paused or waiting attempts.    │
+│Name                                                                │
+│build                                                               │
+│Command                                                             │
+│test -f Cargo.toml                                                  │
+│Working directory (relative)                                        │
+│.                                                                   │
+│Timeout (ms)                                                        │
+│zero▏                                                               │
+│State                                                               │
+│< Enabled >   click / Space to change                               │
+│Timeout must be a positive integer                                  │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project configuration saved #3 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                 │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Continue queue                                            │
+│Planner approval: Automatic                                         │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ build [ · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+╭ Project checks ────────────────────────────────────────────────────╮
+│Select a check, then Apply to edit or enable/disable.               │
+│build [enabled]: test -f Cargo.toml                                 │
+│                                                                    │
+│                                                                    │
+│Check to open                                                       │
+│< Add new check >   click / Space to change                         │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Edit project check #3 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Edit project check ────────────────────────────────────────────────╮
+│Save validates all fields together. Cancel changes nothing.         │
+│Checks cannot change during running, paused or waiting attempts.    │
+│Name                                                                │
+│build▏                                                              │
+│Command                                                             │
+│test -f Cargo.toml                                                  │
+│Working directory (relative)                                        │
+│.                                                                   │
+│Timeout (ms)                                                        │
+│1000                                                                │
+│State                                                               │
+│< Enabled >   click / Space to change                               │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project configuration saved #4 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                 │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Continue queue                                            │
+│Planner approval: Automatic                                         │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ build [ #2 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+╭ Project checks ────────────────────────────────────────────────────╮
+│Select a check, then Apply to edit or enable/disable.               │
+│build [disabled]: test -f Cargo.toml                                │
+│                                                                    │
+│                                                                    │
+│Check to open                                                       │
+│< Add new check >   click / Space to change                         │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Edit project check #4 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Edit project check ────────────────────────────────────────────────╮
+│Save validates all fields together. Cancel changes nothing.         │
+│Checks cannot change during running, paused or waiting attempts.    │
+│Name                                                                │
+│build▏                                                              │
+│Command                                                             │
+│test -f Cargo.toml                                                  │
+│Working directory (relative)                                        │
+│.                                                                   │
+│Timeout (ms)                                                        │
+│1000                                                                │
+│State                                                               │
+│< Disabled >   click / Space to change                              │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project configuration saved #5 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                 │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Continue queue                                            │
+│Planner approval: Automatic                                         │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ build [enabled] · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+╭ Project checks ────────────────────────────────────────────────────╮
+│Select a check, then Apply to edit or enable/disable.               │
+│build [enabled]: test -f Cargo.toml                                 │
+│                                                                    │
+│                                                                    │
+│Check to open                                                       │
+│< Add new check >   click / Space to change                         │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Edit project check #5 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Edit project check ────────────────────────────────────────────────╮
+│Save validates all fields together. Cancel changes nothing.         │
+│Checks cannot change during running, paused or waiting attempts.    │
+│Name                                                                │
+│build▏                                                              │
+│Command                                                             │
+│test -f Cargo.toml                                                  │
+│Working directory (relative)                                        │
+│.                                                                   │
+│Timeout (ms)                                                        │
+│1000                                                                │
+│State                                                               │
+│< Enabled >   click / Space to change                               │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Storage: SQLite #6 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                 │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Continue queue                                            │
+│Planner approval: Automatic                                         │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project preferences · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project preferences ───────────────────────────────────────────────╮
+│Saved per project in this instance. Keyboard stays available.       │
+│This policy controls new breakdown and repair tasks.                │
+│Run mode applies to the next Run/resume/retry.                      │
+│Agent network applies to execution and repair workers. On permits   │
+│Mouse                                                               │
+│< Enabled >   click / Space to change                               │
+│Planner approval                                                    │
+│< Automatic >   click / Space to change                             │
+│Run mode                                                            │
+│< Continue queue >   click / Space to change                        │
+│Agent network                                                       │
+│< Off >   click / Space to change                                   │
+│Check before task                                                   │
+│< On >   click / Space to change                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Storage: SQLite #7 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                 │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Continue queue                                            │
+│Planner approval: Automatic                                         │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project preferences #2 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project preferences ───────────────────────────────────────────────╮
+│Saved per project in this instance. Keyboard stays available.       │
+│This policy controls new breakdown and repair tasks.                │
+│Run mode applies to the next Run/resume/retry.                      │
+│Agent network applies to execution and repair workers. On permits   │
+│Mouse                                                               │
+│< Enabled >   click / Space to change                               │
+│Planner approval                                                    │
+│< Automatic >   click / Space to change                             │
+│Run mode                                                            │
+│< Continue queue >   click / Space to change                        │
+│Agent network                                                       │
+│< Off >   click / Space to change                                   │
+│Check before task                                                   │
+│< On >   click / Space to change                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project configuration saved #6 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Run one preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                 │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Run one                                                   │
+│Planner approval: Review required                                   │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project preferences #3 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project preferences ───────────────────────────────────────────────╮
+│Saved per project in this instance. Keyboard stays available.       │
+│This policy controls new breakdown and repair tasks.                │
+│Run mode applies to the next Run/resume/retry.                      │
+│Agent network applies to execution and repair workers. On permits   │
+│Mouse                                                               │
+│< Enabled >   click / Space to change                               │
+│Planner approval                                                    │
+│< Review required >   click / Space to change                       │
+│Run mode                                                            │
+│< Run one >   click / Space to change                               │
+│Agent network                                                       │
+│< Off >   click / Space to change                                   │
+│Check before task                                                   │
+│< On >   click / Space to change                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Mouse: Disabled · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Run one preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                 │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Disabled                                                     │
+│Run mode: Run one                                                   │
+│Planner approval: Review required                                   │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ No current task #2 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Run one preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────╮
+│No current task.                                                    │
+│Set up this project first: u Readiness lists what is missing.       │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix]
+[S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not…
+@@ Mouse: Disabled #2 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Run one preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                 │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Disabled                                                     │
+│Run mode: Run one                                                   │
+│Planner approval: Review required                                   │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project preferences #4 · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project preferences ───────────────────────────────────────────────╮
+│Saved per project in this instance. Keyboard stays available.       │
+│This policy controls new breakdown and repair tasks.                │
+│Run mode applies to the next Run/resume/retry.                      │
+│Agent network applies to execution and repair workers. On permits   │
+│Mouse                                                               │
+│< Disabled >   click / Space to change                              │
+│Planner approval                                                    │
+│< Review required >   click / Space to change                       │
+│Run mode                                                            │
+│< Run one >   click / Space to change                               │
+│Agent network                                                       │
+│< Off >   click / Space to change                                   │
+│Check before task                                                   │
+│< On >   click / Space to change                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Mouse: Enabled · 70x22 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Run one preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                 │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Run one                                                   │
+│Planner approval: Review required                                   │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project model defaults #3 · 70x22 · mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│planning provider/model                                             │
+│▏                                                                   │
+│planning effort (optional)                                          │
+│                                                                    │
+│execution provider/model                                            │
+│codex/typo-model                                                    │
+│execution effort (optional)                                         │
+│                                                                    │
+│review provider/model                                               │
+│                                                                    │
+│review effort (optional)                                            │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ INVALID EFFORT FORM · 70x22 · mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│planning provider/model                                             │
+│                                                                    │
+│planning effort (optional)                                          │
+│                                                                    │
+│execution provider/model                                            │
+│codex/executor                                                      │
+│execution effort (optional)                                         │
+│hight▏                                                              │
+│review provider/model                                               │
+│                                                                    │
+│review effort (optional)                                            │
+│                                                                    │
+│command conflict: execution effort "hight" is invalid               │
+│accepted values: minimal, low, medium, high, xhigh, max, ultra      │
+│Model codex/executor                                                │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project model defaults #4 · 70x22 · mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│planning provider/model                                             │
+│▏                                                                   │
+│planning effort (optional)                                          │
+│                                                                    │
+│execution provider/model                                            │
+│codex/typo-model                                                    │
+│execution effort (optional)                                         │
+│                                                                    │
+│review provider/model                                               │
+│                                                                    │
+│review effort (optional)                                            │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ planning effort · 70x22 · mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│planning provider/model                                             │
+│codex/planning                                                      │
+│planning effort (optional)                                          │
+│high▏                                                               │
+│execution provider/model                                            │
+│codex/typo-model                                                    │
+│execution effort (optional)                                         │
+│                                                                    │
+│review provider/model                                               │
+│                                                                    │
+│review effort (optional)                                            │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ execution effort · 70x22 · mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│planning provider/model                                             │
+│codex/planning                                                      │
+│planning effort (optional)                                          │
+│high                                                                │
+│execution provider/model                                            │
+│codex/execution                                                     │
+│execution effort (optional)                                         │
+│high▏                                                               │
+│review provider/model                                               │
+│                                                                    │
+│review effort (optional)                                            │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ review effort · 70x22 · mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│planning provider/model                                             │
+│codex/planning                                                      │
+│planning effort (optional)                                          │
+│high                                                                │
+│execution provider/model                                            │
+│codex/execution                                                     │
+│execution effort (optional)                                         │
+│high                                                                │
+│review provider/model                                               │
+│codex/review                                                        │
+│review effort (optional)                                            │
+│high▏                                                               │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ validation provider/model · 70x22 · mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│validation provider/model                                           │
+│                                                                    │
+│validation effort (optional)                                        │
+│                                                                    │
+│remediation provider/model                                          │
+│                                                                    │
+│remediation effort (optional)                                       │
+│                                                                    │
+│operator provider/model                                             │
+│                                                                    │
+│operator effort (optional)                                          │
+│▏                                                                   │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ validation effort · 70x22 · mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│validation provider/model                                           │
+│codex/validation                                                    │
+│validation effort (optional)                                        │
+│high▏                                                               │
+│remediation provider/model                                          │
+│                                                                    │
+│remediation effort (optional)                                       │
+│                                                                    │
+│operator provider/model                                             │
+│                                                                    │
+│operator effort (optional)                                          │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ remediation effort · 70x22 · mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Project model defaults ────────────────────────────────────────────╮
+│Effective models for tasks defined now, and where each comes from   │
+│(user defaults, then the selected profile, then these overrides):   │
+│validation provider/model                                           │
+│codex/validation                                                    │
+│validation effort (optional)                                        │
+│high                                                                │
+│remediation provider/model                                          │
+│codex/remediation                                                   │
+│remediation effort (optional)                                       │
+│high▏                                                               │
+│operator provider/model                                             │
+│                                                                    │
+│operator effort (optional)                                          │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

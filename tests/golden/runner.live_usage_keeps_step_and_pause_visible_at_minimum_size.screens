@@ -1,0 +1,46 @@
+@@ LIVE USAGE · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 1 · History
+ Session: Queue · running · Workflow · Implement · repair round 0/10 …
+ #1 Live recorded usage
+ Workflow · Implement · repair round 0/10 · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Create result.txt containing ve…│
+│Attempt 1                   ││Proof: result.txt contains verified   │
+│Step: Execution             │╰──────────────────────────────────────╯
+│in 123G, cache 186G, out 76G│╭ Log · following · attempt 1 · o: repo╮
+│Model codex/execution / none││Execution started; results require    │
+╰────────────────────────────╯│checks, review and validation         │
+╭ Activity · #1 · l: all ────╮│execution: codex/execution · new      │
+│• Workflow · Implement ·    ││session                               │
+│  repair round 0/10         ││                                      │
+│• Current task attempt      ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [o Report] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ LIVE USAGE PAUSED · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused; worker stopped, Resume continues t…
+ #1 Live recorded usage
+ Paused · r Resume continues this attempt · s Stop returns it to Pendi
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Paused · AI                 ││Goal: Create result.txt containing ve…│
+│Attempt 1                   ││Proof: result.txt contains verified   │
+│in 123G, cache 186G, out 76G│╰──────────────────────────────────────╯
+│Model codex/execution / none│╭ Log · following · attempt 1 · o: repo╮
+│Active <t> · waited <t>     ││Execution started; results require    │
+╰────────────────────────────╯│checks, review and validation         │
+╭ Activity · #1 · l: all ────╮│execution: codex/execution · new      │
+│• Supervisor yielded this   ││session                               │
+│  attempt for resume        ││                                      │
+│• Paused; useful work and   ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models]
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [o Report] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Pause requested · waiting for worker shutdown and cleanup

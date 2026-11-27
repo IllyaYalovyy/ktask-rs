@@ -558,9 +558,9 @@ fn cli_manages_profiles_and_reports_effective_values_with_sources() -> Result {
     Ok(())
 }
 
-fn screen(t: &Terminal, label: &str) -> Result<String> {
+fn screen(t: &Terminal, mouse: bool, label: &str) -> Result<String> {
     let rendered = t.screen(label, |s| s.contains(label))?;
-    println!("{label}\n{rendered}");
+    crate::support::record(label, mouse, &rendered);
     Ok(rendered)
 }
 
@@ -636,7 +636,7 @@ impl Flow {
     /// Opens the profile list on `waits_for`, a line of its body.
     fn open_list(&mut self, waits_for: &str) -> Result<String> {
         self.press("f", "f Profiles")?;
-        screen(&self.t, waits_for)
+        screen(&self.t, self.mouse, waits_for)
     }
 
     /// Moves the list's choice from entry `from` forward `times` entries and applies it.
@@ -663,7 +663,7 @@ impl Flow {
         }
         cycle(&mut self.t, self.mouse, "Profile", &FIXED, 0, 1)?;
         self.apply()?;
-        let form = screen(&self.t, "Profile name")?;
+        let form = screen(&self.t, self.mouse, "Profile name")?;
         assert!(form.contains("claude/opus"), "{form}");
         if self.mouse {
             self.t.click("Profile name")?;
@@ -674,7 +674,11 @@ impl Flow {
         }
         self.action(&ACTIONS[..2], 1)?;
         self.apply()?;
-        screen(&self.t, "Saved profile Anthropic; this project uses it")?;
+        screen(
+            &self.t,
+            self.mouse,
+            "Saved profile Anthropic; this project uses it",
+        )?;
         let anthropic = self.service.profile("Anthropic")?.unwrap();
         assert_eq!(anthropic.models, all("claude", "opus", Some("high")));
         assert_eq!(self.service.selected_profile()?.unwrap().name, "Anthropic");
@@ -685,7 +689,7 @@ impl Flow {
 
     fn clear_project_overrides(&mut self) -> Result {
         self.press("m", "m Defaults")?;
-        let defaults = screen(&self.t, "Project model defaults")?;
+        let defaults = screen(&self.t, self.mouse, "Project model defaults")?;
         assert!(defaults.contains("blank inherits the"), "{defaults}");
         for role in MODEL_ROLES {
             if self.mouse {
@@ -727,7 +731,7 @@ impl Flow {
         ];
         assert!(listing.contains(entries[4]), "{listing}");
         self.choose(&entries, 4, 1)?;
-        screen(&self.t, "Profile name")?;
+        screen(&self.t, self.mouse, "Profile name")?;
         if self.mouse {
             self.t.click("Profile name")?;
             self.t.send("Qwen")?;
@@ -737,7 +741,7 @@ impl Flow {
             self.t.send("Qwen\t\t\t\topencode/vendor/qwen")?;
         }
         self.apply()?;
-        screen(&self.t, "Saved profile Qwen")?;
+        screen(&self.t, self.mouse, "Saved profile Qwen")?;
         let qwen = self.service.profile("Qwen")?.unwrap();
         assert_eq!(qwen.models[1], model("opencode", "vendor/qwen", None));
         assert!(
@@ -752,7 +756,7 @@ impl Flow {
     fn deleting_a_selected_profile_is_refused(&mut self) -> Result {
         self.open_list("Qwen v1")?;
         self.apply()?;
-        let form = screen(&self.t, "Profile Anthropic")?;
+        let form = screen(&self.t, self.mouse, "Profile Anthropic")?;
         assert!(form.contains("used by project"), "{form}");
         if !self.mouse {
             self.t.send("\t")?;
@@ -762,7 +766,7 @@ impl Flow {
         let refused = self
             .t
             .screen("delete refused", |s| s.contains("another profile first"))?;
-        println!("DELETE REFUSED mouse={}\n{refused}", self.mouse);
+        crate::support::record("DELETE REFUSED", self.mouse, &refused);
         assert!(self.service.profile("Anthropic")?.is_some());
         self.press("\x1b", "Cancel")?;
         self.t
@@ -781,7 +785,11 @@ impl Flow {
             "2. Qwen",
         ];
         self.choose(&entries, 4, 4)?;
-        screen(&self.t, "Project uses the user defaults without a profile")?;
+        screen(
+            &self.t,
+            self.mouse,
+            "Project uses the user defaults without a profile",
+        )?;
         assert_eq!(self.service.selected_profile()?, None);
         assert_eq!(
             self.service.project_defaults()?,
@@ -798,13 +806,13 @@ impl Flow {
             "2. Qwen",
         ];
         self.choose(&entries, 0, 4)?;
-        screen(&self.t, "Profile Anthropic")?;
+        screen(&self.t, self.mouse, "Profile Anthropic")?;
         if !self.mouse {
             self.t.send("\t")?;
         }
         self.action(&ACTIONS, 3)?;
         self.apply()?;
-        screen(&self.t, "Deleted profile Anthropic")?;
+        screen(&self.t, self.mouse, "Deleted profile Anthropic")?;
         assert!(self.service.profile("Anthropic")?.is_none());
         Ok(())
     }
@@ -813,13 +821,13 @@ impl Flow {
         self.open_list("Qwen v1")?;
         let entries = [FIXED[0], FIXED[1], FIXED[2], FIXED[3], "1. Qwen"];
         self.choose(&entries, 0, 4)?;
-        screen(&self.t, "Profile Qwen")?;
+        screen(&self.t, self.mouse, "Profile Qwen")?;
         if !self.mouse {
             self.t.send("\t")?;
         }
         self.action(&ACTIONS[..3], 2)?;
         self.apply()?;
-        screen(&self.t, "new projects start with it")?;
+        screen(&self.t, self.mouse, "new projects start with it")?;
         assert_eq!(
             self.service.user_defaults()?.default_profile.as_deref(),
             Some("Qwen")
@@ -836,9 +844,9 @@ fn real_profile_flows_create_select_clear_override_protect_and_delete_with_keybo
         let root = scratch.path();
         let service = seeded(root)?;
         let mut t = Terminal::open_real(BIN, root, 100, 70)?;
-        screen(&t, "No current task")?;
+        screen(&t, mouse, "No current task")?;
         press(&mut t, mouse, "4", "4 Config")?;
-        let config = screen(&t, "Storage: SQLite")?;
+        let config = screen(&t, mouse, "Storage: SQLite")?;
         assert!(config.contains("f Profiles"), "{config}");
         let mut flow = Flow { t, mouse, service };
         flow.create_anthropic_from_project()?;

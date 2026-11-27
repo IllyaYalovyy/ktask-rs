@@ -1,0 +1,276 @@
+@@ android progress queue=false · 140x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs dependency   |   Queue 2 · History 0
+ Session: Run one · waiting · Next #2 · Waiting for dependency: sdk_component system-images;android-36;google_apis;x86_64 7: fixture tool: …
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.                         │
+│Preferences: saved per project and instance.                                                                                              │
+│                                                                                                                                          │
+│Mouse: Enabled                                                                                                                            │
+│Run mode: Continue queue                                                                                                                  │
+│Planner approval: Automatic                                                                                                               │
+│Delivery: local via origin/mai╭ Android install progress ──────────────────────────────────────────────────╮                              │
+│Dependencies: manual external │{                                                                           │issing. CLI require declares  │
+│prerequisites before a task st│  "state": "running",                                                       │                              │
+│                              │  "recipe": "android-36-google-apis-x86_64",                                │                              │
+│Defaults apply to new tasks; e│  "operation": "<id>",                                                      │                              │
+│u User defaults: what new proj│  "stage_bytes": 1275,                                                      │                              │
+│f Profiles: named role models │  "stage_entries": 13,                                                      │                              │
+│w Work categories: templates t│  "download_cache_bytes": 24,                                               │ts or art; override per       │
+│project.                      │  "download_cache_entries": 2,                                              │                              │
+│L Review lenses: opt-in specia│  "message": "Installing fixed Android packages"                            │ default selection.           │
+│Checks: list, add, edit, enabl│}                                                                           │                              │
+│Keyboard remains available wit│Wheel / PgUp / PgDn: scroll · Esc: close                                    │                              │
+│i Report limits: time and cost│                                                                            │                              │
+│E Export settings and o Import│[Copy] [Close] [Up] [Down]                                                  │                              │
+│                              │                                                                            │                              │
+│                              ╰────────────────────────────────────────────────────────────────────────────╯                              │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Recheck current] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings] [e Preferences] [Esc Back]
+[? Help] [q Quit]
+Android installer started; Tools shows progress and cancellation
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ android resumed queue=false · 140x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 2 · History 0
+ Session: Run one · running · Workflow · Implement · repair round 0/10 · Next #2 · Run requested
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.                         │
+│Preferences: saved per project and instance.                                                                                              │
+│                                                                                                                                          │
+│Mouse: Enabled                                                                                                                            │
+│Run mode: Continue queue                                                                                                                  │
+│Planner approval: Automatic                                                                                                               │
+│Delivery: local via origin/main                                                                                                           │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing. CLI require declares  │
+│prerequisites before a task starts.                                                                                                       │
+│                                                                                                                                          │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                                              │
+│u User defaults: what new projects start with; preview and apply them here.                                                               │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                                                    │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art; override per       │
+│project.                                                                                                                                  │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default selection.           │
+│Checks: list, add, edit, enable or disable.                                                                                               │
+│Keyboard remains available with mouse disabled.                                                                                           │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.                                │
+│E Export settings and o Import settings move this project's settings to another computer.                                                 │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery] [k Storage]
+[R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+
+Android SDK generation #2 published; dependency rechecked: true; resumed: true
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ android finished queue=false · 140x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Session: Run one · stopped · Run one completed the current task
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.                         │
+│Preferences: saved per project and instance.                                                                                              │
+│                                                                                                                                          │
+│Mouse: Enabled                                                                                                                            │
+│Run mode: Continue queue                                                                                                                  │
+│Planner approval: Automatic                                                                                                               │
+│Delivery: local via origin/main                                                                                                           │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing. CLI require declares  │
+│prerequisites before a task starts.                                                                                                       │
+│                                                                                                                                          │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                                              │
+│u User defaults: what new projects start with; preview and apply them here.                                                               │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                                                    │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art; override per       │
+│project.                                                                                                                                  │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default selection.           │
+│Checks: list, add, edit, enable or disable.                                                                                               │
+│Keyboard remains available with mouse disabled.                                                                                           │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.                                │
+│E Export settings and o Import settings move this project's settings to another computer.                                                 │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+
+Android SDK generation #2 published; dependency rechecked: true; resumed: true
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ android progress queue=true · 140x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs dependency   |   Queue 2 · History 0
+ Session: Queue · waiting · Next #2 · Waiting for dependency: sdk_component system-images;android-36;google_apis;x86_64 7: fixture tool: co…
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.                         │
+│Preferences: saved per project and instance.                                                                                              │
+│                                                                                                                                          │
+│Mouse: Enabled                                                                                                                            │
+│Run mode: Continue queue                                                                                                                  │
+│Planner approval: Automatic                                                                                                               │
+│Delivery: local via origin/mai╭ Android install progress ──────────────────────────────────────────────────╮                              │
+│Dependencies: manual external │{                                                                           │issing. CLI require declares  │
+│prerequisites before a task st│  "state": "running",                                                       │                              │
+│                              │  "recipe": "android-36-google-apis-x86_64",                                │                              │
+│Defaults apply to new tasks; e│  "operation": "<id>",                                                      │                              │
+│u User defaults: what new proj│  "stage_bytes": 1275,                                                      │                              │
+│f Profiles: named role models │  "stage_entries": 13,                                                      │                              │
+│w Work categories: templates t│  "download_cache_bytes": 24,                                               │ts or art; override per       │
+│project.                      │  "download_cache_entries": 2,                                              │                              │
+│L Review lenses: opt-in specia│  "message": "Installing fixed Android packages"                            │ default selection.           │
+│Checks: list, add, edit, enabl│}                                                                           │                              │
+│Keyboard remains available wit│Wheel / PgUp / PgDn: scroll · Esc: close                                    │                              │
+│i Report limits: time and cost│                                                                            │                              │
+│E Export settings and o Import│[Copy] [Close] [Up] [Down]                                                  │                              │
+│                              │                                                                            │                              │
+│                              ╰────────────────────────────────────────────────────────────────────────────╯                              │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Recheck current] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings] [e Preferences] [Esc Back]
+[? Help] [q Quit]
+Android installer started; Tools shows progress and cancellation
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ android resumed queue=true · 140x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 2 · History 0
+ Session: Queue · running · Workflow · Implement · repair round 0/10 · Next #2 · Queue supervisor active
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.                         │
+│Preferences: saved per project and instance.                                                                                              │
+│                                                                                                                                          │
+│Mouse: Enabled                                                                                                                            │
+│Run mode: Continue queue                                                                                                                  │
+│Planner approval: Automatic                                                                                                               │
+│Delivery: local via origin/main                                                                                                           │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing. CLI require declares  │
+│prerequisites before a task starts.                                                                                                       │
+│                                                                                                                                          │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                                              │
+│u User defaults: what new projects start with; preview and apply them here.                                                               │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                                                    │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art; override per       │
+│project.                                                                                                                                  │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default selection.           │
+│Checks: list, add, edit, enable or disable.                                                                                               │
+│Keyboard remains available with mouse disabled.                                                                                           │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.                                │
+│E Export settings and o Import settings move this project's settings to another computer.                                                 │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery] [k Storage]
+[R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+
+Android SDK generation #2 published; dependency rechecked: true; resumed: true
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ android finished queue=true · 140x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 2
+ Session: Queue · complete · no queued work
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.                         │
+│Preferences: saved per project and instance.                                                                                              │
+│                                                                                                                                          │
+│Mouse: Enabled                                                                                                                            │
+│Run mode: Continue queue                                                                                                                  │
+│Planner approval: Automatic                                                                                                               │
+│Delivery: local via origin/main                                                                                                           │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing. CLI require declares  │
+│prerequisites before a task starts.                                                                                                       │
+│                                                                                                                                          │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                                              │
+│u User defaults: what new projects start with; preview and apply them here.                                                               │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                                                    │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art; override per       │
+│project.                                                                                                                                  │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default selection.           │
+│Checks: list, add, edit, enable or disable.                                                                                               │
+│Keyboard remains available with mouse disabled.                                                                                           │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.                                │
+│E Export settings and o Import settings move this project's settings to another computer.                                                 │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+
+Android SDK generation #2 published; dependency rechecked: true; resumed: true
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

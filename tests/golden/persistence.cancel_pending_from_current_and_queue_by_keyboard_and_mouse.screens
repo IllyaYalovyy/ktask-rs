@@ -1,0 +1,105 @@
+@@ CANCEL CURRENT FORM · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 3 · History 0
+ Queue preference · Next #2: Stays pending · m: run mode in Current
+ #1 Cancel from current
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Persist a real task                                               │
+│No attempts yet                             ││Proof: Survives restart                                                 │
+│Run blocked (9) · u Readiness               │╰────────────────────────────────────────────────────────────────────────╯
+│Model unconfigured / none                   │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 3 used  ╭ Cancel #1 Cancel from current ─────────────────────────────────────────────╮ a direct action.   │
+│                    │The task moves to History as cancelled. Copy to queue brings it back as a   │                    │
+│                    │new task.                                                                   │                    │
+│                    │                                                                            │                    │
+│                    │                                                                            │                    │
+│                    │Reason (optional)                                                           │                    │
+╰────────────────────│▏                                                                           │                    │
+╭ Activity · #1 · l: │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│• #1 created: Cancel│                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CANCELLED FROM QUEUE · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 2
+ Queue preference · last task · m: run mode in Current
+ Queue · 1 shown / 1 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 1 · Model ───────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│› #2   Pending  Stays pending                             unconfigured││Stays pending                                 │
+│                                                                      ││#2 · Pending · AI                             │
+│                                                                      ││                                              │
+│                                                                      ││Goal: Persist a real task                     │
+│                                                                      ││                                              │
+│                                                                      ││Check: Survives restart                       │
+│                                                                      ││                                              │
+│                                                                      ││Attempts: 0 · none yet                        │
+│                                                                      ││                                              │
+│                                                                      ││Models:                                       │
+│                                                                      ││Execution: unconfigured / none                │
+│                                                                      ││Review: unconfigured / none                   │
+│                                                                      ││Validation: unconfigured / none               │
+│                                                                      ││Remediation: unconfigured / none              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel]
+[R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CANCELLED HISTORY · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 2
+ Queue preference · last task · m: run mode in Current
+ History · 2 shown / 2 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 2 · Finished Attempts Time Usage ────────────────────────────╮╭ Details · click for full ──────────────╮
+│› #3   Cancelled Cancel from queue <date> 0 <t> -                           ││Cancel from queue                       │
+│  #1   Cancelled Cancel from current <date> 0 <t> -                         ││#3 · Cancelled · AI · finished <date>   │
+│                                                                            ││<date>                                  │
+│                                                                            ││                                        │
+│                                                                            ││Goal: Persist a real task               │
+│                                                                            ││                                        │
+│                                                                            ││Check: Survives restart                 │
+│                                                                            ││                                        │
+│                                                                            ││Attempts: 0 · none yet                  │
+│                                                                            ││                                        │
+│                                                                            ││Models:                                 │
+│                                                                            ││Execution: unconfigured / none          │
+│                                                                            ││Review: unconfigured / none             │
+│                                                                            ││Validation: unconfigured / none         │
+│                                                                            ││Remediation: unconfigured / none        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+╰────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats]
+[? Help] [q Quit]
+
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

@@ -1,0 +1,660 @@
+@@ CONFIG · 70x22 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: app                                                        │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Continue queue                                            │
+│Planner approval: Automatic                                         │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ EXPORT FORM · 70x22 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+╭ Export settings · disk ────────────────────────────────────────────╮
+│Writes every setting of this project, and the shared settings it    │
+│uses, to one file. Tasks have their own Export in Queue. Paths      │
+│inside the project are written relative to it; tools, registrations │
+│and credentials stay here.                                          │
+│Keep the file outside the project: an untracked file stops the next │
+│run.                                                                │
+│Destination                                                         │
+│---/ktask-test-scratch/run-000000/home/gina/app-ktask-settings.json▏│
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ EXPORTED · 70x22 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: app                                                        │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Continue queue                                            │
+│Planner approval: Automatic                                         │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Exported 31 settings to /tmp/ktask-screens-----------------------/kta…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ EXPORT AGAIN · 70x22 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+╭ Export settings · disk ────────────────────────────────────────────╮
+│Writes every setting of this project, and the shared settings it    │
+│uses, to one file. Tasks have their own Export in Queue. Paths      │
+│inside the project are written relative to it; tools, registrations │
+│and credentials stay here.                                          │
+│Keep the file outside the project: an untracked file stops the next │
+│run.                                                                │
+│Destination                                                         │
+│---/ktask-test-scratch/run-000000/home/gina/app-ktask-settings.json▏│
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Exported 31 settings to /tmp/ktask-screens-----------------------/kta…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CONFIRM OVERWRITE · 70x22 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+╭ Overwrite file? ───────────────────────────────────────────────────╮
+│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000│
+│000/home/gina/app-ktask-settings.json                               │
+│Confirm replaces this file. Cancel keeps its contents.              │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Exported 31 settings to /tmp/ktask-screens-----------------------/kta…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ IMPORT FORM · 70x22 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+╭ Import settings · disk ────────────────────────────────────────────╮
+│Reads a file written by Export settings. A preview shows every      │
+│setting before anything changes.                                    │
+│Import replaces the settings the file names and keeps the rest;     │
+│tasks and history stay.                                             │
+│Source                                                              │
+│---/ktask-test-scratch/run-000000/home/gina/app-ktask-settings.json▏│
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Exported 31 settings to /tmp/ktask-screens-----------------------/kta…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PREVIEW · 70x22 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+╭ Import settings preview ───────────────────────────────────────────╮
+│Preview, nothing applied yet: 0 to add, 1 to change, 30 left as     │
+│they are                                                            │
+│Folder:                                                             │
+│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000│
+│000/home/gina/app                                                   │
+│Project: app                                                        │
+│Settings (shared ones apply to every project of this instance):     │
+│- change check build:                                               │
+│{"command":"false","directory":".","enabled":true,"name":"build","ti│
+│meout_ms":600000} -> {"command":"test -d                            │
+│.","directory":".","enabled":true,"name":"build","timeout_ms":600000│
+│}                                                                   │
+│- unchanged shared user default agent_network: false                │
+│- unchanged shared user default check_before_task: true             │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PREVIEW END · 70x22 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+╭ Import settings preview ───────────────────────────────────────────╮
+│- unchanged preferences mouse: true                                 │
+│- unchanged preferences run_mode: queue                             │
+│- unchanged preferences planner_approval: automatic                 │
+│- unchanged default lenses: []                                      │
+│- unchanged delivery base_branch: main                              │
+│- unchanged delivery mode: local                                    │
+│- unchanged delivery remote: origin                                 │
+│- unchanged retention days: 30                                      │
+│- unchanged retention max_bytes: 8589934592                         │
+│- unchanged retention max_files: 100000                             │
+│- unchanged report limits cost_limit_microusd: 2000000              │
+│- unchanged report limits time_limit_ms: 900000                     │
+│- unchanged fix limits cost_limit_microusd: 5000000                 │
+│- unchanged fix limits time_limit_ms: 1800000                       │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ IMPORTED · 70x22 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: app                                                        │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Continue queue                                            │
+│Planner approval: Automatic                                         │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Settings imported
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PATH newer.json · 70x22 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+╭ Import settings · disk ────────────────────────────────────────────╮
+│Reads a file written by Export settings. A preview shows every      │
+│setting before anything changes.                                    │
+│Import replaces the settings the file names and keeps the rest;     │
+│tasks and history stay.                                             │
+│Source                                                              │
+│ens-----------------------/ktask-test-scratch/run-000000/newer.json▏│
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Settings imported
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ NEWER FILE · 70x22 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+╭ Import settings · disk ────────────────────────────────────────────╮
+│Reads a file written by Export settings. A preview shows every      │
+│setting before anything changes.                                    │
+│Import replaces the settings the file names and keeps the rest;     │
+│tasks and history stay.                                             │
+│Source                                                              │
+│ens-----------------------/ktask-test-scratch/run-000000/newer.json▏│
+│command conflict: Settings file format 2 is newer than this ktask   │
+│reads (1); upgrade ktask to import it                               │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Settings imported
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CONFIG · 120x36 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: app                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                                                                                                                      │
+│Mouse: Enabled                                                                                                        │
+│Run mode: Continue queue                                                                                              │
+│Planner approval: Automatic                                                                                           │
+│Delivery: local via origin/main                                                                                       │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing.   │
+│CLI require declares prerequisites before a task starts.                                                              │
+│                                                                                                                      │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                          │
+│u User defaults: what new projects start with; preview and apply them here.                                           │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                                │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art;│
+│override per project.                                                                                                 │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default  │
+│selection.                                                                                                            │
+│Checks: list, add, edit, enable or disable.                                                                           │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ EXPORT FORM · 120x36 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: app                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                                                                                                                      │
+│Mouse: Enabled                                                                                                        │
+│Run mode: Continue q╭ Export settings · disk ────────────────────────────────────────────────────╮                    │
+│Planner approval: Au│Writes every setting of this project, and the shared settings it uses, to   │                    │
+│Delivery: local via │one file. Tasks have their own Export in Queue. Paths inside the project    │                    │
+│Dependencies: manual│are written relative to it; tools, registrations and credentials stay here. │isite is missing.   │
+│CLI require declares│Keep the file outside the project: an untracked file stops the next run.    │                    │
+│                    │Destination                                                                 │                    │
+│Defaults apply to ne│-----------/ktask-test-scratch/run-000000/home/gina/app-ktask-settings.json▏│                    │
+│u User defaults: wha│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│f Profiles: named ro│                                                                            │                    │
+│w Work categories: t│[Copy] [Apply] [Cancel] [Up] [Down]                                         │e, documents or art;│
+│override per project│                                                                            │                    │
+│L Review lenses: opt╰────────────────────────────────────────────────────────────────────────────╯ project's default  │
+│selection.                                                                                                            │
+│Checks: list, add, edit, enable or disable.                                                                           │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ EXPORTED · 120x36 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: app                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                                                                                                                      │
+│Mouse: Enabled                                                                                                        │
+│Run mode: Continue queue                                                                                              │
+│Planner approval: Automatic                                                                                           │
+│Delivery: local via origin/main                                                                                       │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing.   │
+│CLI require declares prerequisites before a task starts.                                                              │
+│                                                                                                                      │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                          │
+│u User defaults: what new projects start with; preview and apply them here.                                           │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                                │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art;│
+│override per project.                                                                                                 │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default  │
+│selection.                                                                                                            │
+│Checks: list, add, edit, enable or disable.                                                                           │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Exported 31 settings to /tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/home/gina/app-ktask-set…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ EXPORT AGAIN · 120x36 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: app                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                                                                                                                      │
+│Mouse: Enabled                                                                                                        │
+│Run mode: Continue q╭ Export settings · disk ────────────────────────────────────────────────────╮                    │
+│Planner approval: Au│Writes every setting of this project, and the shared settings it uses, to   │                    │
+│Delivery: local via │one file. Tasks have their own Export in Queue. Paths inside the project    │                    │
+│Dependencies: manual│are written relative to it; tools, registrations and credentials stay here. │isite is missing.   │
+│CLI require declares│Keep the file outside the project: an untracked file stops the next run.    │                    │
+│                    │Destination                                                                 │                    │
+│Defaults apply to ne│-----------/ktask-test-scratch/run-000000/home/gina/app-ktask-settings.json▏│                    │
+│u User defaults: wha│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│f Profiles: named ro│                                                                            │                    │
+│w Work categories: t│[Copy] [Apply] [Cancel] [Up] [Down]                                         │e, documents or art;│
+│override per project│                                                                            │                    │
+│L Review lenses: opt╰────────────────────────────────────────────────────────────────────────────╯ project's default  │
+│selection.                                                                                                            │
+│Checks: list, add, edit, enable or disable.                                                                           │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Exported 31 settings to /tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/home/gina/app-ktask-set…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CONFIRM OVERWRITE · 120x36 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: app                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                                                                                                                      │
+│Mouse: Enabled                                                                                                        │
+│Run mode: Continue q╭ Overwrite file? ───────────────────────────────────────────────────────────╮                    │
+│Planner approval: Au│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/home│                    │
+│Delivery: local via │/gina/app-ktask-settings.json                                               │                    │
+│Dependencies: manual│Confirm replaces this file. Cancel keeps its contents.                      │isite is missing.   │
+│CLI require declares│                                                                            │                    │
+│                    │                                                                            │                    │
+│Defaults apply to ne│                                                                            │                    │
+│u User defaults: wha│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│f Profiles: named ro│                                                                            │                    │
+│w Work categories: t│[Copy] [Apply] [Cancel] [Up] [Down]                                         │e, documents or art;│
+│override per project│                                                                            │                    │
+│L Review lenses: opt╰────────────────────────────────────────────────────────────────────────────╯ project's default  │
+│selection.                                                                                                            │
+│Checks: list, add, edit, enable or disable.                                                                           │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Exported 31 settings to /tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/home/gina/app-ktask-set…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ IMPORT FORM · 120x36 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: app                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                                                                                                                      │
+│Mouse: Enabled                                                                                                        │
+│Run mode: Continue q╭ Import settings · disk ────────────────────────────────────────────────────╮                    │
+│Planner approval: Au│Reads a file written by Export settings. A preview shows every setting      │                    │
+│Delivery: local via │before anything changes.                                                    │                    │
+│Dependencies: manual│Import replaces the settings the file names and keeps the rest; tasks and   │isite is missing.   │
+│CLI require declares│history stay.                                                               │                    │
+│                    │Source                                                                      │                    │
+│Defaults apply to ne│-----------/ktask-test-scratch/run-000000/home/gina/app-ktask-settings.json▏│                    │
+│u User defaults: wha│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│f Profiles: named ro│                                                                            │                    │
+│w Work categories: t│[Copy] [Apply] [Cancel] [Up] [Down]                                         │e, documents or art;│
+│override per project│                                                                            │                    │
+│L Review lenses: opt╰────────────────────────────────────────────────────────────────────────────╯ project's default  │
+│selection.                                                                                                            │
+│Checks: list, add, edit, enable or disable.                                                                           │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Exported 31 settings to /tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/home/gina/app-ktask-set…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PREVIEW · 120x36 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Curre╭ Import settings preview ───────────────────────────────────────────────────╮
+ No current task   | │Preview, nothing applied yet: 0 to add, 1 to change, 30 left as they are    │
+ Queue preference · n│Folder:                                                                     │
+ Config              │/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/home│
+                     │/gina/app                                                                   │
+╭ Config ────────────│Project: app                                                                │────────────────────╮
+│Project: app        │Settings (shared ones apply to every project of this instance):             │                    │
+│Storage: SQLite outp│- change check build:                                                       │esource limits.     │
+│Preferences: saved p│{"command":"false","directory":".","enabled":true,"name":"build","timeout_ms│                    │
+│                    │":600000} -> {"command":"test -d                                            │                    │
+│Mouse: Enabled      │.","directory":".","enabled":true,"name":"build","timeout_ms":600000}       │                    │
+│Run mode: Continue q│- unchanged shared user default agent_network: false                        │                    │
+│Planner approval: Au│- unchanged shared user default check_before_task: true                     │                    │
+│Delivery: local via │- unchanged shared user default check_timeout_ms: 600000                    │                    │
+│Dependencies: manual│- unchanged shared user default default_profile: none                       │isite is missing.   │
+│CLI require declares│- unchanged shared user default delivery_mode: local                        │                    │
+│                    │- unchanged shared user default planner_approval: automatic                 │                    │
+│Defaults apply to ne│- unchanged shared user default run_mode: queue                             │                    │
+│u User defaults: wha│- unchanged shared build cache grace_secs: 600                              │                    │
+│f Profiles: named ro│- unchanged shared build cache keep_generations: 3                          │                    │
+│w Work categories: t│- unchanged shared build cache max_bytes: 17179869184                       │e, documents or art;│
+│override per project│- unchanged shared build cache max_files: 400000                            │                    │
+│L Review lenses: opt│- unchanged shared build cache min_free_bytes: 8589934592                   │ project's default  │
+│selection.          │- unchanged selected profile: none                                          │                    │
+│Checks: list, add, e│- unchanged agent network: false                                            │                    │
+│Keyboard remains ava│- unchanged check before task: true                                         │                    │
+│i Report limits: tim│- unchanged automatic provisioning: false                                   │efaults.            │
+│E Export settings an│- unchanged preferences mouse: true                                         │                    │
+│                    │- unchanged preferences run_mode: queue                                     │                    │
+╰────────────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │────────────────────╯
+[Copy] [m Defaults] [│                                                                            │ [g Git delivery]
+[k Storage] [R Limits│[Copy] [Apply] [Cancel] [Up] [Down]                                         │ttings]
+[e Preferences] [Esc │                                                                            │
+Exported 31 settings ╰────────────────────────────────────────────────────────────────────────────╯e/gina/app-ktask-set…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PREVIEW END · 120x36 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Curre╭ Import settings preview ───────────────────────────────────────────────────╮
+ No current task   | │- unchanged shared user default check_timeout_ms: 600000                    │
+ Queue preference · n│- unchanged shared user default default_profile: none                       │
+ Config              │- unchanged shared user default delivery_mode: local                        │
+                     │- unchanged shared user default planner_approval: automatic                 │
+╭ Config ────────────│- unchanged shared user default run_mode: queue                             │────────────────────╮
+│Project: app        │- unchanged shared build cache grace_secs: 600                              │                    │
+│Storage: SQLite outp│- unchanged shared build cache keep_generations: 3                          │esource limits.     │
+│Preferences: saved p│- unchanged shared build cache max_bytes: 17179869184                       │                    │
+│                    │- unchanged shared build cache max_files: 400000                            │                    │
+│Mouse: Enabled      │- unchanged shared build cache min_free_bytes: 8589934592                   │                    │
+│Run mode: Continue q│- unchanged selected profile: none                                          │                    │
+│Planner approval: Au│- unchanged agent network: false                                            │                    │
+│Delivery: local via │- unchanged check before task: true                                         │                    │
+│Dependencies: manual│- unchanged automatic provisioning: false                                   │isite is missing.   │
+│CLI require declares│- unchanged preferences mouse: true                                         │                    │
+│                    │- unchanged preferences run_mode: queue                                     │                    │
+│Defaults apply to ne│- unchanged preferences planner_approval: automatic                         │                    │
+│u User defaults: wha│- unchanged default lenses: []                                              │                    │
+│f Profiles: named ro│- unchanged delivery base_branch: main                                      │                    │
+│w Work categories: t│- unchanged delivery mode: local                                            │e, documents or art;│
+│override per project│- unchanged delivery remote: origin                                         │                    │
+│L Review lenses: opt│- unchanged retention days: 30                                              │ project's default  │
+│selection.          │- unchanged retention max_bytes: 8589934592                                 │                    │
+│Checks: list, add, e│- unchanged retention max_files: 100000                                     │                    │
+│Keyboard remains ava│- unchanged report limits cost_limit_microusd: 2000000                      │                    │
+│i Report limits: tim│- unchanged report limits time_limit_ms: 900000                             │efaults.            │
+│E Export settings an│- unchanged fix limits cost_limit_microusd: 5000000                         │                    │
+│                    │- unchanged fix limits time_limit_ms: 1800000                               │                    │
+╰────────────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │────────────────────╯
+[Copy] [m Defaults] [│                                                                            │ [g Git delivery]
+[k Storage] [R Limits│[Copy] [Apply] [Cancel] [Up] [Down]                                         │ttings]
+[e Preferences] [Esc │                                                                            │
+Exported 31 settings ╰────────────────────────────────────────────────────────────────────────────╯e/gina/app-ktask-set…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ IMPORTED · 120x36 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: app                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                                                                                                                      │
+│Mouse: Enabled                                                                                                        │
+│Run mode: Continue queue                                                                                              │
+│Planner approval: Automatic                                                                                           │
+│Delivery: local via origin/main                                                                                       │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing.   │
+│CLI require declares prerequisites before a task starts.                                                              │
+│                                                                                                                      │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                          │
+│u User defaults: what new projects start with; preview and apply them here.                                           │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                                │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art;│
+│override per project.                                                                                                 │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default  │
+│selection.                                                                                                            │
+│Checks: list, add, edit, enable or disable.                                                                           │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Settings imported
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PATH newer.json · 120x36 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: app                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                                                                                                                      │
+│Mouse: Enabled                                                                                                        │
+│Run mode: Continue q╭ Import settings · disk ────────────────────────────────────────────────────╮                    │
+│Planner approval: Au│Reads a file written by Export settings. A preview shows every setting      │                    │
+│Delivery: local via │before anything changes.                                                    │                    │
+│Dependencies: manual│Import replaces the settings the file names and keeps the rest; tasks and   │isite is missing.   │
+│CLI require declares│history stay.                                                               │                    │
+│                    │Source                                                                      │                    │
+│Defaults apply to ne│ask-screens-----------------------/ktask-test-scratch/run-000000/newer.json▏│                    │
+│u User defaults: wha│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│f Profiles: named ro│                                                                            │                    │
+│w Work categories: t│[Copy] [Apply] [Cancel] [Up] [Down]                                         │e, documents or art;│
+│override per project│                                                                            │                    │
+│L Review lenses: opt╰────────────────────────────────────────────────────────────────────────────╯ project's default  │
+│selection.                                                                                                            │
+│Checks: list, add, edit, enable or disable.                                                                           │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Settings imported
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ NEWER FILE · 120x36 · keyboard+mouse
+ ktask-dev  / app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: app                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                                                                                                                      │
+│Mouse: Enabled                                                                                                        │
+│Run mode: Continue q╭ Import settings · disk ────────────────────────────────────────────────────╮                    │
+│Planner approval: Au│Reads a file written by Export settings. A preview shows every setting      │                    │
+│Delivery: local via │before anything changes.                                                    │                    │
+│Dependencies: manual│Import replaces the settings the file names and keeps the rest; tasks and   │isite is missing.   │
+│CLI require declares│history stay.                                                               │                    │
+│                    │Source                                                                      │                    │
+│Defaults apply to ne│ask-screens-----------------------/ktask-test-scratch/run-000000/newer.json▏│                    │
+│u User defaults: wha│command conflict: Settings file format 2 is newer than this ktask reads     │                    │
+│f Profiles: named ro│(1); upgrade ktask to import it                                             │                    │
+│w Work categories: t│[Copy] [Apply] [Cancel] [Up] [Down]                                         │e, documents or art;│
+│override per project│                                                                            │                    │
+│L Review lenses: opt╰────────────────────────────────────────────────────────────────────────────╯ project's default  │
+│selection.                                                                                                            │
+│Checks: list, add, edit, enable or disable.                                                                           │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Settings imported
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

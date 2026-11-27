@@ -1,0 +1,138 @@
+@@ MINIMUM RUNNING · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · <t> |   Queue 3 · History 0
+ Run one preference · Next #2: Approve the queue interaction · m: run…
+ #1 Recover a failed check
+ Running (simulated) · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Include every task on the final…│
+│Attempt 2 · step <n>/6      ││Proof: All 240 tasks are reachable.   │
+│Budget 1 of 3 used          │╰──────────────────────────────────────╯
+│Model economy / medium      │╭ Log · following · attempt 2 ─────────╮
+│Cost <cost> (mock)          ││Executor: economy / medium · revision │
+╰────────────────────────────╯│1 · session 1 (mock)                  │
+╭ Activity · l: all ─────────╮│                                      │
+│• Current running ·         ││                                      │
+│  simulation only           ││                                      │
+│• Workspace #1: retained    ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+Current running · simulation only
+@@ MINIMUM PAUSED · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · <t> |   Queue 3 · History 0
+ Run one preference · Next #2: Approve the queue interaction · m: run…
+ #1 Recover a failed check
+ Paused · r Resume continues this attempt · s Stop returns it to Pendi
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Paused · AI                 ││Goal: Include every task on the final…│
+│Attempt 2 · step <n>/6      ││Proof: All 240 tasks are reachable.   │
+│Budget 1 of 3 used          │╰──────────────────────────────────────╯
+│Model economy / medium      │╭ Log · following · attempt 2 ─────────╮
+│Cost <cost> (mock)          ││Executor: economy / medium · revision │
+╰────────────────────────────╯│1 · session 1 (mock)                  │
+╭ Activity · l: all ─────────╮│Paused by user; progress retained     │
+│• Current paused · later    ││                                      │
+│  tasks will not start      ││                                      │
+│• Current running ·         ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models]
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Current paused · later tasks will not start
+@@ MINIMUM HUMAN · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 2 · History 1
+ Run one preference · Next #3: Choose the export format · m: run mode…
+ #2 Approve the queue interaction
+ Human task · D Mark done when it is done
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · Human             ││Goal: Inspect the queue and mark the …│
+│No attempts yet             ││Proof: A person confirms the interact…│
+│Budget 0 of 3 used          │╰──────────────────────────────────────╯
+│Model economy / medium      │╭ Log · following ─────────────────────╮
+│Cost <cost> (mock)          ││Human task: do the work, then D Mark  │
+╰────────────────────────────╯│done.                                 │
+╭ Activity · l: all ─────────╮│                                      │
+│• #1 done · Marked done by  ││                                      │
+│  owner                     ││                                      │
+│• Check failed · later      ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit]
+[b Break down] [u Readiness] [m Run mode] [Enter Details] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+#1 done · Marked done by owner
+@@ MINIMUM QUESTION SELECTED · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #3 · Needs input · <t> |   Queue 1 · History 2
+ Run one preference · last task · m: run mode in Current
+ #3 Choose the export format
+ The worker needs your answer · r Answer · s Stop returns it to Pendin
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Needs input · AI            ││Goal: Make the requested change.      │
+│Attempt 1 · step <n>/6      ││Proof: Automated checks pass.         │
+│Budget 0 of 3 used          │╰──────────────────────────────────────╯
+│Waiting for your answer · r │╭ Question from the worker · r: answer ╮
+│Model economy / medium      ││Which export format should be used?   │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+╭ Activity · l: all ─────────╮╭ Log · following · attempt 1 ─────────╮
+│• Current task needs your   ││Executor: inspected the task          │
+│  answer                    ││QUESTION: Which export format should  │
+│• Current running ·         ││be used?                              │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Answer] [s Stop] [T Restart] [D Mark done] [c Models]
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [o Report] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Current task needs your answer
+@@ MINIMUM QUESTION · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #3 · Needs input · <t> |   Queue 1 · History 2
+ Run one preference · last task · m: run mode in Current
+ #3 Choose the export format
+╭ Answer AI question ────────────────────────────────────────────────╮
+│Which export format should be used?                                 │
+│The answer is saved and the task continues.                         │
+│                                                                    │
+│                                                                    │
+│Answer                                                              │
+│▏                                                                   │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Answer] [s Stop] [T Restart] [D Mark done] [c Models]
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [o Report] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Sent 19 characters via OSC 52 · F7: native selection fallback
+@@ STATISTICS · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 3
+╭ Project statistics · simulated ────────────────────────────────────╮
+│Tasks: 3                                                            │
+│Queue: 0                                                            │
+│History: 3                                                          │
+│Completed: 3                                                        │
+│Failed attempts: 2                                                  │
+│Execution steps: 18                                                 │
+│Elapsed execution: <t> (simulated)                                  │
+│Total cost: $0.20 (simulated)                                       │
+│Cancelled: 0 · Superseded: 0                                        │
+│Wheel / PgUp / PgDn: scroll · Esc: close                            │
+│                                                                    │
+│[Copy] [Close] [Up] [Down]                                          │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix]
+[S Stats] [? Help] [q Quit]
+
+#3 completed · queue complete

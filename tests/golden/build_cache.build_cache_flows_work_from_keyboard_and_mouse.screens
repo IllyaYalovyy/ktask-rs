@@ -1,0 +1,462 @@
+@@ No current task · 100x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────╮
+│No current task.                                                                                  │
+│Set up this project first: u Readiness lists what is missing.                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Storage: SQLite · 100x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Not managed (opt in to clean) · 100x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects╭ Build cache ───────────────────────────────────────────────────────────────╮
+ No current│Managed: 0 B in 4 files (limit 16.0 GiB / 400000 files per cache) · free    │
+ Queue pref│<size> of <size>                                                            │
+ Config    │Owned:                                                                      │
+           │                                                                            │
+╭ Config ──│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/cach│──────────╮
+│Project: r│e/ktask-dev/scratch · scratch · 0 B · 4 files · per-run directories under   │          │
+│Storage: S│kernel leases; abandoned runs are reclaimed at startup and safe points      │hes · R:  │
+│resource l│Not managed (opt in to clean):                                              │          │
+│Preference│                                                                            │          │
+│          │/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/targ│          │
+│Mouse: Ena│et · build · 964.0 KiB · 218 files · project build cache created outside    │          │
+│Run mode: │ktask; run `cache adopt` to manage it                                       │          │
+│Planner ap│Pressure: 987136 bytes in unowned caches are outside the bound until adopted│          │
+│Delivery: │Never touched: Project sources, Git objects, stashes and worktrees;         │          │
+│Dependenci│Installed supervisor <checkout>                                             │ a        │
+│prerequisi│Evidence, transcripts and the SQLite database (see `storage`); Provider     │          │
+│          │Maximum bytes per cache                                                     │          │
+│Defaults a│17179869184▏                                                                │          │
+│u User def│Maximum files per cache                                                     │          │
+│f Profiles│400000                                                                      │          │
+│w Work cat│Warm generations kept                                                       │ediate    │
+│code, docu│3                                                                           │          │
+│L Review l│Action                                                                      │n) and the│
+│project's │< Save limits >   click / Space to change                                   │          │
+╰──────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────╯
+[Copy] [m D│                                                                            │[c Checks]
+[g Git deli│[Copy] [Apply] [Cancel] [Up] [Down]                                         │
+[E Export s│                                                                            │
+Runs happen╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Adopt project target · 100x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects╭ Build cache ───────────────────────────────────────────────────────────────╮
+ No current│Managed: 0 B in 4 files (limit 16.0 GiB / 400000 files per cache) · free    │
+ Queue pref│<size> of <size>                                                            │
+ Config    │Owned:                                                                      │
+           │                                                                            │
+╭ Config ──│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/cach│──────────╮
+│Project: r│e/ktask-dev/scratch · scratch · 0 B · 4 files · per-run directories under   │          │
+│Storage: S│kernel leases; abandoned runs are reclaimed at startup and safe points      │hes · R:  │
+│resource l│Not managed (opt in to clean):                                              │          │
+│Preference│                                                                            │          │
+│          │/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/targ│          │
+│Mouse: Ena│et · build · 964.0 KiB · 218 files · project build cache created outside    │          │
+│Run mode: │ktask; run `cache adopt` to manage it                                       │          │
+│Planner ap│Pressure: 987136 bytes in unowned caches are outside the bound until adopted│          │
+│Delivery: │Never touched: Project sources, Git objects, stashes and worktrees;         │          │
+│Dependenci│Installed supervisor <checkout>                                             │ a        │
+│prerequisi│Evidence, transcripts and the SQLite database (see `storage`); Provider     │          │
+│          │Maximum bytes per cache                                                     │          │
+│Defaults a│17179869184                                                                 │          │
+│u User def│Maximum files per cache                                                     │          │
+│f Profiles│400000                                                                      │          │
+│w Work cat│Warm generations kept                                                       │ediate    │
+│code, docu│3                                                                           │          │
+│L Review l│Action                                                                      │n) and the│
+│project's │< Adopt project target >   click / Space to change                          │          │
+╰──────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────╯
+[Copy] [m D│                                                                            │[c Checks]
+[g Git deli│[Copy] [Apply] [Cancel] [Up] [Down]                                         │
+[E Export s│                                                                            │
+Runs happen╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Adopt build cache? · 100x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preference╭ Adopt build cache? ────────────────────────────────────────────────────────╮          │
+│          │Take ownership of                                                           │          │
+│Mouse: Ena│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/targ│          │
+│Run mode: │et?                                                                         │          │
+│Planner ap│ktask will write an ownership marker there and may delete obsolete build    │          │
+│Delivery: │generations from it. It must be a Cargo target directory; the supervisor    │          │
+│Dependenci│executable, sources and Git data are never touched.                         │ a        │
+│prerequisi│Enter / Ctrl-S: confirm · Esc: cancel                                       │          │
+│          │                                                                            │          │
+│Defaults a│[Copy] [Confirm] [Cancel] [Up] [Down]                                       │          │
+│u User def│                                                                            │          │
+│f Profiles╰────────────────────────────────────────────────────────────────────────────╯          │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Build cache owned · 100x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Build cache owned: /tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/target
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Owned: · 100x32 · keyboard
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects╭ Build cache ───────────────────────────────────────────────────────────────╮
+ No current│Managed: 968.0 KiB in 223 files (limit 16.0 GiB / 400000 files per cache) · │
+ Queue pref│free <size> of <size>                                                       │
+ Config    │Owned:                                                                      │
+           │                                                                            │
+╭ Config ──│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/targ│──────────╮
+│Project: r│et · build · 968.0 KiB · 219 files · verified marker and registration;      │          │
+│Storage: S│obsolete generations retire automatically                                   │hes · R:  │
+│resource l│                                                                            │          │
+│Preference│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/cach│          │
+│          │e/ktask-dev/scratch · scratch · 0 B · 4 files · per-run directories under   │          │
+│Mouse: Ena│kernel leases; abandoned runs are reclaimed at startup and safe points      │          │
+│Run mode: │Never touched: Project sources, Git objects, stashes and worktrees;         │          │
+│Planner ap│Installed supervisor <checkout>                                             │          │
+│Delivery: │Evidence, transcripts and the SQLite database (see `storage`); Provider     │          │
+│Dependenci│session, credential and cache storage (reported separately; never cleaned); │ a        │
+│prerequisi│Other applications' data                                                    │          │
+│          │Maximum bytes per cache                                                     │          │
+│Defaults a│17179869184▏                                                                │          │
+│u User def│Maximum files per cache                                                     │          │
+│f Profiles│400000                                                                      │          │
+│w Work cat│Warm generations kept                                                       │ediate    │
+│code, docu│3                                                                           │          │
+│L Review l│Action                                                                      │n) and the│
+│project's │< Save limits >   click / Space to change                                   │          │
+╰──────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────╯
+[Copy] [m D│                                                                            │[c Checks]
+[g Git deli│[Copy] [Apply] [Cancel] [Up] [Down]                                         │
+[E Export s│                                                                            │
+Build cache╰────────────────────────────────────────────────────────────────────────────╯5/target
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Build cache limits saved · 100x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Build cache limits saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Clean obsolete · 100x32 · keyboard
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects╭ Build cache ───────────────────────────────────────────────────────────────╮
+ No current│Managed: 968.0 KiB in 223 files (limit 16.0 GiB / 400000 files per cache) · │
+ Queue pref│free <size> of <size>                                                       │
+ Config    │Owned:                                                                      │
+           │                                                                            │
+╭ Config ──│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/targ│──────────╮
+│Project: r│et · build · 968.0 KiB · 219 files · verified marker and registration;      │          │
+│Storage: S│obsolete generations retire automatically                                   │hes · R:  │
+│resource l│                                                                            │          │
+│Preference│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/cach│          │
+│          │e/ktask-dev/scratch · scratch · 0 B · 4 files · per-run directories under   │          │
+│Mouse: Ena│kernel leases; abandoned runs are reclaimed at startup and safe points      │          │
+│Run mode: │Never touched: Project sources, Git objects, stashes and worktrees;         │          │
+│Planner ap│Installed supervisor <checkout>                                             │          │
+│Delivery: │Evidence, transcripts and the SQLite database (see `storage`); Provider     │          │
+│Dependenci│session, credential and cache storage (reported separately; never cleaned); │ a        │
+│prerequisi│Other applications' data                                                    │          │
+│          │Maximum bytes per cache                                                     │          │
+│Defaults a│17179869184                                                                 │          │
+│u User def│Maximum files per cache                                                     │          │
+│f Profiles│400000                                                                      │          │
+│w Work cat│Warm generations kept                                                       │ediate    │
+│code, docu│1                                                                           │          │
+│L Review l│Action                                                                      │n) and the│
+│project's │< Clean obsolete >   click / Space to change                                │          │
+╰──────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────╯
+[Copy] [m D│                                                                            │[c Checks]
+[g Git deli│[Copy] [Apply] [Cancel] [Up] [Down]                                         │
+[E Export s│                                                                            │
+Build cache╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Clean build caches? · 100x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource l╭ Clean build caches? ───────────────────────────────────────────────────────╮          │
+│Preference│Retire obsolete generations and abandoned scratch in owned caches. Active   │          │
+│          │builds, open or running files, fresh output, final binaries and the         │          │
+│Mouse: Ena│installed supervisor are kept.                                              │          │
+│Run mode: │                                                                            │          │
+│Planner ap│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/targ│          │
+│Delivery: │et: 20 generation(s), 640.0 KiB to free (968.0 KiB → 328.0 KiB)             │          │
+│Dependenci│                                                                            │ a        │
+│prerequisi│Enter / Ctrl-S: confirm · Esc: cancel                                       │          │
+│          │                                                                            │          │
+│Defaults a│[Copy] [Confirm] [Cancel] [Up] [Down]                                       │          │
+│u User def│                                                                            │          │
+│f Profiles╰────────────────────────────────────────────────────────────────────────────╯          │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Build cache limits saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Build cache cleaned · 100x32 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Build cache cleaned: 640.0 KiB freed, 0 abandoned scratch run(s) reclaimed
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Clean obsolete · 100x32 · mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects╭ Build cache ───────────────────────────────────────────────────────────────╮
+ No current│Managed: 0 B in 4 files (limit 16.0 GiB / 400000 files per cache) · free    │
+ Queue pref│<size> of <size>                                                            │
+ Config    │Owned:                                                                      │
+           │                                                                            │
+╭ Config ──│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/cach│──────────╮
+│Project: r│e/ktask-dev/scratch · scratch · 0 B · 4 files · per-run directories under   │          │
+│Storage: S│kernel leases; abandoned runs are reclaimed at startup and safe points      │hes · R:  │
+│resource l│Not managed (opt in to clean):                                              │          │
+│Preference│                                                                            │          │
+│          │/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/targ│          │
+│Mouse: Ena│et · build · 964.0 KiB · 218 files · project build cache created outside    │          │
+│Run mode: │ktask; run `cache adopt` to manage it                                       │          │
+│Planner ap│Pressure: 987136 bytes in unowned caches are outside the bound until adopted│          │
+│Delivery: │Never touched: Project sources, Git objects, stashes and worktrees;         │          │
+│Dependenci│Installed supervisor <checkout>                                             │ a        │
+│prerequisi│Evidence, transcripts and the SQLite database (see `storage`); Provider     │          │
+│          │Maximum bytes per cache                                                     │          │
+│Defaults a│17179869184                                                                 │          │
+│u User def│Maximum files per cache                                                     │          │
+│f Profiles│400000                                                                      │          │
+│w Work cat│Warm generations kept                                                       │ediate    │
+│code, docu│3                                                                           │          │
+│L Review l│Action                                                                      │n) and the│
+│project's │< Clean obsolete >   click / Space to change                                │          │
+╰──────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────╯
+[Copy] [m D│                                                                            │[c Checks]
+[g Git deli│[Copy] [Apply] [Cancel] [Up] [Down]                                         │
+[E Export s│                                                                            │
+Runs happen╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Owned: · 100x32 · mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects╭ Build cache ───────────────────────────────────────────────────────────────╮
+ No current│Managed: 968.0 KiB in 223 files (limit 16.0 GiB / 400000 files per cache) · │
+ Queue pref│free <size> of <size>                                                       │
+ Config    │Owned:                                                                      │
+           │                                                                            │
+╭ Config ──│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/targ│──────────╮
+│Project: r│et · build · 968.0 KiB · 219 files · verified marker and registration;      │          │
+│Storage: S│obsolete generations retire automatically                                   │hes · R:  │
+│resource l│                                                                            │          │
+│Preference│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/cach│          │
+│          │e/ktask-dev/scratch · scratch · 0 B · 4 files · per-run directories under   │          │
+│Mouse: Ena│kernel leases; abandoned runs are reclaimed at startup and safe points      │          │
+│Run mode: │Never touched: Project sources, Git objects, stashes and worktrees;         │          │
+│Planner ap│Installed supervisor <checkout>                                             │          │
+│Delivery: │Evidence, transcripts and the SQLite database (see `storage`); Provider     │          │
+│Dependenci│session, credential and cache storage (reported separately; never cleaned); │ a        │
+│prerequisi│Other applications' data                                                    │          │
+│          │Maximum bytes per cache                                                     │          │
+│Defaults a│17179869184▏                                                                │          │
+│u User def│Maximum files per cache                                                     │          │
+│f Profiles│400000                                                                      │          │
+│w Work cat│Warm generations kept                                                       │ediate    │
+│code, docu│3                                                                           │          │
+│L Review l│Action                                                                      │n) and the│
+│project's │< Save limits >   click / Space to change                                   │          │
+╰──────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────╯
+[Copy] [m D│                                                                            │[c Checks]
+[g Git deli│[Copy] [Apply] [Cancel] [Up] [Down]                                         │
+[E Export s│                                                                            │
+Build cache╰────────────────────────────────────────────────────────────────────────────╯2/target
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Clean obsolete #2 · 100x32 · mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects╭ Build cache ───────────────────────────────────────────────────────────────╮
+ No current│Managed: 968.0 KiB in 223 files (limit 16.0 GiB / 400000 files per cache) · │
+ Queue pref│free <size> of <size>                                                       │
+ Config    │Owned:                                                                      │
+           │                                                                            │
+╭ Config ──│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/targ│──────────╮
+│Project: r│et · build · 968.0 KiB · 219 files · verified marker and registration;      │          │
+│Storage: S│obsolete generations retire automatically                                   │hes · R:  │
+│resource l│                                                                            │          │
+│Preference│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/cach│          │
+│          │e/ktask-dev/scratch · scratch · 0 B · 4 files · per-run directories under   │          │
+│Mouse: Ena│kernel leases; abandoned runs are reclaimed at startup and safe points      │          │
+│Run mode: │Never touched: Project sources, Git objects, stashes and worktrees;         │          │
+│Planner ap│Installed supervisor <checkout>                                             │          │
+│Delivery: │Evidence, transcripts and the SQLite database (see `storage`); Provider     │          │
+│Dependenci│session, credential and cache storage (reported separately; never cleaned); │ a        │
+│prerequisi│Other applications' data                                                    │          │
+│          │Maximum bytes per cache                                                     │          │
+│Defaults a│17179869184                                                                 │          │
+│u User def│Maximum files per cache                                                     │          │
+│f Profiles│400000                                                                      │          │
+│w Work cat│Warm generations kept                                                       │ediate    │
+│code, docu│1                                                                           │          │
+│L Review l│Action                                                                      │n) and the│
+│project's │< Clean obsolete >   click / Space to change                                │          │
+╰──────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────╯
+[Copy] [m D│                                                                            │[c Checks]
+[g Git deli│[Copy] [Apply] [Cancel] [Up] [Down]                                         │
+[E Export s│                                                                            │
+Build cache╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

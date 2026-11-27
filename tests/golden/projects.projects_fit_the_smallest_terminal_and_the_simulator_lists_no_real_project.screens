@@ -1,0 +1,46 @@
+@@ PROJECTS AT 70 x 22 · 70x22 · keyboard
+ ktask-dev  / beta-lib   SQLite · real tasks   Projects: 1 need you ·
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #221 · Needs approval   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Projects · 5 registered · 0 running · 1 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 3 / 5 · * open ─────────────╮╭ Project · click to open ─╮
+│    a-project-with-a-na… Idle           ││beta-lib · open           │
+│    alpha-app            Ready          ││/tmp/ktask-screens--------│
+│› * beta-lib             Needs approval ││---------------/ktask-test│
+│    delta-gone           Missing folder ││-scratch/run-000000/beta-l│
+│    gamma-docs           Idle           ││ib                        │
+│                                        ││                          │
+│                                        ││State: Needs approval     │
+│                                        ││Runner: not running       │
+│                                        ││Current: #221 Approve the │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix]
+[? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROJECTS IN THE SIMULATOR · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Projects · 0 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects ──────────────────────────────────────────────────────────╮
+│The simulator has one mock workspace.                               │
+│Start without --demo to list your projects.                         │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

@@ -1,0 +1,1509 @@
+@@ form · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Agent fixes · project ─────────────────────────────────────────────╮
+│An agent repairs this project on this host, records every change    │
+│and verifies the result. Apply shows what it may do before it       │
+│starts.                                                             │
+│No fixes yet.                                                       │
+│Fix                                                                 │
+│< New fix >   click / Space to change                               │
+│Carry out                                                           │
+│< The instruction below >   click / Space to change                 │
+│Instruction (when not a report)                                     │
+│                                                                    │
+│When verified                                                       │
+│< Leave the runner paused >   click / Space to change               │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ FIX FORM · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Agent fixes · project ─────────────────────────────────────────────╮
+│An agent repairs this project on this host, records every change    │
+│and verifies the result. Apply shows what it may do before it       │
+│starts.                                                             │
+│No fixes yet.                                                       │
+│Fix                                                                 │
+│< New fix >   click / Space to change                               │
+│Carry out                                                           │
+│< The instruction below >   click / Space to change                 │
+│Instruction (when not a report)                                     │
+│                                                                    │
+│When verified                                                       │
+│< Leave the runner paused >   click / Space to change               │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ CONFIRMATION · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Start agent fix · project? ────────────────────────────────────────╮
+│Project: project                                                    │
+│Instruction: Correct the build check                                │
+│When verified: leave the runner paused                              │
+│Model: codex/operator · 30m 00s · $5.00                             │
+│The runner is paused first.                                         │
+│May: use ktask commands for this project; repair its folder and Git │
+│state without discarding work; change this account's setup, never   │
+│with elevated privileges.                                           │
+│Never: delete or move projects, touch other projects, shut ktask    │
+│down, approve drafts unless told, or write product code (it adds    │
+│tasks).                                                             │
+│Enter / Ctrl-S: start the fix · Esc: cancel                         │
+│                                                                    │
+│[Copy] [Start fix] [Cancel] [Up] [Down]                             │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ SCROLLED TO write product code · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Start agent fix · project? ────────────────────────────────────────╮
+│Project: project                                                    │
+│Instruction: Correct the build check                                │
+│When verified: leave the runner paused                              │
+│Model: codex/operator · 30m 00s · $5.00                             │
+│The runner is paused first.                                         │
+│May: use ktask commands for this project; repair its folder and Git │
+│state without discarding work; change this account's setup, never   │
+│with elevated privileges.                                           │
+│Never: delete or move projects, touch other projects, shut ktask    │
+│down, approve drafts unless told, or write product code (it adds    │
+│tasks).                                                             │
+│Enter / Ctrl-S: start the fix · Esc: cancel                         │
+│                                                                    │
+│[Copy] [Start fix] [Cancel] [Up] [Down]                             │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ confirm · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Start agent fix · project? ────────────────────────────────────────╮
+│Project: project                                                    │
+│Instruction: Correct the build check                                │
+│When verified: leave the runner paused                              │
+│Model: codex/operator · 30m 00s · $5.00                             │
+│The runner is paused first.                                         │
+│May: use ktask commands for this project; repair its folder and Git │
+│state without discarding work; change this account's setup, never   │
+│with elevated privileges.                                           │
+│Never: delete or move projects, touch other projects, shut ktask    │
+│down, approve drafts unless told, or write product code (it adds    │
+│tasks).                                                             │
+│Enter / Ctrl-S: start the fix · Esc: cancel                         │
+│                                                                    │
+│[Copy] [Start fix] [Cancel] [Up] [Down]                             │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ LIVE FIX · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fix #2 · Running · project ──────────────────────────────────╮
+│Not known yet.                                                      │
+│                                                                    │
+│PROGRESS                                                            │
+│· Fixing from the owner's instruction · codex/operator · time limit │
+│30m 00s · cost limit $5.00                                          │
+│· Codex reports no cost, so the cost limit cannot end this run; the │
+│time limit bounds it                                                │
+│· Running check build: test -f no-such-file                         │
+│· Codex is repairing the project                                    │
+│» Fix agent read the records                                        │
+│  $ ls                                                              │
+│README.md                                                           │
+│exit 0                                                              │
+│                                                                    │
+│s stop · [ ] older/newer · b fixes · Esc: close, it keeps running   │
+│                                                                    │
+│[Copy] [s Stop] [Older] [Newer] [b Fixes] [Up] [Down] [Close]       │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #2 started · closing keeps it running
+@@ live · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fix #2 · Running · project ──────────────────────────────────╮
+│Not known yet.                                                      │
+│                                                                    │
+│PROGRESS                                                            │
+│· Fixing from the owner's instruction · codex/operator · time limit │
+│30m 00s · cost limit $5.00                                          │
+│· Codex reports no cost, so the cost limit cannot end this run; the │
+│time limit bounds it                                                │
+│· Running check build: test -f no-such-file                         │
+│· Codex is repairing the project                                    │
+│» Fix agent read the records                                        │
+│  $ ls                                                              │
+│README.md                                                           │
+│exit 0                                                              │
+│                                                                    │
+│s stop · [ ] older/newer · b fixes · Esc: close, it keeps running   │
+│                                                                    │
+│[Copy] [s Stop] [Older] [Newer] [b Fixes] [Up] [Down] [Close]       │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #2 started · closing keeps it running
+@@ FINISHED FIX · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fix #2 · Done · project ─────────────────────────────────────╮
+│Agent fix #2 · Done                                                 │
+│The runner stays paused (ktask run continues).                      │
+│                                                                    │
+│AGENT SUMMARY                                                       │
+│Fixture fix summary.                                                │
+│                                                                    │
+│VERIFICATION                                                        │
+│Verified: check build failed before and passes now                  │
+│- check build: before failed · after passed (after: exit 0)         │
+│                                                                    │
+│STEPS                                                               │
+│1. [applied] supervisor: Pause the project runner — no runner was   │
+│running; none starts while the fix works                            │
+│2. [applied] ktask: ktask check-set build --command 'test -f        │
+│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close│
+│                                                                    │
+│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #2 started · closing keeps it running
+@@ done · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fix #2 · Done · project ─────────────────────────────────────╮
+│Agent fix #2 · Done                                                 │
+│The runner stays paused (ktask run continues).                      │
+│                                                                    │
+│AGENT SUMMARY                                                       │
+│Fixture fix summary.                                                │
+│                                                                    │
+│VERIFICATION                                                        │
+│Verified: check build failed before and passes now                  │
+│- check build: before failed · after passed (after: exit 0)         │
+│                                                                    │
+│STEPS                                                               │
+│1. [applied] supervisor: Pause the project runner — no runner was   │
+│running; none starts while the fix works                            │
+│2. [applied] ktask: ktask check-set build --command 'test -f        │
+│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close│
+│                                                                    │
+│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #2 started · closing keeps it running
+@@ SCROLLED TO STEPS · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fix #2 · Done · project ─────────────────────────────────────╮
+│Agent fix #2 · Done                                                 │
+│The runner stays paused (ktask run continues).                      │
+│                                                                    │
+│AGENT SUMMARY                                                       │
+│Fixture fix summary.                                                │
+│                                                                    │
+│VERIFICATION                                                        │
+│Verified: check build failed before and passes now                  │
+│- check build: before failed · after passed (after: exit 0)         │
+│                                                                    │
+│STEPS                                                               │
+│1. [applied] supervisor: Pause the project runner — no runner was   │
+│running; none starts while the fix works                            │
+│2. [applied] ktask: ktask check-set build --command 'test -f        │
+│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close│
+│                                                                    │
+│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #2 started · closing keeps it running
+@@ SCROLLED TO CHANGED · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fix #2 · Done · project ─────────────────────────────────────╮
+│- check build: before failed · after passed (after: exit 0)         │
+│                                                                    │
+│STEPS                                                               │
+│1. [applied] supervisor: Pause the project runner — no runner was   │
+│running; none starts while the fix works                            │
+│2. [applied] ktask: ktask check-set build --command 'test -f        │
+│README.md' — Check saved: build                                     │
+│3. [left for the owner] supervisor: Continue the queue — the runner │
+│stays paused; ktask run continues the queue                         │
+│                                                                    │
+│CHANGED (files, settings, where work went)                          │
+│- setting check build: test -f no-such-file (timeout 600000 ms) ->  │
+│test -f README.md (timeout 600000 ms)                               │
+│                                                                    │
+│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close│
+│                                                                    │
+│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #2 started · closing keeps it running
+@@ SCROLLED TO WHAT REMAINS · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fix #2 · Done · project ─────────────────────────────────────╮
+│stays paused; ktask run continues the queue                         │
+│                                                                    │
+│CHANGED (files, settings, where work went)                          │
+│- setting check build: test -f no-such-file (timeout 600000 ms) ->  │
+│test -f README.md (timeout 600000 ms)                               │
+│                                                                    │
+│WHAT REMAINS                                                        │
+│- left for the owner: Continue the queue — the runner stays paused; │
+│ktask run continues the queue                                       │
+│                                                                    │
+│Instruction: Correct the build check                                │
+│When verified: leave the runner paused                              │
+│Requested by human: owner                                           │
+│Model: codex/operator                                               │
+│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close│
+│                                                                    │
+│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #2 started · closing keeps it running
+@@ remains · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fix #2 · Done · project ─────────────────────────────────────╮
+│stays paused; ktask run continues the queue                         │
+│                                                                    │
+│CHANGED (files, settings, where work went)                          │
+│- setting check build: test -f no-such-file (timeout 600000 ms) ->  │
+│test -f README.md (timeout 600000 ms)                               │
+│                                                                    │
+│WHAT REMAINS                                                        │
+│- left for the owner: Continue the queue — the runner stays paused; │
+│ktask run continues the queue                                       │
+│                                                                    │
+│Instruction: Correct the build check                                │
+│When verified: leave the runner paused                              │
+│Requested by human: owner                                           │
+│Model: codex/operator                                               │
+│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close│
+│                                                                    │
+│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #2 started · closing keeps it running
+@@ REPORT FORM · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Agent reports · project ───────────────────────────────────────────╮
+│A read-only agent investigates this project on this host and        │
+│reports what happened and how to fix it. It changes nothing.        │
+│Model: codex/operator · 15 min · $2.00                              │
+│1 report(s):                                                        │
+│#1 · Finished · <date> · Explain the current state                  │
+│Report                                                              │
+│< New report >   click / Space to change                            │
+│Question (blank: explain the current state)                         │
+│                                                                    │
+│Task ID (blank: current task)                                       │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Agent fix #2 started · closing keeps it running
+@@ REPORT WITH FIX BUTTON · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent report #1 · Finished · project ──────────────────────────────╮
+│Agent report #1 · Finished                                          │
+│                                                                    │
+│WHAT HAPPENED                                                       │
+│The check command is wrong.                                         │
+│                                                                    │
+│CAUSE                                                               │
+│It names a missing file.                                            │
+│                                                                    │
+│Shown by:                                                           │
+│- command ls: no such file                                          │
+│                                                                    │
+│PROPOSED FIX (nothing was applied)                                  │
+│1. [configuration change] ktask check-set build to test README.md   │
+│2. [owner only] Decide whether to keep the check                    │
+│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc│
+│                                                                    │
+│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]      │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #2 started · closing keeps it running
+@@ REPORT PRESELECTED · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fixes · project ─────────────────────────────────────────────╮
+│An agent repairs this project on this host, records every change    │
+│and verifies the result. Apply shows what it may do before it       │
+│starts.                                                             │
+│1 fix(es):                                                          │
+│#2 · fix · Done · <date> · Correct the build check                  │
+│Fix                                                                 │
+│< New fix >   click / Space to change                               │
+│Carry out                                                           │
+│< Report #1 · Explain the current state >   click / Space to change │
+│Instruction (when not a report)                                     │
+│                                                                    │
+│When verified                                                       │
+│< Leave the runner paused >   click / Space to change               │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Agent fix #2 started · closing keeps it running
+@@ REPORT CONFIRMATION · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Start agent fix · project? ────────────────────────────────────────╮
+│Project: project                                                    │
+│Carries out the proposed steps of report #1                         │
+│When verified: continue the queue                                   │
+│Model: codex/operator · 30m 00s · $5.00                             │
+│The runner is paused first.                                         │
+│May: use ktask commands for this project; repair its folder and Git │
+│state without discarding work; change this account's setup, never   │
+│with elevated privileges.                                           │
+│Never: delete or move projects, touch other projects, shut ktask    │
+│down, approve drafts unless told, or write product code (it adds    │
+│tasks).                                                             │
+│Enter / Ctrl-S: start the fix · Esc: cancel                         │
+│                                                                    │
+│[Copy] [Start fix] [Cancel] [Up] [Down]                             │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Agent fix #2 started · closing keeps it running
+@@ SECOND FIX · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fix #3 · Running · project ──────────────────────────────────╮
+│marks this step as the owner's                                      │
+│                                                                    │
+│PROGRESS                                                            │
+│· Fixing from report #1 · codex/operator · time limit 30m 00s ·     │
+│cost limit $5.00                                                    │
+│· Codex reports no cost, so the cost limit cannot end this run; the │
+│time limit bounds it                                                │
+│· Running check build: test -f README.md                            │
+│· Codex is repairing the project                                    │
+│» Fix agent read the records                                        │
+│  $ ls                                                              │
+│README.md                                                           │
+│exit 0                                                              │
+│                                                                    │
+│s stop · [ ] older/newer · b fixes · Esc: close, it keeps running   │
+│                                                                    │
+│[Copy] [s Stop] [Older] [Newer] [b Fixes] [Up] [Down] [Close]       │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #3 started · closing keeps it running
+@@ STOPPED FIX · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fix #3 · Stopped · project ──────────────────────────────────╮
+│Agent fix #3 · Stopped                                              │
+│NOT DONE: Stopped by owner                                          │
+│The runner stays paused.                                            │
+│                                                                    │
+│VERIFICATION                                                        │
+│Not verified: the fix ended before its verification                 │
+│- check build: before passed · after not run (before: exit 0)       │
+│                                                                    │
+│STEPS                                                               │
+│1. [applied] supervisor: Pause the project runner — no runner was   │
+│running; none starts while the fix works                            │
+│2. [left for the owner] supervisor: Decide whether to keep the      │
+│check — the report marks this step as the owner's                   │
+│3. [left for the owner] supervisor: Continue the queue — the runner │
+│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close│
+│                                                                    │
+│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #3: stop requested
+@@ OLDER FIX · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fix #2 · Done · project ─────────────────────────────────────╮
+│Agent fix #2 · Done                                                 │
+│The runner stays paused (ktask run continues).                      │
+│                                                                    │
+│AGENT SUMMARY                                                       │
+│Fixture fix summary.                                                │
+│                                                                    │
+│VERIFICATION                                                        │
+│Verified: check build failed before and passes now                  │
+│- check build: before failed · after passed (after: exit 0)         │
+│                                                                    │
+│STEPS                                                               │
+│1. [applied] supervisor: Pause the project runner — no runner was   │
+│running; none starts while the fix works                            │
+│2. [applied] ktask: ktask check-set build --command 'test -f        │
+│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close│
+│                                                                    │
+│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #3: stop requested
+@@ NEWER FIX · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fix #3 · Stopped · project ──────────────────────────────────╮
+│Agent fix #3 · Stopped                                              │
+│NOT DONE: Stopped by owner                                          │
+│The runner stays paused.                                            │
+│                                                                    │
+│VERIFICATION                                                        │
+│Not verified: the fix ended before its verification                 │
+│- check build: before passed · after not run (before: exit 0)       │
+│                                                                    │
+│STEPS                                                               │
+│1. [applied] supervisor: Pause the project runner — no runner was   │
+│running; none starts while the fix works                            │
+│2. [left for the owner] supervisor: Decide whether to keep the      │
+│check — the report marks this step as the owner's                   │
+│3. [left for the owner] supervisor: Continue the queue — the runner │
+│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close│
+│                                                                    │
+│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #3: stop requested
+@@ PROJECTS FORM · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fixes · project ─────────────────────────────────────────────╮
+│An agent repairs this project on this host, records every change    │
+│and verifies the result. Apply shows what it may do before it       │
+│starts.                                                             │
+│2 fix(es):                                                          │
+│#3 · fix · Stopped · <date> · Carry out report #1                   │
+│#2 · fix · Done · <date> · Correct the build check                  │
+│Fix                                                                 │
+│< New fix >   click / Space to change                               │
+│Carry out                                                           │
+│< The instruction below >   click / Space to change                 │
+│Instruction (when not a report)                                     │
+│                                                                    │
+│When verified                                                       │
+│< Leave the runner paused >   click / Space to change               │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PAST FIX · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fix #3 · Stopped · project ──────────────────────────────────╮
+│Agent fix #3 · Stopped                                              │
+│NOT DONE: Stopped by owner                                          │
+│The runner stays paused.                                            │
+│                                                                    │
+│VERIFICATION                                                        │
+│Not verified: the fix ended before its verification                 │
+│- check build: before passed · after not run (before: exit 0)       │
+│                                                                    │
+│STEPS                                                               │
+│1. [applied] supervisor: Pause the project runner — no runner was   │
+│running; none starts while the fix works                            │
+│2. [left for the owner] supervisor: Decide whether to keep the      │
+│check — the report marks this step as the owner's                   │
+│3. [left for the owner] supervisor: Continue the queue — the runner │
+│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close│
+│                                                                    │
+│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LIMITS FORM · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent report limits ───────────────────────────────────────────────╮
+│What one report or fix of this project may use; running ones keep   │
+│theirs.                                                             │
+│Codex reports no cost, so only the time limit bounds it.            │
+│The model is the operator role in m Defaults; unset, the            │
+│remediation model.                                                  │
+│Time limit per report (minutes)                                     │
+│15▏                                                                 │
+│Cost limit per report (USD)                                         │
+│2.00                                                                │
+│Time limit per fix (minutes)                                        │
+│30                                                                  │
+│Cost limit per fix (USD)                                            │
+│5.00                                                                │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #3: stop requested
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SCROLLED TO CHANGED · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fix #2 · Done · project ─────────────────────────────────────╮
+│VERIFICATION                                                        │
+│Verified: check build failed before and passes now                  │
+│- check build: before failed · after passed (after: exit 0)         │
+│                                                                    │
+│STEPS                                                               │
+│1. [applied] supervisor: Pause the project runner — no runner was   │
+│running; none starts while the fix works                            │
+│2. [applied] ktask: ktask check-set build --command 'test -f        │
+│README.md' — Check saved: build                                     │
+│3. [left for the owner] supervisor: Continue the queue — the runner │
+│stays paused; ktask run continues the queue                         │
+│                                                                    │
+│CHANGED (files, settings, where work went)                          │
+│- setting check build: test -f no-such-file (timeout 600000 ms) ->  │
+│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close│
+│                                                                    │
+│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #2 started · closing keeps it running
+@@ SCROLLED TO WHAT REMAINS · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fix #2 · Done · project ─────────────────────────────────────╮
+│                                                                    │
+│STEPS                                                               │
+│1. [applied] supervisor: Pause the project runner — no runner was   │
+│running; none starts while the fix works                            │
+│2. [applied] ktask: ktask check-set build --command 'test -f        │
+│README.md' — Check saved: build                                     │
+│3. [left for the owner] supervisor: Continue the queue — the runner │
+│stays paused; ktask run continues the queue                         │
+│                                                                    │
+│CHANGED (files, settings, where work went)                          │
+│- setting check build: test -f no-such-file (timeout 600000 ms) ->  │
+│test -f README.md (timeout 600000 ms)                               │
+│                                                                    │
+│WHAT REMAINS                                                        │
+│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close│
+│                                                                    │
+│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #2 started · closing keeps it running
+@@ remains · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Agent fix #2 · Done · project ─────────────────────────────────────╮
+│                                                                    │
+│STEPS                                                               │
+│1. [applied] supervisor: Pause the project runner — no runner was   │
+│running; none starts while the fix works                            │
+│2. [applied] ktask: ktask check-set build --command 'test -f        │
+│README.md' — Check saved: build                                     │
+│3. [left for the owner] supervisor: Continue the queue — the runner │
+│stays paused; ktask run continues the queue                         │
+│                                                                    │
+│CHANGED (files, settings, where work went)                          │
+│- setting check build: test -f no-such-file (timeout 600000 ms) ->  │
+│test -f README.md (timeout 600000 ms)                               │
+│                                                                    │
+│WHAT REMAINS                                                        │
+│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close│
+│                                                                    │
+│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #2 started · closing keeps it running
+@@ form · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Repair me
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Repair me                                                         │
+│No attempts yet                             ││Proof: Delivered                                                        │
+│Can run · u Readines╭ Agent fixes · project ─────────────────────────────────────────────────────╮────────────────────╯
+│Model codex/executio│An agent repairs this project on this host, records every change and        │────────────────────╮
+│Budget 0 of 3 used  │verifies the result. Apply shows what it may do before it starts.           │sor; this pane      │
+│                    │No fixes yet.                                                               │                    │
+│                    │Fix                                                                         │r this task.        │
+│                    │< New fix >   click / Space to change                                       │                    │
+│                    │Carry out                                                                   │                    │
+│                    │< The instruction below >   click / Space to change                         │                    │
+│                    │Instruction (when not a report)                                             │                    │
+│                    │                                                                            │                    │
+│                    │When verified                                                               │                    │
+╰────────────────────│< Leave the runner paused >   click / Space to change                       │                    │
+╭ Activity · #1 · l: │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│• #1 created: Repair│                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ FIX FORM · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Repair me
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Repair me                                                         │
+│No attempts yet                             ││Proof: Delivered                                                        │
+│Can run · u Readines╭ Agent fixes · project ─────────────────────────────────────────────────────╮────────────────────╯
+│Model codex/executio│An agent repairs this project on this host, records every change and        │────────────────────╮
+│Budget 0 of 3 used  │verifies the result. Apply shows what it may do before it starts.           │sor; this pane      │
+│                    │No fixes yet.                                                               │                    │
+│                    │Fix                                                                         │r this task.        │
+│                    │< New fix >   click / Space to change                                       │                    │
+│                    │Carry out                                                                   │                    │
+│                    │< The instruction below >   click / Space to change                         │                    │
+│                    │Instruction (when not a report)                                             │                    │
+│                    │                                                                            │                    │
+│                    │When verified                                                               │                    │
+╰────────────────────│< Leave the runner paused >   click / Space to change                       │                    │
+╭ Activity · #1 · l: │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│• #1 created: Repair│                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CONFIRMATION · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Repair me
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Repair me                                                         │
+│No attempts yet                             ││Proof: Delivered                                                        │
+│Can run · u Readiness                       │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/executio╭ Start agent fix · project? ────────────────────────────────────────────────╮────────────────────╮
+│Budget 0 of 3 used  │Project: project                                                            │sor; this pane      │
+│                    │Instruction: Correct the build check                                        │                    │
+│                    │When verified: leave the runner paused                                      │r this task.        │
+│                    │Model: codex/operator · 30m 00s · $5.00                                     │                    │
+│                    │The runner is paused first.                                                 │                    │
+│                    │May: use ktask commands for this project; repair its folder and Git state   │                    │
+│                    │without discarding work; change this account's setup, never with elevated   │                    │
+│                    │privileges.                                                                 │                    │
+│                    │Never: delete or move projects, touch other projects, shut ktask down,      │                    │
+╰────────────────────│approve drafts unless told, or write product code (it adds tasks).          │                    │
+╭ Activity · #1 · l: │Enter / Ctrl-S: start the fix · Esc: cancel                                 │                    │
+│• #1 created: Repair│                                                                            │                    │
+│                    │[Copy] [Start fix] [Cancel] [Up] [Down]                                     │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SCROLLED TO write product code · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Repair me
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Repair me                                                         │
+│No attempts yet                             ││Proof: Delivered                                                        │
+│Can run · u Readiness                       │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/executio╭ Start agent fix · project? ────────────────────────────────────────────────╮────────────────────╮
+│Budget 0 of 3 used  │Project: project                                                            │sor; this pane      │
+│                    │Instruction: Correct the build check                                        │                    │
+│                    │When verified: leave the runner paused                                      │r this task.        │
+│                    │Model: codex/operator · 30m 00s · $5.00                                     │                    │
+│                    │The runner is paused first.                                                 │                    │
+│                    │May: use ktask commands for this project; repair its folder and Git state   │                    │
+│                    │without discarding work; change this account's setup, never with elevated   │                    │
+│                    │privileges.                                                                 │                    │
+│                    │Never: delete or move projects, touch other projects, shut ktask down,      │                    │
+╰────────────────────│approve drafts unless told, or write product code (it adds tasks).          │                    │
+╭ Activity · #1 · l: │Enter / Ctrl-S: start the fix · Esc: cancel                                 │                    │
+│• #1 created: Repair│                                                                            │                    │
+│                    │[Copy] [Start fix] [Cancel] [Up] [Down]                                     │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ confirm · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Repair me
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Repair me                                                         │
+│No attempts yet                             ││Proof: Delivered                                                        │
+│Can run · u Readiness                       │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/executio╭ Start agent fix · project? ────────────────────────────────────────────────╮────────────────────╮
+│Budget 0 of 3 used  │Project: project                                                            │sor; this pane      │
+│                    │Instruction: Correct the build check                                        │                    │
+│                    │When verified: leave the runner paused                                      │r this task.        │
+│                    │Model: codex/operator · 30m 00s · $5.00                                     │                    │
+│                    │The runner is paused first.                                                 │                    │
+│                    │May: use ktask commands for this project; repair its folder and Git state   │                    │
+│                    │without discarding work; change this account's setup, never with elevated   │                    │
+│                    │privileges.                                                                 │                    │
+│                    │Never: delete or move projects, touch other projects, shut ktask down,      │                    │
+╰────────────────────│approve drafts unless told, or write product code (it adds tasks).          │                    │
+╭ Activity · #1 · l: │Enter / Ctrl-S: start the fix · Esc: cancel                                 │                    │
+│• #1 created: Repair│                                                                            │                    │
+│                    │[Copy] [Start fix] [Cancel] [Up] [Down]                                     │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LIVE FIX · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Agent fix #2 · Running · project ──────────────────────────────────────────╮
+ Current #1 · Pending│Cost: not reported (limit $5.00) · time limit 30m 00s                       │
+ Queue preference · l│                                                                            │
+ #1 Repair me        │VERIFICATION                                                                │
+ Ready · r Run queue;│Not verified yet.                                                           │
+╭ Status · Enter: det│- check build: before failed · after not run (before: exit 1)               │────────────────────╮
+│Pending · AI        │                                                                            │                    │
+│No attempts yet     │STEPS                                                                       │                    │
+│Can run · u Readines│1. [applied] supervisor: Pause the project runner — no runner was running;  │────────────────────╯
+│Model codex/executio│none starts while the fix works                                             │────────────────────╮
+│Budget 0 of 3 used  │                                                                            │sor; this pane      │
+│                    │CHANGED (files, settings, where work went)                                  │                    │
+│                    │Nothing recorded.                                                           │r this task.        │
+│                    │                                                                            │                    │
+│                    │WHAT REMAINS                                                                │                    │
+│                    │Not known yet.                                                              │                    │
+│                    │                                                                            │                    │
+│                    │PROGRESS                                                                    │                    │
+│                    │· Fixing from the owner's instruction · codex/operator · time limit 30m 00s │                    │
+╰────────────────────│· cost limit $5.00                                                          │                    │
+╭ Activity · #1 · l: │· Codex reports no cost, so the cost limit cannot end this run; the time    │                    │
+│• #1 created: Repair│limit bounds it                                                             │                    │
+│                    │· Running check build: test -f no-such-file                                 │                    │
+│                    │· Codex is repairing the project                                            │                    │
+│                    │» Fix agent read the records                                                │                    │
+│                    │  $ ls                                                                      │                    │
+│                    │README.md                                                                   │                    │
+│                    │exit 0                                                                      │                    │
+│                    │                                                                            │                    │
+╰────────────────────│s stop · [ ] older/newer · b fixes · Esc: close, it keeps running           │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [s Stop] [Older] [Newer] [b Fixes] [Up] [Down] [Close]               │
+                     │                                                                            │
+Agent fix #2 started ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ live · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Agent fix #2 · Running · project ──────────────────────────────────────────╮
+ Current #1 · Pending│Cost: not reported (limit $5.00) · time limit 30m 00s                       │
+ Queue preference · l│                                                                            │
+ #1 Repair me        │VERIFICATION                                                                │
+ Ready · r Run queue;│Not verified yet.                                                           │
+╭ Status · Enter: det│- check build: before failed · after not run (before: exit 1)               │────────────────────╮
+│Pending · AI        │                                                                            │                    │
+│No attempts yet     │STEPS                                                                       │                    │
+│Can run · u Readines│1. [applied] supervisor: Pause the project runner — no runner was running;  │────────────────────╯
+│Model codex/executio│none starts while the fix works                                             │────────────────────╮
+│Budget 0 of 3 used  │                                                                            │sor; this pane      │
+│                    │CHANGED (files, settings, where work went)                                  │                    │
+│                    │Nothing recorded.                                                           │r this task.        │
+│                    │                                                                            │                    │
+│                    │WHAT REMAINS                                                                │                    │
+│                    │Not known yet.                                                              │                    │
+│                    │                                                                            │                    │
+│                    │PROGRESS                                                                    │                    │
+│                    │· Fixing from the owner's instruction · codex/operator · time limit 30m 00s │                    │
+╰────────────────────│· cost limit $5.00                                                          │                    │
+╭ Activity · #1 · l: │· Codex reports no cost, so the cost limit cannot end this run; the time    │                    │
+│• #1 created: Repair│limit bounds it                                                             │                    │
+│                    │· Running check build: test -f no-such-file                                 │                    │
+│                    │· Codex is repairing the project                                            │                    │
+│                    │» Fix agent read the records                                                │                    │
+│                    │  $ ls                                                                      │                    │
+│                    │README.md                                                                   │                    │
+│                    │exit 0                                                                      │                    │
+│                    │                                                                            │                    │
+╰────────────────────│s stop · [ ] older/newer · b fixes · Esc: close, it keeps running           │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [s Stop] [Older] [Newer] [b Fixes] [Up] [Down] [Close]               │
+                     │                                                                            │
+Agent fix #2 started ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ FINISHED FIX · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Agent fix #2 · Done · project ─────────────────────────────────────────────╮
+ Current #1 · Pending│Agent fix #2 · Done                                                         │
+ Queue preference · l│The runner stays paused (ktask run continues).                              │
+ #1 Repair me        │                                                                            │
+ Ready · r Run queue;│AGENT SUMMARY                                                               │
+╭ Status · Enter: det│Fixture fix summary.                                                        │────────────────────╮
+│Pending · AI        │                                                                            │                    │
+│No attempts yet     │VERIFICATION                                                                │                    │
+│Can run · u Readines│Verified: check build failed before and passes now                          │────────────────────╯
+│Model codex/executio│- check build: before failed · after passed (after: exit 0)                 │────────────────────╮
+│Budget 0 of 3 used  │                                                                            │sor; this pane      │
+│                    │STEPS                                                                       │                    │
+│                    │1. [applied] supervisor: Pause the project runner — no runner was running;  │r this task.        │
+│                    │none starts while the fix works                                             │                    │
+│                    │2. [applied] ktask: ktask check-set build --command 'test -f README.md' —   │                    │
+│                    │Check saved: build                                                          │                    │
+│                    │3. [left for the owner] supervisor: Continue the queue — the runner stays   │                    │
+│                    │paused; ktask run continues the queue                                       │                    │
+│                    │                                                                            │                    │
+╰────────────────────│CHANGED (files, settings, where work went)                                  │                    │
+╭ Activity · #1 · l: │- setting check build: test -f no-such-file (timeout 600000 ms) -> test -f  │                    │
+│• #1 created: Repair│README.md (timeout 600000 ms)                                               │                    │
+│                    │                                                                            │                    │
+│                    │WHAT REMAINS                                                                │                    │
+│                    │- left for the owner: Continue the queue — the runner stays paused; ktask   │                    │
+│                    │run continues the queue                                                     │                    │
+│                    │                                                                            │                    │
+│                    │Instruction: Correct the build check                                        │                    │
+│                    │When verified: leave the runner paused                                      │                    │
+╰────────────────────│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close        │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                        │
+                     │                                                                            │
+Agent fix #2 started ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ done · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Agent fix #2 · Done · project ─────────────────────────────────────────────╮
+ Current #1 · Pending│Agent fix #2 · Done                                                         │
+ Queue preference · l│The runner stays paused (ktask run continues).                              │
+ #1 Repair me        │                                                                            │
+ Ready · r Run queue;│AGENT SUMMARY                                                               │
+╭ Status · Enter: det│Fixture fix summary.                                                        │────────────────────╮
+│Pending · AI        │                                                                            │                    │
+│No attempts yet     │VERIFICATION                                                                │                    │
+│Can run · u Readines│Verified: check build failed before and passes now                          │────────────────────╯
+│Model codex/executio│- check build: before failed · after passed (after: exit 0)                 │────────────────────╮
+│Budget 0 of 3 used  │                                                                            │sor; this pane      │
+│                    │STEPS                                                                       │                    │
+│                    │1. [applied] supervisor: Pause the project runner — no runner was running;  │r this task.        │
+│                    │none starts while the fix works                                             │                    │
+│                    │2. [applied] ktask: ktask check-set build --command 'test -f README.md' —   │                    │
+│                    │Check saved: build                                                          │                    │
+│                    │3. [left for the owner] supervisor: Continue the queue — the runner stays   │                    │
+│                    │paused; ktask run continues the queue                                       │                    │
+│                    │                                                                            │                    │
+╰────────────────────│CHANGED (files, settings, where work went)                                  │                    │
+╭ Activity · #1 · l: │- setting check build: test -f no-such-file (timeout 600000 ms) -> test -f  │                    │
+│• #1 created: Repair│README.md (timeout 600000 ms)                                               │                    │
+│                    │                                                                            │                    │
+│                    │WHAT REMAINS                                                                │                    │
+│                    │- left for the owner: Continue the queue — the runner stays paused; ktask   │                    │
+│                    │run continues the queue                                                     │                    │
+│                    │                                                                            │                    │
+│                    │Instruction: Correct the build check                                        │                    │
+│                    │When verified: leave the runner paused                                      │                    │
+╰────────────────────│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close        │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                        │
+                     │                                                                            │
+Agent fix #2 started ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SCROLLED TO STEPS · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Agent fix #2 · Done · project ─────────────────────────────────────────────╮
+ Current #1 · Pending│Agent fix #2 · Done                                                         │
+ Queue preference · l│The runner stays paused (ktask run continues).                              │
+ #1 Repair me        │                                                                            │
+ Ready · r Run queue;│AGENT SUMMARY                                                               │
+╭ Status · Enter: det│Fixture fix summary.                                                        │────────────────────╮
+│Pending · AI        │                                                                            │                    │
+│No attempts yet     │VERIFICATION                                                                │                    │
+│Can run · u Readines│Verified: check build failed before and passes now                          │────────────────────╯
+│Model codex/executio│- check build: before failed · after passed (after: exit 0)                 │────────────────────╮
+│Budget 0 of 3 used  │                                                                            │sor; this pane      │
+│                    │STEPS                                                                       │                    │
+│                    │1. [applied] supervisor: Pause the project runner — no runner was running;  │r this task.        │
+│                    │none starts while the fix works                                             │                    │
+│                    │2. [applied] ktask: ktask check-set build --command 'test -f README.md' —   │                    │
+│                    │Check saved: build                                                          │                    │
+│                    │3. [left for the owner] supervisor: Continue the queue — the runner stays   │                    │
+│                    │paused; ktask run continues the queue                                       │                    │
+│                    │                                                                            │                    │
+╰────────────────────│CHANGED (files, settings, where work went)                                  │                    │
+╭ Activity · #1 · l: │- setting check build: test -f no-such-file (timeout 600000 ms) -> test -f  │                    │
+│• #1 created: Repair│README.md (timeout 600000 ms)                                               │                    │
+│                    │                                                                            │                    │
+│                    │WHAT REMAINS                                                                │                    │
+│                    │- left for the owner: Continue the queue — the runner stays paused; ktask   │                    │
+│                    │run continues the queue                                                     │                    │
+│                    │                                                                            │                    │
+│                    │Instruction: Correct the build check                                        │                    │
+│                    │When verified: leave the runner paused                                      │                    │
+╰────────────────────│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close        │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                        │
+                     │                                                                            │
+Agent fix #2 started ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SCROLLED TO CHANGED · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Agent fix #2 · Done · project ─────────────────────────────────────────────╮
+ Current #1 · Pending│Agent fix #2 · Done                                                         │
+ Queue preference · l│The runner stays paused (ktask run continues).                              │
+ #1 Repair me        │                                                                            │
+ Ready · r Run queue;│AGENT SUMMARY                                                               │
+╭ Status · Enter: det│Fixture fix summary.                                                        │────────────────────╮
+│Pending · AI        │                                                                            │                    │
+│No attempts yet     │VERIFICATION                                                                │                    │
+│Can run · u Readines│Verified: check build failed before and passes now                          │────────────────────╯
+│Model codex/executio│- check build: before failed · after passed (after: exit 0)                 │────────────────────╮
+│Budget 0 of 3 used  │                                                                            │sor; this pane      │
+│                    │STEPS                                                                       │                    │
+│                    │1. [applied] supervisor: Pause the project runner — no runner was running;  │r this task.        │
+│                    │none starts while the fix works                                             │                    │
+│                    │2. [applied] ktask: ktask check-set build --command 'test -f README.md' —   │                    │
+│                    │Check saved: build                                                          │                    │
+│                    │3. [left for the owner] supervisor: Continue the queue — the runner stays   │                    │
+│                    │paused; ktask run continues the queue                                       │                    │
+│                    │                                                                            │                    │
+╰────────────────────│CHANGED (files, settings, where work went)                                  │                    │
+╭ Activity · #1 · l: │- setting check build: test -f no-such-file (timeout 600000 ms) -> test -f  │                    │
+│• #1 created: Repair│README.md (timeout 600000 ms)                                               │                    │
+│                    │                                                                            │                    │
+│                    │WHAT REMAINS                                                                │                    │
+│                    │- left for the owner: Continue the queue — the runner stays paused; ktask   │                    │
+│                    │run continues the queue                                                     │                    │
+│                    │                                                                            │                    │
+│                    │Instruction: Correct the build check                                        │                    │
+│                    │When verified: leave the runner paused                                      │                    │
+╰────────────────────│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close        │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                        │
+                     │                                                                            │
+Agent fix #2 started ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SCROLLED TO WHAT REMAINS · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Agent fix #2 · Done · project ─────────────────────────────────────────────╮
+ Current #1 · Pending│Agent fix #2 · Done                                                         │
+ Queue preference · l│The runner stays paused (ktask run continues).                              │
+ #1 Repair me        │                                                                            │
+ Ready · r Run queue;│AGENT SUMMARY                                                               │
+╭ Status · Enter: det│Fixture fix summary.                                                        │────────────────────╮
+│Pending · AI        │                                                                            │                    │
+│No attempts yet     │VERIFICATION                                                                │                    │
+│Can run · u Readines│Verified: check build failed before and passes now                          │────────────────────╯
+│Model codex/executio│- check build: before failed · after passed (after: exit 0)                 │────────────────────╮
+│Budget 0 of 3 used  │                                                                            │sor; this pane      │
+│                    │STEPS                                                                       │                    │
+│                    │1. [applied] supervisor: Pause the project runner — no runner was running;  │r this task.        │
+│                    │none starts while the fix works                                             │                    │
+│                    │2. [applied] ktask: ktask check-set build --command 'test -f README.md' —   │                    │
+│                    │Check saved: build                                                          │                    │
+│                    │3. [left for the owner] supervisor: Continue the queue — the runner stays   │                    │
+│                    │paused; ktask run continues the queue                                       │                    │
+│                    │                                                                            │                    │
+╰────────────────────│CHANGED (files, settings, where work went)                                  │                    │
+╭ Activity · #1 · l: │- setting check build: test -f no-such-file (timeout 600000 ms) -> test -f  │                    │
+│• #1 created: Repair│README.md (timeout 600000 ms)                                               │                    │
+│                    │                                                                            │                    │
+│                    │WHAT REMAINS                                                                │                    │
+│                    │- left for the owner: Continue the queue — the runner stays paused; ktask   │                    │
+│                    │run continues the queue                                                     │                    │
+│                    │                                                                            │                    │
+│                    │Instruction: Correct the build check                                        │                    │
+│                    │When verified: leave the runner paused                                      │                    │
+╰────────────────────│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close        │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                        │
+                     │                                                                            │
+Agent fix #2 started ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ remains · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Agent fix #2 · Done · project ─────────────────────────────────────────────╮
+ Current #1 · Pending│Agent fix #2 · Done                                                         │
+ Queue preference · l│The runner stays paused (ktask run continues).                              │
+ #1 Repair me        │                                                                            │
+ Ready · r Run queue;│AGENT SUMMARY                                                               │
+╭ Status · Enter: det│Fixture fix summary.                                                        │────────────────────╮
+│Pending · AI        │                                                                            │                    │
+│No attempts yet     │VERIFICATION                                                                │                    │
+│Can run · u Readines│Verified: check build failed before and passes now                          │────────────────────╯
+│Model codex/executio│- check build: before failed · after passed (after: exit 0)                 │────────────────────╮
+│Budget 0 of 3 used  │                                                                            │sor; this pane      │
+│                    │STEPS                                                                       │                    │
+│                    │1. [applied] supervisor: Pause the project runner — no runner was running;  │r this task.        │
+│                    │none starts while the fix works                                             │                    │
+│                    │2. [applied] ktask: ktask check-set build --command 'test -f README.md' —   │                    │
+│                    │Check saved: build                                                          │                    │
+│                    │3. [left for the owner] supervisor: Continue the queue — the runner stays   │                    │
+│                    │paused; ktask run continues the queue                                       │                    │
+│                    │                                                                            │                    │
+╰────────────────────│CHANGED (files, settings, where work went)                                  │                    │
+╭ Activity · #1 · l: │- setting check build: test -f no-such-file (timeout 600000 ms) -> test -f  │                    │
+│• #1 created: Repair│README.md (timeout 600000 ms)                                               │                    │
+│                    │                                                                            │                    │
+│                    │WHAT REMAINS                                                                │                    │
+│                    │- left for the owner: Continue the queue — the runner stays paused; ktask   │                    │
+│                    │run continues the queue                                                     │                    │
+│                    │                                                                            │                    │
+│                    │Instruction: Correct the build check                                        │                    │
+│                    │When verified: leave the runner paused                                      │                    │
+╰────────────────────│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close        │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                        │
+                     │                                                                            │
+Agent fix #2 started ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ REPORT FORM · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Repair me
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Repair me                                                         │
+│No attempts yet                             ││Proof: Delivered                                                        │
+│Can run · u Readines╭ Agent reports · project ───────────────────────────────────────────────────╮────────────────────╯
+│Model codex/executio│A read-only agent investigates this project on this host and reports what   │────────────────────╮
+│Budget 0 of 3 used  │happened and how to fix it. It changes nothing.                             │sor; this pane      │
+│                    │Model: codex/operator · 15 min · $2.00                                      │                    │
+│                    │1 report(s):                                                                │r this task.        │
+│                    │#1 · Finished · <date> · Explain the current state                          │                    │
+│                    │Report                                                                      │                    │
+│                    │< New report >   click / Space to change                                    │                    │
+│                    │Question (blank: explain the current state)                                 │                    │
+│                    │                                                                            │                    │
+│                    │Task ID (blank: current task)                                               │                    │
+╰────────────────────│                                                                            │                    │
+╭ Activity · #1 · l: │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│• agent fix #2: ktas│                                                                            │                    │
+│  --command 'test -f│[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│• #1 created: Repair│                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Agent fix #2 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ REPORT WITH FIX BUTTON · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Agent report #1 · Finished · project ──────────────────────────────────────╮
+ Current #1 · Pending│Agent report #1 · Finished                                                  │
+ Queue preference · l│                                                                            │
+ #1 Repair me        │WHAT HAPPENED                                                               │
+ Ready · r Run queue;│The check command is wrong.                                                 │
+╭ Status · Enter: det│                                                                            │────────────────────╮
+│Pending · AI        │CAUSE                                                                       │                    │
+│No attempts yet     │It names a missing file.                                                    │                    │
+│Can run · u Readines│                                                                            │────────────────────╯
+│Model codex/executio│Shown by:                                                                   │────────────────────╮
+│Budget 0 of 3 used  │- command ls: no such file                                                  │sor; this pane      │
+│                    │                                                                            │                    │
+│                    │PROPOSED FIX (nothing was applied)                                          │r this task.        │
+│                    │1. [configuration change] ktask check-set build to test README.md           │                    │
+│                    │2. [owner only] Decide whether to keep the check                            │                    │
+│                    │                                                                            │                    │
+│                    │Question: Explain the current state                                         │                    │
+│                    │Task: the current task                                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+╰────────────────────│Model: codex/operator                                                       │                    │
+╭ Activity · #1 · l: │Started <date> · took <t>                                                   │                    │
+│• agent fix #2: ktas│Usage: tokens in 100 · cache read 20 · cache write 0 · out 30               │                    │
+│  --command 'test -f│Cost: not reported (limit $2.00) · time limit 15m 00s                       │                    │
+│• #1 created: Repair│                                                                            │                    │
+│                    │HOW IT WAS FOUND                                                            │                    │
+│                    │· Collecting ktask records · codex/operator · time limit 15m 00s · cost     │                    │
+│                    │limit $2.00                                                                 │                    │
+│                    │· Codex reports no cost, so the cost limit cannot end this run; the time    │                    │
+│                    │limit bounds it                                                             │                    │
+╰────────────────────│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc        │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]              │
+                     │                                                                            │
+Agent fix #2 started ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ REPORT PRESELECTED · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Repair me
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Repair me                                                         │
+│No attempts yet                             ││Proof: Delivered                                                        │
+│Can run · u Readines╭ Agent fixes · project ─────────────────────────────────────────────────────╮────────────────────╯
+│Model codex/executio│An agent repairs this project on this host, records every change and        │────────────────────╮
+│Budget 0 of 3 used  │verifies the result. Apply shows what it may do before it starts.           │sor; this pane      │
+│                    │1 fix(es):                                                                  │                    │
+│                    │#2 · fix · Done · <date> · Correct the build check                          │r this task.        │
+│                    │Fix                                                                         │                    │
+│                    │< New fix >   click / Space to change                                       │                    │
+│                    │Carry out                                                                   │                    │
+│                    │< Report #1 · Explain the current state >   click / Space to change         │                    │
+│                    │Instruction (when not a report)                                             │                    │
+│                    │                                                                            │                    │
+╰────────────────────│When verified                                                               │                    │
+╭ Activity · #1 · l: │< Leave the runner paused >   click / Space to change                       │                    │
+│• agent fix #2: ktas│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│  --command 'test -f│                                                                            │                    │
+│• #1 created: Repair│[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Agent fix #2 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ REPORT CONFIRMATION · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Repair me
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Repair me                                                         │
+│No attempts yet                             ││Proof: Delivered                                                        │
+│Can run · u Readiness                       │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/executio╭ Start agent fix · project? ────────────────────────────────────────────────╮────────────────────╮
+│Budget 0 of 3 used  │Project: project                                                            │sor; this pane      │
+│                    │Carries out the proposed steps of report #1                                 │                    │
+│                    │When verified: continue the queue                                           │r this task.        │
+│                    │Model: codex/operator · 30m 00s · $5.00                                     │                    │
+│                    │The runner is paused first.                                                 │                    │
+│                    │May: use ktask commands for this project; repair its folder and Git state   │                    │
+│                    │without discarding work; change this account's setup, never with elevated   │                    │
+│                    │privileges.                                                                 │                    │
+│                    │Never: delete or move projects, touch other projects, shut ktask down,      │                    │
+╰────────────────────│approve drafts unless told, or write product code (it adds tasks).          │                    │
+╭ Activity · #1 · l: │Enter / Ctrl-S: start the fix · Esc: cancel                                 │                    │
+│• agent fix #2: ktas│                                                                            │                    │
+│  --command 'test -f│[Copy] [Start fix] [Cancel] [Up] [Down]                                     │                    │
+│• #1 created: Repair│                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Agent fix #2 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SECOND FIX · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Agent fix #3 · Running · project ──────────────────────────────────────────╮
+ Current #1 · Pending│Not verified yet.                                                           │
+ Queue preference · l│- check build: before passed · after not run (before: exit 0)               │
+ #1 Repair me        │                                                                            │
+ Ready · r Run queue;│STEPS                                                                       │
+╭ Status · Enter: det│1. [applied] supervisor: Pause the project runner — no runner was running;  │────────────────────╮
+│Pending · AI        │none starts while the fix works                                             │                    │
+│No attempts yet     │2. [left for the owner] supervisor: Decide whether to keep the check — the  │                    │
+│Can run · u Readines│report marks this step as the owner's                                       │────────────────────╯
+│Model codex/executio│                                                                            │────────────────────╮
+│Budget 0 of 3 used  │CHANGED (files, settings, where work went)                                  │sor; this pane      │
+│                    │Nothing recorded.                                                           │                    │
+│                    │                                                                            │r this task.        │
+│                    │WHAT REMAINS                                                                │                    │
+│                    │- left for the owner: Decide whether to keep the check — the report marks   │                    │
+│                    │this step as the owner's                                                    │                    │
+│                    │                                                                            │                    │
+│                    │PROGRESS                                                                    │                    │
+│                    │· Fixing from report #1 · codex/operator · time limit 30m 00s · cost limit  │                    │
+╰────────────────────│$5.00                                                                       │                    │
+╭ Activity · #1 · l: │· Codex reports no cost, so the cost limit cannot end this run; the time    │                    │
+│• agent fix #2: ktas│limit bounds it                                                             │                    │
+│  --command 'test -f│· Running check build: test -f README.md                                    │                    │
+│• #1 created: Repair│· Codex is repairing the project                                            │                    │
+│                    │» Fix agent read the records                                                │                    │
+│                    │  $ ls                                                                      │                    │
+│                    │README.md                                                                   │                    │
+│                    │exit 0                                                                      │                    │
+│                    │                                                                            │                    │
+╰────────────────────│s stop · [ ] older/newer · b fixes · Esc: close, it keeps running           │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [s Stop] [Older] [Newer] [b Fixes] [Up] [Down] [Close]               │
+                     │                                                                            │
+Agent fix #3 started ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOPPED FIX · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Agent fix #3 · Stopped · project ──────────────────────────────────────────╮
+ Current #1 · Pending│Agent fix #3 · Stopped                                                      │
+ Queue preference · l│NOT DONE: Stopped by owner                                                  │
+ #1 Repair me        │The runner stays paused.                                                    │
+ Ready · r Run queue;│                                                                            │
+╭ Status · Enter: det│VERIFICATION                                                                │────────────────────╮
+│Pending · AI        │Not verified: the fix ended before its verification                         │                    │
+│No attempts yet     │- check build: before passed · after not run (before: exit 0)               │                    │
+│Can run · u Readines│                                                                            │────────────────────╯
+│Model codex/executio│STEPS                                                                       │────────────────────╮
+│Budget 0 of 3 used  │1. [applied] supervisor: Pause the project runner — no runner was running;  │sor; this pane      │
+│                    │none starts while the fix works                                             │                    │
+│                    │2. [left for the owner] supervisor: Decide whether to keep the check — the  │r this task.        │
+│                    │report marks this step as the owner's                                       │                    │
+│                    │3. [left for the owner] supervisor: Continue the queue — the runner stays   │                    │
+│                    │paused: the fix is not verified                                             │                    │
+│                    │                                                                            │                    │
+│                    │CHANGED (files, settings, where work went)                                  │                    │
+│                    │Nothing recorded.                                                           │                    │
+╰────────────────────│                                                                            │                    │
+╭ Activity · #1 · l: │WHAT REMAINS                                                                │                    │
+│• agent fix #2: ktas│- left for the owner: Decide whether to keep the check — the report marks   │                    │
+│  --command 'test -f│this step as the owner's                                                    │                    │
+│• #1 created: Repair│- left for the owner: Continue the queue — the runner stays paused: the fix │                    │
+│                    │is not verified                                                             │                    │
+│                    │                                                                            │                    │
+│                    │From: Carry out report #1                                                   │                    │
+│                    │When verified: continue the queue                                           │                    │
+│                    │Requested by human: owner                                                   │                    │
+╰────────────────────│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close        │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                        │
+                     │                                                                            │
+Agent fix #3: stop re╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ OLDER FIX · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Agent fix #2 · Done · project ─────────────────────────────────────────────╮
+ Current #1 · Pending│Agent fix #2 · Done                                                         │
+ Queue preference · l│The runner stays paused (ktask run continues).                              │
+ #1 Repair me        │                                                                            │
+ Ready · r Run queue;│AGENT SUMMARY                                                               │
+╭ Status · Enter: det│Fixture fix summary.                                                        │────────────────────╮
+│Pending · AI        │                                                                            │                    │
+│No attempts yet     │VERIFICATION                                                                │                    │
+│Can run · u Readines│Verified: check build failed before and passes now                          │────────────────────╯
+│Model codex/executio│- check build: before failed · after passed (after: exit 0)                 │────────────────────╮
+│Budget 0 of 3 used  │                                                                            │sor; this pane      │
+│                    │STEPS                                                                       │                    │
+│                    │1. [applied] supervisor: Pause the project runner — no runner was running;  │r this task.        │
+│                    │none starts while the fix works                                             │                    │
+│                    │2. [applied] ktask: ktask check-set build --command 'test -f README.md' —   │                    │
+│                    │Check saved: build                                                          │                    │
+│                    │3. [left for the owner] supervisor: Continue the queue — the runner stays   │                    │
+│                    │paused; ktask run continues the queue                                       │                    │
+│                    │                                                                            │                    │
+╰────────────────────│CHANGED (files, settings, where work went)                                  │                    │
+╭ Activity · #1 · l: │- setting check build: test -f no-such-file (timeout 600000 ms) -> test -f  │                    │
+│• agent fix #2: ktas│README.md (timeout 600000 ms)                                               │                    │
+│  --command 'test -f│                                                                            │                    │
+│• #1 created: Repair│WHAT REMAINS                                                                │                    │
+│                    │- left for the owner: Continue the queue — the runner stays paused; ktask   │                    │
+│                    │run continues the queue                                                     │                    │
+│                    │                                                                            │                    │
+│                    │Instruction: Correct the build check                                        │                    │
+│                    │When verified: leave the runner paused                                      │                    │
+╰────────────────────│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close        │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                        │
+                     │                                                                            │
+Agent fix #3: stop re╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ NEWER FIX · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Agent fix #3 · Stopped · project ──────────────────────────────────────────╮
+ Current #1 · Pending│Agent fix #3 · Stopped                                                      │
+ Queue preference · l│NOT DONE: Stopped by owner                                                  │
+ #1 Repair me        │The runner stays paused.                                                    │
+ Ready · r Run queue;│                                                                            │
+╭ Status · Enter: det│VERIFICATION                                                                │────────────────────╮
+│Pending · AI        │Not verified: the fix ended before its verification                         │                    │
+│No attempts yet     │- check build: before passed · after not run (before: exit 0)               │                    │
+│Can run · u Readines│                                                                            │────────────────────╯
+│Model codex/executio│STEPS                                                                       │────────────────────╮
+│Budget 0 of 3 used  │1. [applied] supervisor: Pause the project runner — no runner was running;  │sor; this pane      │
+│                    │none starts while the fix works                                             │                    │
+│                    │2. [left for the owner] supervisor: Decide whether to keep the check — the  │r this task.        │
+│                    │report marks this step as the owner's                                       │                    │
+│                    │3. [left for the owner] supervisor: Continue the queue — the runner stays   │                    │
+│                    │paused: the fix is not verified                                             │                    │
+│                    │                                                                            │                    │
+│                    │CHANGED (files, settings, where work went)                                  │                    │
+│                    │Nothing recorded.                                                           │                    │
+╰────────────────────│                                                                            │                    │
+╭ Activity · #1 · l: │WHAT REMAINS                                                                │                    │
+│• agent fix #2: ktas│- left for the owner: Decide whether to keep the check — the report marks   │                    │
+│  --command 'test -f│this step as the owner's                                                    │                    │
+│• #1 created: Repair│- left for the owner: Continue the queue — the runner stays paused: the fix │                    │
+│                    │is not verified                                                             │                    │
+│                    │                                                                            │                    │
+│                    │From: Carry out report #1                                                   │                    │
+│                    │When verified: continue the queue                                           │                    │
+│                    │Requested by human: owner                                                   │                    │
+╰────────────────────│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close        │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                        │
+                     │                                                                            │
+Agent fix #3: stop re╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROJECTS FORM · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Projects · 1 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 1 / 1 · * open ───────────────────────────────────────────╮╭ Project · click to open ─────────────────────╮
+│› * project Ready   1 queued · #1 Repair me                           ││project · open                                │
+│                    ╭ Agent fixes · project ─────────────────────────────────────────────────────╮---------------/ktas│
+│                    │An agent repairs this project on this host, records every change and        │project             │
+│                    │verifies the result. Apply shows what it may do before it starts.           │                    │
+│                    │2 fix(es):                                                                  │                    │
+│                    │#3 · fix · Stopped · <date> · Carry out report #1                           │                    │
+│                    │#2 · fix · Done · <date> · Correct the build check                          │nding               │
+│                    │Fix                                                                         │ory: 0 finished     │
+│                    │< New fix >   click / Space to change                                       │                    │
+│                    │Carry out                                                                   │er returns to it.   │
+│                    │< The instruction below >   click / Space to change                         │                    │
+│                    │Instruction (when not a report)                                             │                    │
+│                    │                                                                            │                    │
+│                    │When verified                                                               │                    │
+│                    │< Leave the runner paused >   click / Space to change                       │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Agent fix #3: stop requested
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PAST FIX · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Agent fix #3 · Stopped · project ──────────────────────────────────────────╮
+ Current #1 · Pending│Agent fix #3 · Stopped                                                      │
+ Queue preference · l│NOT DONE: Stopped by owner                                                  │
+ Projects · 1 registe│The runner stays paused.                                                    │
+ Each project keeps i│                                                                            │
+╭ Projects · 1 / 1 · │VERIFICATION                                                                │────────────────────╮
+│› * project Ready   │Not verified: the fix ended before its verification                         │                    │
+│                    │- check build: before passed · after not run (before: exit 0)               │---------------/ktas│
+│                    │                                                                            │project             │
+│                    │STEPS                                                                       │                    │
+│                    │1. [applied] supervisor: Pause the project runner — no runner was running;  │                    │
+│                    │none starts while the fix works                                             │                    │
+│                    │2. [left for the owner] supervisor: Decide whether to keep the check — the  │nding               │
+│                    │report marks this step as the owner's                                       │ory: 0 finished     │
+│                    │3. [left for the owner] supervisor: Continue the queue — the runner stays   │                    │
+│                    │paused: the fix is not verified                                             │er returns to it.   │
+│                    │                                                                            │                    │
+│                    │CHANGED (files, settings, where work went)                                  │                    │
+│                    │Nothing recorded.                                                           │                    │
+│                    │                                                                            │                    │
+│                    │WHAT REMAINS                                                                │                    │
+│                    │- left for the owner: Decide whether to keep the check — the report marks   │                    │
+│                    │this step as the owner's                                                    │                    │
+│                    │- left for the owner: Continue the queue — the runner stays paused: the fix │                    │
+│                    │is not verified                                                             │                    │
+│                    │                                                                            │                    │
+│                    │From: Carry out report #1                                                   │                    │
+│                    │When verified: continue the queue                                           │                    │
+│                    │Requested by human: owner                                                   │                    │
+╰────────────────────│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close        │────────────────────╯
+[Copy] [Enter Open] [│                                                                            │
+                     │[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                        │
+                     │                                                                            │
+Agent fix #3: stop re╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LIMITS FORM · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                      │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved p╭ Agent report limits ───────────────────────────────────────────────────────╮                    │
+│                    │What one report or fix of this project may use; running ones keep theirs.   │                    │
+│Mouse: Enabled      │Codex reports no cost, so only the time limit bounds it.                    │                    │
+│Run mode: Continue q│The model is the operator role in m Defaults; unset, the remediation model. │                    │
+│Planner approval: Au│Time limit per report (minutes)                                             │                    │
+│Delivery: local via │15▏                                                                         │                    │
+│Dependencies: manual│Cost limit per report (USD)                                                 │isite is missing.   │
+│CLI require declares│2.00                                                                        │                    │
+│                    │Time limit per fix (minutes)                                                │                    │
+│Defaults apply to ne│30                                                                          │                    │
+│u User defaults: wha│Cost limit per fix (USD)                                                    │                    │
+│f Profiles: named ro│5.00                                                                        │                    │
+│w Work categories: t│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │e, documents or art;│
+│override per project│                                                                            │                    │
+│L Review lenses: opt│[Copy] [Apply] [Cancel] [Up] [Down]                                         │ project's default  │
+│selection.          │                                                                            │                    │
+│Checks: list, add, e╰────────────────────────────────────────────────────────────────────────────╯                    │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Agent fix #3: stop requested
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

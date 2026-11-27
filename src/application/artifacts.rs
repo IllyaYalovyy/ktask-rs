@@ -781,6 +781,7 @@ mod tests {
             &packet,
             &tree,
             "Review scope: fixture diff",
+            false,
         )?;
         assert!(summary.len() < 24 * 1024);
         assert!(!summary.contains("failure near the start"));
@@ -800,6 +801,7 @@ mod tests {
             &packet,
             &tree,
             "Review scope: fixture diff",
+            false,
         )?;
         assert_eq!(summary, summary2);
         // Finite storage budgets still reject oversized evidence before allocating memory.

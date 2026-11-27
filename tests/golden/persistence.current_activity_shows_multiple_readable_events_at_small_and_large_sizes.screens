@@ -1,0 +1,77 @@
+@@ CURRENT ACTIVITY · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Activity visibility
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · AI                ││Goal: Persist a real task             │
+│No attempts yet             ││Proof: Survives restart               │
+│Run blocked (6) · u Readines│╰──────────────────────────────────────╯
+│Model codex/activity-fixtur…│╭ Log · following ─────────────────────╮
+│Budget 0 of 1 used          ││Run is blocked. Press u Readiness for │
+╰────────────────────────────╯│each cause and a direct action.       │
+╭ Activity · #1 · l: all ────╮│Refresh after setup; Run retries from │
+│• Latest event detailed     ││Current.                              │
+│  context continues here    ││                                      │
+│• Event 8                   ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models]
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ CURRENT ACTIVITY · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Activity visibility
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Pending · AI                                ││Goal: Persist a real task                           │
+│No attempts yet                             ││Proof: Survives restart                             │
+│Run blocked (6) · u Readiness               │╰────────────────────────────────────────────────────╯
+│Model codex/activity-fixture-0 / none       │╭ Log · following ───────────────────────────────────╮
+│Budget 0 of 1 used                          ││Run is blocked. Press u Readiness for each cause    │
+│                                            ││and a direct action. Refresh after setup; Run       │
+│                                            ││retries from Current.                               │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #1 · l: all ────────────────────╮│                                                    │
+│• Latest event detailed context continues   ││                                                    │
+│  here                                      ││                                                    │
+│• Event 8                                   ││                                                    │
+│• Event 7                                   ││                                                    │
+│• Event 6                                   ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down]
+[u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help]
+[q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOPPED CURRENT ACTIVITY · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Activity visibility
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: Recorded failure                                            ┃
+┃Not resolved automatically: All 1 coding attempts are used.         ┃
+┃Next: r Retry restarts the attempt count; c Models raises the limit ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Failed · AI                 ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+╭ Activity · #1 · l: all ────╮╭ Report · attempt 1 · o: raw log ─────╮
+│• Stop event visible        ││Outcome: Recorded failure             │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models]
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [o Log] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…

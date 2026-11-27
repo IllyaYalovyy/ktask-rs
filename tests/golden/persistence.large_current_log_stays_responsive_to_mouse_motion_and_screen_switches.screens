@@ -1,0 +1,270 @@
+@@ LARGE CURRENT · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 201 · History
+ Queue preference · Next #2: Pending 0 · m: run mode in Current
+ #1 Large current log
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+│Step: Supervisor preparing …│╰──────────────────────────────────────╯
+│Tokens none reported yet    │╭ Log · following · attempt 1 ─────────╮
+│Model codex/fixture-model /…││move.                                 │
+╰────────────────────────────╯│Large task output: retain every line  │
+╭ Activity · #1 · l: all ────╮│without rewrapping on every pointer   │
+│• Current task attempt      ││move.                                 │
+│  recorded                  ││                                      │
+│• #1 created: Large current ││LAST LOG MARKER                       │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ POINTER FLOOD · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 201 · History
+ Queue preference · Next #2: Pending 0 · m: run mode in Current
+ Queue · 201 shown / 201 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 201 ───────────────────────╮╭ Details · click for full ╮
+│› #1   Running  Large current log       ││Large current log         │
+│  #2   Pending  Pending 0               ││#1 · Running · AI         │
+│  #3   Pending  Pending 1               ││                          │
+│  #4   Pending  Pending 2               ││Goal: Persist a real task │
+│  #5   Pending  Pending 3               ││                          │
+│  #6   Pending  Pending 4               ││Check: Survives restart   │
+│  #7   Pending  Pending 5               ││                          │
+│  #8   Pending  Pending 6               ││Attempts: 1 · none yet    │
+│  #9   Pending  Pending 7               ││                          │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [p Pause] [a Add] [i Insert] [s Stop] [T Restart] [D Mark done]
+[o Import] [E Export] [Enter Details] [f Filter] [/ Search]
+[Esc Clear] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ KEYBOARD QUEUE · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 201 · History
+ Queue preference · Next #2: Pending 0 · m: run mode in Current
+ Queue · 201 shown / 201 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 201 ───────────────────────╮╭ Details · click for full ╮
+│› #1   Running  Large current log       ││Large current log         │
+│  #2   Pending  Pending 0               ││#1 · Running · AI         │
+│  #3   Pending  Pending 1               ││                          │
+│  #4   Pending  Pending 2               ││Goal: Persist a real task │
+│  #5   Pending  Pending 3               ││                          │
+│  #6   Pending  Pending 4               ││Check: Survives restart   │
+│  #7   Pending  Pending 5               ││                          │
+│  #8   Pending  Pending 6               ││Attempts: 1 · none yet    │
+│  #9   Pending  Pending 7               ││                          │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [p Pause] [a Add] [i Insert] [s Stop] [T Restart] [D Mark done]
+[o Import] [E Export] [Enter Details] [f Filter] [/ Search]
+[Esc Clear] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CURRENT CACHE UPDATED · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 201 · History
+ Queue preference · Next #2: Pending 0 · m: run mode in Current
+ #1 Large current log
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+│Step: Supervisor preparing …│╰──────────────────────────────────────╯
+│Tokens none reported yet    │╭ Log · following · attempt 1 ─────────╮
+│Model codex/fixture-model /…││Large task output: retain every line  │
+╰────────────────────────────╯│without rewrapping on every pointer   │
+╭ Activity · #1 · l: all ────╮│move.                                 │
+│• Current task attempt      ││                                      │
+│  recorded                  ││LAST LOG MARKER                       │
+│• #1 created: Large current ││NEW OUTPUT INVALIDATES CACHE          │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ CURRENT REFRESH DURING HOVER · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 201 · History
+ Queue preference · Next #2: Pending 0 · m: run mode in Current
+ #1 Large current log
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+│Step: Supervisor preparing …│╰──────────────────────────────────────╯
+│Tokens none reported yet    │╭ Log · following · attempt 1 ─────────╮
+│Model codex/fixture-model /…││without rewrapping on every pointer   │
+╰────────────────────────────╯│move.                                 │
+╭ Activity · #1 · l: all ────╮│                                      │
+│• Current task attempt      ││LAST LOG MARKER                       │
+│  recorded                  ││NEW OUTPUT INVALIDATES CACHE          │
+│• #1 created: Large current ││OUTPUT DURING CONTINUOUS HOVER        │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ LARGE CURRENT · 120x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 201 · History 0
+ Queue preference · Next #2: Pending 0 · m: run mode in Current
+ #1 Large current log
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Persist a real task                                               │
+│Attempt 1                                   ││Proof: Survives restart                                                 │
+│Step: Supervisor preparing the next step    │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/fixture-model / none            │╭ Log · following · attempt 1 ───────────────────────────────────────────╮
+│Active <t>                                  ││pointer move.                                                           │
+│Tokens none reported yet                    ││Large task output: retain every line without rewrapping on every        │
+│none yet                                    ││pointer move.                                                           │
+│Budget 0 of 3 used                          ││Large task output: retain every line without rewrapping on every        │
+│                                            ││pointer move.                                                           │
+│                                            ││Large task output: retain every line without rewrapping on every        │
+╰────────────────────────────────────────────╯│pointer move.                                                           │
+╭ Activity · #1 · l: all ────────────────────╮│Large task output: retain every line without rewrapping on every        │
+│• Current task attempt recorded             ││pointer move.                                                           │
+│• #1 created: Large current log             ││Large task output: retain every line without rewrapping on every        │
+│                                            ││pointer move.                                                           │
+│                                            ││                                                                        │
+│                                            ││LAST LOG MARKER                                                         │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ POINTER FLOOD · 120x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 201 · History 0
+ Queue preference · Next #2: Pending 0 · m: run mode in Current
+ Queue · 201 shown / 201 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 201 · Model ─────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│› #1   Running  Large current log                  codex/fixture-model││Large current log                             │
+│  #2   Pending  Pending 0                          unconfigured       ││#1 · Running · AI                             │
+│  #3   Pending  Pending 1                          unconfigured       ││                                              │
+│  #4   Pending  Pending 2                          unconfigured       ││Goal: Persist a real task                     │
+│  #5   Pending  Pending 3                          unconfigured       ││                                              │
+│  #6   Pending  Pending 4                          unconfigured       ││Check: Survives restart                       │
+│  #7   Pending  Pending 5                          unconfigured       ││                                              │
+│  #8   Pending  Pending 6                          unconfigured       ││Attempts: 1 · none yet                        │
+│  #9   Pending  Pending 7                          unconfigured       ││                                              │
+│  #10  Pending  Pending 8                          unconfigured       ││Models:                                       │
+│  #11  Pending  Pending 9                          unconfigured       ││Execution: codex/fixture-model / none         │
+│  #12  Pending  Pending 10                         unconfigured       ││Review: codex/fixture-judge-1 / none          │
+│  #13  Pending  Pending 11                         unconfigured       ││Validation: codex/fixture-judge-2 / none      │
+│  #14  Pending  Pending 12                         unconfigured       ││Remediation: codex/fixture-judge-3 / none     │
+│  #15  Pending  Pending 13                         unconfigured       ││Attempt 1 · Running · Active <t>              │
+│  #16  Pending  Pending 14                         unconfigured       ││0 calls · uncached unknown · cache read       │
+│  #17  Pending  Pending 15                         unconfigured       ││unknown · cache write unknown · output unknown│
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [p Pause] [a Add] [i Insert] [s Stop] [T Restart] [D Mark done] [o Import] [E Export] [Enter Details] [f Filter]
+[/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ KEYBOARD QUEUE · 120x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 201 · History 0
+ Queue preference · Next #2: Pending 0 · m: run mode in Current
+ Queue · 201 shown / 201 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 201 · Model ─────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│› #1   Running  Large current log                  codex/fixture-model││Large current log                             │
+│  #2   Pending  Pending 0                          unconfigured       ││#1 · Running · AI                             │
+│  #3   Pending  Pending 1                          unconfigured       ││                                              │
+│  #4   Pending  Pending 2                          unconfigured       ││Goal: Persist a real task                     │
+│  #5   Pending  Pending 3                          unconfigured       ││                                              │
+│  #6   Pending  Pending 4                          unconfigured       ││Check: Survives restart                       │
+│  #7   Pending  Pending 5                          unconfigured       ││                                              │
+│  #8   Pending  Pending 6                          unconfigured       ││Attempts: 1 · none yet                        │
+│  #9   Pending  Pending 7                          unconfigured       ││                                              │
+│  #10  Pending  Pending 8                          unconfigured       ││Models:                                       │
+│  #11  Pending  Pending 9                          unconfigured       ││Execution: codex/fixture-model / none         │
+│  #12  Pending  Pending 10                         unconfigured       ││Review: codex/fixture-judge-1 / none          │
+│  #13  Pending  Pending 11                         unconfigured       ││Validation: codex/fixture-judge-2 / none      │
+│  #14  Pending  Pending 12                         unconfigured       ││Remediation: codex/fixture-judge-3 / none     │
+│  #15  Pending  Pending 13                         unconfigured       ││Attempt 1 · Running · Active <t>              │
+│  #16  Pending  Pending 14                         unconfigured       ││0 calls · uncached unknown · cache read       │
+│  #17  Pending  Pending 15                         unconfigured       ││unknown · cache write unknown · output unknown│
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [p Pause] [a Add] [i Insert] [s Stop] [T Restart] [D Mark done] [o Import] [E Export] [Enter Details] [f Filter]
+[/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CURRENT CACHE UPDATED · 120x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 201 · History 0
+ Queue preference · Next #2: Pending 0 · m: run mode in Current
+ #1 Large current log
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Persist a real task                                               │
+│Attempt 1                                   ││Proof: Survives restart                                                 │
+│Step: Supervisor preparing the next step    │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/fixture-model / none            │╭ Log · following · attempt 1 ───────────────────────────────────────────╮
+│Active <t>                                  ││Large task output: retain every line without rewrapping on every        │
+│Tokens none reported yet                    ││pointer move.                                                           │
+│none yet                                    ││Large task output: retain every line without rewrapping on every        │
+│Budget 0 of 3 used                          ││pointer move.                                                           │
+│                                            ││Large task output: retain every line without rewrapping on every        │
+│                                            ││pointer move.                                                           │
+╰────────────────────────────────────────────╯│Large task output: retain every line without rewrapping on every        │
+╭ Activity · #1 · l: all ────────────────────╮│pointer move.                                                           │
+│• Current task attempt recorded             ││Large task output: retain every line without rewrapping on every        │
+│• #1 created: Large current log             ││pointer move.                                                           │
+│                                            ││                                                                        │
+│                                            ││LAST LOG MARKER                                                         │
+│                                            ││NEW OUTPUT INVALIDATES CACHE                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CURRENT REFRESH DURING HOVER · 120x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 201 · History 0
+ Queue preference · Next #2: Pending 0 · m: run mode in Current
+ #1 Large current log
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Persist a real task                                               │
+│Attempt 1                                   ││Proof: Survives restart                                                 │
+│Step: Supervisor preparing the next step    │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/fixture-model / none            │╭ Log · following · attempt 1 ───────────────────────────────────────────╮
+│Active <t>                                  ││pointer move.                                                           │
+│Tokens none reported yet                    ││Large task output: retain every line without rewrapping on every        │
+│none yet                                    ││pointer move.                                                           │
+│Budget 0 of 3 used                          ││Large task output: retain every line without rewrapping on every        │
+│                                            ││pointer move.                                                           │
+│                                            ││Large task output: retain every line without rewrapping on every        │
+╰────────────────────────────────────────────╯│pointer move.                                                           │
+╭ Activity · #1 · l: all ────────────────────╮│Large task output: retain every line without rewrapping on every        │
+│• Current task attempt recorded             ││pointer move.                                                           │
+│• #1 created: Large current log             ││                                                                        │
+│                                            ││LAST LOG MARKER                                                         │
+│                                            ││NEW OUTPUT INVALIDATES CACHE                                            │
+│                                            ││OUTPUT DURING CONTINUOUS HOVER                                          │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

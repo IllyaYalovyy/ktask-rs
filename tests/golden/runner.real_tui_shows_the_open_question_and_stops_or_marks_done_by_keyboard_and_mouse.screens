@@ -1,0 +1,155 @@
+@@ QUESTION SCREEN · 100x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs input · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · waiting · Awaiting answer to current task
+ #1 Ask owner
+ The worker needs your answer · r Answer · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Needs input · AI                            ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Waiting for your answer · r Answer          │╰────────────────────────────────────────────────────╯
+│Model codex/remediation / none              │╭ Question from the worker · r: answer ──────────────╮
+│Active <t> · waited <t>                     ││Which content?                                      │
+│Tokens 60 new · 40 cached · 10 out          │╰────────────────────────────────────────────────────╯
+│70 new tokens + 1 call(s) unreported        │╭ Report · attempt 1 · o: raw log ───────────────────╮
+│Budget 0 of 3 used                          ││Outcome: Waiting                                    │
+│Can run · u Readiness                       ││                                                    │
+│Execution   ✓ succeeded                     ││Worker claim (unverified):                          │
+╰────────────────────────────────────────────╯│Need direction                                      │
+╭ Activity · #1 · l: all ────────────────────╮│                                                    │
+│• Supervisor yielded this attempt for resume││Remediation · waiting · codex/remediation verdict:  │
+│• Which content?                            ││Owner action is required before delivery can        │
+│• Workflow · Implement · repair round 0/10  ││continue                                            │
+│• Current task attempt recorded             ││                                                    │
+│• #1 created: Ask owner                     ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Answer] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ ATTEMPT STOPPED · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Queue · stopped · Stopped: Not worth answering
+ #1 Ask owner
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Model codex/remediation / none              │╰────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ───────────────────╮
+│Tokens 60 new · 40 cached · 10 out          ││Outcome: Stopped: Not worth answering               │
+│70 new tokens + 1 call(s) unreported        ││                                                    │
+│Budget 0 of 3 used                          ││Worker claim (unverified):                          │
+│Can run · u Readiness                       ││Need direction                                      │
+│Execution   ✓ succeeded                     ││                                                    │
+│Repair      ✓ succeeded                     ││Remediation · succeeded · codex/remediation         │
+╰────────────────────────────────────────────╯│verdict: Owner action is required before delivery   │
+╭ Activity · #1 · l: all ────────────────────╮│can continue                                        │
+│• Back to Pending; the next Run starts fresh││                                                    │
+│• Stopped: Not worth answering              ││Supervisor outcome: Stopped: Not worth answering    │
+│• Supervisor yielded this attempt for resume││                                                    │
+│• Which content?                            ││                                                    │
+│• Workflow · Implement · repair round 0/10  ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down]
+[u Readiness] [m Run mode] [Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+#1 stopped · back to Pending
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MARK DONE FORM · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs input · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · waiting · Awaiting answer to current task
+ #1 Ask owner
+ The worker needs your answer · r Answer · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Needs input · AI                            ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Waiting fo╭ Mark done #1 Ask owner ────────────────────────────────────────────────────╮──────────╯
+│Model code│Records the task as done by your decision and moves it to History.          │──────────╮
+│Active <t>│A live attempt stops first and its uncommitted changes are stashed; commit  │          │
+│Tokens 60 │them first to keep them in the tree.                                        │──────────╯
+│70 new tok│                                                                            │──────────╮
+│Budget 0 o│Reason (optional)                                                           │          │
+│Can run · │▏                                                                           │          │
+│Execution │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+╰──────────│                                                                            │          │
+╭ Activity │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│• Supervis│                                                                            │verdict:  │
+│• Which co╰────────────────────────────────────────────────────────────────────────────╯an        │
+│• Workflow · Implement · repair round 0/10  ││continue                                            │
+│• Current task attempt recorded             ││                                                    │
+│• #1 created: Ask owner                     ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Answer] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ AFTER MARK DONE · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                   │
+│Inspect results in History, or add more work.                                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+#1 marked done
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DONE IN HISTORY · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ History · 1 shown / 1 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 1 · Finished Attempts Time Usage ───────────────╮╭ Details · click for full ───────╮
+│› #1   Done     Ask owner <date> 1 <t> 70 tkn +1 ?             ││Ask owner                        │
+│                                                               ││#1 · Done · AI · finished <date> │
+│                                                               ││<date>                           │
+│                                                               ││                                 │
+│                                                               ││Goal: Create result.txt          │
+│                                                               ││containing verified              │
+│                                                               ││                                 │
+│                                                               ││Check: result.txt contains       │
+│                                                               ││verified                         │
+│                                                               ││                                 │
+│                                                               ││Attempts: 1 · 70 new tokens + 1  │
+│                                                               ││call(s) unreported               │
+│                                                               ││                                 │
+│                                                               ││Models:                          │
+│                                                               ││Execution: codex/execution / none│
+│                                                               ││Review: codex/review / none      │
+│                                                               ││Validation: codex/validation /   │
+╰───────────────────────────────────────────────────────────────╯╰─────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear]
+[E Export] [S Stats] [? Help] [q Quit]
+
+#1 marked done
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

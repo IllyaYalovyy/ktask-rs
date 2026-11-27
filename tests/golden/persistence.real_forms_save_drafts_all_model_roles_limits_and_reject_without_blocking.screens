@@ -1,0 +1,46 @@
+@@ STORED MODEL FORM · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task models and limits ────────────────────────────────────────────╮
+│Use provider/model: codex/…, claude/sonnet, opencode/vendor/model;  │
+│blank means unconfigured.                                           │
+│Execution provider/model                                            │
+│▏                                                                   │
+│Execution effort (blank = none)                                     │
+│                                                                    │
+│Review provider/model                                               │
+│                                                                    │
+│Review effort (blank = none)                                        │
+│                                                                    │
+│Validation provider/model                                           │
+│                                                                    │
+│Validation effort (blank = none)                                    │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Saved to SQLite
+@@ STORED MODEL LIMITS · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task models and limits ────────────────────────────────────────────╮
+│Use provider/model: codex/…, claude/sonnet, opencode/vendor/model;  │
+│blank means unconfigured.                                           │
+│Validation effort (blank = none)                                    │
+│high                                                                │
+│Remediation provider/model                                          │
+│codex/remediator                                                    │
+│Remediation effort (blank = none)                                   │
+│max                                                                 │
+│Attempt limit (blank = unlimited)                                   │
+│7                                                                   │
+│Task time limit (all attempts)                                      │
+│< 6 h >   click / Space to change                                   │
+│Stage time limit (one agent turn)                                   │
+│< 30 min >   click / Space to change                                │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Saved to SQLite

@@ -1,14 +1,53 @@
 //! A navigation packet, not a transcript dump. Full evidence stays in the archive.
 use super::*;
+use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     fs::File,
     io::{BufWriter, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 const PREVIEW_BYTES: usize = 12 * 1024;
+
+/// What a project's check names its report of new, changed and removed screens.
+pub(crate) const SCREEN_REPORT: &str = "changed-screens.txt";
+
+/// A project keeps an approved set of terminal screens as `tests/golden/*.screens`, and its
+/// check compares every recorded screen with it.
+pub(crate) fn has_golden_screens(project: &Path) -> bool {
+    std::fs::read_dir(project.join("tests/golden")).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|entry| entry.path().extension().is_some_and(|ext| ext == "screens"))
+    })
+}
+
+/// What the checks of the current source left to say about its screens.
+enum ScreenReport {
+    /// The report of new, changed and removed screens, as an artifact.
+    Available { id: i64, path: PathBuf },
+    /// Their evidence was archived completely and holds no report.
+    NothingChanged,
+    /// A report cannot be read, or may be among files that were not archived.
+    Unavailable,
+}
+
+/// What judges are told about the screens of a project with a golden set.
+fn screen_evidence(report: &ScreenReport) -> String {
+    let report = match report {
+        ScreenReport::Available { id, path } => format!(
+            "The changed-screens report, artifact #{id} at {}, is the only screen evidence: it holds the before and after text of every new, changed or removed screen. Page or search it with the evidence command and judge those new and changed screens against the criteria; a removed screen needs a reason in the change.",
+            path.display()
+        ),
+        ScreenReport::NothingChanged => "No changed-screens report is archived for the current source tree, whose check evidence is complete: that is how the check says that no screen is new, changed or removed, so there is no screen to review.".into(),
+        ScreenReport::Unavailable => "The changed-screens report of the current source tree is unavailable: it is missing, pruned, or the check's evidence is incomplete. New and changed screens could not be reviewed, and this missing evidence blocks acceptance.".into(),
+    };
+    format!(
+        "Screen evidence: this project keeps an approved set of terminal screens in tests/golden, and its check compares every recorded screen with it. Screens that match the approved set were verified in code against it; do not reread them, the .screens files or their diff. {report}\n"
+    )
+}
 
 fn record(out: &mut impl Write, value: &Value) -> Result<()> {
     serde_json::to_writer(&mut *out, value).map_err(|e| Error::Conflict(e.to_string()))?;
@@ -17,6 +56,64 @@ fn record(out: &mut impl Write, value: &Value) -> Result<()> {
 }
 
 impl Service {
+    /// Looks at the latest run of each check on `tree`, a reused result standing for the
+    /// run it reused. Only a report one of them kept, or all their evidence collected
+    /// completely without one, says anything about the screens.
+    fn screen_report(&self, attempt: i64, archive: &Path, tree: &str) -> Result<ScreenReport> {
+        let db = self.db.connection();
+        let mut checks = db.prepare(
+            "SELECT s.state,o.attempt_id,o.id FROM attempt_steps s
+             JOIN attempt_steps o ON o.id=coalesce(s.reused_from_step_id,s.id)
+             WHERE s.id IN (SELECT max(id) FROM attempt_steps
+                 WHERE attempt_id=?1 AND role='check' AND source_tree=?2 GROUP BY check_name)
+             ORDER BY s.id DESC",
+        )?;
+        let checks = checks
+            .query_map(params![attempt, tree], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut complete = !checks.is_empty();
+        for (state, origin, step) in checks {
+            let prefix = format!("evidence/attempt-{origin}/step-{step}");
+            let report = db
+                .query_row(
+                    "SELECT id,relative_path,pruned_at_ms IS NOT NULL FROM artifacts
+                     WHERE attempt_id=?1 AND relative_path GLOB ?2 AND name=?3 ORDER BY id DESC",
+                    params![origin, format!("{prefix}/*"), SCREEN_REPORT],
+                    |r| Ok((r.get(0)?, r.get::<_, String>(1)?, r.get::<_, bool>(2)?)),
+                )
+                .optional()?;
+            if let Some((id, relative, pruned)) = report {
+                let path = (!pruned)
+                    .then(|| super::queries::retained_artifact_path(archive, &relative))
+                    .flatten()
+                    .filter(|path| path.is_file());
+                return Ok(path.map_or(ScreenReport::Unavailable, |path| {
+                    ScreenReport::Available { id, path }
+                }));
+            }
+            let collection: Option<String> = db
+                .query_row(
+                    "SELECT state FROM evidence_collections
+                     WHERE attempt_id=?1 AND relative_prefix=?2 AND source_tree=?3 ORDER BY id DESC",
+                    params![origin, prefix, tree],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            complete &= state == "succeeded" && collection.as_deref() == Some("complete");
+        }
+        Ok(if complete {
+            ScreenReport::NothingChanged
+        } else {
+            ScreenReport::Unavailable
+        })
+    }
+
     /// Materialize a read-only snapshot for one model turn. No log payload is read here.
     /// Every index row links to complete evidence; missing and historical records stay explicit.
     pub fn review_bundle(
@@ -26,6 +123,7 @@ impl Service {
         folder: &Path,
         tree: &str,
         context: &str,
+        golden_screens: bool,
     ) -> Result<String> {
         let db = self.db.connection();
         let (task, revision): (i64, i64) = db.query_row(
@@ -69,6 +167,11 @@ impl Service {
             )?;
         }
         artifacts.flush()?;
+        let screens = if golden_screens {
+            screen_evidence(&self.screen_report(attempt, archive, tree)?)
+        } else {
+            String::new()
+        };
         // Files a truncated collection did not archive are listed, never silently absent.
         let mut manifest = BufWriter::new(File::create(folder.join("manifest.jsonl"))?);
         let mut statement = db.prepare("SELECT c.attempt_id,m.name,m.size_bytes,m.checksum_sha256,m.omitted FROM evidence_manifest m JOIN evidence_collections c ON c.id=m.collection_id JOIN attempts a ON a.id=c.attempt_id WHERE a.project_id=?1 AND a.task_id=?2 ORDER BY c.id DESC,m.ordinal")?;
@@ -188,7 +291,7 @@ impl Service {
         }
         latest_file.flush()?;
         Ok(format!(
-            "Evidence packet: task #{task}, attempt #{attempt}, revision {revision}, current source tree {tree}.\nRead-only index directory: {}\n{criterion_count} criteria in criteria.jsonl; {} latest role/check records in latest.jsonl ({shown} shown below); {step_count} historical steps in steps.jsonl; {artifact_count} artifacts in artifacts.jsonl ({matching} available with matching tree).\nStart with criteria.jsonl and latest.jsonl. Inspect every criterion's proof and every unresolved critical finding; reports are complete files, not summaries. Earlier findings are hypotheses until checked against the current diff. A missing, pruned, stale or unverified source is NOT proof. Matching tree alone does not prove the check definition matches: retain the supervisor's reuse guards.\nFull review scope, owner answers and authorized repair scope: workflow.txt. Search that file for 'Review scope', 'Recorded answers', and 'Repair plan'; do not replay it wholesale. The task criteria and mandatory review bar are unchanged.\nUse the supervisor's evidence command to page/search these files; open required PNG paths with your image viewer. Do not concatenate archives into context. Actual visual inspection is mandatory for visual criteria.\n{truncated}Latest results (not a substitute for source inspection):\n{preview}",
+            "Evidence packet: task #{task}, attempt #{attempt}, revision {revision}, current source tree {tree}.\nRead-only index directory: {}\n{criterion_count} criteria in criteria.jsonl; {} latest role/check records in latest.jsonl ({shown} shown below); {step_count} historical steps in steps.jsonl; {artifact_count} artifacts in artifacts.jsonl ({matching} available with matching tree).\nStart with criteria.jsonl and latest.jsonl. Inspect every criterion's proof and every unresolved critical finding; reports are complete files, not summaries. Earlier findings are hypotheses until checked against the current diff. A missing, pruned, stale or unverified source is NOT proof. Matching tree alone does not prove the check definition matches: retain the supervisor's reuse guards.\nFull review scope, owner answers and authorized repair scope: workflow.txt. Search that file for 'Review scope', 'Recorded answers', and 'Repair plan'; do not replay it wholesale. The task criteria and mandatory review bar are unchanged.\nUse the supervisor's evidence command to page/search these files; open required image paths with your image viewer. Do not concatenate archives into context. Actual inspection is mandatory for visual criteria: images in your viewer, recorded terminal screens as text.\n{screens}{truncated}Latest results (not a substitute for source inspection):\n{preview}",
             folder.display(),
             latest.len()
         ))

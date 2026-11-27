@@ -1,0 +1,62 @@
+@@ STOP DIALOG · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Mouse stop
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Model code╭ Stop #1 Mouse stop ────────────────────────────────────────────────────────╮──────────╯
+│Active <t>│The worker stops and this attempt ends. Its uncommitted changes are saved   │──────────╮
+│Tokens non│as a git stash (git stash pop restores them).                               │          │
+│none yet  │The task returns to Pending; Run starts it fresh with full limits.          │          │
+│Budget 0 o│                                                                            │          │
+│Can run · │Reason (optional)                                                           │          │
+│          │▏                                                                           │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+╰──────────│                                                                            │          │
+╭ Activity │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│• Fixture │                                                                            │          │
+│• Current ╰────────────────────────────────────────────────────────────────────────────╯          │
+│• #1 created: Mouse stop                    ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MOUSE STOP PENDING · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Mouse stop
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Report · attempt 1 · o: raw log ───────────────────╮
+│Tokens none reported yet                    ││Outcome: Stopped by owner                           │
+│none yet                                    ││                                                    │
+│Budget 0 of 3 used                          ││Supervisor outcome: Stopped by owner                │
+│Can run · u Readiness                       ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #1 · l: all ────────────────────╮│                                                    │
+│• Back to Pending; the next Run starts fresh││                                                    │
+│• Stopped by owner                          ││                                                    │
+│• Fixture handoff                           ││                                                    │
+│• Current task attempt recorded             ││                                                    │
+│• #1 created: Mouse stop                    ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down]
+[u Readiness] [m Run mode] [Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+#1 stopped · back to Pending
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

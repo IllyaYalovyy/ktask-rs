@@ -1,0 +1,46 @@
+@@ STORED FAILURE · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · failed                            │
+│Outcome: Recorded fixture failure                                   │
+│Output page 1 / 1 · chunk 1 / 1 · 1 records · newest first ·        │
+│snapshot #1                                                         │
+│                                                                    │
+│#1 [system] Original evidence retained                              │
+│                                                                    │
+│Attempt inputs: revision 1 · session not recorded                   │
+│Revision 1 · Stored failure                                         │
+│Approval: ready · human: owner · Category: code (built-in, checks   │
+│apply)                                                              │
+│Goal: Persist a real task                                           │
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…
+@@ STORED RESOLUTION · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│review: codex/worker / medium                                       │
+│validation: codex/worker / medium                                   │
+│remediation: codex/worker / medium                                  │
+│Attempt limit: 3 · Task limit: 10 min · Stage limit: Off            │
+│Task usage: none yet                                                │
+│Attempt 1 · #1: failed · revision 1 · active <t> · waiting <t>      │
+│  Outcome: Recorded fixture failure                                 │
+│  Usage: 0 calls · uncached unknown · cache read unknown · cache    │
+│write unknown · output unknown · none yet                           │
+│Resolution: human: owner · Accepted evidence                        │
+│Resolution: succeeded_override · human: owner · Accepted evidence · │
+│<epoch>                                                             │
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

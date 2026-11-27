@@ -747,13 +747,14 @@ dependencies = [
 
 [[package]]
 name = "ktask-rs-mk3"
-version = "0.61.1"
+version = "0.62.0"
 dependencies = [
  "chrono",
  "clap",
  "nix 0.31.3",
  "portable-pty",
  "ratatui",
+ "regex",
  "rusqlite",
  "rustix",
  "serde",

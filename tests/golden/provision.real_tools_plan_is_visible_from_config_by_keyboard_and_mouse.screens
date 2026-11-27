@@ -1,0 +1,276 @@
+@@ provision current · 140x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs dependency   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Android tool setup
+ Dependency setup needed · r Recheck after setup · u Readiness · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Needs dependency · AI                       ││Goal: Build an Android app                                                                  │
+│No attempts yet                             ││Proof: Android checks can run                                                               │
+│Run blocked (6) · u Readiness               │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Model unconfigured / none                   │╭ Log · following ───────────────────────────────────────────────────────────────────────────╮
+│Budget 0 used · no limit                    ││Run is blocked. Press u Readiness for each cause and a direct action. Refresh after setup;  │
+│                                            ││Run retries from Current.                                                                   │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯│                                                                                            │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                            │
+│• Prerequisite probe did not pass:          ││                                                                                            │
+│  sdk_component…                            ││                                                                                            │
+│• sdk_component                             ││                                                                                            │
+│  system-images;android-36;google_apis;x86_…││                                                                                            │
+│• #1 created: Android tool setup            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Recheck] [t Tools and install plan] [s Stop] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ provision current tools · 140x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs dependency   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Android tool setup
+ Dependency setup needed · r Recheck after setup · u Readiness · s Stop
+╭ Status · Enter: details ─────╭ Project tools ─────────────────────────────────────────────────────────────╮──────────────────────────────╮
+│Needs dependency · AI         │#1 v1 · android-sdk cmdline-tools-16 · linux x86_64 ·                       │                              │
+│No attempts yet               │/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/sour│                              │
+│Run blocked (6) · u Readiness │ce-sdk · external · ready · components:                                     │──────────────────────────────╯
+│Model unconfigured / none     │                                                                            │──────────────────────────────╮
+│Budget 0 used · no limit      │Provisioning: manual (manual is the default). Select Plan for packages,     │action. Refresh after setup;  │
+│                              │source, destination, capacity and license status.                           │                              │
+│                              │                                                                            │                              │
+│                              │Tool action                                                                 │                              │
+│                              │< Register >   click / Space to change                                      │                              │
+│                              │Tool name                                                                   │                              │
+│                              │                                                                            │                              │
+│                              │Tool version                                                                │                              │
+│                              │                                                                            │                              │
+╰──────────────────────────────│Platform                                                                    │                              │
+╭ Activity · #1 · l: all ──────│linux                                                                       │                              │
+│• Prerequisite probe did not p│Architecture                                                                │                              │
+│  sdk_component…              │x86_64                                                                      │                              │
+│• sdk_component               │Installation path                                                           │                              │
+│  system-images;android-36;goo│                                                                            │                              │
+│• #1 created: Android tool set│Components (; in one component, comma between components)                   │                              │
+│                              │                                                                            │                              │
+│                              │Ownership                                                                   │                              │
+│                              │< External >   click / Space to change                                      │                              │
+│                              │Generation ID                                                               │                              │
+│                              │1                                                                           │                              │
+│                              │Expected version (binding or generation)                                    │                              │
+│                              │0                                                                           │                              │
+│                              │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                              │
+│                              │                                                                            │                              │
+│                              │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                              │
+│                              │                                                                            │                              │
+│                              ╰────────────────────────────────────────────────────────────────────────────╯                              │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Recheck] [t Tools and install plan] [s Stop] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROVISION PLAN · 140x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs dependency   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+                               ╭ Android install plan ──────────────────────────────────────────────────────╮
+╭ Config ──────────────────────│Recipe: android-36-google-apis-x86_64                                       │──────────────────────────────╮
+│Project: project              │Source:                                                                     │                              │
+│Storage: SQLite output and ins│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/sour│mits.                         │
+│Preferences: saved per project│ce-sdk                                                                      │                              │
+│                              │Source version: cmdline-tools-16                                            │                              │
+│Mouse: Enabled                │Repository: https://dl.google.com/android/repository (stable channel via    │                              │
+│Run mode: Continue queue      │registered Android CLI/sdkmanager)                                          │                              │
+│Planner approval: Automatic   │Destination:                                                                │                              │
+│Delivery: local via origin/mai│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/data│                              │
+│Dependencies: manual external │/ktask-dev/tools/android-36-google-apis-x86_64-source-1                     │issing. CLI require declares  │
+│prerequisites before a task st│                                                                            │                              │
+│                              │Packages:                                                                   │                              │
+│Defaults apply to new tasks; e│  platform-tools @ 37.0.1                                                   │                              │
+│u User defaults: what new proj│  emulator @ 37.2.13                                                        │                              │
+│f Profiles: named role models │  platforms;android-36 @ 2                                                  │                              │
+│w Work categories: templates t│  system-images;android-36;google_apis;x86_64 @ 7                           │ts or art; override per       │
+│project.                      │                                                                            │                              │
+│L Review lenses: opt-in specia│Download cache: 12884901888 bytes / 100000 entries                          │ default selection.           │
+│Checks: list, add, edit, enabl│Stage capacity: 12884901888 bytes                                           │                              │
+│Keyboard remains available wit│Retained capacity: 34359738368 bytes                                        │                              │
+│i Report limits: time and cost│Free-space reserve: 2147483648 bytes                                        │                              │
+│E Export settings and o Import│Time limit: 1800 seconds                                                    │                              │
+│                              │Policy: manual                                                              │                              │
+│                              │License consent: missing                                                    │                              │
+│                              │                                                                            │                              │
+│                              │Before install:                                                             │                              │
+│                              │  • A human must record consent for the exact source SDK license files      │                              │
+│                              │  • Automatic provisioning is disabled for this project                     │                              │
+│                              │                                                                            │                              │
+│                              │Wheel / PgUp / PgDn: scroll · Esc: close                                    │                              │
+│                              │                                                                            │                              │
+│                              │[Copy] [Close] [Up] [Down]                                                  │                              │
+│                              │                                                                            │                              │
+╰──────────────────────────────╰────────────────────────────────────────────────────────────────────────────╯──────────────────────────────╯
+[Copy] [r Recheck current] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings] [e Preferences] [Esc Back]
+[? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ provision progress · 140x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs dependency   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.                         │
+│Preferences: saved per project and instance.                                                                                              │
+│                                                                                                                                          │
+│Mouse: Enabled                                                                                                                            │
+│Run mode: Continue queue                                                                                                                  │
+│Planner approval: Automatic                                                                                                               │
+│Delivery: local via origin/mai╭ Android install progress ──────────────────────────────────────────────────╮                              │
+│Dependencies: manual external │{                                                                           │issing. CLI require declares  │
+│prerequisites before a task st│  "state": "running",                                                       │                              │
+│                              │  "recipe": "android-36-google-apis-x86_64",                                │                              │
+│Defaults apply to new tasks; e│  "operation": "1-fixture",                                                 │                              │
+│u User defaults: what new proj│  "stage_bytes": 2048,                                                      │                              │
+│f Profiles: named role models │  "stage_entries": 4,                                                       │                              │
+│w Work categories: templates t│  "download_cache_bytes": 4096,                                             │ts or art; override per       │
+│project.                      │  "download_cache_entries": 2,                                              │                              │
+│L Review lenses: opt-in specia│  "message": "Downloading reviewed Android packages"                        │ default selection.           │
+│Checks: list, add, edit, enabl│}                                                                           │                              │
+│Keyboard remains available wit│Wheel / PgUp / PgDn: scroll · Esc: close                                    │                              │
+│i Report limits: time and cost│                                                                            │                              │
+│E Export settings and o Import│[Copy] [Close] [Up] [Down]                                                  │                              │
+│                              │                                                                            │                              │
+│                              ╰────────────────────────────────────────────────────────────────────────────╯                              │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Recheck current] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings] [e Preferences] [Esc Back]
+[? Help] [q Quit]
+Recorded human license consent
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ provision install wait · 140x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs dependency   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.                         │
+│Preferences: saved per project and instance.                                                                                              │
+│                                                                                                                                          │
+│Mouse: Enabled                                                                                                                            │
+│Run mode: Continue queue                                                                                                                  │
+│Planner approval: Automatic                                                                                                               │
+│Delivery: local via origin/main                                                                                                           │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing. CLI require declares  │
+│prerequisites before a task starts.                                                                                                       │
+│                                                                                                                                          │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                                              │
+│u User defaults: what new projects start with; preview and apply them here.                                                               │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                                                    │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art; override per       │
+│project.                                                                                                                                  │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default selection.           │
+│Checks: list, add, edit, enable or disable.                                                                                               │
+│Keyboard remains available with mouse disabled.                                                                                           │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.                                │
+│E Export settings and o Import settings move this project's settings to another computer.                                                 │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Recheck current] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings] [e Preferences] [Esc Back]
+[? Help] [q Quit]
+Android provisioning stopped: command conflict: Dependency setup needed: Automatic provisioning is disabled for this project
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROVISION CONFIG · 140x45 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs dependency   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.                         │
+│Preferences: saved per project and instance.                                                                                              │
+│                                                                                                                                          │
+│Mouse: Enabled                                                                                                                            │
+│Run mode: Continue queue                                                                                                                  │
+│Planner approval: Automatic                                                                                                               │
+│Delivery: local via origin/main                                                                                                           │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing. CLI require declares  │
+│prerequisites before a task starts.                                                                                                       │
+│                                                                                                                                          │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                                              │
+│u User defaults: what new projects start with; preview and apply them here.                                                               │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                                                    │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art; override per       │
+│project.                                                                                                                                  │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default selection.           │
+│Checks: list, add, edit, enable or disable.                                                                                               │
+│Keyboard remains available with mouse disabled.                                                                                           │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.                                │
+│E Export settings and o Import settings move this project's settings to another computer.                                                 │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Recheck current] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings] [e Preferences] [Esc Back]
+[? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

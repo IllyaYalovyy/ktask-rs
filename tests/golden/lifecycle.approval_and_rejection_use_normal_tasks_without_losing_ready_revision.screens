@@ -1,0 +1,46 @@
+@@ NEEDS APPROVAL · 70x22 · keyboard
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs approval   |   Queue 3 · History 0
+ Run one preference · Next #2: Approve the queue interaction · m: run…
+ #1 Review planned work
+ Pending revision 1 · needs approval · v Approve / n Reject
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Needs approval · AI         ││Goal: Include every task on the final…│
+│No attempts yet             ││Proof: All 240 tasks are reachable.   │
+│Budget 0 of 3 used          │╰──────────────────────────────────────╯
+│Model economy / medium      │╭ Log · following ─────────────────────╮
+│Cost <cost> (mock)          ││Needs approval. Review the task, then │
+╰────────────────────────────╯│Approve or Reject.                    │
+╭ Activity · l: all ─────────╮│                                      │
+│• Configuration applied ·   ││                                      │
+│  session only              ││                                      │
+│• Mock workspace reset      ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [v Approve] [n Reject] [D Mark done] [c Models] [e Edit]
+[u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+Configuration applied · session only
+@@ REJECT REVISION · 70x22 · mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs approval   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Ready inputs
+╭ Reject pending revision ───────────────────────────────────────────╮
+│Previous approved inputs remain usable. With no approved revision,  │
+│the task moves to History.                                          │
+│                                                                    │
+│                                                                    │
+│Reason                                                              │
+│▏                                                                   │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [v Approve] [n Reject] [D Mark done] [c Models] [e Edit]
+[u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…

@@ -19,7 +19,15 @@ pub struct Scratch {
 impl Scratch {
     /// Abandoned scratch is deleted before this returns.
     pub fn new(root: &Path) -> io::Result<Self> {
-        let (scratch, abandoned) = Self::claim(root)?;
+        let (scratch, abandoned) = Self::claim(root, None)?;
+        delete_all(&abandoned);
+        Ok(scratch)
+    }
+
+    /// Like [`Self::new`] with a chosen directory name starting `run-`, for tests whose
+    /// recorded screens show its path. Fails with `AlreadyExists` while another owns it.
+    pub fn named(root: &Path, name: &str) -> io::Result<Self> {
+        let (scratch, abandoned) = Self::claim(root, Some(name))?;
         delete_all(&abandoned);
         Ok(scratch)
     }
@@ -27,7 +35,7 @@ impl Scratch {
     /// For interactive startup: abandoned scratch, which can hold many thousands of
     /// files, is deleted in the background so the screen appears at once.
     pub fn new_in_background(root: &Path) -> io::Result<Self> {
-        let (scratch, abandoned) = Self::claim(root)?;
+        let (scratch, abandoned) = Self::claim(root, None)?;
         std::thread::spawn(move || delete_all(&abandoned));
         Ok(scratch)
     }
@@ -52,7 +60,7 @@ impl Scratch {
         Ok(abandoned.len())
     }
 
-    fn claim(root: &Path) -> io::Result<(Self, Vec<PathBuf>)> {
+    fn claim(root: &Path, name: Option<&str>) -> io::Result<(Self, Vec<PathBuf>)> {
         fs::create_dir_all(root)?;
         let sweep = open_lock(&root.join(".sweep.lock"))?;
         sweep.lock()?;
@@ -62,7 +70,18 @@ impl Scratch {
         // Collect these under the sweep lock so a newly renamed run is included once.
         let mut abandoned = reclaimed_entries(root)?;
         abandoned.extend(set_aside_abandoned(root)?);
-        let dir = Builder::new().prefix("run-").tempdir_in(root)?;
+        let dir = match name {
+            Some(name) => Builder::new().prefix(name).rand_bytes(0).tempdir_in(root),
+            None => Builder::new().prefix("run-").tempdir_in(root),
+        };
+        let dir = match dir {
+            Ok(dir) => dir,
+            Err(error) => {
+                sweep.unlock()?;
+                delete_all(&abandoned);
+                return Err(error);
+            }
+        };
         let lease = open_lock(&dir.path().join(LEASE_NAME))?;
         lease.lock()?;
         sweep.unlock()?;

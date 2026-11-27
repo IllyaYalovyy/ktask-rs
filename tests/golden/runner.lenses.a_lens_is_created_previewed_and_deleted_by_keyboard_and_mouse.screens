@@ -1,0 +1,180 @@
+@@ LENS NEW FORM · 120x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                      │
+│Storage: SQLite outp╭ New lens ──────────────────────────────────────────────────────────────────╮esource limits.     │
+│Preferences: saved p│A new lens starts as a copy of the security lens; change what differs.      │                    │
+│                    │Placeholders: {{title}}, {{goal}}, {{criteria}}, {{category}}, {{context}}. │                    │
+│Mouse: Enabled      │Task fields and context are always delivered; a placeholder only chooses    │                    │
+│Run mode: Continue q│where. {{context}} is runtime-only: previews show a labelled stand-in.      │                    │
+│Planner approval: Au│In the instructions line, \n is a line break; write \{{ for a literal {{.   │                    │
+│Delivery: local via │The supervisor's rules, evidence handling and response schema are added     │                    │
+│Dependencies: manual│around every lens and cannot be edited here.                                │isite is missing.   │
+│CLI require declares│Save in the project scope to override a user or built-in lens of the same   │                    │
+│                    │name for this project only. Preview shows the effective prompt for an       │                    │
+│Defaults apply to ne│example task (select a task first to preview its content), with             │                    │
+│u User defaults: wha│runtime-only parts labelled; nothing is saved until Save.                   │                    │
+│f Profiles: named ro│Lens name                                                                   │                    │
+│w Work categories: t│▏                                                                           │e, documents or art;│
+│override per project│Action                                                                      │                    │
+│L Review lenses: opt│< Save >   click / Space to change                                          │ project's default  │
+│selection.          │Save in                                                                     │                    │
+│Checks: list, add, e│< User scope >   click / Space to change                                    │                    │
+│Keyboard remains ava│Description                                                                 │                    │
+│i Report limits: tim│                                                                            │efaults.            │
+│E Export settings an│Instructions                                                                │                    │
+│                    │Specialist review through the security lens: trust boundaries. Look at where│                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LENS INVALID PLACEHOLDER · 120x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                      │
+│Storage: SQLite outp╭ New lens ──────────────────────────────────────────────────────────────────╮esource limits.     │
+│Preferences: saved p│A new lens starts as a copy of the security lens; change what differs.      │                    │
+│                    │Placeholders: {{title}}, {{goal}}, {{criteria}}, {{category}}, {{context}}. │                    │
+│Mouse: Enabled      │Task fields and context are always delivered; a placeholder only chooses    │                    │
+│Run mode: Continue q│where. {{context}} is runtime-only: previews show a labelled stand-in.      │                    │
+│Planner approval: Au│In the instructions line, \n is a line break; write \{{ for a literal {{.   │                    │
+│Delivery: local via │The supervisor's rules, evidence handling and response schema are added     │                    │
+│Dependencies: manual│around every lens and cannot be edited here.                                │isite is missing.   │
+│CLI require declares│Save in the project scope to override a user or built-in lens of the same   │                    │
+│                    │name for this project only. Preview shows the effective prompt for an       │                    │
+│Defaults apply to ne│example task (select a task first to preview its content), with             │                    │
+│u User defaults: wha│runtime-only parts labelled; nothing is saved until Save.                   │                    │
+│f Profiles: named ro│Lens name                                                                   │                    │
+│w Work categories: t│Lock misuse                                                                 │e, documents or art;│
+│override per project│Action                                                                      │                    │
+│L Review lenses: opt│< Save >   click / Space to change                                          │ project's default  │
+│selection.          │Save in                                                                     │                    │
+│Checks: list, add, e│< User scope >   click / Space to change                                    │                    │
+│Keyboard remains ava│Description                                                                 │                    │
+│i Report limits: tim│                                                                            │efaults.            │
+│E Export settings an│Instructions                                                                │                    │
+│                    │Check {{nope}}▏                                                             │                    │
+│                    │command conflict: The lens instructions: Unknown placeholder {{nope}};      │                    │
+│                    │valid placeholders are {{title}}, {{goal}}, {{criteria}}, {{category}},     │                    │
+│                    │{{context}}                                                                 │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LENS PREVIEW · 120x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ New lens ──────────────────────────────────────────────────────────────────╮
+ No current task   | │Preview of the Lock misuse lens prompt for an example task (select a task   │
+ Queue preference · n│first to preview its content). Nothing is saved.                            │
+ Config              │                                                                            │
+                     │== Review lens Lock misuse (user scope) for work category code; example     │
+╭ Config ────────────│task content filled in; the model reads the supervisor rules first ==       │────────────────────╮
+│Project: project    │Look for lock misuse in Example task.                                       │                    │
+│Storage: SQLite outp│Goal: Example goal: the outcome wanted.                                     │esource limits.     │
+│Preferences: saved p│Criteria:                                                                   │                    │
+│                    │1. First example criterion                                                  │                    │
+│Mouse: Enabled      │2. Second example criterion                                                 │                    │
+│Run mode: Continue q│Context:                                                                    │                    │
+│Planner approval: Au│[runtime-only context: the supervisor fills this in when the turn starts:   │                    │
+│Delivery: local via │review scope, check results, evidence paths, earlier findings, the repair   │                    │
+│Dependencies: manual│plan and answered questions]                                                │isite is missing.   │
+│CLI require declares│                                                                            │                    │
+│                    │                                                                            │                    │
+│Defaults apply to ne│== Supervisor rules: fixed, not editable by the lens ==                     │                    │
+│u User defaults: wha│Your sandbox is read-only by design: you cannot build, run tests, or edit   │                    │
+│f Profiles: named ro│files, and you must not ask to; nobody will change it or grant permission.  │                    │
+│w Work categories: t│Evidence packets and artifact paths in Context are read-only. Read the      │e, documents or art;│
+│override per project│criterion map and latest result/finding records before deciding, then       │                    │
+│L Review lenses: opt│inspect their exact sources on demand. Never accept an executor claim,      │ project's default  │
+│selection.          │stale evidence or a summary alone as proof. Search and page with the        │                    │
+│Checks: list, add, e│evidence command instead of dumping whole files. A visual criterion         │                    │
+│Keyboard remains ava│requires inspecting the actual rendering: images opened at useful           │                    │
+│i Report limits: tim│resolution, or recorded terminal screens read as text. The supervisor check │efaults.            │
+│E Export settings an│Lens name                                                                   │                    │
+│                    │Lock misuse                                                                 │                    │
+│                    │Action                                                                      │                    │
+│                    │< Preview prompt >   click / Space to change                                │                    │
+│                    │Save in                                                                     │                    │
+│                    │< User scope >   click / Space to change                                    │                    │
+│                    │Description                                                                 │                    │
+│                    │                                                                            │                    │
+│                    │Instructions                                                                │                    │
+│                    │Look for lock misuse in {{title}}.\nGoal: {{goal}}                          │                    │
+╰────────────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │────────────────────╯
+[Copy] [m Defaults] [│                                                                            │ [g Git delivery]
+[k Storage] [R Limits│[Copy] [Apply] [Cancel] [Up] [Down]                                         │ttings]
+[e Preferences] [Esc │                                                                            │
+Runs happen in a back╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LENS DELETED · 120x44 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                      │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                                                                                                                      │
+│Mouse: Enabled                                                                                                        │
+│Run mode: Continue queue                                                                                              │
+│Planner approval: Automatic                                                                                           │
+│Delivery: local via origin/main                                                                                       │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing.   │
+│CLI require declares prerequisites before a task starts.                                                              │
+│                                                                                                                      │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                          │
+│u User defaults: what new projects start with; preview and apply them here.                                           │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                                │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art;│
+│override per project.                                                                                                 │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default  │
+│selection.                                                                                                            │
+│Checks: list, add, edit, enable or disable.                                                                           │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Deleted user lens Lock misuse; it inherits again
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

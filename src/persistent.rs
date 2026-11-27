@@ -17,6 +17,9 @@ use crate::{
 };
 use std::{collections::BTreeMap, path::Path, time::Duration, time::Instant};
 
+/// How often the terminal looks for changes other processes stored.
+pub const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+
 const PROJECT_DEFAULTS: &str = "Project defaults";
 const APPLY_DEFAULTS: &str = "Apply current project defaults";
 
@@ -448,9 +451,6 @@ impl StoredWorkspace {
                         "Dependency not verified · u Readiness shows the observed result",
                     );
                     return;
-                }
-                if let Some(id) = current {
-                    let _ = self.service.record_launch_result(id, "");
                 }
                 self.committed(
                     screen,
@@ -1165,7 +1165,7 @@ impl Backend for StoredWorkspace {
         if self.poll_provision(screen) || self.poll_proposal(screen) || self.poll_control(screen) {
             return true;
         }
-        if screen.dialog.is_some() || screen.last_tick.elapsed() < Duration::from_millis(500) {
+        if screen.dialog.is_some() || screen.last_tick.elapsed() < REFRESH_INTERVAL {
             return false;
         }
         let changed = self.refresh(screen);

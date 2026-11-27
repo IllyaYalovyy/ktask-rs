@@ -1,0 +1,105 @@
+@@ MARK DONE FAILED FORM · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 2 · History 0
+ Queue preference · Next #2: Pending done · m: run mode in Current
+ #1 Failed current
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Failed · AI                                 ││Goal: Persist a real task                                               │
+│Attempt 1                                   ││Proof: Survives restart                                                 │
+│Model codex/fixture-judge-2 / high          │╰────────────────────────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────╮
+│Tokens none reported╭ Mark done #1 Failed current ───────────────────────────────────────────────╮                    │
+│? new tokens        │Records the task as done by your decision and moves it to History.          │                    │
+│Budget 1 of 3 used  │A live attempt stops first and its uncommitted changes are stashed; commit  │w structured finding│
+│Run blocked (2) · u │them first to keep them in the tree.                                        │                    │
+│Review      ✗ failed│                                                                            │alidation           │
+│Validation  ✗ failed│Reason (optional)                                                           │                    │
+╰────────────────────│▏                                                                           │                    │
+╭ Activity · #1 · l: │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│• Failed check with │                                                                            │                    │
+│• Current task attem│[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│• #1 created: Failed│                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MARKED FAILED DONE · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ #2 Pending done
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Persist a real task                                               │
+│No attempts yet                             ││Proof: Survives restart                                                 │
+│Run blocked (5) · u Readiness               │╰────────────────────────────────────────────────────────────────────────╯
+│Model unconfigured / none                   │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Run is blocked. Press u Readiness for each cause and a direct action.   │
+│                                            ││Refresh after setup; Run retries from Current.                          │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #2 · l: all ────────────────────╮│                                                                        │
+│• #2 created: Pending done                  ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+#1 marked done
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MARKED DONE HISTORY · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 2
+ Queue preference · no queued work · m: run mode in Current
+ History · 2 shown / 2 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 2 · Finished Attempts Time Usage ────────────────────────────╮╭ Details · click for full ──────────────╮
+│› #2   Done     Pending done <date> 0 <t> -                                 ││Pending done                            │
+│  #1   Done     Failed current <date> 1 <t> ? tkn                           ││#2 · Done · AI · finished <date>        │
+│                                                                            ││                                        │
+│                                                                            ││Goal: Persist a real task               │
+│                                                                            ││                                        │
+│                                                                            ││Check: Survives restart                 │
+│                                                                            ││                                        │
+│                                                                            ││Attempts: 0 · none yet                  │
+│                                                                            ││                                        │
+│                                                                            ││Models:                                 │
+│                                                                            ││Execution: unconfigured / none          │
+│                                                                            ││Review: unconfigured / none             │
+│                                                                            ││Validation: unconfigured / none         │
+│                                                                            ││Remediation: unconfigured / none        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+╰────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats]
+[? Help] [q Quit]
+
+#2 marked done
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

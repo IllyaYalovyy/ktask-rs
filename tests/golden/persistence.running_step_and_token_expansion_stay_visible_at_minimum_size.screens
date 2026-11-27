@@ -1,0 +1,92 @@
+@@ RUNNING USAGE MINIMUM · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Running usage
+ AI implementing the task · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+│Step: Execution             │╰──────────────────────────────────────╯
+│in 123G, cache 186G, out 76G│╭ Log · following · attempt 1 ─────────╮
+│Model codex/fixture-model /…││                                      │
+╰────────────────────────────╯│                                      │
+╭ Activity · #1 · l: all ────╮│                                      │
+│• Current task attempt      ││                                      │
+│  recorded                  ││                                      │
+│• #1 created: Running usage ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ RUNNING USAGE DETAILS MINIMUM · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · running                           │
+│Outcome: No outcome recorded                                        │
+│Output page 1 / 1 · chunk 1 / 1 · 0 records · newest first ·        │
+│snapshot #0                                                         │
+│No output records on this page.                                     │
+│                                                                    │
+│                                                                    │
+│Attempt inputs: revision 1 · session 1                              │
+│Revision 1 · Running usage                                          │
+│Approval: ready · human: owner · Category: code (built-in, checks   │
+│apply)                                                              │
+│Goal: Persist a real task                                           │
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…
+@@ RUNNING USAGE EXACT MINIMUM · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Revision 1 · Running usage                                          │
+│Approval: ready · human: owner · Category: code (built-in, checks   │
+│apply)                                                              │
+│Goal: Persist a real task                                           │
+│Acceptance: 1: Survives restart                                     │
+│execution: codex/fixture-model / none                               │
+│review: codex/fixture-judge-1 / none                                │
+│validation: codex/fixture-judge-2 / none                            │
+│remediation: codex/fixture-judge-3 / none                           │
+│Attempt limit: 3 · Task limit: 10 min · Stage limit: Off            │
+│Active <t> · waiting <t>                                            │
+│Usage: 1 calls · uncached 123,456,789,012 · cache read              │
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…
+@@ RUNNING USAGE EXACT MINIMUM · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Approval: ready · human: owner · Category: code (built-in, checks   │
+│apply)                                                              │
+│Goal: Persist a real task                                           │
+│Acceptance: 1: Survives restart                                     │
+│execution: codex/fixture-model / none                               │
+│review: codex/fixture-judge-1 / none                                │
+│validation: codex/fixture-judge-2 / none                            │
+│remediation: codex/fixture-judge-3 / none                           │
+│Attempt limit: 3 · Task limit: 10 min · Stage limit: Off            │
+│Active <t> · waiting <t>                                            │
+│Usage: 1 calls · uncached 123,456,789,012 · cache read              │
+│98,765,432,109 · cache write 87,654,321,098 · output 76,543,210,987 │
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…

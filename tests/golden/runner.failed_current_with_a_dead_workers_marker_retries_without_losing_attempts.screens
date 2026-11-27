@@ -1,0 +1,74 @@
+@@ READINESS FAILED WORKER · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed ╭ Execution readiness ───────────────────────────────────────────────────────╮
+ Session: Run one · s│Can run · 0 blocker(s)                                                      │t: EOF while parsing…
+ #1 Failed with stale│                                                                            │
+ Failed · r Retry kee│OK · Execution state                                                        │
+┏ ■ EXECUTION STOPPED│OK · Project checks                                                         │━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: command conf│OK · Approval                                                               │                    ┃
+┃Not resolved automat│OK · Task                                                                   │would fail the same ┃
+┃way.                │OK · execution model                                                        │                    ┃
+┃Next: Fix the cause │OK · review model                                                           │                    ┃
+┗━━━━━━━━━━━━━━━━━━━━│OK · validation model                                                       │━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: det│OK · remediation model                                                      │────────────────────╮
+│Failed · AI         │OK · Writable workers (execution and repair) · Agent network Off · Codex    │                    │
+│Attempt 3           │OK · Codex CLI                                                              │                    │
+│Model codex/remediat│OK · Read-only sandbox                                                      │────────────────────╯
+│Active <t>          │OK · Commit identity: Project Author <project@example.com>                  │────────────────────╮
+│Tokens 0 new · 0 cac│OK · Supervisor ownership                                                   │ EOF while parsing  │
+│0 new tokens + 4 cal│OK · Worker ownership                                                       │                    │
+│Budget 0 of 3 used  │OK · Workspace baseline                                                     │                    │
+│Can run · u Readines│                                                                            │ Repair: The check  │
+│Remediation ✓ succee│Queue: stopped · command conflict: Task #1 stopped (protocol): command      │                    │
+│Repair      ✗ failed│conflict: Invalid agent assessment: EOF while parsing a value at line 1     │                    │
+╰────────────────────│column 0 The provider or environment failed 3 attempts in a row; another    │                    │
+╭ Activity · #1 · l: │retry would fail the same way.                                              │                    │
+│• command conflict: │                                                                            │onflict: Invalid    │
+│  assessment: EOF wh│After fixing setup, Refresh here or press r on Current. Inspection creates  │1 column 0          │
+│• Workflow · Fix · r│no attempt.                                                                 │                    │
+│  Why: The check fai│Wheel / PgUp / PgDn: scroll · Esc: close                                    │onflict: Invalid    │
+│• Workflow · Plan fi│                                                                            │1 column 0          │
+╰────────────────────│[c Checks] [m Models] [r Retry] [u Refresh] [Close]                         │────────────────────╯
+[Copy] [r Retry] [s S│                                                                            │[Enter Details]
+[o Log] [a Add] [i In│                                                                            │
+                     ╰────────────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ FAILED WORKER RETRIED · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                       │
+│Inspect results in History, or add more work.                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

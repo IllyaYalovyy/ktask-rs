@@ -1,0 +1,92 @@
+@@ REAL EMPTY · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────╮
+│No current task.                                                    │
+│Set up this project first: u Readiness lists what is missing.       │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix]
+[S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not…
+@@ REAL ADD · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Queue · 1 shown / 1 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 1 ─────────────────────────╮╭ Details · click for full ╮
+│› #1   Pending  Real durable task       ││Real durable task         │
+│                                        ││#1 · Pending · AI         │
+│                                        ││                          │
+│                                        ││Goal: Goal                │
+│                                        ││                          │
+│                                        ││Check: Check              │
+│                                        ││                          │
+│                                        ││Attempts: 0 · none yet    │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move]
+[b Break down] [c Models] [D Mark done] [x Cancel] [R Supersede]
+[o Import] [E Export] [Enter Details] [f Filter] [/ Search]
+[Esc Clear] [S Stats] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ REAL RUN PREFLIGHT · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Real durable task
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · AI                ││Goal: Goal                            │
+│No attempts yet             ││Proof: Check                          │
+│Run blocked (9) · u Readines│╰──────────────────────────────────────╯
+│Model codex/worker-v2 / high│╭ Log · following ─────────────────────╮
+│Budget 0 of 3 used          ││Run is blocked. Press u Readiness for │
+╰────────────────────────────╯│each cause and a direct action.       │
+╭ Activity · #1 · l: all ────╮│Refresh after setup; Run retries from │
+│• command conflict: git     ││Current.                              │
+│  rev-parse…                ││                                      │
+│• #1 revision 2 saved       ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models]
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+command conflict: git rev-parse --show-toplevel: fatal: not a git rep…
+@@ REAL RESTART · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Real durable task
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · AI                ││Goal: Goal                            │
+│No attempts yet             ││Proof: Check                          │
+│Run blocked (9) · u Readines│╰──────────────────────────────────────╯
+│Model codex/worker-v2 / high│╭ Log · following ─────────────────────╮
+│Budget 0 of 3 used          ││Run is blocked. Press u Readiness for │
+╰────────────────────────────╯│each cause and a direct action.       │
+╭ Activity · #1 · l: all ────╮│Refresh after setup; Run retries from │
+│• command conflict: git     ││Current.                              │
+│  rev-parse…                ││                                      │
+│• #1 revision 2 saved       ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models]
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…

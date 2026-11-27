@@ -64,8 +64,14 @@ fn judge_once(
     let (evidence, judging) = evidence(service, run, ctx, failed)?;
     let packet = crate::scratch::Scratch::new(&ctx.paths.state.join("review-packets"))?;
     let tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
-    let evidence =
-        service.review_bundle(failed, &ctx.paths.state, packet.path(), &tree, &evidence)?;
+    let evidence = service.review_bundle(
+        failed,
+        &ctx.paths.state,
+        packet.path(),
+        &tree,
+        &evidence,
+        false,
+    )?;
     let evidence = format!(
         "{evidence}\nResolved project tools: {}. Environment fingerprint: {}.\nRead/search with '{}' evidence FILE --offset 0 --limit 4096 [--search TEXT]; follow next_offset.\n",
         ctx.tools.description,

@@ -1,0 +1,29 @@
+@@ ADD TASK AFTER PLAIN CTRL-C · 100x28 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue pref╭ Add task ──────────────────────────────────────────────────────────────────╮
+ Queue · 12│Title, goal, and acceptance check are required.                             │
+ Filter: Al│Blank execution fields use defaults; with a new model, blank effort means   │
+╭ Queue · 1│none.                                                                       │──────────╮
+│› #1   Fai│Title                                                                       │          │
+│  #2   Pen│Copy this title▏                                                            │          │
+│  #3   Pen│Goal                                                                        │          │
+│  #4   Pen│                                                                            │the final │
+│  #5   Pen│Acceptance check                                                            │          │
+│  #6   Pen│                                                                            │          │
+│  #7   Pen│Kind                                                                        │chable.   │
+│  #8   Pen│< AI >   click / Space to change                                            │          │
+│  #9   Pen│Execution provider/model (blank = default)                                  │          │
+│  #10  Pen│                                                                            │          │
+│  #11  Pen│Execution effort (optional)                                                 │          │
+│  #12  Pen│                                                                            │          │
+│  #13  Pen│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│  #14  Pen│                                                                            │          │
+│  #15  Pen│[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+╰──────────│                                                                            │──────────╯
+[Copy] [r R╰────────────────────────────────────────────────────────────────────────────╯]
+[o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Sent 9 characters via OSC 52 · F7: native selection fallback
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

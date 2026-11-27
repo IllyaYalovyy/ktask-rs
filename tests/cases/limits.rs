@@ -35,17 +35,6 @@ fn paused_transcript_fixture(title: &str) -> Result<Fixture> {
     Ok(f)
 }
 
-fn save_screen(screen: &str, name: &str) -> Result {
-    println!("LIMITS PTY {name}\n{screen}");
-    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-        support::screen_png(
-            screen,
-            &PathBuf::from(directory).join(format!("{name}.png")),
-        )?;
-    }
-    Ok(())
-}
-
 const SIZES: [(u16, u16); 2] = [(120, 36), (80, 24)];
 
 #[test]
@@ -240,7 +229,6 @@ fn a_limit_raised_from_the_cli_is_honoured_by_a_tui_started_resume() -> Result {
 fn resource_pause_and_raise_and_resume_by_keyboard_and_mouse_at_both_sizes() -> Result {
     for (cols, rows) in SIZES {
         for mouse in [false, true] {
-            let name = format!("{cols}x{rows}-{}", if mouse { "mouse" } else { "keys" });
             let f = paused_transcript_fixture("Raise and resume the pause")?;
             let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
             t.screen("task ready", |s| s.contains("[r Run queue]"))?;
@@ -255,7 +243,7 @@ fn resource_pause_and_raise_and_resume_by_keyboard_and_mouse_at_both_sizes() -> 
                     && s.contains("+ Raise to 4096")
                     && s.contains("[+ Raise and resume]")
             })?;
-            save_screen(&paused, &format!("resource-pause-{name}"))?;
+            crate::support::record("resource-pause", mouse, &paused);
             f.supervisor_stopped()?;
             t.still("paused", |s| s.contains("[r Resume]"))?;
             if mouse {
@@ -266,7 +254,7 @@ fn resource_pause_and_raise_and_resume_by_keyboard_and_mouse_at_both_sizes() -> 
             let refused = t.screen("plain resume refused", |s| {
                 s.contains("Resume refused") && s.contains("New value")
             })?;
-            save_screen(&refused, &format!("resource-refused-{name}"))?;
+            crate::support::record("resource-refused", mouse, &refused);
             if mouse {
                 t.click("Cancel")?;
             } else {
@@ -281,7 +269,7 @@ fn resource_pause_and_raise_and_resume_by_keyboard_and_mouse_at_both_sizes() -> 
             let dialog = t.screen("raise dialog", |s| {
                 s.contains("New value") && s.contains("4096") && s.contains("[Raise and resume]")
             })?;
-            save_screen(&dialog, &format!("resource-raise-{name}"))?;
+            crate::support::record("resource-raise", mouse, &dialog);
             assert_eq!(check_runs(&f), "x");
             if mouse {
                 t.click("Raise and resume")?;
@@ -292,8 +280,10 @@ fn resource_pause_and_raise_and_resume_by_keyboard_and_mouse_at_both_sizes() -> 
             assert_eq!(check_runs(&f), "x", "the recorded check is not repeated");
             assert_eq!(setting(&f, "artifact_file_bytes")?["value"], 4096);
             f.supervisor_stopped()?;
-            let done = t.screen("queue complete", |s| s.contains("Queue complete"))?;
-            save_screen(&done, &format!("resource-resumed-{name}"))?;
+            let done = t.screen("queue complete", |s| {
+                s.contains("Queue complete") && s.contains("Session: Queue · complete")
+            })?;
+            crate::support::record("resource-resumed", mouse, &done);
             t.send("q")?;
             t.finish()?;
             f.no_scratch()?;
@@ -314,7 +304,6 @@ fn configuration_edits_limits_and_warns_by_keyboard_and_mouse_at_both_sizes() ->
     let mut expected = 6;
     for (cols, rows) in SIZES {
         for mouse in [false, true] {
-            let name = format!("{cols}x{rows}-{}", if mouse { "mouse" } else { "keys" });
             let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
             t.screen("started", |s| s.contains("Queue complete"))?;
             if mouse {
@@ -331,7 +320,7 @@ fn configuration_edits_limits_and_warns_by_keyboard_and_mouse_at_both_sizes() ->
             let overview = t.screen("limits overview", |s| {
                 s.contains("Limit to edit") && s.contains("scratch_bytes: ")
             })?;
-            save_screen(&overview, &format!("limits-overview-{name}"))?;
+            crate::support::record("limits-overview", mouse, &overview);
             let names = [
                 "scratch_bytes",
                 "scratch_entries",
@@ -358,7 +347,7 @@ fn configuration_edits_limits_and_warns_by_keyboard_and_mouse_at_both_sizes() ->
             let form = t.screen("limit form", |s| {
                 s.contains("Resource limit · artifact_attempt_files") && s.contains("Project value")
             })?;
-            save_screen(&form, &format!("limits-form-{name}"))?;
+            crate::support::record("limits-form", mouse, &form);
             if mouse {
                 t.click("Project value")?;
             }
@@ -379,7 +368,7 @@ fn configuration_edits_limits_and_warns_by_keyboard_and_mouse_at_both_sizes() ->
                 s.contains(&format!("Saved artifact_attempt_files: {expected}"))
                     && s.contains("Limit warning: artifact_attempt_files")
             })?;
-            save_screen(&saved, &format!("limits-saved-{name}"))?;
+            crate::support::record("limits-saved", mouse, &saved);
             assert_eq!(setting(&f, "artifact_attempt_files")?["value"], expected);
             t.send("q")?;
             t.finish()?;
@@ -547,7 +536,6 @@ fn kept_evidence_is_archived_or_recorded_as_truncated_when_the_runner_continues(
 #[test]
 fn truncated_evidence_is_shown_in_current_history_and_details() -> Result {
     for (cols, rows) in SIZES {
-        let name = format!("{cols}x{rows}");
         let f = paused_transcript_fixture("Show what was left out")?;
         f.ok(&[
             "limits",
@@ -565,7 +553,7 @@ fn truncated_evidence_is_shown_in_current_history_and_details() -> Result {
         f.state("paused")?;
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
         let current = t.screen("current evidence", |s| s.contains("Truncated evidence 2/5"))?;
-        save_screen(&current, &format!("evidence-current-{name}"))?;
+        crate::support::record("evidence-current", false, &current);
         t.send("q")?;
         t.finish()?;
         f.ok(&["limits", "artifact_file_bytes", "--value", "8192"])?;
@@ -579,7 +567,7 @@ fn truncated_evidence_is_shown_in_current_history_and_details() -> Result {
         let details = t.screen("details evidence", |s| {
             s.contains("Task details") && s.contains("Evidence truncated: 2 of 5 files archived")
         })?;
-        save_screen(&details, &format!("evidence-history-{name}"))?;
+        crate::support::record("evidence-history", false, &details);
         t.send("\x1b")?;
         t.screen("details closed", |s| !s.contains("Task details"))?;
         t.send("q")?;
@@ -791,7 +779,6 @@ fn a_storage_pause_another_projects_budget_governs_cannot_be_raised_here() -> Re
 fn storage_pause_and_raise_and_resume_by_keyboard_and_mouse_at_both_sizes() -> Result {
     for (cols, rows) in SIZES {
         for mouse in [false, true] {
-            let name = format!("{cols}x{rows}-{}", if mouse { "mouse" } else { "keys" });
             let f = paused_by_storage_fixture("Raise the storage budget")?;
             let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
             t.screen("task ready", |s| s.contains("[r Run queue]"))?;
@@ -807,7 +794,7 @@ fn storage_pause_and_raise_and_resume_by_keyboard_and_mouse_at_both_sizes() -> R
                     && s.contains("+ Raise to ")
                     && s.contains("[+ Raise and resume]")
             })?;
-            save_screen(&paused, &format!("storage-pause-{name}"))?;
+            crate::support::record("storage-pause", mouse, &paused);
             f.supervisor_stopped()?;
             let proposal = storage_pause(&f)?["proposal"].as_u64().unwrap();
             assert!(
@@ -823,7 +810,7 @@ fn storage_pause_and_raise_and_resume_by_keyboard_and_mouse_at_both_sizes() -> R
             let refused = t.screen("plain resume refused", |s| {
                 s.contains("Resume refused") && s.contains("New value")
             })?;
-            save_screen(&refused, &format!("storage-refused-{name}"))?;
+            crate::support::record("storage-refused", mouse, &refused);
             f.supervisor_stopped()?;
             if mouse {
                 t.click("Cancel")?;
@@ -839,7 +826,7 @@ fn storage_pause_and_raise_and_resume_by_keyboard_and_mouse_at_both_sizes() -> R
             let dialog = t.screen("raise dialog", |s| {
                 s.contains("New value") && s.contains("[Raise and resume]")
             })?;
-            save_screen(&dialog, &format!("storage-raise-{name}"))?;
+            crate::support::record("storage-raise", mouse, &dialog);
             if mouse {
                 t.click("Raise and resume")?;
             } else {
@@ -849,8 +836,10 @@ fn storage_pause_and_raise_and_resume_by_keyboard_and_mouse_at_both_sizes() -> R
             assert_eq!(check_runs(&f), "x");
             assert!(storage_budget(&f)? > 1_048_576);
             f.supervisor_stopped()?;
-            let done = t.screen("queue complete", |s| s.contains("Queue complete"))?;
-            save_screen(&done, &format!("storage-resumed-{name}"))?;
+            let done = t.screen("queue complete", |s| {
+                s.contains("Queue complete") && s.contains("Session: Queue · complete")
+            })?;
+            crate::support::record("storage-resumed", mouse, &done);
             t.send("q")?;
             t.finish()?;
             f.no_scratch()?;

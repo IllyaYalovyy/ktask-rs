@@ -1,0 +1,296 @@
+@@ INVALID MODEL CURRENT role=execution resume=false · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Run one · stopped · execution effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, m…
+ #1 Invalid stored model
+ Run blocked · u Readiness shows causes and actions
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: execution effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max, ultraModel        ┃
+┃codex/typo-model                                                                                                      ┃
+┃Not resolved automatically: The supervisor could not start or continue this task.                                     ┃
+┃Next: Fix the cause, then r Run (u Readiness lists each blocker)                                                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                             │
+│No attempts yet                             ││Proof: result.txt contains verified                                     │
+│Run blocked (1) · u Readiness               │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/typo-model / hight              │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Run is blocked. Press u Readiness for each cause and a direct action.   │
+│                                            ││Refresh after setup; Run retries from Current.                          │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• command conflict: execution effort        ││                                                                        │
+│  "hight" is invalid…                       ││                                                                        │
+│• #1 created: Invalid stored model          ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+command conflict: execution effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max, ultraMo…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ INVALID MODEL CURRENT role=review resume=false · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Run one · stopped · review effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max,…
+ #1 Invalid stored model
+ Run blocked · u Readiness shows causes and actions
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: review effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max, ultraModel           ┃
+┃codex/typo-model                                                                                                      ┃
+┃Not resolved automatically: The supervisor could not start or continue this task.                                     ┃
+┃Next: Fix the cause, then r Run (u Readiness lists each blocker)                                                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                             │
+│No attempts yet                             ││Proof: result.txt contains verified                                     │
+│Run blocked (1) · u Readiness               │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Run is blocked. Press u Readiness for each cause and a direct action.   │
+│                                            ││Refresh after setup; Run retries from Current.                          │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• command conflict: review effort "hight"   ││                                                                        │
+│  is invalid…                               ││                                                                        │
+│• #1 created: Invalid stored model          ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+command conflict: review effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max, ultraModel…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ INVALID MODEL CURRENT role=validation resume=false · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Run one · stopped · validation effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, …
+ #1 Invalid stored model
+ Run blocked · u Readiness shows causes and actions
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: validation effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max, ultraModel       ┃
+┃codex/typo-model                                                                                                      ┃
+┃Not resolved automatically: The supervisor could not start or continue this task.                                     ┃
+┃Next: Fix the cause, then r Run (u Readiness lists each blocker)                                                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                             │
+│No attempts yet                             ││Proof: result.txt contains verified                                     │
+│Run blocked (1) · u Readiness               │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Run is blocked. Press u Readiness for each cause and a direct action.   │
+│                                            ││Refresh after setup; Run retries from Current.                          │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• command conflict: validation effort       ││                                                                        │
+│  "hight" is invalid…                       ││                                                                        │
+│• #1 created: Invalid stored model          ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+command conflict: validation effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max, ultraM…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ INVALID MODEL CURRENT role=remediation resume=false · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Run one · stopped · remediation effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh,…
+ #1 Invalid stored model
+ Run blocked · u Readiness shows causes and actions
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: remediation effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max, ultraModel      ┃
+┃codex/typo-model                                                                                                      ┃
+┃Not resolved automatically: The supervisor could not start or continue this task.                                     ┃
+┃Next: Fix the cause, then r Run (u Readiness lists each blocker)                                                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                             │
+│No attempts yet                             ││Proof: result.txt contains verified                                     │
+│Run blocked (1) · u Readiness               │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Run is blocked. Press u Readiness for each cause and a direct action.   │
+│                                            ││Refresh after setup; Run retries from Current.                          │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• command conflict: remediation effort      ││                                                                        │
+│  "hight" is invalid…                       ││                                                                        │
+│• #1 created: Invalid stored model          ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+command conflict: remediation effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max, ultra…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ INVALID MODEL CURRENT role=execution resume=true · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Run one · stopped · execution effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, m…
+ #1 Invalid stored model
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: execution effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max, ultraModel        ┃
+┃codex/typo-model                                                                                                      ┃
+┃Not resolved automatically: The supervisor could not start or continue this task.                                     ┃
+┃Next: Fix the cause, then r Run (u Readiness lists each blocker)                                                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Model codex/typo-model / hight              │╰────────────────────────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Log · following · attempt 1 ───────────────────────────────────────────╮
+│Tokens none reported yet                    ││                                                                        │
+│none yet                                    ││                                                                        │
+│Budget 0 of 3 used                          ││                                                                        │
+│Run blocked (1) · u Readiness               ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• command conflict: execution effort        ││                                                                        │
+│  "hight" is invalid…                       ││                                                                        │
+│• Fixture handoff                           ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #1 created: Invalid stored model          ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+command conflict: execution effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max, ultraMo…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ INVALID MODEL CURRENT role=review resume=true · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Run one · stopped · review effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max,…
+ #1 Invalid stored model
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: review effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max, ultraModel           ┃
+┃codex/typo-model                                                                                                      ┃
+┃Not resolved automatically: The supervisor could not start or continue this task.                                     ┃
+┃Next: Fix the cause, then r Run (u Readiness lists each blocker)                                                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Log · following · attempt 1 ───────────────────────────────────────────╮
+│Tokens none reported yet                    ││                                                                        │
+│none yet                                    ││                                                                        │
+│Budget 0 of 3 used                          ││                                                                        │
+│Run blocked (1) · u Readiness               ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• command conflict: review effort "hight"   ││                                                                        │
+│  is invalid…                               ││                                                                        │
+│• Fixture handoff                           ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #1 created: Invalid stored model          ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+command conflict: review effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max, ultraModel…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ INVALID MODEL CURRENT role=validation resume=true · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Run one · stopped · validation effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, …
+ #1 Invalid stored model
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: validation effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max, ultraModel       ┃
+┃codex/typo-model                                                                                                      ┃
+┃Not resolved automatically: The supervisor could not start or continue this task.                                     ┃
+┃Next: Fix the cause, then r Run (u Readiness lists each blocker)                                                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Log · following · attempt 1 ───────────────────────────────────────────╮
+│Tokens none reported yet                    ││                                                                        │
+│none yet                                    ││                                                                        │
+│Budget 0 of 3 used                          ││                                                                        │
+│Run blocked (1) · u Readiness               ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• command conflict: validation effort       ││                                                                        │
+│  "hight" is invalid…                       ││                                                                        │
+│• Fixture handoff                           ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #1 created: Invalid stored model          ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+command conflict: validation effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max, ultraM…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ INVALID MODEL CURRENT role=remediation resume=true · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Run one · stopped · remediation effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh,…
+ #1 Invalid stored model
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: remediation effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max, ultraModel      ┃
+┃codex/typo-model                                                                                                      ┃
+┃Not resolved automatically: The supervisor could not start or continue this task.                                     ┃
+┃Next: Fix the cause, then r Run (u Readiness lists each blocker)                                                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Log · following · attempt 1 ───────────────────────────────────────────╮
+│Tokens none reported yet                    ││                                                                        │
+│none yet                                    ││                                                                        │
+│Budget 0 of 3 used                          ││                                                                        │
+│Run blocked (1) · u Readiness               ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• command conflict: remediation effort      ││                                                                        │
+│  "hight" is invalid…                       ││                                                                        │
+│• Fixture handoff                           ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #1 created: Invalid stored model          ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+command conflict: remediation effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max, ultra…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

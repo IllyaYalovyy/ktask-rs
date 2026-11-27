@@ -1,0 +1,69 @@
+@@ MARK DONE FORM · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Run one preference · Next #2: Approve the queue interaction · m: run…
+ #1 Recover a failed check
+╭ Mark done #1 Recover a failed check ───────────────────────────────╮
+│Records the task as done by your decision and moves it to History.  │
+│A live attempt stops first and its uncommitted changes are stashed; │
+│commit them first to keep them in the tree.                         │
+│                                                                    │
+│Reason (optional)                                                   │
+│▏                                                                   │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models]
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Configuration applied · session only
+@@ DONE HISTORY · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Task details / attempts ───────────────────────────────────────────╮
+│#1 Recover a failed check                                           │
+│Done · AI                                                           │
+│                                                                    │
+│Goal: Include every task on the final queue page.                   │
+│Acceptance check: All 240 tasks are reachable.                      │
+│Total cost: $0.08 (simulated)                                       │
+│Answer: None                                                        │
+│                                                                    │
+│Attempt 1 / 1                                                       │
+│Failed: final row omitted                                           │
+│PASS  queue fixture 01                                              │
+│PASS  queue fixture 02                                              │
+│PASS  queue fixture 03                                              │
+│PASS  queue fixture 04                                              │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DONE HISTORY RESOLUTION · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Execution: economy / medium                                         │
+│Review: capable / high                                              │
+│Validation: capable / high                                          │
+│Remediation: capable / high                                         │
+│Attempt limit: 3 · task limit: Off · stage limit: Off               │
+│Resolution: Human: owner · Marked done: Accepted with evidence      │
+│Attempt inputs: revision 1 · session 1                              │
+│Failed: final row omitted                                           │
+│Revision 1 · Human: owner                                           │
+│Execution: economy / medium                                         │
+│Review: capable / high                                              │
+│Validation: capable / high                                          │
+│Remediation: capable / high                                         │
+│Attempt limit: 3 · task limit: Off · stage limit: Off               │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

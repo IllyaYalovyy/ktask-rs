@@ -1,0 +1,37 @@
+@@ BOUNDED REMOTE SYNC · 130x36 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Run one · paused · Paused: command conflict: Remote advanced beyond six synchronization cycles. Work and proof are reta…
+ #1 Bound remote synchronization
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                                       │
+│Attempt 1                                   ││Proof: result.txt contains verified                                               │
+│Model codex/remediation / none              │╰──────────────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ─────────────────────────────────────────╮
+│Tokens 180 new · 120 cached · 30 out        ││Supervisor needs remediation: command conflict: Remote advanced beyond six        │
+│210 new tokens + 2 call(s) unreported       ││synchronization cycles. Work and proof are retained; Resume preserves this bound. │
+│Budget 0 of 3 used                          ││After remote writers settle, s Stop, then r Run for a fresh bounded               │
+│Can run · u Readiness                       ││synchronization batch.                                                            │
+│Checks      ✓ succeeded                     ││Diagnosing supervisor stop: codex/remediation · read-only                         │
+│Review      ✓ succeeded                     ││{"judgment":{"action":"escalate","reason":"Owner action is required before        │
+│Validation  ✓ succeeded                     ││delivery can continue"}}                                                          │
+│Remediation ✓ succeeded                     ││Remediator cannot resolve this issue: Owner action is required before delivery    │
+│Remediation ✓ succeeded                     ││can continue                                                                      │
+╰────────────────────────────────────────────╯│Execution started; results require checks, review and validation                  │
+╭ Activity · #1 · l: all ────────────────────╮│Supervisor needs remediation: command conflict: Remote advanced beyond six        │
+│• Supervisor yielded this attempt for resume││synchronization cycles. Work and proof are retained; Resume preserves this bound. │
+│• command conflict: Remote advanced beyond  ││After remote writers settle, s Stop, then r Run for a fresh bounded               │
+│  six synchronization cycles. Work and…     ││synchronization batch.                                                            │
+│• Workflow · Complete · repair round 0/10   ││Diagnosing supervisor stop: codex/remediation · read-only                         │
+│• Existing attempt resumed                  ││{"judgment":{"action":"escalate","reason":"Owner action is required before        │
+│• Supervisor yielded this attempt for resume││delivery can continue"}}                                                          │
+│• command conflict: Remote advanced beyond  ││Remediator cannot resolve this issue: Owner action is required before delivery    │
+│  six synchronization cycles. Work and…     ││can continue                                                                      │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details] [o Report]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

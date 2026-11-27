@@ -800,17 +800,18 @@ fn press(t: &mut Terminal, mouse: bool, key: &str, button: &str) -> Result {
     if mouse { t.click(button) } else { t.send(key) }
 }
 
-fn shown(t: &Terminal, case: &str, label: &str, text: &str) -> Result<String> {
+fn shown(t: &Terminal, (case, mouse): (&str, bool), label: &str, text: &str) -> Result<String> {
     let screen = t.screen(label, |s| s.contains(text))?;
-    println!("{case} {label}\n{screen}");
+    crate::support::record(&format!("{case}{label}"), mouse, &screen);
     Ok(screen)
 }
 
 /// Types `path` into the form's only field, replacing what it holds.
-fn type_path(t: &mut Terminal, case: &str, path: &str) -> Result {
+fn type_path(t: &mut Terminal, case: (&str, bool), path: &str) -> Result {
     t.send(&format!("\x01{path}"))?;
     let end = &path[path.len() - 20..];
-    shown(t, case, "PATH", &format!("{end}▏"))?;
+    let name = path.rsplit('/').next().unwrap_or(path);
+    shown(t, case, &format!("PATH {name}"), &format!("{end}▏"))?;
     Ok(())
 }
 
@@ -818,39 +819,39 @@ fn type_path(t: &mut Terminal, case: &str, path: &str) -> Result {
 fn configuration_exports_and_imports_settings_by_keyboard_and_mouse() -> Result {
     for (columns, rows) in SIZES {
         for mouse in [false, true] {
-            let case = format!("{columns}x{rows} mouse={mouse}");
+            let case = ("", mouse);
             let computer = Computer::new("gina", "app", None)?;
             computer.ok(&["check-set", "build", "--command", "test -d ."])?;
             let scratch = computer.fixture.scratch.path();
             let mut t = Terminal::open_project(BIN, scratch, &computer.clone, columns, rows)?;
             t.screen("startup", |s| s.contains("No current task"))?;
             press(&mut t, mouse, "4", "4 Config")?;
-            let config = shown(&t, &case, "CONFIG", "[E Export settings]")?;
+            let config = shown(&t, case, "CONFIG", "[E Export settings]")?;
             assert!(config.contains("[o Import settings]"), "{config}");
 
             // The default destination is beside the project folder, not inside it.
             let file = computer.clone.with_file_name("app-ktask-settings.json");
             press(&mut t, mouse, "E", "E Export settings")?;
-            shown(&t, &case, "EXPORT FORM", "Export settings · disk")?;
+            shown(&t, case, "EXPORT FORM", "Export settings · disk")?;
             press(&mut t, mouse, "\x13", "Apply")?;
-            shown(&t, &case, "EXPORTED", "settings to /")?;
+            shown(&t, case, "EXPORTED", "settings to /")?;
             let exported = fs::read_to_string(&file)?;
             assert!(exported.contains("test -d ."), "{exported}");
 
             // An existing file is replaced only after confirmation.
             computer.ok(&["check-set", "build", "--command", "false"])?;
             press(&mut t, mouse, "E", "E Export settings")?;
-            shown(&t, &case, "EXPORT AGAIN", "Export settings · disk")?;
+            shown(&t, case, "EXPORT AGAIN", "Export settings · disk")?;
             press(&mut t, mouse, "\x13", "Apply")?;
-            shown(&t, &case, "CONFIRM OVERWRITE", "Overwrite file?")?;
+            shown(&t, case, "CONFIRM OVERWRITE", "Overwrite file?")?;
             press(&mut t, mouse, "\x1b", "Cancel")?;
             t.screen("overwrite cancelled", |s| !s.contains("Overwrite file?"))?;
             assert_eq!(fs::read_to_string(&file)?, exported);
 
             press(&mut t, mouse, "o", "o Import settings")?;
-            shown(&t, &case, "IMPORT FORM", "Import settings · disk")?;
+            shown(&t, case, "IMPORT FORM", "Import settings · disk")?;
             press(&mut t, mouse, "\x13", "Apply")?;
-            let preview = shown(&t, &case, "PREVIEW", "Import settings preview")?;
+            let preview = shown(&t, case, "PREVIEW", "Import settings preview")?;
             assert!(preview.contains("nothing applied yet"), "{preview}");
             assert!(preview.contains("1 to change"), "{preview}");
             // Changes are listed before the settings left as they are.
@@ -874,9 +875,9 @@ fn configuration_exports_and_imports_settings_by_keyboard_and_mouse() -> Result 
                 press(&mut t, mouse, "\x1b[6~", "Down")?;
                 t.screen("preview scrolls", |s| s != before)?;
             }
-            shown_still(&t, &case, "PREVIEW END", "fix limits time_limit_ms")?;
+            shown_still(&t, case, "PREVIEW END", "fix limits time_limit_ms")?;
             press(&mut t, mouse, "\x13", "Apply")?;
-            shown(&t, &case, "IMPORTED", "Settings imported")?;
+            shown(&t, case, "IMPORTED", "Settings imported")?;
             assert_eq!(
                 computer.ok(&["checks"])?["checks"][0]["command"],
                 "test -d ."
@@ -887,9 +888,9 @@ fn configuration_exports_and_imports_settings_by_keyboard_and_mouse() -> Result 
             fs::write(&newer, r#"{"format":"ktask-settings","version":2}"#)?;
             press(&mut t, mouse, "o", "o Import settings")?;
             t.screen("import form", |s| s.contains("Import settings · disk"))?;
-            type_path(&mut t, &case, &newer)?;
+            type_path(&mut t, case, &newer)?;
             press(&mut t, mouse, "\x13", "Apply")?;
-            shown(&t, &case, "NEWER FILE", "newer than this")?;
+            shown(&t, case, "NEWER FILE", "newer than this")?;
             press(&mut t, mouse, "\x1b", "Cancel")?;
             t.screen("form closed", |s| !s.contains("Import settings · disk"))?;
             t.send("q")?;
@@ -899,9 +900,9 @@ fn configuration_exports_and_imports_settings_by_keyboard_and_mouse() -> Result 
     Ok(())
 }
 
-fn shown_still(t: &Terminal, case: &str, label: &str, text: &str) -> Result {
+fn shown_still(t: &Terminal, (case, mouse): (&str, bool), label: &str, text: &str) -> Result {
     let screen = t.still(label, |s| s.contains(text))?;
-    println!("{case} {label}\n{screen}");
+    crate::support::record(&format!("{case}{label}"), mouse, &screen);
     Ok(())
 }
 
@@ -909,44 +910,44 @@ fn shown_still(t: &Terminal, case: &str, label: &str, text: &str) -> Result {
 fn demo_settings_move_through_memory_files_without_a_database() -> Result {
     for (columns, rows) in SIZES {
         for mouse in [false, true] {
-            let case = format!("demo {columns}x{rows} mouse={mouse}");
+            let case = ("demo ", mouse);
             let sandbox = support::sandbox()?;
             let mut t = Terminal::open_at(BIN, sandbox.path(), columns, rows)?;
             t.screen("demo", |s| s.contains("MOCK DATA"))?;
             press(&mut t, mouse, "4", "4 Config")?;
-            shown(&t, &case, "CONFIG", "[E Export settings]")?;
+            shown(&t, case, "CONFIG", "[E Export settings]")?;
 
             press(&mut t, mouse, "E", "E Export settings")?;
-            shown(&t, &case, "EXPORT", "in-memory demo files")?;
+            shown(&t, case, "EXPORT", "in-memory demo files")?;
             press(&mut t, mouse, "\x13", "Apply")?;
             t.screen("export closed", |s| {
                 !s.contains("Export settings · in-memory")
             })?;
 
             press(&mut t, mouse, "o", "o Import settings")?;
-            shown(&t, &case, "IMPORT", "/demo/settings.json")?;
+            shown(&t, case, "IMPORT", "/demo/settings.json")?;
             press(&mut t, mouse, "\x13", "Apply")?;
-            let preview = shown(&t, &case, "PREVIEW", "2 to change, 1 left")?;
+            let preview = shown(&t, case, "PREVIEW", "2 to change, 1 left")?;
             assert!(preview.contains("preview · simulated"), "{preview}");
             press(&mut t, mouse, "\x13", "Apply")?;
-            shown(&t, &case, "IMPORTED", "Continue queue: Disabled")?;
+            shown(&t, case, "IMPORTED", "Continue queue: Disabled")?;
 
             // The exported session settings are read back from memory.
             press(&mut t, mouse, "o", "o Import settings")?;
             t.screen("import again", |s| {
                 s.contains("Import settings · in-memory")
             })?;
-            type_path(&mut t, &case, "/demo/my-settings.json")?;
+            type_path(&mut t, case, "/demo/my-settings.json")?;
             press(&mut t, mouse, "\x13", "Apply")?;
-            shown(&t, &case, "PREVIEW BACK", "2 to change, 1 left")?;
+            shown(&t, case, "PREVIEW BACK", "2 to change, 1 left")?;
             press(&mut t, mouse, "\x13", "Apply")?;
-            shown(&t, &case, "RESTORED", "Continue queue: Enabled")?;
+            shown(&t, case, "RESTORED", "Continue queue: Enabled")?;
 
             press(&mut t, mouse, "o", "o Import settings")?;
             t.screen("import form", |s| s.contains("Import settings · in-memory"))?;
-            type_path(&mut t, &case, "/demo/settings-newer.json")?;
+            type_path(&mut t, case, "/demo/settings-newer.json")?;
             press(&mut t, mouse, "\x13", "Apply")?;
-            shown(&t, &case, "NEWER", "newer than this")?;
+            shown(&t, case, "NEWER", "newer than this")?;
             press(&mut t, mouse, "\x1b", "Cancel")?;
             t.screen("form closed", |s| {
                 !s.contains("Import settings · in-memory")

@@ -1089,12 +1089,7 @@ fn real_cargo_stays_warm_after_cleanup_of_lib_prefixed_crates() -> Result {
         .count();
     assert_eq!(libraries, 1, "only the current library generation remains");
     let transcript = pass()?;
-    if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-        let _ = fs::write(
-            Path::new(&dir).join("real-cargo-warm-after-clean.txt"),
-            format!("{report:#?}\n{transcript}"),
-        );
-    }
+    println!("{report:#?}\n{transcript}");
     assert!(
         !transcript.contains("Compiling") && !transcript.contains("Checking"),
         "{transcript}"
@@ -1288,9 +1283,9 @@ fn cli_inventories_adopts_cleans_and_separates_provider_storage() -> Result {
     Ok(())
 }
 
-fn screen(t: &Terminal, label: &str) -> Result<String> {
+fn screen(t: &Terminal, mouse: bool, label: &str) -> Result<String> {
     let rendered = t.screen(label, |s| s.contains(label))?;
-    println!("{label}\n{rendered}");
+    crate::support::record(label, mouse, &rendered);
     Ok(rendered)
 }
 
@@ -1304,33 +1299,33 @@ fn build_cache_flows_work_from_keyboard_and_mouse() -> Result {
             build(&target, version, 50_000 - version)?;
         }
         let mut t = Terminal::open_real(DEV, &f.root, 100, 32)?;
-        screen(&t, "No current task")?;
+        screen(&t, mouse, "No current task")?;
         let go = |t: &mut Terminal, key: &str, label: &str| -> Result {
             if mouse { t.click(label) } else { t.send(key) }
         };
         go(&mut t, "4", "4 Config")?;
-        screen(&t, "Storage: SQLite")?;
+        screen(&t, mouse, "Storage: SQLite")?;
         go(&mut t, "b", "b Build cache")?;
-        let opened = screen(&t, "Not managed (opt in to clean)")?;
+        let opened = screen(&t, mouse, "Not managed (opt in to clean)")?;
         assert!(opened.contains("target") && opened.contains("Maximum bytes per cache"));
         assert!(opened.contains("Never touched"));
         // Choose Adopt, confirm.
         if mouse {
             t.click("Save limits")?;
-            screen(&t, "Clean obsolete")?;
+            screen(&t, mouse, "Clean obsolete")?;
             t.click("Clean obsolete")?;
         } else {
             t.send("\t\t\t  ")?;
         }
-        screen(&t, "Adopt project target")?;
+        screen(&t, mouse, "Adopt project target")?;
         go(&mut t, "\x13", "Apply")?;
-        screen(&t, "Adopt build cache?")?;
+        screen(&t, mouse, "Adopt build cache?")?;
         go(&mut t, "\x13", "Confirm")?;
-        screen(&t, "Build cache owned")?;
+        screen(&t, mouse, "Build cache owned")?;
         assert!(build_cache::is_owned(&f.paths, &target));
         // Reopen and clean: preview, then confirm.
         go(&mut t, "b", "b Build cache")?;
-        screen(&t, "Owned:")?;
+        screen(&t, mouse, "Owned:")?;
         // Keep a single warm generation through the form itself.
         if mouse {
             t.click("Warm generations kept")?;
@@ -1339,7 +1334,7 @@ fn build_cache_flows_work_from_keyboard_and_mouse() -> Result {
         }
         t.send("\x011")?;
         go(&mut t, "\x13", "Apply")?;
-        screen(&t, "Build cache limits saved")?;
+        screen(&t, mouse, "Build cache limits saved")?;
         assert_eq!(build_cache::policy(&f.paths)?.keep_generations, 1);
         go(&mut t, "b", "b Build cache")?;
         // Saving closed the form, so its fields are back only once it reopens; the footer
@@ -1352,12 +1347,12 @@ fn build_cache_flows_work_from_keyboard_and_mouse() -> Result {
         } else {
             t.send("\t\t\t ")?;
         }
-        screen(&t, "Clean obsolete")?;
+        screen(&t, mouse, "Clean obsolete")?;
         go(&mut t, "\x13", "Apply")?;
-        let preview = screen(&t, "Clean build caches?")?;
+        let preview = screen(&t, mouse, "Clean build caches?")?;
         assert!(preview.contains("generation(s)"));
         go(&mut t, "\x13", "Confirm")?;
-        screen(&t, "Build cache cleaned")?;
+        screen(&t, mouse, "Build cache cleaned")?;
         assert!(
             target
                 .join("debug/deps")

@@ -1,0 +1,317 @@
+@@ FOLLOW-UP RUNNING CURRENT · 105x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 4 · History 0
+ Session: Queue · running · Workflow · Implement · repair round 0/10 · Next #2 · Run requested
+ #1 Origin task
+ Workflow · Implement · repair round 0/10 · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ───────────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified              │
+│Attempt 1                                   ││Proof: result.txt contains verified                      │
+│Step: Execution                             ││Follow-ups: #3, #4 · Queue for details                   │
+│Model codex/execution / none                │╰─────────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Log · following · attempt 1 · o: report ────────────────╮
+│Tokens none reported yet                    ││Execution started; results require checks, review and    │
+│? new tokens                                ││validation                                               │
+│Budget 0 of 3 used                          ││execution: codex/execution · new session                 │
+│Execution   … running                       ││                                                         │
+│                                            ││                                                         │
+╰────────────────────────────────────────────╯│                                                         │
+╭ Activity · #1 · l: all ────────────────────╮│                                                         │
+│• Workflow · Implement · repair round 0/10  ││                                                         │
+│• Current task attempt recorded             ││                                                         │
+│• #1 created: Origin task                   ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+╰────────────────────────────────────────────╯╰─────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [o Report]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ FOLLOW-UP APPENDED QUEUE · 105x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 4 · History 0
+ Session: Queue · running · Workflow · Implement · repair round 0/10 · Next #2 · Run requested
+ Queue · 4 shown / 4 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 4 · Model ──────────────────────────────────────╮╭ Details · click for full ──────────────╮
+│› #1   Running        Origin task             codex/execution││Origin task                             │
+│  #2   Pending        Later task              codex/execution││#1 · Running · AI                       │
+│  #3   Needs approval Discovered follow-up    codex/execution││                                        │
+│  #4   Needs approval Second discovery        codex/execution││Goal: Create result.txt containing      │
+│                                                             ││verified                                │
+│                                                             ││                                        │
+│                                                             ││Check: result.txt contains verified     │
+│                                                             ││                                        │
+│                                                             ││Attempts: 1 · ? new tokens              │
+│                                                             ││Follow-up #3: Discovered follow-up      │
+│                                                             ││Follow-up #4: Second discovery          │
+│                                                             ││                                        │
+│                                                             ││Models:                                 │
+│                                                             ││Execution: codex/execution / none       │
+│                                                             ││Review: codex/review / none             │
+│                                                             ││Validation: codex/validation / none     │
+│                                                             ││Remediation: codex/remediation / none   │
+╰─────────────────────────────────────────────────────────────╯╰────────────────────────────────────────╯
+[Copy] [p Pause] [a Add] [i Insert] [s Stop] [T Restart] [D Mark done] [o Import] [E Export]
+[Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ FOLLOW-UP RUNNING SOURCE DETAIL · 105x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects  ╭ Task details / attempts ───────────────────────────────────────────────────╮
+ Current #1 ·│Actions: Pause, Stop, Restart, Mark done                                    │
+ Session: Que│Current Revision 1 · Origin task                                            │ted
+ #1 Origin ta│Approval: ready · human: owner · Category: code (built-in, checks apply)    │
+ Workflow · I│Goal: Create result.txt containing verified                                 │
+╭ Status · En│Acceptance: 1: result.txt contains verified                                 │─────────────╮
+│Running · AI│execution: codex/execution / none                                           │             │
+│Attempt 1   │review: codex/review / none                                                 │             │
+│Step: Execut│validation: codex/validation / none                                         │             │
+│Model codex/│remediation: codex/remediation / none                                       │─────────────╯
+│Active <t>  │Attempt limit: 3 · Task limit: Off · Stage limit: Off                       │─────────────╮
+│Tokens none │Task usage: ? new tokens                                                    │eview and    │
+│? new tokens│Follow-up #3: Discovered follow-up                                          │             │
+│Budget 0 of │Follow-up #4: Second discovery                                              │             │
+│Execution   │Attempt 1 · #1: running · revision 1 · active <t> · waiting <t>             │             │
+│            │  Outcome: in progress                                                      │             │
+╰────────────│  Usage: 1 calls · uncached unknown · cache read unknown · cache write      │             │
+╭ Activity · │unknown · output unknown · ? new tokens                                     │             │
+│• Workflow ·│  execution: codex/execution / none · 1 calls · uncached unknown · cache    │             │
+│• Current ta│read unknown · cache write unknown · output unknown · ? new tokens ·        │             │
+│• #1 created│provider time <t>                                                           │             │
+│            │Find output                                                                 │             │
+│            │▏                                                                           │             │
+╰────────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │─────────────╯
+[Copy] [p Pau│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │ls] [o Report]
+[a Add] [i In│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │
+             │[Refresh] [Up] [Down] [Close] [Copy]                                        │
+Runs happen i╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ FOLLOW-UP RUNNING CURRENT · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 4 · History
+ Session: Queue · running · Workflow · Implement · repair round 0/10 …
+ #1 Origin task
+ Workflow · Implement · repair round 0/10 · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Create result.txt containing ve…│
+│Attempt 1                   ││Proof: result.txt contains verified   │
+│Step: Execution             ││Follow-ups: #3, #4 · Queue for details│
+│Tokens none reported yet    │╰──────────────────────────────────────╯
+│Model codex/execution / none│╭ Log · following · attempt 1 · o: repo╮
+╰────────────────────────────╯│Execution started; results require    │
+╭ Activity · #1 · l: all ────╮│checks, review and validation         │
+│• Workflow · Implement ·    ││execution: codex/execution · new      │
+│  repair round 0/10         ││session                               │
+│• Current task attempt      ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [o Report] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ FOLLOW-UP APPENDED QUEUE · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 4 · History
+ Session: Queue · running · Workflow · Implement · repair round 0/10 …
+ Queue · 4 shown / 4 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 4 ─────────────────────────╮╭ Details · click for full ╮
+│› #1   Running        Origin task       ││Origin task               │
+│  #2   Pending        Later task        ││#1 · Running · AI         │
+│  #3   Needs approval Discovered follow…││                          │
+│  #4   Needs approval Second discovery  ││Goal: Create result.txt   │
+│                                        ││containing verified       │
+│                                        ││                          │
+│                                        ││Check: result.txt contains│
+│                                        ││verified                  │
+│                                        ││                          │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [p Pause] [a Add] [i Insert] [s Stop] [T Restart] [D Mark done]
+[o Import] [E Export] [Enter Details] [f Filter] [/ Search]
+[Esc Clear] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ FOLLOW-UP RUNNING SOURCE DETAIL · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│remediation: codex/remediation / none                               │
+│Attempt limit: 3 · Task limit: Off · Stage limit: Off               │
+│Task usage: ? new tokens                                            │
+│Follow-up #3: Discovered follow-up                                  │
+│Follow-up #4: Second discovery                                      │
+│Attempt 1 · #1: running · revision 1 · active <t> · waiting <t>     │
+│  Outcome: in progress                                              │
+│  Usage: 1 calls · uncached unknown · cache read unknown · cache    │
+│write unknown · output unknown · ? new tokens                       │
+│  execution: codex/execution / none · 1 calls · uncached unknown ·  │
+│cache read unknown · cache write unknown · output unknown · ? new   │
+│tokens · provider time <t>                                          │
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…
+@@ FOLLOW-UP CURRENT · 105x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #3 · Needs approval   |   Queue 2 · History 2
+ Session: Queue · waiting · Next #4 · Queue stopped for human work or approval
+ #3 Discovered follow-up
+ Pending revision 1 · needs approval · v Approve / n Reject
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ───────────────────────╮
+│Needs approval · AI                         ││Goal: Investigate discovered work                        │
+│No attempts yet                             ││Proof: Review the discovery                              │
+│Run blocked (2) · u Readiness               │╰─────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Needs approval. Review the task, then Approve or Reject. │
+│                                            ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+╰────────────────────────────────────────────╯│                                                         │
+╭ Activity · #3 · l: all ────────────────────╮│                                                         │
+│• #3 follow-up draft from task #1, attempt  ││                                                         │
+│  #1: Discovered follow-up                  ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+╰────────────────────────────────────────────╯╰─────────────────────────────────────────────────────────╯
+[Copy] [v Approve] [n Reject] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ FOLLOW-UP QUEUE KEYBOARD · 105x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #3 · Needs approval   |   Queue 2 · History 2
+ Session: Queue · waiting · Next #4 · Queue stopped for human work or approval
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 2 · Model ──────────────────────────────────────╮╭ Details · click for full ──────────────╮
+│› #3   Needs approval Discovered follow-up    codex/execution││Discovered follow-up                    │
+│  #4   Needs approval Second discovery        codex/execution││#3 · Needs approval · AI                │
+│                                                             ││                                        │
+│                                                             ││Goal: Investigate discovered work       │
+│                                                             ││                                        │
+│                                                             ││Check: Review the discovery             │
+│                                                             ││                                        │
+│                                                             ││Attempts: 0 · none yet                  │
+│                                                             ││Follow-up from task #1, attempt #1      │
+│                                                             ││                                        │
+│                                                             ││Models:                                 │
+│                                                             ││Execution: codex/execution / none       │
+│                                                             ││Review: codex/review / none             │
+│                                                             ││Validation: codex/validation / none     │
+│                                                             ││Remediation: codex/remediation / none   │
+│                                                             ││                                        │
+│                                                             ││                                        │
+╰─────────────────────────────────────────────────────────────╯╰────────────────────────────────────────╯
+[Copy] [a Add] [i Insert] [e Edit] [m Move] [v Approve] [n Reject] [c Models] [D Mark done] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ FOLLOW-UP DETAIL KEYBOARD · 105x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #3 · Needs approval   |   Queue 2 · History 2
+ Session: Que╭ Task details / attempts ───────────────────────────────────────────────────╮
+ Queue · 2 sh│#3 v1 · Needs approval · ai                                                 │
+ Filter: All │Discovered follow-up                                                        │
+╭ Queue · 1 /│Actions: Approve, Reject, Edit, Move, Mark done                             │─────────────╮
+│› #3   Needs│Current Revision 1 · Discovered follow-up                                   │             │
+│  #4   Needs│Approval: draft · ai: worker attempt #1 · Category: code (built-in, checks  │             │
+│            │apply)                                                                      │             │
+│            │Goal: Investigate discovered work                                           │d work       │
+│            │Acceptance: 1: Review the discovery                                         │             │
+│            │execution: codex/execution / none                                           │             │
+│            │review: codex/review / none                                                 │             │
+│            │validation: codex/validation / none                                         │             │
+│            │remediation: codex/remediation / none                                       │empt #1      │
+│            │Attempt limit: 3 · Task limit: Off · Stage limit: Off                       │             │
+│            │Task usage: none yet                                                        │             │
+│            │Follow-up from task #1, attempt #1                                          │/ none       │
+│            │No attempt evidence recorded.                                               │             │
+│            │Find output                                                                 │n / none     │
+│            │▏                                                                           │ion / none   │
+│            │[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │             │
+│            │[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │             │
+╰────────────│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │─────────────╯
+[Copy] [a Add│[Refresh] [Up] [Down] [Close] [Copy]                                        │ [o Import]
+[E Export] [E╰────────────────────────────────────────────────────────────────────────────╯
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ FOLLOW-UP HISTORY MOUSE · 105x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #3 · Needs approval   |   Queue 2 · History 2
+ Session: Queue · waiting · Next #4 · Queue stopped for human work or approval
+ History · 2 shown / 2 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 2 / 2 · Finished Attempts Time Usage ──────────────────╮╭ Details · click for full ─────────╮
+│  #2   Done     Later task <date> 1 <t> 210 tkn                   ││Origin task                        │
+│› #1   Done     Origin task <date> 1 <t> 210 tkn                  ││#1 · Done · AI · finished <date>   │
+│                                                                  ││<date>                             │
+│                                                                  ││                                   │
+│                                                                  ││Goal: Create result.txt containing │
+│                                                                  ││verified                           │
+│                                                                  ││                                   │
+│                                                                  ││Check: result.txt contains verified│
+│                                                                  ││                                   │
+│                                                                  ││Attempts: 1 · 210 new tokens       │
+│                                                                  ││Follow-up #3: Discovered follow-up │
+│                                                                  ││Follow-up #4: Second discovery     │
+│                                                                  ││                                   │
+│                                                                  ││Models:                            │
+│                                                                  ││Execution: codex/execution / none  │
+│                                                                  ││Review: codex/review / none        │
+│                                                                  ││Validation: codex/validation / none│
+╰──────────────────────────────────────────────────────────────────╯╰───────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear]
+[E Export] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ FOLLOW-UP SOURCE DETAIL MOUSE · 105x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects  ╭ Task details / attempts ───────────────────────────────────────────────────╮
+ Current #3 ·│remediation: codex/remediation / none                                       │
+ Session: Que│Attempt limit: 3 · Task limit: Off · Stage limit: Off                       │
+ History · 2 │Task usage: 210 new tokens                                                  │
+ Filter: All │Follow-up #3: Discovered follow-up                                          │
+╭ History · 2│Follow-up #4: Second discovery                                              │ull ─────────╮
+│  #2   Done │Attempt 1 · #1: succeeded · revision 1 · active <t> · waiting <t>           │             │
+│› #1   Done │  Outcome: Checks, independent review and validation passed after 0 repair  │hed <date>   │
+│            │rounds                                                                      │             │
+│            │  Usage: 3 calls · uncached 180 · cache read 120 · cache write 0 · output   │             │
+│            │30 · 210 new tokens                                                         │t containing │
+│            │  execution: codex/execution / none · 1 calls · uncached 60 · cache read 40 │             │
+│            │· cache write 0 · output 10 · 70 new tokens · provider time <t>             │             │
+│            │  review: codex/review / none · 1 calls · uncached 60 · cache read 40 ·     │ains verified│
+│            │cache write 0 · output 10 · 70 new tokens · provider time <t>               │             │
+│            │  validation: codex/validation / none · 1 calls · uncached 60 · cache read  │tokens       │
+│            │40 · cache write 0 · output 10 · 70 new tokens · provider time <t>          │ed follow-up │
+│            │Resolution: system: runner · Checks, independent review and validation      │iscovery     │
+│            │passed after 0 repair rounds                                                │             │
+│            │Resolution: succeeded · system: runner · Checks, independent review and     │             │
+│            │validation passed after 0 repair rounds · <epoch>                           │tion / none  │
+│            │Find output                                                                 │ none        │
+│            │▏                                                                           │dation / none│
+╰────────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │─────────────╯
+[Copy] [C Cop│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │c Clear]
+[E Export] [S│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │
+             │[Refresh] [Up] [Down] [Close] [Copy]                                        │
+Runs happen i╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

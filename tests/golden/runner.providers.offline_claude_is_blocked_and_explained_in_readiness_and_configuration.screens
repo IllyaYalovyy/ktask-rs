@@ -1,0 +1,82 @@
+@@ OFFLINE READINESS · 140x40 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Offline Claude             ╭ Execution readiness ───────────────────────────────────────────────────────╮
+ Run blocked · u Readiness show│Run blocked · 1 blocker(s)                                                  │
+╭ Status · Enter: details ─────│                                                                            │──────────────────────────────╮
+│Pending · AI                  │OK · Execution state                                                        │                              │
+│No attempts yet               │OK · Project checks                                                         │                              │
+│Run blocked (1) · u Readiness │OK · Approval                                                               │──────────────────────────────╯
+│Model claude/execution / none │OK · Task                                                                   │──────────────────────────────╮
+│Budget 0 of 3 used            │OK · execution model                                                        │action. Refresh after setup;  │
+│                              │OK · review model                                                           │                              │
+│                              │OK · validation model                                                       │                              │
+│                              │OK · remediation model                                                      │                              │
+│                              │BLOCK · Writable workers (execution and repair) · Agent network Off ·       │                              │
+│                              │Claude Code: command conflict: Claude Code cannot enforce Agent network Off │                              │
+│                              │for writable workers; set Agent network On or choose Codex for execution    │                              │
+│                              │and repair → Esc, 4 Config, e Preferences: Agent network On; or m Models:   │                              │
+│                              │Codex execution                                                             │                              │
+╰──────────────────────────────│OK · Claude Code CLI                                                        │                              │
+╭ Activity · #1 · l: all ──────│OK · Read-only sandbox                                                      │                              │
+│• #1 created: Offline Claude  │OK · Commit identity: Project Author <project@example.com>                  │                              │
+│                              │OK · Supervisor ownership                                                   │                              │
+│                              │OK · Worker ownership                                                       │                              │
+│                              │OK · Workspace baseline                                                     │                              │
+│                              │                                                                            │                              │
+│                              │After fixing setup, Refresh here or press r on Current. Inspection creates  │                              │
+│                              │no attempt.                                                                 │                              │
+│                              │Wheel / PgUp / PgDn: scroll · Esc: close                                    │                              │
+│                              │                                                                            │                              │
+│                              │[c Checks] [m Models] [r Run queue] [u Refresh] [Close]                     │                              │
+│                              │                                                                            │                              │
+│                              │                                                                            │                              │
+╰──────────────────────────────╰────────────────────────────────────────────────────────────────────────────╯──────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ OFFLINE CONFIGURATION · 140x40 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project              ╭ Project preferences ───────────────────────────────────────────────────────╮                              │
+│Storage: SQLite output and ins│Saved per project in this instance. Keyboard stays available.               │mits.                         │
+│Preferences: saved per project│This policy controls new breakdown and repair tasks.                        │                              │
+│                              │Run mode applies to the next Run/resume/retry.                              │                              │
+│Mouse: Enabled                │Agent network applies to execution and repair workers. On permits network   │                              │
+│Run mode: Continue queue      │access with Codex, Claude Code and OpenCode. Off is enforced by Codex;      │                              │
+│Planner approval: Automatic   │Claude Code and OpenCode cannot enforce Off, so their writable turns are    │                              │
+│Delivery: local via origin/mai│blocked.                                                                    │                              │
+│Dependencies: manual external │Check before task runs the project checks on a task's clean starting        │issing. CLI require declares  │
+│prerequisites before a task st│commit; a red start enters bounded automatic repair with the original task  │                              │
+│                              │goal.                                                                       │                              │
+│Defaults apply to new tasks; e│Mouse                                                                       │                              │
+│u User defaults: what new proj│< Enabled >   click / Space to change                                       │                              │
+│f Profiles: named role models │Planner approval                                                            │                              │
+│w Work categories: templates t│< Automatic >   click / Space to change                                     │ts or art; override per       │
+│project.                      │Run mode                                                                    │                              │
+│L Review lenses: opt-in specia│< Continue queue >   click / Space to change                                │ default selection.           │
+│Checks: list, add, edit, enabl│Agent network                                                               │                              │
+│Keyboard remains available wit│< Off >   click / Space to change                                           │                              │
+│i Report limits: time and cost│Check before task                                                           │                              │
+│E Export settings and o Import│< Off >   click / Space to change                                           │                              │
+│                              │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                              │
+│                              │                                                                            │                              │
+│                              │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                              │
+│                              │                                                                            │                              │
+│                              ╰────────────────────────────────────────────────────────────────────────────╯                              │
+│                                                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

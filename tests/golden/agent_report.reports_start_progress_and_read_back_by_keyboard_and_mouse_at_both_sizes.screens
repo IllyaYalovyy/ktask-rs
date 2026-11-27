@@ -1,0 +1,1265 @@
+@@ REPORT FORM · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+╭ Agent reports · project ───────────────────────────────────────────╮
+│A read-only agent investigates this project on this host and        │
+│reports what happened and how to fix it. It changes nothing.        │
+│Model: codex/operator · 15 min · $2.00                              │
+│No reports yet.                                                     │
+│Report                                                              │
+│< New report >   click / Space to change                            │
+│Question (blank: explain the current state)                         │
+│                                                                    │
+│Task ID (blank: current task)                                       │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ LIVE PROGRESS · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+╭ Agent report #1 · Running · project ───────────────────────────────╮
+│Usage: tokens not reported                                          │
+│Cost: not reported (limit $2.00) · time limit 15m 00s               │
+│                                                                    │
+│PROGRESS (no report yet)                                            │
+│· Collecting ktask records · codex/operator · time limit 15m 00s ·  │
+│cost limit $2.00                                                    │
+│· Codex reports no cost, so the cost limit cannot end this run; the │
+│time limit bounds it                                                │
+│· Codex is investigating · read-only                                │
+│» Fixture agent read the ktask records                              │
+│  $ df -h .                                                         │
+│fixture disk                                                        │
+│exit 0                                                              │
+│                                                                    │
+│s stop · [ ] older/newer · b reports · Esc: close, it keeps running │
+│                                                                    │
+│[Copy] [s Stop] [Older] [Newer] [b Reports] [Up] [Down] [Close]     │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent report #1 started · closing keeps it running
+@@ FINISHED REPORT · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+╭ Agent report #1 · Finished · project ──────────────────────────────╮
+│Agent report #1 · Finished                                          │
+│                                                                    │
+│WHAT HAPPENED                                                       │
+│Fixture account of what happened.                                   │
+│                                                                    │
+│CAUSE                                                               │
+│Fixture cause from the records.                                     │
+│                                                                    │
+│Shown by:                                                           │
+│- event 1: The latest recorded event                                │
+│- command df -h .: The disk has room                                │
+│- attempt 987654: An attempt that does not exist [not found in      │
+│ktask records]                                                      │
+│                                                                    │
+│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc│
+│                                                                    │
+│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]      │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent report #1 started · closing keeps it running
+@@ SCROLLED TO CAUSE · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+╭ Agent report #1 · Finished · project ──────────────────────────────╮
+│Agent report #1 · Finished                                          │
+│                                                                    │
+│WHAT HAPPENED                                                       │
+│Fixture account of what happened.                                   │
+│                                                                    │
+│CAUSE                                                               │
+│Fixture cause from the records.                                     │
+│                                                                    │
+│Shown by:                                                           │
+│- event 1: The latest recorded event                                │
+│- command df -h .: The disk has room                                │
+│- attempt 987654: An attempt that does not exist [not found in      │
+│ktask records]                                                      │
+│                                                                    │
+│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc│
+│                                                                    │
+│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]      │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent report #1 started · closing keeps it running
+@@ SCROLLED TO [owner only] · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+╭ Agent report #1 · Finished · project ──────────────────────────────╮
+│Shown by:                                                           │
+│- event 1: The latest recorded event                                │
+│- command df -h .: The disk has room                                │
+│- attempt 987654: An attempt that does not exist [not found in      │
+│ktask records]                                                      │
+│                                                                    │
+│PROPOSED FIX (nothing was applied)                                  │
+│1. [ktask action] Run ktask run                                     │
+│2. [repository change] Correct the check                            │
+│3. [configuration change] Raise the check timeout                   │
+│4. [host change] Free disk space                                    │
+│5. [owner only] Decide the content                                  │
+│                                                                    │
+│Question: Why is it waiting?                                        │
+│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc│
+│                                                                    │
+│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]      │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent report #1 started · closing keeps it running
+@@ OTHER PROJECT SELECTED · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 1 / 2 · * open ─────────────╮╭ Project · click to open ─╮
+│›   another Idle    0 queued · No unfin…││another                   │
+│  * project Ready   1 queued · #1 Expla…││/tmp/ktask-screens--------│
+│                                        ││---------------/ktask-test│
+│                                        ││-scratch/run-000000/anothe│
+│                                        ││r                         │
+│                                        ││                          │
+│                                        ││State: Idle               │
+│                                        ││Runner: not running       │
+│                                        ││Current: No unfinished    │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix]
+[? Help] [q Quit]
+
+Agent report #1 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROJECTS FORM · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+╭ Agent reports · another ───────────────────────────────────────────╮
+│A read-only agent investigates this project on this host and        │
+│reports what happened and how to fix it. It changes nothing.        │
+│Model: codex/operator · 15 min · $2.00                              │
+│No reports yet.                                                     │
+│Report                                                              │
+│< New report >   click / Space to change                            │
+│Question (blank: explain the current state)                         │
+│                                                                    │
+│Task ID (blank: current task)                                       │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+
+Agent report #1 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROJECTS LIVE PROGRESS · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+╭ Agent report #2 · Running · another ───────────────────────────────╮
+│Usage: tokens not reported                                          │
+│Cost: not reported (limit $2.00) · time limit 15m 00s               │
+│                                                                    │
+│PROGRESS (no report yet)                                            │
+│· Collecting ktask records · codex/operator · time limit 15m 00s ·  │
+│cost limit $2.00                                                    │
+│· Codex reports no cost, so the cost limit cannot end this run; the │
+│time limit bounds it                                                │
+│· Codex is investigating · read-only                                │
+│» Fixture agent read the ktask records                              │
+│  $ df -h .                                                         │
+│fixture disk                                                        │
+│exit 0                                                              │
+│                                                                    │
+│s stop · [ ] older/newer · b reports · Esc: close, it keeps running │
+│                                                                    │
+│[Copy] [s Stop] [Older] [Newer] [b Reports] [Up] [Down] [Close]     │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOPPED REPORT · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+╭ Agent report #2 · Stopped · another ───────────────────────────────╮
+│Agent report #2 · Stopped                                           │
+│NOT A FINISHED REPORT: Stopped by owner                             │
+│                                                                    │
+│Question: Explain the current state                                 │
+│Task: the current task                                              │
+│Requested by human: owner                                           │
+│Model: codex/operator                                               │
+│Started <date> · took <t>                                           │
+│Usage: tokens not reported                                          │
+│Cost: not reported (limit $2.00) · time limit 15m 00s               │
+│                                                                    │
+│WHAT IT HAD FOUND                                                   │
+│· Collecting ktask records · codex/operator · time limit 15m 00s ·  │
+│cost limit $2.00                                                    │
+│[ ] older/newer · b reports · Wheel / PgUp / PgDn: scroll · Esc:    │
+│close                                                               │
+│[Copy] [Older] [Newer] [b Reports] [Up] [Down] [Close]              │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ OWN PROJECT SELECTED · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 2 / 2 · * open ─────────────╮╭ Project · click to open ─╮
+│    another Idle    0 queued · No unfin…││project · open            │
+│› * project Ready   1 queued · #1 Expla…││/tmp/ktask-screens--------│
+│                                        ││---------------/ktask-test│
+│                                        ││-scratch/run-000000/projec│
+│                                        ││t                         │
+│                                        ││                          │
+│                                        ││State: Ready              │
+│                                        ││Runner: not running       │
+│                                        ││Current: #1 Explain me ·  │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix]
+[? Help] [q Quit]
+
+Agent report #2: stop requested
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PAST REPORTS · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Agent reports · project ───────────────────────────────────────────╮
+│A read-only agent investigates this project on this host and        │
+│reports what happened and how to fix it. It changes nothing.        │
+│Model: codex/operator · 15 min · $2.00                              │
+│1 report(s):                                                        │
+│#1 · Finished · <date> · Why is it waiting?                         │
+│Report                                                              │
+│< New report >   click / Space to change                            │
+│Question (blank: explain the current state)                         │
+│                                                                    │
+│Task ID (blank: current task)                                       │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+
+Agent report #2: stop requested
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PAST REPORT · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+╭ Agent report #1 · Finished · project ──────────────────────────────╮
+│Agent report #1 · Finished                                          │
+│                                                                    │
+│WHAT HAPPENED                                                       │
+│Fixture account of what happened.                                   │
+│                                                                    │
+│CAUSE                                                               │
+│Fixture cause from the records.                                     │
+│                                                                    │
+│Shown by:                                                           │
+│- event 1: The latest recorded event                                │
+│- command df -h .: The disk has room                                │
+│- attempt 987654: An attempt that does not exist [not found in      │
+│ktask records]                                                      │
+│                                                                    │
+│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc│
+│                                                                    │
+│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]      │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SECOND REPORT · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+╭ Agent report #3 · Finished · project ──────────────────────────────╮
+│Agent report #3 · Finished                                          │
+│                                                                    │
+│WHAT HAPPENED                                                       │
+│Fixture account of what happened.                                   │
+│                                                                    │
+│CAUSE                                                               │
+│Fixture cause from the records.                                     │
+│                                                                    │
+│Shown by:                                                           │
+│- event 1: The latest recorded event                                │
+│- command df -h .: The disk has room                                │
+│- attempt 987654: An attempt that does not exist [not found in      │
+│ktask records]                                                      │
+│                                                                    │
+│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc│
+│                                                                    │
+│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]      │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ OLDER REPORT · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+╭ Agent report #1 · Finished · project ──────────────────────────────╮
+│Agent report #1 · Finished                                          │
+│                                                                    │
+│WHAT HAPPENED                                                       │
+│Fixture account of what happened.                                   │
+│                                                                    │
+│CAUSE                                                               │
+│Fixture cause from the records.                                     │
+│                                                                    │
+│Shown by:                                                           │
+│- event 1: The latest recorded event                                │
+│- command df -h .: The disk has room                                │
+│- attempt 987654: An attempt that does not exist [not found in      │
+│ktask records]                                                      │
+│                                                                    │
+│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc│
+│                                                                    │
+│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]      │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ NEWER REPORT · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+╭ Agent report #3 · Finished · project ──────────────────────────────╮
+│Agent report #3 · Finished                                          │
+│                                                                    │
+│WHAT HAPPENED                                                       │
+│Fixture account of what happened.                                   │
+│                                                                    │
+│CAUSE                                                               │
+│Fixture cause from the records.                                     │
+│                                                                    │
+│Shown by:                                                           │
+│- event 1: The latest recorded event                                │
+│- command df -h .: The disk has room                                │
+│- attempt 987654: An attempt that does not exist [not found in      │
+│ktask records]                                                      │
+│                                                                    │
+│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc│
+│                                                                    │
+│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]      │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LIMITS FORM · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+╭ Agent report limits ───────────────────────────────────────────────╮
+│What one report or fix of this project may use; running ones keep   │
+│theirs.                                                             │
+│Codex reports no cost, so only the time limit bounds it.            │
+│The model is the operator role in m Defaults; unset, the            │
+│remediation model.                                                  │
+│Time limit per report (minutes)                                     │
+│15▏                                                                 │
+│Cost limit per report (USD)                                         │
+│2.00                                                                │
+│Time limit per fix (minutes)                                        │
+│30                                                                  │
+│Cost limit per fix (USD)                                            │
+│5.00                                                                │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent report #3 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SCROLLED TO [owner only] · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+╭ Agent report #1 · Finished · project ──────────────────────────────╮
+│Fixture cause from the records.                                     │
+│                                                                    │
+│Shown by:                                                           │
+│- event 1: The latest recorded event                                │
+│- command df -h .: The disk has room                                │
+│- attempt 987654: An attempt that does not exist [not found in      │
+│ktask records]                                                      │
+│                                                                    │
+│PROPOSED FIX (nothing was applied)                                  │
+│1. [ktask action] Run ktask run                                     │
+│2. [repository change] Correct the check                            │
+│3. [configuration change] Raise the check timeout                   │
+│4. [host change] Free disk space                                    │
+│5. [owner only] Decide the content                                  │
+│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc│
+│                                                                    │
+│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]      │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent report #1 started · closing keeps it running
+@@ PAST REPORTS · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Agent reports · project ───────────────────────────────────────────╮
+│A read-only agent investigates this project on this host and        │
+│reports what happened and how to fix it. It changes nothing.        │
+│Model: codex/operator · 15 min · $2.00                              │
+│1 report(s):                                                        │
+│#1 · Finished · <date> · Explain the current state                  │
+│Report                                                              │
+│< New report >   click / Space to change                            │
+│Question (blank: explain the current state)                         │
+│                                                                    │
+│Task ID (blank: current task)                                       │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+
+Agent report #2: stop requested
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ REPORT FORM · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Explain me
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Be investigated                                                   │
+│No attempts yet                             ││Proof: Reported                                                         │
+│Can run · u Readiness                       │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/executio╭ Agent reports · project ───────────────────────────────────────────────────╮────────────────────╮
+│Budget 0 of 3 used  │A read-only agent investigates this project on this host and reports what   │sor; this pane      │
+│                    │happened and how to fix it. It changes nothing.                             │                    │
+│                    │Model: codex/operator · 15 min · $2.00                                      │r this task.        │
+│                    │No reports yet.                                                             │                    │
+│                    │Report                                                                      │                    │
+│                    │< New report >   click / Space to change                                    │                    │
+│                    │Question (blank: explain the current state)                                 │                    │
+│                    │                                                                            │                    │
+│                    │Task ID (blank: current task)                                               │                    │
+╰────────────────────│                                                                            │                    │
+╭ Activity · #1 · l: │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│• #1 created: Explai│                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LIVE PROGRESS · 120x36 · keyboard
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Explain me
+ Ready · r Run queue;╭ Agent report #1 · Running · project ───────────────────────────────────────╮
+╭ Status · Enter: det│Agent report #1 · Running                                                   │────────────────────╮
+│Pending · AI        │Question: Why is it waiting?                                                │                    │
+│No attempts yet     │Task: the current task                                                      │                    │
+│Can run · u Readines│Requested by human: owner                                                   │────────────────────╯
+│Model codex/executio│Model: codex/operator                                                       │────────────────────╮
+│Budget 0 of 3 used  │Started <date> · running for <t>                                            │sor; this pane      │
+│                    │Usage: tokens not reported                                                  │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │r this task.        │
+│                    │                                                                            │                    │
+│                    │PROGRESS (no report yet)                                                    │                    │
+│                    │· Collecting ktask records · codex/operator · time limit 15m 00s · cost     │                    │
+│                    │limit $2.00                                                                 │                    │
+│                    │· Codex reports no cost, so the cost limit cannot end this run; the time    │                    │
+│                    │limit bounds it                                                             │                    │
+╰────────────────────│· Codex is investigating · read-only                                        │                    │
+╭ Activity · #1 · l: │» Fixture agent read the ktask records                                      │                    │
+│• #1 created: Explai│  $ df -h .                                                                 │                    │
+│                    │fixture disk                                                                │                    │
+│                    │exit 0                                                                      │                    │
+│                    │                                                                            │                    │
+│                    │s stop · [ ] older/newer · b reports · Esc: close, it keeps running         │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [s Stop] [Older] [Newer] [b Reports] [Up] [Down] [Close]             │                    │
+│                    │                                                                            │                    │
+╰────────────────────╰────────────────────────────────────────────────────────────────────────────╯────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Agent report #1 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ FINISHED REPORT · 120x36 · keyboard
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Curre╭ Agent report #1 · Finished · project ──────────────────────────────────────╮
+ Current #1 · Pending│Agent report #1 · Finished                                                  │
+ Queue preference · l│                                                                            │
+ #1 Explain me       │WHAT HAPPENED                                                               │
+ Ready · r Run queue;│Fixture account of what happened.                                           │
+╭ Status · Enter: det│                                                                            │────────────────────╮
+│Pending · AI        │CAUSE                                                                       │                    │
+│No attempts yet     │Fixture cause from the records.                                             │                    │
+│Can run · u Readines│                                                                            │────────────────────╯
+│Model codex/executio│Shown by:                                                                   │────────────────────╮
+│Budget 0 of 3 used  │- event 1: The latest recorded event                                        │sor; this pane      │
+│                    │- command df -h .: The disk has room                                        │                    │
+│                    │- attempt 987654: An attempt that does not exist [not found in ktask        │r this task.        │
+│                    │records]                                                                    │                    │
+│                    │                                                                            │                    │
+│                    │PROPOSED FIX (nothing was applied)                                          │                    │
+│                    │1. [ktask action] Run ktask run                                             │                    │
+│                    │2. [repository change] Correct the check                                    │                    │
+│                    │3. [configuration change] Raise the check timeout                           │                    │
+╰────────────────────│4. [host change] Free disk space                                            │                    │
+╭ Activity · #1 · l: │5. [owner only] Decide the content                                          │                    │
+│• #1 created: Explai│                                                                            │                    │
+│                    │Question: Why is it waiting?                                                │                    │
+│                    │Task: the current task                                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/operator                                                       │                    │
+│                    │Started <date> · took <t>                                                   │                    │
+│                    │Usage: tokens in 100 · cache read 20 · cache write 0 · out 30               │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │                    │
+╰────────────────────│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc        │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]              │
+                     │                                                                            │
+Agent report #1 start╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SCROLLED TO CAUSE · 120x36 · keyboard
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Curre╭ Agent report #1 · Finished · project ──────────────────────────────────────╮
+ Current #1 · Pending│Agent report #1 · Finished                                                  │
+ Queue preference · l│                                                                            │
+ #1 Explain me       │WHAT HAPPENED                                                               │
+ Ready · r Run queue;│Fixture account of what happened.                                           │
+╭ Status · Enter: det│                                                                            │────────────────────╮
+│Pending · AI        │CAUSE                                                                       │                    │
+│No attempts yet     │Fixture cause from the records.                                             │                    │
+│Can run · u Readines│                                                                            │────────────────────╯
+│Model codex/executio│Shown by:                                                                   │────────────────────╮
+│Budget 0 of 3 used  │- event 1: The latest recorded event                                        │sor; this pane      │
+│                    │- command df -h .: The disk has room                                        │                    │
+│                    │- attempt 987654: An attempt that does not exist [not found in ktask        │r this task.        │
+│                    │records]                                                                    │                    │
+│                    │                                                                            │                    │
+│                    │PROPOSED FIX (nothing was applied)                                          │                    │
+│                    │1. [ktask action] Run ktask run                                             │                    │
+│                    │2. [repository change] Correct the check                                    │                    │
+│                    │3. [configuration change] Raise the check timeout                           │                    │
+╰────────────────────│4. [host change] Free disk space                                            │                    │
+╭ Activity · #1 · l: │5. [owner only] Decide the content                                          │                    │
+│• #1 created: Explai│                                                                            │                    │
+│                    │Question: Why is it waiting?                                                │                    │
+│                    │Task: the current task                                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/operator                                                       │                    │
+│                    │Started <date> · took <t>                                                   │                    │
+│                    │Usage: tokens in 100 · cache read 20 · cache write 0 · out 30               │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │                    │
+╰────────────────────│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc        │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]              │
+                     │                                                                            │
+Agent report #1 start╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SCROLLED TO [owner only] · 120x36 · keyboard
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Curre╭ Agent report #1 · Finished · project ──────────────────────────────────────╮
+ Current #1 · Pending│Agent report #1 · Finished                                                  │
+ Queue preference · l│                                                                            │
+ #1 Explain me       │WHAT HAPPENED                                                               │
+ Ready · r Run queue;│Fixture account of what happened.                                           │
+╭ Status · Enter: det│                                                                            │────────────────────╮
+│Pending · AI        │CAUSE                                                                       │                    │
+│No attempts yet     │Fixture cause from the records.                                             │                    │
+│Can run · u Readines│                                                                            │────────────────────╯
+│Model codex/executio│Shown by:                                                                   │────────────────────╮
+│Budget 0 of 3 used  │- event 1: The latest recorded event                                        │sor; this pane      │
+│                    │- command df -h .: The disk has room                                        │                    │
+│                    │- attempt 987654: An attempt that does not exist [not found in ktask        │r this task.        │
+│                    │records]                                                                    │                    │
+│                    │                                                                            │                    │
+│                    │PROPOSED FIX (nothing was applied)                                          │                    │
+│                    │1. [ktask action] Run ktask run                                             │                    │
+│                    │2. [repository change] Correct the check                                    │                    │
+│                    │3. [configuration change] Raise the check timeout                           │                    │
+╰────────────────────│4. [host change] Free disk space                                            │                    │
+╭ Activity · #1 · l: │5. [owner only] Decide the content                                          │                    │
+│• #1 created: Explai│                                                                            │                    │
+│                    │Question: Why is it waiting?                                                │                    │
+│                    │Task: the current task                                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/operator                                                       │                    │
+│                    │Started <date> · took <t>                                                   │                    │
+│                    │Usage: tokens in 100 · cache read 20 · cache write 0 · out 30               │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │                    │
+╰────────────────────│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc        │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]              │
+                     │                                                                            │
+Agent report #1 start╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ OTHER PROJECT SELECTED · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 1 / 2 · * open ───────────────────────────────────────────╮╭ Project · click to open ─────────────────────╮
+│›   another Idle    0 queued · No unfinished task                     ││another                                       │
+│  * project Ready   1 queued · #1 Explain me                          ││/tmp/ktask-screens-----------------------/ktas│
+│                                                                      ││k-test-scratch/run-000000/another             │
+│                                                                      ││                                              │
+│                                                                      ││State: Idle                                   │
+│                                                                      ││Runner: not running                           │
+│                                                                      ││Current: No unfinished task                   │
+│                                                                      ││Queue: 0 unfinished · History: 0 finished     │
+│                                                                      ││                                              │
+│                                                                      ││Enter opens it.                               │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Agent report #1 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROJECTS FORM · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 1 / 2 · * open ───────────────────────────────────────────╮╭ Project · click to open ─────────────────────╮
+│›   another Idle    0 queued · No unfinished task                     ││another                                       │
+│  * project Ready   1 queued · #1 Explain me                          ││/tmp/ktask-screens-----------------------/ktas│
+│                                                                      ││k-test-scratch/run-000000/another             │
+│                    ╭ Agent reports · another ───────────────────────────────────────────────────╮                    │
+│                    │A read-only agent investigates this project on this host and reports what   │                    │
+│                    │happened and how to fix it. It changes nothing.                             │                    │
+│                    │Model: codex/operator · 15 min · $2.00                                      │k                   │
+│                    │No reports yet.                                                             │ory: 0 finished     │
+│                    │Report                                                                      │                    │
+│                    │< New report >   click / Space to change                                    │                    │
+│                    │Question (blank: explain the current state)                                 │                    │
+│                    │                                                                            │                    │
+│                    │Task ID (blank: current task)                                               │                    │
+│                    │                                                                            │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Agent report #1 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROJECTS LIVE PROGRESS · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ Each project keeps i╭ Agent report #2 · Running · another ───────────────────────────────────────╮
+╭ Projects · 1 / 2 · │Agent report #2 · Running                                                   │────────────────────╮
+│›   another Idle    │Question: Explain the current state                                         │                    │
+│  * project Ready   │Task: the current task                                                      │---------------/ktas│
+│                    │Requested by human: owner                                                   │another             │
+│                    │Model: codex/operator                                                       │                    │
+│                    │Started <date> · running for <t>                                            │                    │
+│                    │Usage: tokens not reported                                                  │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │k                   │
+│                    │                                                                            │ory: 0 finished     │
+│                    │PROGRESS (no report yet)                                                    │                    │
+│                    │· Collecting ktask records · codex/operator · time limit 15m 00s · cost     │                    │
+│                    │limit $2.00                                                                 │                    │
+│                    │· Codex reports no cost, so the cost limit cannot end this run; the time    │                    │
+│                    │limit bounds it                                                             │                    │
+│                    │· Codex is investigating · read-only                                        │                    │
+│                    │» Fixture agent read the ktask records                                      │                    │
+│                    │  $ df -h .                                                                 │                    │
+│                    │fixture disk                                                                │                    │
+│                    │exit 0                                                                      │                    │
+│                    │                                                                            │                    │
+│                    │s stop · [ ] older/newer · b reports · Esc: close, it keeps running         │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [s Stop] [Older] [Newer] [b Reports] [Up] [Down] [Close]             │                    │
+│                    │                                                                            │                    │
+╰────────────────────╰────────────────────────────────────────────────────────────────────────────╯────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Agent report #2 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOPPED REPORT · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Projects · 2 registe╭ Agent report #2 · Stopped · another ───────────────────────────────────────╮
+ Each project keeps i│Agent report #2 · Stopped                                                   │
+╭ Projects · 1 / 2 · │NOT A FINISHED REPORT: Stopped by owner                                     │────────────────────╮
+│›   another Idle    │                                                                            │                    │
+│  * project Ready   │Question: Explain the current state                                         │---------------/ktas│
+│                    │Task: the current task                                                      │another             │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/operator                                                       │                    │
+│                    │Started <date> · took <t>                                                   │                    │
+│                    │Usage: tokens not reported                                                  │k                   │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │ory: 0 finished     │
+│                    │                                                                            │                    │
+│                    │WHAT IT HAD FOUND                                                           │                    │
+│                    │· Collecting ktask records · codex/operator · time limit 15m 00s · cost     │                    │
+│                    │limit $2.00                                                                 │                    │
+│                    │· Codex reports no cost, so the cost limit cannot end this run; the time    │                    │
+│                    │limit bounds it                                                             │                    │
+│                    │· Codex is investigating · read-only                                        │                    │
+│                    │» Fixture agent read the ktask records                                      │                    │
+│                    │  $ df -h .                                                                 │                    │
+│                    │fixture disk                                                                │                    │
+│                    │exit 0                                                                      │                    │
+│                    │                                                                            │                    │
+│                    │[ ] older/newer · b reports · Wheel / PgUp / PgDn: scroll · Esc: close      │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [Older] [Newer] [b Reports] [Up] [Down] [Close]                      │                    │
+╰────────────────────│                                                                            │────────────────────╯
+[Copy] [Enter Open] [╰────────────────────────────────────────────────────────────────────────────╯
+
+
+Agent report #2: stop requested
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ OWN PROJECT SELECTED · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 2 / 2 · * open ───────────────────────────────────────────╮╭ Project · click to open ─────────────────────╮
+│    another Idle    0 queued · No unfinished task                     ││project · open                                │
+│› * project Ready   1 queued · #1 Explain me                          ││/tmp/ktask-screens-----------------------/ktas│
+│                                                                      ││k-test-scratch/run-000000/project             │
+│                                                                      ││                                              │
+│                                                                      ││State: Ready                                  │
+│                                                                      ││Runner: not running                           │
+│                                                                      ││Current: #1 Explain me · Pending              │
+│                                                                      ││Queue: 1 unfinished · History: 0 finished     │
+│                                                                      ││                                              │
+│                                                                      ││This project is open · Enter returns to it.   │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Agent report #2: stop requested
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PAST REPORTS · 120x36 · keyboard
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 2 / 2 · * open ───────────────────────────────────────────╮╭ Project · click to open ─────────────────────╮
+│    another Idle    0 queued · No unfinished task                     ││project · open                                │
+│› * project Ready   1 queued · #1 Explain me                          ││/tmp/ktask-screens-----------------------/ktas│
+│                    ╭ Agent reports · project ───────────────────────────────────────────────────╮project             │
+│                    │A read-only agent investigates this project on this host and reports what   │                    │
+│                    │happened and how to fix it. It changes nothing.                             │                    │
+│                    │Model: codex/operator · 15 min · $2.00                                      │                    │
+│                    │1 report(s):                                                                │ending              │
+│                    │#1 · Finished · <date> · Why is it waiting?                                 │ory: 0 finished     │
+│                    │Report                                                                      │                    │
+│                    │< New report >   click / Space to change                                    │er returns to it.   │
+│                    │Question (blank: explain the current state)                                 │                    │
+│                    │                                                                            │                    │
+│                    │Task ID (blank: current task)                                               │                    │
+│                    │                                                                            │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Agent report #2: stop requested
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PAST REPORT · 120x36 · keyboard
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Curre╭ Agent report #1 · Finished · project ──────────────────────────────────────╮
+ Current #1 · Pending│Agent report #1 · Finished                                                  │
+ Queue preference · l│                                                                            │
+ Projects · 2 registe│WHAT HAPPENED                                                               │
+ Each project keeps i│Fixture account of what happened.                                           │
+╭ Projects · 2 / 2 · │                                                                            │────────────────────╮
+│    another Idle    │CAUSE                                                                       │                    │
+│› * project Ready   │Fixture cause from the records.                                             │---------------/ktas│
+│                    │                                                                            │project             │
+│                    │Shown by:                                                                   │                    │
+│                    │- event 1: The latest recorded event                                        │                    │
+│                    │- command df -h .: The disk has room                                        │                    │
+│                    │- attempt 987654: An attempt that does not exist [not found in ktask        │ending              │
+│                    │records]                                                                    │ory: 0 finished     │
+│                    │                                                                            │                    │
+│                    │PROPOSED FIX (nothing was applied)                                          │er returns to it.   │
+│                    │1. [ktask action] Run ktask run                                             │                    │
+│                    │2. [repository change] Correct the check                                    │                    │
+│                    │3. [configuration change] Raise the check timeout                           │                    │
+│                    │4. [host change] Free disk space                                            │                    │
+│                    │5. [owner only] Decide the content                                          │                    │
+│                    │                                                                            │                    │
+│                    │Question: Why is it waiting?                                                │                    │
+│                    │Task: the current task                                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/operator                                                       │                    │
+│                    │Started <date> · took <t>                                                   │                    │
+│                    │Usage: tokens in 100 · cache read 20 · cache write 0 · out 30               │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │                    │
+╰────────────────────│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc        │────────────────────╯
+[Copy] [Enter Open] [│                                                                            │
+                     │[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]              │
+                     │                                                                            │
+Agent report #2: stop╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SECOND REPORT · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Curre╭ Agent report #3 · Finished · project ──────────────────────────────────────╮
+ Current #1 · Pending│Agent report #3 · Finished                                                  │
+ Queue preference · l│                                                                            │
+ Projects · 2 registe│WHAT HAPPENED                                                               │
+ Each project keeps i│Fixture account of what happened.                                           │
+╭ Projects · 2 / 2 · │                                                                            │────────────────────╮
+│    another Idle    │CAUSE                                                                       │                    │
+│› * project Ready   │Fixture cause from the records.                                             │---------------/ktas│
+│                    │                                                                            │project             │
+│                    │Shown by:                                                                   │                    │
+│                    │- event 1: The latest recorded event                                        │                    │
+│                    │- command df -h .: The disk has room                                        │                    │
+│                    │- attempt 987654: An attempt that does not exist [not found in ktask        │ending              │
+│                    │records]                                                                    │ory: 0 finished     │
+│                    │                                                                            │                    │
+│                    │PROPOSED FIX (nothing was applied)                                          │er returns to it.   │
+│                    │1. [ktask action] Run ktask run                                             │                    │
+│                    │2. [repository change] Correct the check                                    │                    │
+│                    │3. [configuration change] Raise the check timeout                           │                    │
+│                    │4. [host change] Free disk space                                            │                    │
+│                    │5. [owner only] Decide the content                                          │                    │
+│                    │                                                                            │                    │
+│                    │Question: Explain the current state                                         │                    │
+│                    │Task: the current task                                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/operator                                                       │                    │
+│                    │Started <date> · took <t>                                                   │                    │
+│                    │Usage: tokens in 100 · cache read 20 · cache write 0 · out 30               │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │                    │
+╰────────────────────│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc        │────────────────────╯
+[Copy] [Enter Open] [│                                                                            │
+                     │[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]              │
+                     │                                                                            │
+Agent report #3 start╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ OLDER REPORT · 120x36 · keyboard
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Curre╭ Agent report #1 · Finished · project ──────────────────────────────────────╮
+ Current #1 · Pending│Agent report #1 · Finished                                                  │
+ Queue preference · l│                                                                            │
+ Projects · 2 registe│WHAT HAPPENED                                                               │
+ Each project keeps i│Fixture account of what happened.                                           │
+╭ Projects · 2 / 2 · │                                                                            │────────────────────╮
+│    another Idle    │CAUSE                                                                       │                    │
+│› * project Ready   │Fixture cause from the records.                                             │---------------/ktas│
+│                    │                                                                            │project             │
+│                    │Shown by:                                                                   │                    │
+│                    │- event 1: The latest recorded event                                        │                    │
+│                    │- command df -h .: The disk has room                                        │                    │
+│                    │- attempt 987654: An attempt that does not exist [not found in ktask        │ending              │
+│                    │records]                                                                    │ory: 0 finished     │
+│                    │                                                                            │                    │
+│                    │PROPOSED FIX (nothing was applied)                                          │er returns to it.   │
+│                    │1. [ktask action] Run ktask run                                             │                    │
+│                    │2. [repository change] Correct the check                                    │                    │
+│                    │3. [configuration change] Raise the check timeout                           │                    │
+│                    │4. [host change] Free disk space                                            │                    │
+│                    │5. [owner only] Decide the content                                          │                    │
+│                    │                                                                            │                    │
+│                    │Question: Why is it waiting?                                                │                    │
+│                    │Task: the current task                                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/operator                                                       │                    │
+│                    │Started <date> · took <t>                                                   │                    │
+│                    │Usage: tokens in 100 · cache read 20 · cache write 0 · out 30               │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │                    │
+╰────────────────────│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc        │────────────────────╯
+[Copy] [Enter Open] [│                                                                            │
+                     │[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]              │
+                     │                                                                            │
+Agent report #3 start╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ NEWER REPORT · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Curre╭ Agent report #3 · Finished · project ──────────────────────────────────────╮
+ Current #1 · Pending│Agent report #3 · Finished                                                  │
+ Queue preference · l│                                                                            │
+ Projects · 2 registe│WHAT HAPPENED                                                               │
+ Each project keeps i│Fixture account of what happened.                                           │
+╭ Projects · 2 / 2 · │                                                                            │────────────────────╮
+│    another Idle    │CAUSE                                                                       │                    │
+│› * project Ready   │Fixture cause from the records.                                             │---------------/ktas│
+│                    │                                                                            │project             │
+│                    │Shown by:                                                                   │                    │
+│                    │- event 1: The latest recorded event                                        │                    │
+│                    │- command df -h .: The disk has room                                        │                    │
+│                    │- attempt 987654: An attempt that does not exist [not found in ktask        │ending              │
+│                    │records]                                                                    │ory: 0 finished     │
+│                    │                                                                            │                    │
+│                    │PROPOSED FIX (nothing was applied)                                          │er returns to it.   │
+│                    │1. [ktask action] Run ktask run                                             │                    │
+│                    │2. [repository change] Correct the check                                    │                    │
+│                    │3. [configuration change] Raise the check timeout                           │                    │
+│                    │4. [host change] Free disk space                                            │                    │
+│                    │5. [owner only] Decide the content                                          │                    │
+│                    │                                                                            │                    │
+│                    │Question: Explain the current state                                         │                    │
+│                    │Task: the current task                                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/operator                                                       │                    │
+│                    │Started <date> · took <t>                                                   │                    │
+│                    │Usage: tokens in 100 · cache read 20 · cache write 0 · out 30               │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │                    │
+╰────────────────────│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc        │────────────────────╯
+[Copy] [Enter Open] [│                                                                            │
+                     │[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]              │
+                     │                                                                            │
+Agent report #3 start╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LIMITS FORM · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                      │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved p╭ Agent report limits ───────────────────────────────────────────────────────╮                    │
+│                    │What one report or fix of this project may use; running ones keep theirs.   │                    │
+│Mouse: Enabled      │Codex reports no cost, so only the time limit bounds it.                    │                    │
+│Run mode: Continue q│The model is the operator role in m Defaults; unset, the remediation model. │                    │
+│Planner approval: Au│Time limit per report (minutes)                                             │                    │
+│Delivery: local via │15▏                                                                         │                    │
+│Dependencies: manual│Cost limit per report (USD)                                                 │isite is missing.   │
+│CLI require declares│2.00                                                                        │                    │
+│                    │Time limit per fix (minutes)                                                │                    │
+│Defaults apply to ne│30                                                                          │                    │
+│u User defaults: wha│Cost limit per fix (USD)                                                    │                    │
+│f Profiles: named ro│5.00                                                                        │                    │
+│w Work categories: t│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │e, documents or art;│
+│override per project│                                                                            │                    │
+│L Review lenses: opt│[Copy] [Apply] [Cancel] [Up] [Down]                                         │ project's default  │
+│selection.          │                                                                            │                    │
+│Checks: list, add, e╰────────────────────────────────────────────────────────────────────────────╯                    │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Agent report #3 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LIVE PROGRESS · 120x36 · mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Explain me
+ Ready · r Run queue;╭ Agent report #1 · Running · project ───────────────────────────────────────╮
+╭ Status · Enter: det│Agent report #1 · Running                                                   │────────────────────╮
+│Pending · AI        │Question: Explain the current state                                         │                    │
+│No attempts yet     │Task: the current task                                                      │                    │
+│Can run · u Readines│Requested by human: owner                                                   │────────────────────╯
+│Model codex/executio│Model: codex/operator                                                       │────────────────────╮
+│Budget 0 of 3 used  │Started <date> · running for <t>                                            │sor; this pane      │
+│                    │Usage: tokens not reported                                                  │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │r this task.        │
+│                    │                                                                            │                    │
+│                    │PROGRESS (no report yet)                                                    │                    │
+│                    │· Collecting ktask records · codex/operator · time limit 15m 00s · cost     │                    │
+│                    │limit $2.00                                                                 │                    │
+│                    │· Codex reports no cost, so the cost limit cannot end this run; the time    │                    │
+│                    │limit bounds it                                                             │                    │
+╰────────────────────│· Codex is investigating · read-only                                        │                    │
+╭ Activity · #1 · l: │» Fixture agent read the ktask records                                      │                    │
+│• #1 created: Explai│  $ df -h .                                                                 │                    │
+│                    │fixture disk                                                                │                    │
+│                    │exit 0                                                                      │                    │
+│                    │                                                                            │                    │
+│                    │s stop · [ ] older/newer · b reports · Esc: close, it keeps running         │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [s Stop] [Older] [Newer] [b Reports] [Up] [Down] [Close]             │                    │
+│                    │                                                                            │                    │
+╰────────────────────╰────────────────────────────────────────────────────────────────────────────╯────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Agent report #1 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ FINISHED REPORT · 120x36 · mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Curre╭ Agent report #1 · Finished · project ──────────────────────────────────────╮
+ Current #1 · Pending│Agent report #1 · Finished                                                  │
+ Queue preference · l│                                                                            │
+ #1 Explain me       │WHAT HAPPENED                                                               │
+ Ready · r Run queue;│Fixture account of what happened.                                           │
+╭ Status · Enter: det│                                                                            │────────────────────╮
+│Pending · AI        │CAUSE                                                                       │                    │
+│No attempts yet     │Fixture cause from the records.                                             │                    │
+│Can run · u Readines│                                                                            │────────────────────╯
+│Model codex/executio│Shown by:                                                                   │────────────────────╮
+│Budget 0 of 3 used  │- event 1: The latest recorded event                                        │sor; this pane      │
+│                    │- command df -h .: The disk has room                                        │                    │
+│                    │- attempt 987654: An attempt that does not exist [not found in ktask        │r this task.        │
+│                    │records]                                                                    │                    │
+│                    │                                                                            │                    │
+│                    │PROPOSED FIX (nothing was applied)                                          │                    │
+│                    │1. [ktask action] Run ktask run                                             │                    │
+│                    │2. [repository change] Correct the check                                    │                    │
+│                    │3. [configuration change] Raise the check timeout                           │                    │
+╰────────────────────│4. [host change] Free disk space                                            │                    │
+╭ Activity · #1 · l: │5. [owner only] Decide the content                                          │                    │
+│• #1 created: Explai│                                                                            │                    │
+│                    │Question: Explain the current state                                         │                    │
+│                    │Task: the current task                                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/operator                                                       │                    │
+│                    │Started <date> · took <t>                                                   │                    │
+│                    │Usage: tokens in 100 · cache read 20 · cache write 0 · out 30               │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │                    │
+╰────────────────────│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc        │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]              │
+                     │                                                                            │
+Agent report #1 start╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SCROLLED TO CAUSE · 120x36 · mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Curre╭ Agent report #1 · Finished · project ──────────────────────────────────────╮
+ Current #1 · Pending│Agent report #1 · Finished                                                  │
+ Queue preference · l│                                                                            │
+ #1 Explain me       │WHAT HAPPENED                                                               │
+ Ready · r Run queue;│Fixture account of what happened.                                           │
+╭ Status · Enter: det│                                                                            │────────────────────╮
+│Pending · AI        │CAUSE                                                                       │                    │
+│No attempts yet     │Fixture cause from the records.                                             │                    │
+│Can run · u Readines│                                                                            │────────────────────╯
+│Model codex/executio│Shown by:                                                                   │────────────────────╮
+│Budget 0 of 3 used  │- event 1: The latest recorded event                                        │sor; this pane      │
+│                    │- command df -h .: The disk has room                                        │                    │
+│                    │- attempt 987654: An attempt that does not exist [not found in ktask        │r this task.        │
+│                    │records]                                                                    │                    │
+│                    │                                                                            │                    │
+│                    │PROPOSED FIX (nothing was applied)                                          │                    │
+│                    │1. [ktask action] Run ktask run                                             │                    │
+│                    │2. [repository change] Correct the check                                    │                    │
+│                    │3. [configuration change] Raise the check timeout                           │                    │
+╰────────────────────│4. [host change] Free disk space                                            │                    │
+╭ Activity · #1 · l: │5. [owner only] Decide the content                                          │                    │
+│• #1 created: Explai│                                                                            │                    │
+│                    │Question: Explain the current state                                         │                    │
+│                    │Task: the current task                                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/operator                                                       │                    │
+│                    │Started <date> · took <t>                                                   │                    │
+│                    │Usage: tokens in 100 · cache read 20 · cache write 0 · out 30               │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │                    │
+╰────────────────────│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc        │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]              │
+                     │                                                                            │
+Agent report #1 start╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SCROLLED TO [owner only] · 120x36 · mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Curre╭ Agent report #1 · Finished · project ──────────────────────────────────────╮
+ Current #1 · Pending│Agent report #1 · Finished                                                  │
+ Queue preference · l│                                                                            │
+ #1 Explain me       │WHAT HAPPENED                                                               │
+ Ready · r Run queue;│Fixture account of what happened.                                           │
+╭ Status · Enter: det│                                                                            │────────────────────╮
+│Pending · AI        │CAUSE                                                                       │                    │
+│No attempts yet     │Fixture cause from the records.                                             │                    │
+│Can run · u Readines│                                                                            │────────────────────╯
+│Model codex/executio│Shown by:                                                                   │────────────────────╮
+│Budget 0 of 3 used  │- event 1: The latest recorded event                                        │sor; this pane      │
+│                    │- command df -h .: The disk has room                                        │                    │
+│                    │- attempt 987654: An attempt that does not exist [not found in ktask        │r this task.        │
+│                    │records]                                                                    │                    │
+│                    │                                                                            │                    │
+│                    │PROPOSED FIX (nothing was applied)                                          │                    │
+│                    │1. [ktask action] Run ktask run                                             │                    │
+│                    │2. [repository change] Correct the check                                    │                    │
+│                    │3. [configuration change] Raise the check timeout                           │                    │
+╰────────────────────│4. [host change] Free disk space                                            │                    │
+╭ Activity · #1 · l: │5. [owner only] Decide the content                                          │                    │
+│• #1 created: Explai│                                                                            │                    │
+│                    │Question: Explain the current state                                         │                    │
+│                    │Task: the current task                                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/operator                                                       │                    │
+│                    │Started <date> · took <t>                                                   │                    │
+│                    │Usage: tokens in 100 · cache read 20 · cache write 0 · out 30               │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │                    │
+╰────────────────────│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc        │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]              │
+                     │                                                                            │
+Agent report #1 start╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PAST REPORTS · 120x36 · mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 2 / 2 · * open ───────────────────────────────────────────╮╭ Project · click to open ─────────────────────╮
+│    another Idle    0 queued · No unfinished task                     ││project · open                                │
+│› * project Ready   1 queued · #1 Explain me                          ││/tmp/ktask-screens-----------------------/ktas│
+│                    ╭ Agent reports · project ───────────────────────────────────────────────────╮project             │
+│                    │A read-only agent investigates this project on this host and reports what   │                    │
+│                    │happened and how to fix it. It changes nothing.                             │                    │
+│                    │Model: codex/operator · 15 min · $2.00                                      │                    │
+│                    │1 report(s):                                                                │ending              │
+│                    │#1 · Finished · <date> · Explain the current state                          │ory: 0 finished     │
+│                    │Report                                                                      │                    │
+│                    │< New report >   click / Space to change                                    │er returns to it.   │
+│                    │Question (blank: explain the current state)                                 │                    │
+│                    │                                                                            │                    │
+│                    │Task ID (blank: current task)                                               │                    │
+│                    │                                                                            │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Agent report #2: stop requested
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PAST REPORT · 120x36 · mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Curre╭ Agent report #1 · Finished · project ──────────────────────────────────────╮
+ Current #1 · Pending│Agent report #1 · Finished                                                  │
+ Queue preference · l│                                                                            │
+ Projects · 2 registe│WHAT HAPPENED                                                               │
+ Each project keeps i│Fixture account of what happened.                                           │
+╭ Projects · 2 / 2 · │                                                                            │────────────────────╮
+│    another Idle    │CAUSE                                                                       │                    │
+│› * project Ready   │Fixture cause from the records.                                             │---------------/ktas│
+│                    │                                                                            │project             │
+│                    │Shown by:                                                                   │                    │
+│                    │- event 1: The latest recorded event                                        │                    │
+│                    │- command df -h .: The disk has room                                        │                    │
+│                    │- attempt 987654: An attempt that does not exist [not found in ktask        │ending              │
+│                    │records]                                                                    │ory: 0 finished     │
+│                    │                                                                            │                    │
+│                    │PROPOSED FIX (nothing was applied)                                          │er returns to it.   │
+│                    │1. [ktask action] Run ktask run                                             │                    │
+│                    │2. [repository change] Correct the check                                    │                    │
+│                    │3. [configuration change] Raise the check timeout                           │                    │
+│                    │4. [host change] Free disk space                                            │                    │
+│                    │5. [owner only] Decide the content                                          │                    │
+│                    │                                                                            │                    │
+│                    │Question: Explain the current state                                         │                    │
+│                    │Task: the current task                                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/operator                                                       │                    │
+│                    │Started <date> · took <t>                                                   │                    │
+│                    │Usage: tokens in 100 · cache read 20 · cache write 0 · out 30               │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │                    │
+╰────────────────────│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc        │────────────────────╯
+[Copy] [Enter Open] [│                                                                            │
+                     │[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]              │
+                     │                                                                            │
+Agent report #2: stop╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ OLDER REPORT · 120x36 · mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Curre╭ Agent report #1 · Finished · project ──────────────────────────────────────╮
+ Current #1 · Pending│Agent report #1 · Finished                                                  │
+ Queue preference · l│                                                                            │
+ Projects · 2 registe│WHAT HAPPENED                                                               │
+ Each project keeps i│Fixture account of what happened.                                           │
+╭ Projects · 2 / 2 · │                                                                            │────────────────────╮
+│    another Idle    │CAUSE                                                                       │                    │
+│› * project Ready   │Fixture cause from the records.                                             │---------------/ktas│
+│                    │                                                                            │project             │
+│                    │Shown by:                                                                   │                    │
+│                    │- event 1: The latest recorded event                                        │                    │
+│                    │- command df -h .: The disk has room                                        │                    │
+│                    │- attempt 987654: An attempt that does not exist [not found in ktask        │ending              │
+│                    │records]                                                                    │ory: 0 finished     │
+│                    │                                                                            │                    │
+│                    │PROPOSED FIX (nothing was applied)                                          │er returns to it.   │
+│                    │1. [ktask action] Run ktask run                                             │                    │
+│                    │2. [repository change] Correct the check                                    │                    │
+│                    │3. [configuration change] Raise the check timeout                           │                    │
+│                    │4. [host change] Free disk space                                            │                    │
+│                    │5. [owner only] Decide the content                                          │                    │
+│                    │                                                                            │                    │
+│                    │Question: Explain the current state                                         │                    │
+│                    │Task: the current task                                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/operator                                                       │                    │
+│                    │Started <date> · took <t>                                                   │                    │
+│                    │Usage: tokens in 100 · cache read 20 · cache write 0 · out 30               │                    │
+│                    │Cost: not reported (limit $2.00) · time limit 15m 00s                       │                    │
+╰────────────────────│f fix this · [ ] older/newer · b reports · Wheel / PgUp / PgDn · Esc        │────────────────────╯
+[Copy] [Enter Open] [│                                                                            │
+                     │[Copy] [f Fix] [Older] [Newer] [b Reports] [Up] [Down] [Close]              │
+                     │                                                                            │
+Agent report #3 start╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

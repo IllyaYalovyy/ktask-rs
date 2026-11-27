@@ -1,0 +1,62 @@
+@@ RATE WAIT · 100x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 1 · History 0
+ Session: Queue · running · Supervisor preparing the next step · Run requested
+ #1 Rate limited
+ Provider limit until <date> · resumes by itself · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Step: Supervisor preparing the next step    │╰────────────────────────────────────────────────────╯
+│Resumes in <t>                              │╭ Log · following · attempt 1 · o: report ───────────╮
+│Model codex/execution / none                ││Execution started; results require checks, review   │
+│Active <t> · waited <t>                     ││and validation                                      │
+│Tokens none reported yet                    ││execution: codex/execution · new session            │
+│? new tokens                                ││{"error":{"message":"rate_limit                     │
+│Budget 0 of 3 used                          ││reached"},"type":"turn.failed"}                     │
+│Execution   ! waiting                       ││Automatic rate-limit backoff; Pause stops the       │
+╰────────────────────────────────────────────╯│scheduler without discarding the wait or session    │
+╭ Activity · #1 · l: all ────────────────────╮│                                                    │
+│• Provider rate limited; retrying <date>    ││                                                    │
+│ <date> with the same attempt and session   ││                                                    │
+│• Workflow · Implement · repair round 0/10  ││                                                    │
+│• Supervisor started                        ││                                                    │
+│• Current task attempt recorded             ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details]
+[o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RATE WAIT PAUSED · 100x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused; worker stopped, Resume continues the same attempt
+ #1 Rate limited
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ───────────╮
+│Tokens none reported yet                    ││Execution started; results require checks, review   │
+│? new tokens                                ││and validation                                      │
+│Budget 0 of 3 used                          ││execution: codex/execution · new session            │
+│Can run · u Readiness                       ││{"error":{"message":"rate_limit                     │
+│Execution   ! interrupted                   ││reached"},"type":"turn.failed"}                     │
+│                                            ││Automatic rate-limit backoff; Pause stops the       │
+╰────────────────────────────────────────────╯│scheduler without discarding the wait or session    │
+╭ Activity · #1 · l: all ────────────────────╮│Automatic continuation stopped; resume eligibility  │
+│• Supervisor yielded this attempt for resume││is retained                                         │
+│• Paused during a provider limit wait;      ││                                                    │
+│  Resume tries again now                    ││                                                    │
+│• Pause requested; stopping worker          ││                                                    │
+│• Provider rate limited; retrying <date>    ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Pause requested · waiting for worker shutdown and cleanup
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

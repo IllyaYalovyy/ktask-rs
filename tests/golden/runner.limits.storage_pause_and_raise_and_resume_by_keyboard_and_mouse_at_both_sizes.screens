@@ -1,0 +1,248 @@
+@@ storage-pause · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused: Resource limit: check transcript evidence incomplete: command conflict: Resource lim…
+ #1 Raise the storage budget
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Limit storage_max_bytes                     ││Proof: result.txt contains verified                                     │
+│Now 1048576 · needed 0000000                │╰────────────────────────────────────────────────────────────────────────╯
+│+ Raise to 0000000 and resume               │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
+│Attempt 1                                   ││Execution started; results require checks, review and validation        │
+│Model codex/execution / none                ││execution: codex/execution · new session                                │
+│Active <t> · waited <t>                     ││Worker claim (unverified) · complete: Verified result                   │
+│Tokens 60 new · 40 cached · 10 out          ││Worker criterion claim (unverified) #1 · claimed pass: Inspected        │
+│70 new tokens                               ││result.txt                                                              │
+│Budget 0 of 3 used                          ││Check build: printf x >> "$HOME/check-runs"; env -u                     │
+│Can run · u Readiness                       ││KTASK_WORKER_CALLBACK                                                   │
+│Execution   ✓ succeeded                     ││'<checkout>                                          retention 30       │
+│Checks      ✓ succeeded                     ││--max-bytes 1048576 >/dev/null 2>&1; test -f result.txt (timeout 600000 │
+╰────────────────────────────────────────────╯│ms)                                                                     │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• Supervisor yielded this attempt for resume││                                                                        │
+│• Resource limit: check transcript evidence ││                                                                        │
+│  incomplete: command conflict: Resource…   ││                                                                        │
+│• Workflow · Check · repair round 0/10      ││                                                                        │
+│• Workflow · Implement · repair round 0/10  ││                                                                        │
+│• Supervisor started                        ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #1 created: Raise the storage budget      ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [+ Raise and resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ storage-refused · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused: Resource limit: check transcript evidence incomplete: command conflict: Resource lim…
+ #1 Raise the storage budget
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Limit storage_max_bytes                     ││Proof: result.txt contains verified                                     │
+│Now 1048576 · needed 0000000                │╰────────────────────────────────────────────────────────────────────────╯
+│+ Raise to 0000000 and resume               │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
+│Attempt 1           ╭ Raise and resume ──────────────────────────────────────────────────────────╮d validation        │
+│Model codex/executio│Resume refused: storage_max_bytes is 1048576 bytes, needed 0000000 bytes    │                    │
+│Active <t> · waited 0│and nothing that caused the pause has changed, so the same work would pause │t                   │
+│Tokens 60 new · 40 c│again. Raise and resume sets storage_max_bytes to 0000000 bytes (TUI + on   │s: Inspected        │
+│70 new tokens       │Current, or ktask run --raise)                                              │                    │
+│Budget 0 of 3 used  │Raise this project's storage_max_bytes (ceiling 1099511627776) and resume   │                    │
+│Can run · u Readines│the same attempt. Recorded results are not repeated.                        │                    │
+│Execution   ✓ succee│New value                                                                   │ retention 30       │
+│Checks      ✓ succee│0000000▏                                                                    │txt (timeout 600000 │
+╰────────────────────│Enter / Ctrl-S: raise and resume · Esc: cancel                              │                    │
+╭ Activity · #1 · l: │                                                                            │                    │
+│• command conflict: │[Copy] [Raise and resume] [Cancel] [Up] [Down]                              │                    │
+│  storage_max_bytes │                                                                            │                    │
+│• Supervisor yielded╰────────────────────────────────────────────────────────────────────────────╯                    │
+│• Resource limit: check transcript evidence ││                                                                        │
+│  incomplete: command conflict: Resource…   ││                                                                        │
+│• Workflow · Check · repair round 0/10      ││                                                                        │
+│• Workflow · Implement · repair round 0/10  ││                                                                        │
+│• Supervisor started                        ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [+ Raise and resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+command conflict: Resume refused: storage_max_bytes is 1048576 bytes, needed 0000000 bytes and nothing that caused the …
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ storage-raise · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused: Resource limit: check transcript evidence incomplete: command conflict: Resource lim…
+ #1 Raise the storage budget
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Limit storage_max_bytes                     ││Proof: result.txt contains verified                                     │
+│Now 1048576 · needed 0000000                │╰────────────────────────────────────────────────────────────────────────╯
+│+ Raise to 0000000 and resume               │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
+│Attempt 1                                   ││Execution started; results require checks, review and validation        │
+│Model codex/executio╭ Raise and resume ──────────────────────────────────────────────────────────╮                    │
+│Active <t> · waited 0│Task #1 is paused on a resource limit: storage_max_bytes is 1048576 bytes,  │t                   │
+│Tokens 60 new · 40 c│needed 0000000 bytes.                                                       │s: Inspected        │
+│70 new tokens       │Raise this project's storage_max_bytes (ceiling 1099511627776) and resume   │                    │
+│Budget 0 of 3 used  │the same attempt. Recorded results are not repeated.                        │                    │
+│Can run · u Readines│New value                                                                   │                    │
+│Execution   ✓ succee│0000000▏                                                                    │ retention 30       │
+│Checks      ✓ succee│Enter / Ctrl-S: raise and resume · Esc: cancel                              │txt (timeout 600000 │
+╰────────────────────│                                                                            │                    │
+╭ Activity · #1 · l: │[Copy] [Raise and resume] [Cancel] [Up] [Down]                              │                    │
+│• command conflict: │                                                                            │                    │
+│  storage_max_bytes ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│• Supervisor yielded this attempt for resume││                                                                        │
+│• Resource limit: check transcript evidence ││                                                                        │
+│  incomplete: command conflict: Resource…   ││                                                                        │
+│• Workflow · Check · repair round 0/10      ││                                                                        │
+│• Workflow · Implement · repair round 0/10  ││                                                                        │
+│• Supervisor started                        ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [+ Raise and resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+command conflict: Resume refused: storage_max_bytes is 1048576 bytes, needed 0000000 bytes and nothing that caused the …
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ storage-resumed · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                       │
+│Inspect results in History, or add more work.                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ storage-pause · 80x24 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused: Resource limit: check transcript evidence in…
+ #1 Raise the storage budget
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ──────────────╮
+│Paused · AI                 ││Goal: Create result.txt containing verified     │
+│Limit storage_max_bytes     ││Proof: result.txt contains verified             │
+│Now 1048576 · needed 0000000│╰────────────────────────────────────────────────╯
+│+ Raise to 0000000 and      │╭ Log · following · attempt 1 · o: report ───────╮
+│resume                      ││Worker criterion claim (unverified) #1 ·        │
+│Attempt 1                   ││claimed pass: Inspected result.txt              │
+╰────────────────────────────╯│Check build: printf x >> "$HOME/check-runs";    │
+╭ Activity · #1 · l: all ────╮│env -u KTASK_WORKER_CALLBACK                    │
+│• Supervisor yielded this   ││'<checkout>                                     │
+│  attempt for resume        ││dev' retention 30 --max-bytes 1048576           │
+│• Resource limit: check     ││>/dev/null 2>&1; test -f result.txt (timeout    │
+│  transcript evidence…      ││600000 ms)                                      │
+╰────────────────────────────╯╰────────────────────────────────────────────────╯
+[Copy] [r Resume] [+ Raise and resume] [s Stop] [T Restart] [D Mark done]
+[c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details] [o Report]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Supervisor started · close TUI safely · Pause stops execution
+@@ storage-refused · 80x24 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused: Resource limit: check transcript evidence in…
+ #1 Raise the storage budget
+ ╭ Raise and resume ──────────────────────────────────────────────────────────╮
+╭│Resume refused: storage_max_bytes is 1048576 bytes, needed 0000000 bytes    │╮
+││and nothing that caused the pause has changed, so the same work would pause ││
+││again. Raise and resume sets storage_max_bytes to 0000000 bytes (TUI + on   ││
+││Current, or ktask run --raise)                                              │╯
+││Raise this project's storage_max_bytes (ceiling 1099511627776) and resume   │╮
+││the same attempt. Recorded results are not repeated.                        ││
+││New value                                                                   ││
+╰│0000000▏                                                                    ││
+╭│Enter / Ctrl-S: raise and resume · Esc: cancel                              ││
+││                                                                            ││
+││[Copy] [Raise and resume] [Cancel] [Up] [Down]                              ││
+││                                                                            ││
+│╰────────────────────────────────────────────────────────────────────────────╯│
+╰────────────────────────────╯╰────────────────────────────────────────────────╯
+[Copy] [r Resume] [+ Raise and resume] [s Stop] [T Restart] [D Mark done]
+[c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details] [o Report]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+command conflict: Resume refused: storage_max_bytes is 1048576 bytes, needed 00…
+@@ storage-raise · 80x24 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused: Resource limit: check transcript evidence in…
+ #1 Raise the storage budget
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭╭ Raise and resume ──────────────────────────────────────────────────────────╮╮
+││Task #1 is paused on a resource limit: storage_max_bytes is 1048576 bytes,  ││
+││needed 0000000 bytes.                                                       ││
+││Raise this project's storage_max_bytes (ceiling 1099511627776) and resume   │╯
+││the same attempt. Recorded results are not repeated.                        │╮
+││New value                                                                   ││
+││0000000▏                                                                    ││
+╰│Enter / Ctrl-S: raise and resume · Esc: cancel                              ││
+╭│                                                                            ││
+││[Copy] [Raise and resume] [Cancel] [Up] [Down]                              ││
+││                                                                            ││
+│╰────────────────────────────────────────────────────────────────────────────╯│
+│  attempt for resume        ││600000 ms)                                      │
+╰────────────────────────────╯╰────────────────────────────────────────────────╯
+[Copy] [r Resume] [+ Raise and resume] [s Stop] [T Restart] [D Mark done]
+[c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details] [o Report]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+command conflict: Resume refused: storage_max_bytes is 1048576 bytes, needed 00…
+@@ storage-resumed · 80x24 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                               │
+│Inspect results in History, or add more work.                                 │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution

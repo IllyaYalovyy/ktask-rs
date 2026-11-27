@@ -1,0 +1,41 @@
+@@ HOOK REVERIFICATION DETAILS · 140x40 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Que╭ Task details / attempts ───────────────────────────────────────────────────╮
+ No current task   |   Queue 0 │Attempt 1 / 1 · #1 · revision 1 · succeeded                                 │
+ Session: Run one · complete · │Outcome: Checks, independent review and validation passed after 0 repair    │ir rounds
+ History · 1 shown / 1 total · │rounds                                                                      │
+ Filter: All  |  Search: / to s│Output page 1 / 1 · chunk 1 / 1 · 15 records · newest first · snapshot #15  │
+╭ History · 1 / 1 · Finished At│                                                                            │for full ─────────────────────╮
+│› #1   Done     Recover a hook│#15 [stdout] Validation verdict · complete: Verified result                 │anged checkpoint              │
+│                              │Validation criterion verdict #1 · claimed pass: Inspected result.txt        │finished <date>               │
+│                              │#14 [system] validation: codex/validation · resume session                  │                              │
+│                              │#13 [stdout] Review verdict · complete: Verified result                     │lt.txt containing verified    │
+│                              │Review criterion verdict #1 · claimed pass: Inspected result.txt            │                              │
+│                              │#12 [system] review: codex/review · resume session                          │ contains verified            │
+│                              │#11 [system] Check build: test -f result.txt (timeout 600000 ms)            │                              │
+│                              │#10 [system] Commit hooks changed checkpoint                                │ new tokens                   │
+│                              │xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx before it was recorded; differing  │                              │
+│                              │paths: A stamp.txt · rerunning checks, review and validation before         │                              │
+│                              │delivery; repair count retained                                             │execution / none              │
+│                              │#9 [system] Execution started; results require checks, review and validation│iew / none                    │
+│                              │#8 [stdout] Validation verdict · complete: Verified result                  │/validation / none            │
+│                              │Validation criterion verdict #1 · claimed pass: Inspected result.txt        │x/remediation / none          │
+│                              │#7 [system] validation: codex/validation · new session                      │· Active <t> · waited <t>     │
+│                              │#6 [stdout] Review verdict · complete: Verified result                      │d 180 · cache read 120 · cache│
+│                              │Review criterion verdict #1 · claimed pass: Inspected result.txt            │30 · 210 new tokens           │
+│                              │#5 [system] review: codex/review · new session                              │                              │
+│                              │#4 [system] Check build: test -f result.txt (timeout 600000 ms)             │                              │
+│                              │#3 [stdout] Worker claim (unverified) · complete: Verified result           │                              │
+│                              │Worker criterion claim (unverified) #1 · claimed pass: Inspected result.txt │                              │
+│                              │#2 [system] execution: codex/execution · new session                        │                              │
+│                              │#1 [system] Execution started; results require checks, review and validation│                              │
+│                              │                                                                            │                              │
+│                              │Attempt inputs: revision 1 · session 1                                      │                              │
+│                              │Find output                                                                 │                              │
+│                              │▏                                                                           │                              │
+╰──────────────────────────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │──────────────────────────────╯
+[Copy] [C Copy to queue] [Enter│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │] [S Stats] [? Help] [q Quit]
+                               │[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │
+                               │[Refresh] [Up] [Down] [Close] [Copy]                                        │
+Runs happen in a background sup╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

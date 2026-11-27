@@ -1,0 +1,132 @@
+@@ LOST QUESTION HANDOFF · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs input · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · waiting · Awaiting answer to current task
+ #1 Unanswered question
+ The worker needs your answer · r Answer · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Needs input · AI                            ││Goal: Create result.txt containing verified                   │
+│Attempt 1                                   ││Proof: result.txt contains verified                           │
+│Waiting for your answer · r Answer          │╰──────────────────────────────────────────────────────────────╯
+│Model codex/remediation / none              │╭ Question from the worker · r: answer ────────────────────────╮
+│Active <t> · waited <t>                     ││Which content?                                                │
+│Tokens 60 new · 40 cached · 10 out          │╰──────────────────────────────────────────────────────────────╯
+│70 new tokens + 1 call(s) unreported        │╭ Report · attempt 1 · o: raw log ─────────────────────────────╮
+│Budget 0 of 3 used                          ││Outcome: Waiting                                              │
+│Can run · u Readiness                       ││                                                              │
+│Execution   ✓ succeeded                     ││Worker claim (unverified):                                    │
+╰────────────────────────────────────────────╯│Need direction                                                │
+╭ Activity · #1 · l: all ────────────────────╮│                                                              │
+│• Which content?                            ││Remediation · waiting · codex/remediation verdict: Owner      │
+│• Workflow · Implement · repair round 0/10  ││action is required before delivery can continue               │
+│• Current task attempt recorded             ││                                                              │
+│• #1 created: Unanswered question           ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Answer] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ QUESTION STOP DIALOG · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs input · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · waiting · Awaiting answer to current task
+ #1 Unanswered question
+ The worker needs your answer · r Answer · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Needs input · AI                            ││Goal: Create result.txt containing verified                   │
+│Attempt 1                                   ││Proof: result.txt contains verified                           │
+│Waiting for your answer · r Answer          │╰──────────────────────────────────────────────────────────────╯
+│Model codex/rem╭ Stop #1 Unanswered question ───────────────────────────────────────────────╮───────────────╮
+│Active <t> · wai│The worker stops and this attempt ends. Its uncommitted changes are saved   │               │
+│Tokens 60 new ·│as a git stash (git stash pop restores them).                               │───────────────╯
+│70 new tokens +│The task returns to Pending; Run starts it fresh with full limits.          │───────────────╮
+│Budget 0 of 3 u│                                                                            │               │
+│Can run · u Rea│Reason (optional)                                                           │               │
+│Execution   ✓ s│▏                                                                           │               │
+╰───────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │               │
+╭ Activity · #1 │                                                                            │               │
+│• Which content│[Copy] [Apply] [Cancel] [Up] [Down]                                         │ct: Owner      │
+│• Workflow · Im│                                                                            │               │
+│• Current task ╰────────────────────────────────────────────────────────────────────────────╯               │
+│• #1 created: Unanswered question           ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Answer] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STALE STOP REFUSED · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs input · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · waiting · Awaiting answer to current task
+ #1 Unanswered question
+ The worker needs your answer · r Answer · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Needs input · AI                            ││Goal: Create result.txt containing verified                   │
+│Attempt 1                                   ││Proof: result.txt contains verified                           │
+│Waiting for your answer · r Answer          │╰──────────────────────────────────────────────────────────────╯
+│Model codex/rem╭ Stop #1 Unanswered question ───────────────────────────────────────────────╮───────────────╮
+│Active <t> · wai│The worker stops and this attempt ends. Its uncommitted changes are saved   │               │
+│Tokens 60 new ·│as a git stash (git stash pop restores them).                               │───────────────╯
+│70 new tokens +│The task returns to Pending; Run starts it fresh with full limits.          │───────────────╮
+│Budget 0 of 3 u│                                                                            │               │
+│Can run · u Rea│Reason (optional)                                                           │               │
+│Execution   ✓ s│▏                                                                           │               │
+╰───────────────│command conflict: Task changed elsewhere; refresh the task                  │               │
+╭ Activity · #1 │                                                                            │               │
+│• Which content│[Copy] [Apply] [Cancel] [Up] [Down]                                         │ct: Owner      │
+│• Workflow · Im│                                                                            │               │
+│• Current task ╰────────────────────────────────────────────────────────────────────────────╯               │
+│• #1 created: Unanswered question           ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Answer] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STOPPED QUESTION · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Queue · stopped · Stopped by owner
+ #1 Unanswered question
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                   │
+│Attempt 1                                   ││Proof: result.txt contains verified                           │
+│Model codex/remediation / none              │╰──────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ─────────────────────────────╮
+│Tokens 60 new · 40 cached · 10 out          ││Outcome: Stopped by owner                                     │
+│70 new tokens + 1 call(s) unreported        ││                                                              │
+│Budget 0 of 3 used                          ││Worker claim (unverified):                                    │
+│Can run · u Readiness                       ││Need direction                                                │
+│Execution   ✓ succeeded                     ││                                                              │
+│Repair      ✓ succeeded                     ││Remediation · succeeded · codex/remediation verdict: Owner    │
+╰────────────────────────────────────────────╯│action is required before delivery can continue               │
+╭ Activity · #1 · l: all ────────────────────╮│                                                              │
+│• Back to Pending; the next Run starts fresh││Supervisor outcome: Stopped by owner                          │
+│• Stopped by owner                          ││                                                              │
+│• Answer saved; the task continues          ││                                                              │
+│• Which content?                            ││                                                              │
+│• Workflow · Implement · repair round 0/10  ││                                                              │
+│• Current task attempt recorded             ││                                                              │
+│• #1 created: Unanswered question           ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+#1 stopped · back to Pending
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

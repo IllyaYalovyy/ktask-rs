@@ -1,0 +1,62 @@
+@@ IMPORT PREVIEW · 120x30 · keyboard
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Queue · 120 shown / 120 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 120 · Model ─────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│› #1   Failed   Recover a failed check                  economy medium││Recover a failed check                        │
+│  #2   Pending  [Human] Approve the queue interaction   economy medium││#1 · Failed · AI                              │
+│  #3   Pending  Choo╭ Import preview · simulated ────────────────────────────────────────────────╮                    │
+│  #4   Pending  Fail│Position: after #2 / before #3                                              │n the final queue   │
+│  #5   Pending  Work│AI · Imported check                                                         │                    │
+│  #6   Pending  Inst│Human · Imported review                                                     │                    │
+│  #7   Pending  Queu│                                                                            │eachable.           │
+│  #8   Pending  Keyb│Before task ID                                                              │                    │
+│  #9   Pending  Sear│3▏                                                                          │                    │
+│  #10  Pending  Fail│Alt-Up/Down: position · Ctrl-S: apply · Esc: cancel                         │                    │
+│  #11  Pending  Work│                                                                            │                    │
+│  #12  Pending  Inst│[Copy] [Apply] [Cancel] [Up] [Down] [Earlier] [Later]                       │m                   │
+│  #13  Pending  Queu│                                                                            │                    │
+│  #14  Pending  Keyb╰────────────────────────────────────────────────────────────────────────────╯                    │
+│  #15  Pending  Search matching · case 15               economy medium││Remediation: capable / high                   │
+│  #16  Pending  Failure recovery · case 16              economy medium││                                              │
+│  #17  Pending  Workspace cleanup · case 17             economy medium││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Retry] [a Add] [i Insert] [e Edit] [c Models] [s Stop] [T Restart] [D Mark done] [o Import] [E Export]
+[Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ OVERWRITE CONFIRMATION · 120x30 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 122 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Queue · 122 shown / 122 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 3 / 122 · Model ─────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│  #1   Failed   Recover a failed check                  economy medium││Imported check                                │
+│  #2   Pending  [Human] Approve the queue interaction   economy medium││#241 · Pending · AI                           │
+│› #241 Pending  Impo╭ Overwrite mock file? ──────────────────────────────────────────────────────╮                    │
+│  #242 Pending  [Hum│/demo/existing.tsv already exists.                                          │task                │
+│  #3   Pending  Choo│Confirm replaces it; cancel preserves its contents.                         │                    │
+│  #4   Pending  Fail│                                                                            │                    │
+│  #5   Pending  Work│                                                                            │                    │
+│  #6   Pending  Inst│                                                                            │                    │
+│  #7   Pending  Queu│                                                                            │                    │
+│  #8   Pending  Keyb│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│  #9   Pending  Sear│                                                                            │m                   │
+│  #10  Pending  Fail│[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│  #11  Pending  Work│                                                                            │                    │
+│  #12  Pending  Inst╰────────────────────────────────────────────────────────────────────────────╯h                   │
+│  #13  Pending  Queue pagination · case 13              economy medium││                                              │
+│  #14  Pending  Keyboard navigation · case 14           economy medium││                                              │
+│  #15  Pending  Search matching · case 15               economy medium││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Retry] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel] [R Supersede]
+[o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Imported 2 tasks · simulated files only
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

@@ -1,0 +1,29 @@
+@@ CURRENT CONFIGURATION FAILURE · 90x28 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 1 · History 0
+ Session: Run one · stopped · Task #1 stopped (configuration): execution effort rejected …
+ #1 Reject bad settings
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: execution effort rejected by Codex for codex/execution (exit 2):                ┃
+┃{"error":{"message":"HTTP 400 invalid parameter: effort hight"},"type":"turn.failed"}.  ┃
+┃Fix the effort setting before retrying                                                  ┃
+┃Not resolved automatically: The provider rejected a role's model or effort setting;     ┃
+┃automatic retry is stopped.                                                             ┃
+┃Next: c Models: correct the named role and setting, then r Retry                        ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────╮
+│Failed · AI                                 ││Goal: Create result.txt containing verifi…│
+│Attempt 1                                   ││Proof: result.txt contains verified       │
+│Tokens none reported yet                    │╰──────────────────────────────────────────╯
+│Model codex/remediation / none              │╭ Report · attempt 1 · o: raw log ─────────╮
+╰────────────────────────────────────────────╯│Outcome: execution effort rejected by     │
+╭ Activity · #1 · l: all ────────────────────╮│Codex for codex/execution (exit 2):       │
+│• execution effort rejected by Codex for    ││{"error":{"message":"HTTP 400 invalid     │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness]
+[m Run mode] [Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help]
+[q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

@@ -1,0 +1,26 @@
+@@ RECONCILED CURRENT SCREEN · 80x25 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Retained task
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ──────────────╮
+│Failed · AI                 ││Goal: Retained goal                             │
+│Attempt 1                   ││Proof: Retained check                           │
+│Model unconfigured / none   │╰────────────────────────────────────────────────╯
+│Active <t>                  │╭ Log · following · attempt 1 ───────────────────╮
+│Tokens none reported yet    ││                                                │
+│none yet                    ││                                                │
+╰────────────────────────────╯│                                                │
+╭ Activity · #1 · l: all ────╮│                                                │
+│• Retained event            ││                                                │
+│• #1 created: Retained task ││                                                │
+│                            ││                                                │
+│                            ││                                                │
+╰────────────────────────────╯╰────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit]
+[u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix]
+[S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

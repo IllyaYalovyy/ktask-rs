@@ -1,0 +1,124 @@
+@@ QUESTION CONTROLS · 100x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs input · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · waiting · Awaiting answer to current task
+ #1 Ask owner
+ The worker needs your answer · r Answer · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Needs input · AI                            ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Waiting for your answer · r Answer          │╰────────────────────────────────────────────────────╯
+│Model codex/remediation / none              │╭ Question from the worker · r: answer ──────────────╮
+│Active <t> · waited <t>                     ││Which content?                                      │
+│Tokens 60 new · 40 cached · 10 out          │╰────────────────────────────────────────────────────╯
+│70 new tokens + 1 call(s) unreported        │╭ Report · attempt 1 · o: raw log ───────────────────╮
+│Budget 0 of 3 used                          ││Outcome: Waiting                                    │
+│Can run · u Readiness                       ││                                                    │
+│Execution   ✓ succeeded                     ││Worker claim (unverified):                          │
+╰────────────────────────────────────────────╯│Need direction                                      │
+╭ Activity · #1 · l: all ────────────────────╮│                                                    │
+│• Supervisor yielded this attempt for resume││Remediation · waiting · codex/remediation verdict:  │
+│• Which content?                            ││Owner action is required before delivery can        │
+│• Workflow · Implement · repair round 0/10  ││continue                                            │
+│• Supervisor started                        ││                                                    │
+│• Current task attempt recorded             ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Answer] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ FORWARD ASKS FOR THE ANSWER · 100x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs input · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · waiting · Awaiting answer to current task
+ #1 Ask owner
+ The worker needs your answer · r Answer · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Needs input · AI                            ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Waiting fo╭ Answer AI question ────────────────────────────────────────────────────────╮──────────╯
+│Model code│Which content?                                                              │──────────╮
+│Active <t>│                                                                            │          │
+│Tokens 60 │                                                                            │──────────╯
+│70 new tok│                                                                            │──────────╮
+│Budget 0 o│Answer                                                                      │          │
+│Can run · │▏                                                                           │          │
+│Execution │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+╰──────────│                                                                            │          │
+╭ Activity │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│• Supervis│                                                                            │verdict:  │
+│• Which co╰────────────────────────────────────────────────────────────────────────────╯an        │
+│• Workflow · Implement · repair round 0/10  ││continue                                            │
+│• Supervisor started                        ││                                                    │
+│• Current task attempt recorded             ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Answer] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ ANSWER FORM · 100x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs input · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · waiting · Awaiting answer to current task
+ #1 Ask owner
+ The worker needs your answer · r Answer · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Needs input · AI                            ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Waiting fo╭ Answer AI question ────────────────────────────────────────────────────────╮──────────╯
+│Model code│Which content?                                                              │──────────╮
+│Active <t>│                                                                            │          │
+│Tokens 60 │                                                                            │──────────╯
+│70 new tok│                                                                            │──────────╮
+│Budget 0 o│Answer                                                                      │          │
+│Can run · │▏                                                                           │          │
+│Execution │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+╰──────────│                                                                            │          │
+╭ Activity │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│• Supervis│                                                                            │verdict:  │
+│• Which co╰────────────────────────────────────────────────────────────────────────────╯an        │
+│• Workflow · Implement · repair round 0/10  ││continue                                            │
+│• Supervisor started                        ││                                                    │
+│• Current task attempt recorded             ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Answer] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RESUMED SAME ATTEMPT · 100x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                   │
+│Inspect results in History, or add more work.                                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Saved to SQLite · execution continuing
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

@@ -1,0 +1,46 @@
+@@ CLI → TUI · 70x22 · keyboard
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Added through CLI
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · AI                ││Goal: Goal                            │
+│No attempts yet             ││Proof: Check                          │
+│Run blocked (9) · u Readines│╰──────────────────────────────────────╯
+│Model unconfigured / none   │╭ Log · following ─────────────────────╮
+│Budget 0 of 3 used          ││Run is blocked. Press u Readiness for │
+╰────────────────────────────╯│each cause and a direct action.       │
+╭ Activity · #1 · l: all ────╮│Refresh after setup; Run retries from │
+│• #1 created: Added through ││Current.                              │
+│  CLI                       ││                                      │
+│                            ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models]
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ CONFLICT · 70x22 · mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+╭ Edit task ─────────────────────────────────────────────────────────╮
+│Save commits a new revision in SQLite. Earlier attempts remain      │
+│unchanged.                                                          │
+│Title                                                               │
+│Stale TUI change▏                                                   │
+│Goal                                                                │
+│Goal                                                                │
+│Acceptance check                                                    │
+│Check                                                               │
+│Kind                                                                │
+│< AI >   click / Space to change                                    │
+│Approval                                                            │
+│< Ready >   click / Space to change                                 │
+│Work category                                                       │
+│< code >   click / Space to change                                  │
+│command conflict: Task changed elsewhere; refresh the task          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…

@@ -1,0 +1,124 @@
+@@ STARTUP OUTSIDE A PROJECT · 110x30 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Projects · 1 registered · 0 running · 0 need you
+ /tmp/ktask-screens---------------------… is not a project · n adds it
+╭ Projects · 1 / 1 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│› * alpha-app Ready   1 queued · #1 Only alpha task             ││alpha-app · open                          │
+│                                                                ││/tmp/ktask-screens-----------------------/│
+│                                                                ││ktask-test-scratch/run-000000/alpha-app   │
+│                                                                ││                                          │
+│                                                                ││State: Ready                              │
+│                                                                ││Runner: not running                       │
+│                                                                ││Current: #1 Only alpha task · Pending     │
+│                                                                ││Queue: 1 unfinished · History: 0 finished │
+│                                                                ││                                          │
+│                                                                ││This project is open · Enter returns to   │
+│                                                                ││it.                                       │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [n Add this folder] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+This folder is not a project · Enter opens one, n adds this folder
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ ADD THIS FOLDER · 110x30 · keyboard
+ ktask-dev  / alpha-app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Projects · 1 registered · 0 running · 0 need you
+ /tmp/ktask-screens---------------------… is not a project · n adds it
+╭ Projects · 1 / 1 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│› * alpha-app Ready   1 queued · #1 Only alpha task             ││alpha-app · open                          │
+│               ╭ Add this folder as a project ──────────────────────────────────────────────╮--------------/│
+│               │Folder:                                                                     │c2/alpha-app   │
+│               │/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/fres│               │
+│               │h-folder                                                                    │               │
+│               │The project starts with your user defaults and its own empty queue.         │               │
+│               │Nothing in the folder changes.                                              │ · Pending     │
+│               │Project name                                                                │ry: 0 finished │
+│               │fresh-folder▏                                                               │               │
+│               │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │r returns to   │
+│               │                                                                            │               │
+│               │[Copy] [Apply] [Cancel] [Up] [Down]                                         │               │
+│               │                                                                            │               │
+│               ╰────────────────────────────────────────────────────────────────────────────╯               │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [n Add this folder] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+This folder is not a project · Enter opens one, n adds this folder
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ ADDED AND OPENED · 110x30 · keyboard+mouse
+ ktask-dev  / fresh-folder   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│No current task.                                                                                            │
+│Set up this project first: u Readiness lists what is missing.                                               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Opened fresh-folder · 0 Projects lists every project; runs continue in the background
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ ADD THIS FOLDER · 110x30 · mouse
+ ktask-dev  / alpha-app   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Projects · 1 registered · 0 running · 0 need you
+ /tmp/ktask-screens---------------------… is not a project · n adds it
+╭ Projects · 1 / 1 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│› * alpha-app Ready   1 queued · #1 Only alpha task             ││alpha-app · open                          │
+│               ╭ Add this folder as a project ──────────────────────────────────────────────╮--------------/│
+│               │Folder:                                                                     │75/alpha-app   │
+│               │/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/fres│               │
+│               │h-folder                                                                    │               │
+│               │The project starts with your user defaults and its own empty queue.         │               │
+│               │Nothing in the folder changes.                                              │ · Pending     │
+│               │Project name                                                                │ry: 0 finished │
+│               │fresh-folder▏                                                               │               │
+│               │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │r returns to   │
+│               │                                                                            │               │
+│               │[Copy] [Apply] [Cancel] [Up] [Down]                                         │               │
+│               │                                                                            │               │
+│               ╰────────────────────────────────────────────────────────────────────────────╯               │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [n Add this folder] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+This folder is not a project · Enter opens one, n adds this folder
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

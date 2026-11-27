@@ -1,0 +1,46 @@
+@@ CLEANUP BLOCKED · 70x22 · keyboard
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #241 · Pending   |   Queue 121 · History 120
+ Run one preference · Next #1: Recover a failed check · m: run mode i…
+ #241 Repair first
+ Ready · r Run starts a simulated attempt
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · AI                ││Goal: Goal                            │
+│No attempts yet             ││Proof: Check                          │
+│Budget 0 of 3 used          │╰──────────────────────────────────────╯
+│Model economy / medium      │╭ Log · following ─────────────────────╮
+│Cost <cost> (mock)          ││Ready. Run current to begin a         │
+╰────────────────────────────╯│simulated attempt.                    │
+╭ Activity · l: all ─────────╮│                                      │
+│• Cleanup blocked (mock) ·  ││                                      │
+│  work preserved · retry…   ││                                      │
+│• Workspace #241: useful    ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run one] [D Mark done] [x Cancel] [R Supersede] [c Models]
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Cleanup blocked (mock) · work preserved · retry Run/Retry to check ag…
+@@ HANDOFF EVENTS · 70x22 · keyboard
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Project events ────────────────────────────────────────────────────╮
+│#242 saved · mock workspace                                         │
+│Current paused · later tasks will not start                         │
+│Current running · simulation only                                   │
+│Workspace #241: owned scratch cleaned (mock)                        │
+│Workspace #241: useful work checkpointed (mock); existing attempts  │
+│retained                                                            │
+│Cleanup blocked (mock) · work preserved · retry Run/Retry to check  │
+│again                                                               │
+│Workspace #241: useful work checkpointed (mock); existing attempts  │
+│retained                                                            │
+│#241 saved · mock workspace                                         │
+│Configuration applied · session only                                │
+│Configuration applied · session only                                │
+│Check failed · #1                                                   │
+│Wheel / PgUp / PgDn: scroll · Esc: close                            │
+│                                                                    │
+│[Copy] [Close] [Up] [Down]                                          │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+#242 saved · mock workspace

@@ -1,0 +1,1704 @@
+@@ Existing · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Existing
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Pending · AI                                ││Goal: Goal with {{context}} kept literally          │
+│No attempts yet                             ││Proof: First; Second                                │
+│Run blocked (9) · u Readiness               │╰────────────────────────────────────────────────────╯
+│Model unconfigured / none                   │╭ Log · following ───────────────────────────────────╮
+│Budget 0 of 3 used                          ││Run is blocked. Press u Readiness for each cause    │
+│                                            ││and a direct action. Refresh after setup; Run       │
+│                                            ││retries from Current.                               │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #1 · l: all ────────────────────╮│                                                    │
+│• #1 created: Existing                      ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down]
+[u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help]
+[q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Storage: SQLite · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: list, add, edit, enable or disable.                                                       │
+│Keyboard remains available with mouse disabled.                                                   │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m  │
+│Defaults.                                                                                         │
+│E Export settings and o Import settings move this project's settings to another computer.         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ A work category tells AI turns · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User def╭ Work categories ───────────────────────────────────────────────────────────╮          │
+│f Profiles│A work category tells AI turns how to execute, review, validate and         │          │
+│w Work cat│remediate a kind of work. A project's own category overrides the user scope │ediate    │
+│code, docu│and the built-in code, documents and art categories of the same name;       │          │
+│L Review l│choose one on a task's form.                                                │n) and the│
+│project's │                                                                            │          │
+│Checks: li│Categories:                                                                 │          │
+│Keyboard r│code · built-in scope · project checks apply · Source code: project checks  │          │
+│i Report l│gate it and the diff is held to the Clean Code bar.                         │ole in m  │
+│Defaults. │documents · built-in scope · project checks do not apply · Documents, plans │          │
+│E Export s│and other non-code files: no project checks.                                │.         │
+│          │art · built-in scope · project checks do not apply · Images, icons, sound   │          │
+│          │and other assets: no project checks; judged on the deliverables.            │          │
+│          │Changes reach only tasks defined afterwards; a task revision keeps the      │          │
+│          │templates it was defined with.                                              │          │
+│          │Select a category and choose Apply to edit, preview, override or delete it. │          │
+│          │Placeholders: {{title}}, {{goal}}, {{criteria}}, {{category}}, {{context}}. │          │
+│          │Task fields and context are always delivered; a placeholder only chooses    │          │
+│          │where. {{context}} is runtime-only: previews show a labelled stand-in.      │          │
+│          │In a template line, \n is a line break; write \{{ for a literal {{.         │          │
+│          │The supervisor's rules, evidence handling and response schema are added     │          │
+│          │around every template and cannot be edited here.                            │          │
+│          │Category                                                                    │          │
+│          │< New category >   click / Space to change                                  │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ A new category starts as a copy · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisi╭ New category ──────────────────────────────────────────────────────────────╮          │
+│          │A new category starts as a copy of the code category; change what differs.  │          │
+│Defaults a│Placeholders: {{title}}, {{goal}}, {{criteria}}, {{category}}, {{context}}. │          │
+│u User def│Task fields and context are always delivered; a placeholder only chooses    │          │
+│f Profiles│where. {{context}} is runtime-only: previews show a labelled stand-in.      │          │
+│w Work cat│In a template line, \n is a line break; write \{{ for a literal {{.         │ediate    │
+│code, docu│The supervisor's rules, evidence handling and response schema are added     │          │
+│L Review l│around every template and cannot be edited here.                            │n) and the│
+│project's │Save in the project scope to override a user or built-in category of the    │          │
+│Checks: li│same name for this project only. Choose Project checks Do not apply for     │          │
+│Keyboard r│documents or art-only work.                                                 │          │
+│i Report l│Preview shows the effective prompt for task #1, with runtime-only parts     │ole in m  │
+│Defaults. │labelled; nothing is saved until Save.                                      │          │
+│E Export s│Category name                                                               │.         │
+│          │▏                                                                           │          │
+│          │Action                                                                      │          │
+│          │< Save >   click / Space to change                                          │          │
+│          │Save in                                                                     │          │
+│          │< User scope >   click / Space to change                                    │          │
+│          │Project checks                                                              │          │
+│          │< Apply >   click / Space to change                                         │          │
+│          │Description                                                                 │          │
+│          │Source code: project checks gate it and the diff is held to the Clean Code b│          │
+│          │Execution template                                                          │          │
+│          │Own this high-level task end to end: inspect the repository, infer the neces│          │
+│          │Review template                                                             │          │
+│          │Independently review the change as a senior engineer holding the Clean Code │          │
+│          │Validation template                                                         │          │
+│          │Independently validate that the objective was achieved as written, not a nar│          │
+│          │Remediation template                                                        │          │
+│          │Remediate the reported problems of this code task. Hold the Clean Code bar. │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ INVALID PLACEHOLDER · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependenci╭ New category ──────────────────────────────────────────────────────────────╮ a        │
+│prerequisi│A new category starts as a copy of the code category; change what differs.  │          │
+│          │Placeholders: {{title}}, {{goal}}, {{criteria}}, {{category}}, {{context}}. │          │
+│Defaults a│Task fields and context are always delivered; a placeholder only chooses    │          │
+│u User def│where. {{context}} is runtime-only: previews show a labelled stand-in.      │          │
+│f Profiles│In a template line, \n is a line break; write \{{ for a literal {{.         │          │
+│w Work cat│The supervisor's rules, evidence handling and response schema are added     │ediate    │
+│code, docu│around every template and cannot be edited here.                            │          │
+│L Review l│Save in the project scope to override a user or built-in category of the    │n) and the│
+│project's │same name for this project only. Choose Project checks Do not apply for     │          │
+│Checks: li│documents or art-only work.                                                 │          │
+│Keyboard r│Preview shows the effective prompt for task #1, with runtime-only parts     │          │
+│i Report l│labelled; nothing is saved until Save.                                      │ole in m  │
+│Defaults. │Category name                                                               │          │
+│E Export s│Poster art                                                                  │.         │
+│          │Action                                                                      │          │
+│          │< Save >   click / Space to change                                          │          │
+│          │Save in                                                                     │          │
+│          │< User scope >   click / Space to change                                    │          │
+│          │Project checks                                                              │          │
+│          │< Apply >   click / Space to change                                         │          │
+│          │Description                                                                 │          │
+│          │Print posters                                                               │          │
+│          │Execution template                                                          │          │
+│          │Paint {{title}} \n then {{nope}}▏                                           │          │
+│          │Review template                                                             │          │
+│          │Independently review the change as a senior engineer holding the Clean Code │          │
+│          │Validation template                                                         │          │
+│          │Independently validate that the objective was achieved as written, not a nar│          │
+│          │Remediation template                                                        │          │
+│          │Remediate the reported problems of this code task. Hold the Clean Code bar. │          │
+│          │command conflict: The execution template: Unknown placeholder {{nope}};     │          │
+│          │valid placeholders are {{title}}, {{goal}}, {{criteria}}, {{category}},     │          │
+│          │{{context}}                                                                 │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Preview of the review prompt for task #1. Nothing is saved. · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects╭ New category ──────────────────────────────────────────────────────────────╮
+ Current #1│Preview of the review prompt for task #1. Nothing is saved.                 │
+ Queue pref│                                                                            │
+ Config    │== Work category Poster art (user scope), review template; task content     │
+           │filled in; the model reads the supervisor rules first ==                    │
+╭ Config ──│Independently review the change as a senior engineer holding the Clean Code │──────────╮
+│Project: r│bar: intention-revealing names; small functions that do one thing at one    │          │
+│Storage: S│level of abstraction; no duplication of logic the project already has; no   │hes · R:  │
+│resource l│dead or commented-out code; comments only where the code cannot say it,     │          │
+│Preference│never narration or noise; error handling that does not obscure the logic;   │          │
+│          │no magic values; consistency with the project's existing structure and      │          │
+│Mouse: Ena│conventions; tests that are fast, independent, repeatable and readable,     │          │
+│Run mode: │with none removed, weakened or ignored; no scope creep beyond the task. The │          │
+│Planner ap│change must leave the code at least as clean as it found it. Before         │          │
+│Delivery: │answering, review your own findings: for each one, state its concrete       │          │
+│Dependenci│impact. Mark a finding critical only when it harms correctness, behavior,   │ a        │
+│prerequisi│safety or data, performance, or long-term maintenance, for example a test   │          │
+│          │that cannot fail or does not exercise what it claims, logic duplicated      │          │
+│Defaults a│instead of reused, structure that makes the next change harder, or a        │          │
+│u User def│criterion without proof. Each critical finding must identify file:line, a   │          │
+│f Profiles│reachable trigger or demonstrated maintenance cost, the consequence, and a  │          │
+│w Work cat│focused correction. Review the full diff once and report all substantiated  │ediate    │
+│code, docu│blockers together. Diagnostic changes that a repair plan authorizes are     │          │
+│L Review l│judged on their merits, not rejected merely for touching another file.      │n) and the│
+│project's │Task: Existing                                                              │          │
+│Checks: li│Goal: Goal with {{context}} kept literally                                  │          │
+│Keyboard r│Criteria:                                                                   │          │
+│i Report l│1. First                                                                    │ole in m  │
+│Defaults. │2. Second                                                                   │          │
+│E Export s│Context:                                                                    │.         │
+│          │[runtime-only context: the supervisor fills this in when the turn starts:   │          │
+│          │review scope, check results, evidence paths, earlier findings, the repair   │          │
+│          │plan and answered questions]                                                │          │
+│          │                                                                            │          │
+│          │== Supervisor rules: fixed, not editable by the category ==                 │          │
+│          │Your sandbox is read-only by design: you cannot build, run tests, or edit   │          │
+│          │files, and you must not ask to; nobody will change it or grant permission.  │          │
+│          │Evidence packets and artifact paths in Context are read-only. Read the      │          │
+│          │criterion map and latest result/finding records before deciding, then       │          │
+│          │inspect their exact sources on demand. Never accept an executor claim,      │          │
+│          │stale evidence or a summary alone as proof. Search and page with the        │          │
+│          │evidence command instead of dumping whole files. A visual criterion         │          │
+│          │requires inspecting the actual rendering: images opened at useful           │          │
+│          │resolution, or recorded terminal screens read as text. No project checks,   │          │
+│          │builds or tests run for this category of work: never ask for them, require  │          │
+│          │Category name                                                               │          │
+│          │Poster art                                                                  │          │
+│          │Action                                                                      │          │
+│          │< Preview review prompt >   click / Space to change                         │          │
+│          │Save in                                                                     │          │
+│          │< User scope >   click / Space to change                                    │          │
+│          │Project checks                                                              │          │
+│          │< Do not apply >   click / Space to change                                  │          │
+│          │Description                                                                 │          │
+│          │Print posters                                                               │          │
+│          │Execution template                                                          │          │
+│          │Paint {{title}}.\nGoal: {{goal}}                                            │          │
+│          │Review template                                                             │          │
+│          │Independently review the change as a senior engineer holding the Clean Code │          │
+│          │Validation template                                                         │          │
+│          │Independently validate that the objective was achieved as written, not a nar│          │
+│          │Remediation template                                                        │          │
+│          │Remediate the reported problems of this code task. Hold the Clean Code bar. │          │
+╰──────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────╯
+[Copy] [m D│                                                                            │[c Checks]
+[g Git deli│[Copy] [Apply] [Cancel] [Up] [Down]                                         │
+[E Export s│                                                                            │
+Runs happen╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PREVIEW Goal: Goal with {{context}} kept literally · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects╭ New category ──────────────────────────────────────────────────────────────╮
+ Current #1│Preview of the review prompt for task #1. Nothing is saved.                 │
+ Queue pref│                                                                            │
+ Config    │== Work category Poster art (user scope), review template; task content     │
+           │filled in; the model reads the supervisor rules first ==                    │
+╭ Config ──│Independently review the change as a senior engineer holding the Clean Code │──────────╮
+│Project: r│bar: intention-revealing names; small functions that do one thing at one    │          │
+│Storage: S│level of abstraction; no duplication of logic the project already has; no   │hes · R:  │
+│resource l│dead or commented-out code; comments only where the code cannot say it,     │          │
+│Preference│never narration or noise; error handling that does not obscure the logic;   │          │
+│          │no magic values; consistency with the project's existing structure and      │          │
+│Mouse: Ena│conventions; tests that are fast, independent, repeatable and readable,     │          │
+│Run mode: │with none removed, weakened or ignored; no scope creep beyond the task. The │          │
+│Planner ap│change must leave the code at least as clean as it found it. Before         │          │
+│Delivery: │answering, review your own findings: for each one, state its concrete       │          │
+│Dependenci│impact. Mark a finding critical only when it harms correctness, behavior,   │ a        │
+│prerequisi│safety or data, performance, or long-term maintenance, for example a test   │          │
+│          │that cannot fail or does not exercise what it claims, logic duplicated      │          │
+│Defaults a│instead of reused, structure that makes the next change harder, or a        │          │
+│u User def│criterion without proof. Each critical finding must identify file:line, a   │          │
+│f Profiles│reachable trigger or demonstrated maintenance cost, the consequence, and a  │          │
+│w Work cat│focused correction. Review the full diff once and report all substantiated  │ediate    │
+│code, docu│blockers together. Diagnostic changes that a repair plan authorizes are     │          │
+│L Review l│judged on their merits, not rejected merely for touching another file.      │n) and the│
+│project's │Task: Existing                                                              │          │
+│Checks: li│Goal: Goal with {{context}} kept literally                                  │          │
+│Keyboard r│Criteria:                                                                   │          │
+│i Report l│1. First                                                                    │ole in m  │
+│Defaults. │2. Second                                                                   │          │
+│E Export s│Context:                                                                    │.         │
+│          │[runtime-only context: the supervisor fills this in when the turn starts:   │          │
+│          │review scope, check results, evidence paths, earlier findings, the repair   │          │
+│          │plan and answered questions]                                                │          │
+│          │                                                                            │          │
+│          │== Supervisor rules: fixed, not editable by the category ==                 │          │
+│          │Your sandbox is read-only by design: you cannot build, run tests, or edit   │          │
+│          │files, and you must not ask to; nobody will change it or grant permission.  │          │
+│          │Evidence packets and artifact paths in Context are read-only. Read the      │          │
+│          │criterion map and latest result/finding records before deciding, then       │          │
+│          │inspect their exact sources on demand. Never accept an executor claim,      │          │
+│          │stale evidence or a summary alone as proof. Search and page with the        │          │
+│          │evidence command instead of dumping whole files. A visual criterion         │          │
+│          │requires inspecting the actual rendering: images opened at useful           │          │
+│          │resolution, or recorded terminal screens read as text. No project checks,   │          │
+│          │builds or tests run for this category of work: never ask for them, require  │          │
+│          │Category name                                                               │          │
+│          │Poster art                                                                  │          │
+│          │Action                                                                      │          │
+│          │< Preview review prompt >   click / Space to change                         │          │
+│          │Save in                                                                     │          │
+│          │< User scope >   click / Space to change                                    │          │
+│          │Project checks                                                              │          │
+│          │< Do not apply >   click / Space to change                                  │          │
+│          │Description                                                                 │          │
+│          │Print posters                                                               │          │
+│          │Execution template                                                          │          │
+│          │Paint {{title}}.\nGoal: {{goal}}                                            │          │
+│          │Review template                                                             │          │
+│          │Independently review the change as a senior engineer holding the Clean Code │          │
+│          │Validation template                                                         │          │
+│          │Independently validate that the objective was achieved as written, not a nar│          │
+│          │Remediation template                                                        │          │
+│          │Remediate the reported problems of this code task. Hold the Clean Code bar. │          │
+╰──────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────╯
+[Copy] [m D│                                                                            │[c Checks]
+[g Git deli│[Copy] [Apply] [Cancel] [Up] [Down]                                         │
+[E Export s│                                                                            │
+Runs happen╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PREVIEW [runtime-only context: · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects╭ New category ──────────────────────────────────────────────────────────────╮
+ Current #1│Preview of the review prompt for task #1. Nothing is saved.                 │
+ Queue pref│                                                                            │
+ Config    │== Work category Poster art (user scope), review template; task content     │
+           │filled in; the model reads the supervisor rules first ==                    │
+╭ Config ──│Independently review the change as a senior engineer holding the Clean Code │──────────╮
+│Project: r│bar: intention-revealing names; small functions that do one thing at one    │          │
+│Storage: S│level of abstraction; no duplication of logic the project already has; no   │hes · R:  │
+│resource l│dead or commented-out code; comments only where the code cannot say it,     │          │
+│Preference│never narration or noise; error handling that does not obscure the logic;   │          │
+│          │no magic values; consistency with the project's existing structure and      │          │
+│Mouse: Ena│conventions; tests that are fast, independent, repeatable and readable,     │          │
+│Run mode: │with none removed, weakened or ignored; no scope creep beyond the task. The │          │
+│Planner ap│change must leave the code at least as clean as it found it. Before         │          │
+│Delivery: │answering, review your own findings: for each one, state its concrete       │          │
+│Dependenci│impact. Mark a finding critical only when it harms correctness, behavior,   │ a        │
+│prerequisi│safety or data, performance, or long-term maintenance, for example a test   │          │
+│          │that cannot fail or does not exercise what it claims, logic duplicated      │          │
+│Defaults a│instead of reused, structure that makes the next change harder, or a        │          │
+│u User def│criterion without proof. Each critical finding must identify file:line, a   │          │
+│f Profiles│reachable trigger or demonstrated maintenance cost, the consequence, and a  │          │
+│w Work cat│focused correction. Review the full diff once and report all substantiated  │ediate    │
+│code, docu│blockers together. Diagnostic changes that a repair plan authorizes are     │          │
+│L Review l│judged on their merits, not rejected merely for touching another file.      │n) and the│
+│project's │Task: Existing                                                              │          │
+│Checks: li│Goal: Goal with {{context}} kept literally                                  │          │
+│Keyboard r│Criteria:                                                                   │          │
+│i Report l│1. First                                                                    │ole in m  │
+│Defaults. │2. Second                                                                   │          │
+│E Export s│Context:                                                                    │.         │
+│          │[runtime-only context: the supervisor fills this in when the turn starts:   │          │
+│          │review scope, check results, evidence paths, earlier findings, the repair   │          │
+│          │plan and answered questions]                                                │          │
+│          │                                                                            │          │
+│          │== Supervisor rules: fixed, not editable by the category ==                 │          │
+│          │Your sandbox is read-only by design: you cannot build, run tests, or edit   │          │
+│          │files, and you must not ask to; nobody will change it or grant permission.  │          │
+│          │Evidence packets and artifact paths in Context are read-only. Read the      │          │
+│          │criterion map and latest result/finding records before deciding, then       │          │
+│          │inspect their exact sources on demand. Never accept an executor claim,      │          │
+│          │stale evidence or a summary alone as proof. Search and page with the        │          │
+│          │evidence command instead of dumping whole files. A visual criterion         │          │
+│          │requires inspecting the actual rendering: images opened at useful           │          │
+│          │resolution, or recorded terminal screens read as text. No project checks,   │          │
+│          │builds or tests run for this category of work: never ask for them, require  │          │
+│          │Category name                                                               │          │
+│          │Poster art                                                                  │          │
+│          │Action                                                                      │          │
+│          │< Preview review prompt >   click / Space to change                         │          │
+│          │Save in                                                                     │          │
+│          │< User scope >   click / Space to change                                    │          │
+│          │Project checks                                                              │          │
+│          │< Do not apply >   click / Space to change                                  │          │
+│          │Description                                                                 │          │
+│          │Print posters                                                               │          │
+│          │Execution template                                                          │          │
+│          │Paint {{title}}.\nGoal: {{goal}}                                            │          │
+│          │Review template                                                             │          │
+│          │Independently review the change as a senior engineer holding the Clean Code │          │
+│          │Validation template                                                         │          │
+│          │Independently validate that the objective was achieved as written, not a nar│          │
+│          │Remediation template                                                        │          │
+│          │Remediate the reported problems of this code task. Hold the Clean Code bar. │          │
+╰──────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────╯
+[Copy] [m D│                                                                            │[c Checks]
+[g Git deli│[Copy] [Apply] [Cancel] [Up] [Down]                                         │
+[E Export s│                                                                            │
+Runs happen╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PREVIEW RULES · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects╭ New category ──────────────────────────────────────────────────────────────╮
+ Current #1│Preview of the review prompt for task #1. Nothing is saved.                 │
+ Queue pref│                                                                            │
+ Config    │== Work category Poster art (user scope), review template; task content     │
+           │filled in; the model reads the supervisor rules first ==                    │
+╭ Config ──│Independently review the change as a senior engineer holding the Clean Code │──────────╮
+│Project: r│bar: intention-revealing names; small functions that do one thing at one    │          │
+│Storage: S│level of abstraction; no duplication of logic the project already has; no   │hes · R:  │
+│resource l│dead or commented-out code; comments only where the code cannot say it,     │          │
+│Preference│never narration or noise; error handling that does not obscure the logic;   │          │
+│          │no magic values; consistency with the project's existing structure and      │          │
+│Mouse: Ena│conventions; tests that are fast, independent, repeatable and readable,     │          │
+│Run mode: │with none removed, weakened or ignored; no scope creep beyond the task. The │          │
+│Planner ap│change must leave the code at least as clean as it found it. Before         │          │
+│Delivery: │answering, review your own findings: for each one, state its concrete       │          │
+│Dependenci│impact. Mark a finding critical only when it harms correctness, behavior,   │ a        │
+│prerequisi│safety or data, performance, or long-term maintenance, for example a test   │          │
+│          │that cannot fail or does not exercise what it claims, logic duplicated      │          │
+│Defaults a│instead of reused, structure that makes the next change harder, or a        │          │
+│u User def│criterion without proof. Each critical finding must identify file:line, a   │          │
+│f Profiles│reachable trigger or demonstrated maintenance cost, the consequence, and a  │          │
+│w Work cat│focused correction. Review the full diff once and report all substantiated  │ediate    │
+│code, docu│blockers together. Diagnostic changes that a repair plan authorizes are     │          │
+│L Review l│judged on their merits, not rejected merely for touching another file.      │n) and the│
+│project's │Task: Existing                                                              │          │
+│Checks: li│Goal: Goal with {{context}} kept literally                                  │          │
+│Keyboard r│Criteria:                                                                   │          │
+│i Report l│1. First                                                                    │ole in m  │
+│Defaults. │2. Second                                                                   │          │
+│E Export s│Context:                                                                    │.         │
+│          │[runtime-only context: the supervisor fills this in when the turn starts:   │          │
+│          │review scope, check results, evidence paths, earlier findings, the repair   │          │
+│          │plan and answered questions]                                                │          │
+│          │                                                                            │          │
+│          │== Supervisor rules: fixed, not editable by the category ==                 │          │
+│          │Your sandbox is read-only by design: you cannot build, run tests, or edit   │          │
+│          │files, and you must not ask to; nobody will change it or grant permission.  │          │
+│          │Evidence packets and artifact paths in Context are read-only. Read the      │          │
+│          │criterion map and latest result/finding records before deciding, then       │          │
+│          │inspect their exact sources on demand. Never accept an executor claim,      │          │
+│          │stale evidence or a summary alone as proof. Search and page with the        │          │
+│          │evidence command instead of dumping whole files. A visual criterion         │          │
+│          │requires inspecting the actual rendering: images opened at useful           │          │
+│          │resolution, or recorded terminal screens read as text. No project checks,   │          │
+│          │builds or tests run for this category of work: never ask for them, require  │          │
+│          │Category name                                                               │          │
+│          │Poster art                                                                  │          │
+│          │Action                                                                      │          │
+│          │< Preview review prompt >   click / Space to change                         │          │
+│          │Save in                                                                     │          │
+│          │< User scope >   click / Space to change                                    │          │
+│          │Project checks                                                              │          │
+│          │< Do not apply >   click / Space to change                                  │          │
+│          │Description                                                                 │          │
+│          │Print posters                                                               │          │
+│          │Execution template                                                          │          │
+│          │Paint {{title}}.\nGoal: {{goal}}                                            │          │
+│          │Review template                                                             │          │
+│          │Independently review the change as a senior engineer holding the Clean Code │          │
+│          │Validation template                                                         │          │
+│          │Independently validate that the objective was achieved as written, not a nar│          │
+│          │Remediation template                                                        │          │
+│          │Remediate the reported problems of this code task. Hold the Clean Code bar. │          │
+╰──────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────╯
+[Copy] [m D│                                                                            │[c Checks]
+[g Git deli│[Copy] [Apply] [Cancel] [Up] [Down]                                         │
+[E Export s│                                                                            │
+Runs happen╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Saved user category Poster art · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: list, add, edit, enable or disable.                                                       │
+│Keyboard remains available with mouse disabled.                                                   │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m  │
+│Defaults.                                                                                         │
+│E Export settings and o Import settings move this project's settings to another computer.         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved user category Poster art; only tasks defined afterwards use it
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ A work category tells AI turns #2 · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults a╭ Work categories ───────────────────────────────────────────────────────────╮          │
+│u User def│A work category tells AI turns how to execute, review, validate and         │          │
+│f Profiles│remediate a kind of work. A project's own category overrides the user scope │          │
+│w Work cat│and the built-in code, documents and art categories of the same name;       │ediate    │
+│code, docu│choose one on a task's form.                                                │          │
+│L Review l│                                                                            │n) and the│
+│project's │Categories:                                                                 │          │
+│Checks: li│code · built-in scope · project checks apply · Source code: project checks  │          │
+│Keyboard r│gate it and the diff is held to the Clean Code bar.                         │          │
+│i Report l│documents · built-in scope · project checks do not apply · Documents, plans │ole in m  │
+│Defaults. │and other non-code files: no project checks.                                │          │
+│E Export s│art · built-in scope · project checks do not apply · Images, icons, sound   │.         │
+│          │and other assets: no project checks; judged on the deliverables.            │          │
+│          │Banner · user scope · project checks do not apply · Test category           │          │
+│          │Poster art · user scope · project checks do not apply · Print posters       │          │
+│          │Changes reach only tasks defined afterwards; a task revision keeps the      │          │
+│          │templates it was defined with.                                              │          │
+│          │Select a category and choose Apply to edit, preview, override or delete it. │          │
+│          │Placeholders: {{title}}, {{goal}}, {{criteria}}, {{category}}, {{context}}. │          │
+│          │Task fields and context are always delivered; a placeholder only chooses    │          │
+│          │where. {{context}} is runtime-only: previews show a labelled stand-in.      │          │
+│          │In a template line, \n is a line break; write \{{ for a literal {{.         │          │
+│          │The supervisor's rules, evidence handling and response schema are added     │          │
+│          │around every template and cannot be edited here.                            │          │
+│          │Category                                                                    │          │
+│          │< New category >   click / Space to change                                  │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved user category Poster art; only tasks defined afterwards use it
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Category Poster art (user) · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisi╭ Category Poster art (user) ────────────────────────────────────────────────╮          │
+│          │Placeholders: {{title}}, {{goal}}, {{criteria}}, {{category}}, {{context}}. │          │
+│Defaults a│Task fields and context are always delivered; a placeholder only chooses    │          │
+│u User def│where. {{context}} is runtime-only: previews show a labelled stand-in.      │          │
+│f Profiles│In a template line, \n is a line break; write \{{ for a literal {{.         │          │
+│w Work cat│The supervisor's rules, evidence handling and response schema are added     │ediate    │
+│code, docu│around every template and cannot be edited here.                            │          │
+│L Review l│Save in the project scope to override a user or built-in category of the    │n) and the│
+│project's │same name for this project only. Choose Project checks Do not apply for     │          │
+│Checks: li│documents or art-only work.                                                 │          │
+│Keyboard r│Preview shows the effective prompt for task #1, with runtime-only parts     │          │
+│i Report l│labelled; nothing is saved until Save.                                      │ole in m  │
+│Defaults. │Category name                                                               │          │
+│E Export s│Poster art▏                                                                 │.         │
+│          │Action                                                                      │          │
+│          │< Save >   click / Space to change                                          │          │
+│          │Save in                                                                     │          │
+│          │< User scope >   click / Space to change                                    │          │
+│          │Project checks                                                              │          │
+│          │< Do not apply >   click / Space to change                                  │          │
+│          │Description                                                                 │          │
+│          │Print posters                                                               │          │
+│          │Execution template                                                          │          │
+│          │Paint {{title}}.\nGoal: {{goal}}                                            │          │
+│          │Review template                                                             │          │
+│          │Independently review the change as a senior engineer holding the Clean Code │          │
+│          │Validation template                                                         │          │
+│          │Independently validate that the objective was achieved as written, not a nar│          │
+│          │Remediation template                                                        │          │
+│          │Remediate the reported problems of this code task. Hold the Clean Code bar. │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved user category Poster art; only tasks defined afterwards use it
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RENAME REFUSED · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisi╭ Category Poster art (user) ────────────────────────────────────────────────╮          │
+│          │Placeholders: {{title}}, {{goal}}, {{criteria}}, {{category}}, {{context}}. │          │
+│Defaults a│Task fields and context are always delivered; a placeholder only chooses    │          │
+│u User def│where. {{context}} is runtime-only: previews show a labelled stand-in.      │          │
+│f Profiles│In a template line, \n is a line break; write \{{ for a literal {{.         │          │
+│w Work cat│The supervisor's rules, evidence handling and response schema are added     │ediate    │
+│code, docu│around every template and cannot be edited here.                            │          │
+│L Review l│Save in the project scope to override a user or built-in category of the    │n) and the│
+│project's │same name for this project only. Choose Project checks Do not apply for     │          │
+│Checks: li│documents or art-only work.                                                 │          │
+│Keyboard r│Preview shows the effective prompt for task #1, with runtime-only parts     │          │
+│i Report l│labelled; nothing is saved until Save.                                      │ole in m  │
+│Defaults. │Category name                                                               │          │
+│E Export s│Banner▏                                                                     │.         │
+│          │Action                                                                      │          │
+│          │< Save >   click / Space to change                                          │          │
+│          │Save in                                                                     │          │
+│          │< User scope >   click / Space to change                                    │          │
+│          │Project checks                                                              │          │
+│          │< Do not apply >   click / Space to change                                  │          │
+│          │Description                                                                 │          │
+│          │Print posters                                                               │          │
+│          │Execution template                                                          │          │
+│          │Paint {{title}}.\nGoal: {{goal}}                                            │          │
+│          │Review template                                                             │          │
+│          │Independently review the change as a senior engineer holding the Clean Code │          │
+│          │Validation template                                                         │          │
+│          │Independently validate that the objective was achieved as written, not a nar│          │
+│          │Remediation template                                                        │          │
+│          │Remediate the reported problems of this code task. Hold the Clean Code bar. │          │
+│          │Category Banner already exists in the user scope; open it from the list to  │          │
+│          │edit it                                                                     │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved user category Poster art; only tasks defined afterwards use it
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ A work category tells AI turns #3 · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User def╭ Work categories ───────────────────────────────────────────────────────────╮          │
+│f Profiles│A work category tells AI turns how to execute, review, validate and         │          │
+│w Work cat│remediate a kind of work. A project's own category overrides the user scope │ediate    │
+│code, docu│and the built-in code, documents and art categories of the same name;       │          │
+│L Review l│choose one on a task's form.                                                │n) and the│
+│project's │                                                                            │          │
+│Checks: li│Categories:                                                                 │          │
+│Keyboard r│code · built-in scope · project checks apply · Source code: project checks  │          │
+│i Report l│gate it and the diff is held to the Clean Code bar.                         │ole in m  │
+│Defaults. │documents · built-in scope · project checks do not apply · Documents, plans │          │
+│E Export s│and other non-code files: no project checks.                                │.         │
+│          │art · built-in scope · project checks do not apply · Images, icons, sound   │          │
+│          │and other assets: no project checks; judged on the deliverables.            │          │
+│          │Poster art · user scope · project checks do not apply · Print posters       │          │
+│          │Changes reach only tasks defined afterwards; a task revision keeps the      │          │
+│          │templates it was defined with.                                              │          │
+│          │Select a category and choose Apply to edit, preview, override or delete it. │          │
+│          │Placeholders: {{title}}, {{goal}}, {{criteria}}, {{category}}, {{context}}. │          │
+│          │Task fields and context are always delivered; a placeholder only chooses    │          │
+│          │where. {{context}} is runtime-only: previews show a labelled stand-in.      │          │
+│          │In a template line, \n is a line break; write \{{ for a literal {{.         │          │
+│          │The supervisor's rules, evidence handling and response schema are added     │          │
+│          │around every template and cannot be edited here.                            │          │
+│          │Category                                                                    │          │
+│          │< New category >   click / Space to change                                  │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved user category Poster art; only tasks defined afterwards use it
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Category Poster art (user) #2 · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisi╭ Category Poster art (user) ────────────────────────────────────────────────╮          │
+│          │Placeholders: {{title}}, {{goal}}, {{criteria}}, {{category}}, {{context}}. │          │
+│Defaults a│Task fields and context are always delivered; a placeholder only chooses    │          │
+│u User def│where. {{context}} is runtime-only: previews show a labelled stand-in.      │          │
+│f Profiles│In a template line, \n is a line break; write \{{ for a literal {{.         │          │
+│w Work cat│The supervisor's rules, evidence handling and response schema are added     │ediate    │
+│code, docu│around every template and cannot be edited here.                            │          │
+│L Review l│Save in the project scope to override a user or built-in category of the    │n) and the│
+│project's │same name for this project only. Choose Project checks Do not apply for     │          │
+│Checks: li│documents or art-only work.                                                 │          │
+│Keyboard r│Preview shows the effective prompt for task #1, with runtime-only parts     │          │
+│i Report l│labelled; nothing is saved until Save.                                      │ole in m  │
+│Defaults. │Category name                                                               │          │
+│E Export s│Poster art▏                                                                 │.         │
+│          │Action                                                                      │          │
+│          │< Save >   click / Space to change                                          │          │
+│          │Save in                                                                     │          │
+│          │< User scope >   click / Space to change                                    │          │
+│          │Project checks                                                              │          │
+│          │< Do not apply >   click / Space to change                                  │          │
+│          │Description                                                                 │          │
+│          │Print posters                                                               │          │
+│          │Execution template                                                          │          │
+│          │Paint {{title}}.\nGoal: {{goal}}                                            │          │
+│          │Review template                                                             │          │
+│          │Independently review the change as a senior engineer holding the Clean Code │          │
+│          │Validation template                                                         │          │
+│          │Independently validate that the objective was achieved as written, not a nar│          │
+│          │Remediation template                                                        │          │
+│          │Remediate the reported problems of this code task. Hold the Clean Code bar. │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved user category Poster art; only tasks defined afterwards use it
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Saved project category Poster art · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: list, add, edit, enable or disable.                                                       │
+│Keyboard remains available with mouse disabled.                                                   │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m  │
+│Defaults.                                                                                         │
+│E Export settings and o Import settings move this project's settings to another computer.         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved project category Poster art; only tasks defined afterwards use it
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ A work category tells AI turns #4 · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User def╭ Work categories ───────────────────────────────────────────────────────────╮          │
+│f Profiles│A work category tells AI turns how to execute, review, validate and         │          │
+│w Work cat│remediate a kind of work. A project's own category overrides the user scope │ediate    │
+│code, docu│and the built-in code, documents and art categories of the same name;       │          │
+│L Review l│choose one on a task's form.                                                │n) and the│
+│project's │                                                                            │          │
+│Checks: li│Categories:                                                                 │          │
+│Keyboard r│code · built-in scope · project checks apply · Source code: project checks  │          │
+│i Report l│gate it and the diff is held to the Clean Code bar.                         │ole in m  │
+│Defaults. │documents · built-in scope · project checks do not apply · Documents, plans │          │
+│E Export s│and other non-code files: no project checks.                                │.         │
+│          │art · built-in scope · project checks do not apply · Images, icons, sound   │          │
+│          │and other assets: no project checks; judged on the deliverables.            │          │
+│          │Poster art · project scope · project checks apply · Print posters           │          │
+│          │Changes reach only tasks defined afterwards; a task revision keeps the      │          │
+│          │templates it was defined with.                                              │          │
+│          │Select a category and choose Apply to edit, preview, override or delete it. │          │
+│          │Placeholders: {{title}}, {{goal}}, {{criteria}}, {{category}}, {{context}}. │          │
+│          │Task fields and context are always delivered; a placeholder only chooses    │          │
+│          │where. {{context}} is runtime-only: previews show a labelled stand-in.      │          │
+│          │In a template line, \n is a line break; write \{{ for a literal {{.         │          │
+│          │The supervisor's rules, evidence handling and response schema are added     │          │
+│          │around every template and cannot be edited here.                            │          │
+│          │Category                                                                    │          │
+│          │< New category >   click / Space to change                                  │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved project category Poster art; only tasks defined afterwards use it
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Category Poster art (project) · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisi╭ Category Poster art (project) ─────────────────────────────────────────────╮          │
+│          │Placeholders: {{title}}, {{goal}}, {{criteria}}, {{category}}, {{context}}. │          │
+│Defaults a│Task fields and context are always delivered; a placeholder only chooses    │          │
+│u User def│where. {{context}} is runtime-only: previews show a labelled stand-in.      │          │
+│f Profiles│In a template line, \n is a line break; write \{{ for a literal {{.         │          │
+│w Work cat│The supervisor's rules, evidence handling and response schema are added     │ediate    │
+│code, docu│around every template and cannot be edited here.                            │          │
+│L Review l│Save in the project scope to override a user or built-in category of the    │n) and the│
+│project's │same name for this project only. Choose Project checks Do not apply for     │          │
+│Checks: li│documents or art-only work.                                                 │          │
+│Keyboard r│Preview shows the effective prompt for task #1, with runtime-only parts     │          │
+│i Report l│labelled; nothing is saved until Save.                                      │ole in m  │
+│Defaults. │Category name                                                               │          │
+│E Export s│Poster art▏                                                                 │.         │
+│          │Action                                                                      │          │
+│          │< Save >   click / Space to change                                          │          │
+│          │Save in                                                                     │          │
+│          │< Project scope >   click / Space to change                                 │          │
+│          │Project checks                                                              │          │
+│          │< Apply >   click / Space to change                                         │          │
+│          │Description                                                                 │          │
+│          │Print posters                                                               │          │
+│          │Execution template                                                          │          │
+│          │Paint {{title}}.\nGoal: {{goal}}                                            │          │
+│          │Review template                                                             │          │
+│          │Independently review the change as a senior engineer holding the Clean Code │          │
+│          │Validation template                                                         │          │
+│          │Independently validate that the objective was achieved as written, not a nar│          │
+│          │Remediation template                                                        │          │
+│          │Remediate the reported problems of this code task. Hold the Clean Code bar. │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved project category Poster art; only tasks defined afterwards use it
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SCOPE SWITCH REFUSED · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisi╭ Category Poster art (project) ─────────────────────────────────────────────╮          │
+│          │Placeholders: {{title}}, {{goal}}, {{criteria}}, {{category}}, {{context}}. │          │
+│Defaults a│Task fields and context are always delivered; a placeholder only chooses    │          │
+│u User def│where. {{context}} is runtime-only: previews show a labelled stand-in.      │          │
+│f Profiles│In a template line, \n is a line break; write \{{ for a literal {{.         │          │
+│w Work cat│The supervisor's rules, evidence handling and response schema are added     │ediate    │
+│code, docu│around every template and cannot be edited here.                            │          │
+│L Review l│Save in the project scope to override a user or built-in category of the    │n) and the│
+│project's │same name for this project only. Choose Project checks Do not apply for     │          │
+│Checks: li│documents or art-only work.                                                 │          │
+│Keyboard r│Preview shows the effective prompt for task #1, with runtime-only parts     │          │
+│i Report l│labelled; nothing is saved until Save.                                      │ole in m  │
+│Defaults. │Category name                                                               │          │
+│E Export s│Poster art                                                                  │.         │
+│          │Action                                                                      │          │
+│          │< Save >   click / Space to change                                          │          │
+│          │Save in                                                                     │          │
+│          │< User scope >   click / Space to change                                    │          │
+│          │Project checks                                                              │          │
+│          │< Apply >   click / Space to change                                         │          │
+│          │Description                                                                 │          │
+│          │Print posters                                                               │          │
+│          │Execution template                                                          │          │
+│          │Paint {{title}}.\nGoal: {{goal}}                                            │          │
+│          │Review template                                                             │          │
+│          │Independently review the change as a senior engineer holding the Clean Code │          │
+│          │Validation template                                                         │          │
+│          │Independently validate that the objective was achieved as written, not a nar│          │
+│          │Remediation template                                                        │          │
+│          │Remediate the reported problems of this code task. Hold the Clean Code bar. │          │
+│          │Category Poster art already exists in the user scope; open it from the list │          │
+│          │to edit it                                                                  │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved project category Poster art; only tasks defined afterwards use it
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Work category · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Queue · 1 shown / 1 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 1 · Model ───────────────────────────────────╮╭ Details · click for full ────────────╮
+│› #1   Pending  Existing                      unconfigured││Existing                              │
+│                                                          ││#1 · Pending · AI                     │
+│                                                          ││                                      │
+│                                                          ││Goal: Goal with {{context}} kept      │
+│                                                          ││literally                             │
+│                                                          ││                                      │
+│                                                          ││Check: First                          │
+│                                                          ││Second                                │
+│                                                          ││                                      │
+│                                                          ││Attempts: 0 · none yet                │
+│          ╭ Add task ──────────────────────────────────────────────────────────────────╮          │
+│          │Save creates a task in SQLite. Blank execution fields use project defaults; │          │
+│          │with a new model, blank effort means none.                                  │ne        │
+│          │Needs review creates a draft.                                               │          │
+│          │Title                                                                       │one       │
+│          │▏                                                                           │none      │
+│          │Goal                                                                        │          │
+│          │                                                                            │          │
+│          │Acceptance check                                                            │          │
+│          │                                                                            │          │
+│          │Kind                                                                        │          │
+│          │< AI >   click / Space to change                                            │          │
+│          │Execution provider/model (blank = default)                                  │          │
+│          │                                                                            │          │
+│          │Execution effort (optional)                                                 │          │
+│          │                                                                            │          │
+│          │Approval                                                                    │          │
+│          │< Ready >   click / Space to change                                         │          │
+│          │Work category                                                               │          │
+│          │< Default >   click / Space to change                                       │          │
+│          │Review lens 1                                                               │          │
+│          │< Project default >   click / Space to change                               │          │
+│          │Review lens 2                                                               │          │
+│          │< - >   click / Space to change                                             │          │
+│          │Review lens 3                                                               │          │
+│          │< - >   click / Space to change                                             │          │
+│          │Review lens 4                                                               │          │
+│          │< - >   click / Space to change                                             │          │
+│          │Review lens 5                                                               │          │
+│          │< - >   click / Space to change                                             │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done]
+[x Cancel] [R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear]
+[S Stats] [? Help] [q Quit]
+Saved project category Poster art; only tasks defined afterwards use it
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Storage: SQLite #2 · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Queue preference · Next #2: Poster task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: list, add, edit, enable or disable.                                                       │
+│Keyboard remains available with mouse disabled.                                                   │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m  │
+│Defaults.                                                                                         │
+│E Export settings and o Import settings move this project's settings to another computer.         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ A work category tells AI turns #5 · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Queue preference · Next #2: Poster task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User def╭ Work categories ───────────────────────────────────────────────────────────╮          │
+│f Profiles│A work category tells AI turns how to execute, review, validate and         │          │
+│w Work cat│remediate a kind of work. A project's own category overrides the user scope │ediate    │
+│code, docu│and the built-in code, documents and art categories of the same name;       │          │
+│L Review l│choose one on a task's form.                                                │n) and the│
+│project's │                                                                            │          │
+│Checks: li│Categories:                                                                 │          │
+│Keyboard r│code · built-in scope · project checks apply · Source code: project checks  │          │
+│i Report l│gate it and the diff is held to the Clean Code bar.                         │ole in m  │
+│Defaults. │documents · built-in scope · project checks do not apply · Documents, plans │          │
+│E Export s│and other non-code files: no project checks.                                │.         │
+│          │art · built-in scope · project checks do not apply · Images, icons, sound   │          │
+│          │and other assets: no project checks; judged on the deliverables.            │          │
+│          │Poster art · project scope · project checks apply · Print posters           │          │
+│          │Changes reach only tasks defined afterwards; a task revision keeps the      │          │
+│          │templates it was defined with.                                              │          │
+│          │Select a category and choose Apply to edit, preview, override or delete it. │          │
+│          │Placeholders: {{title}}, {{goal}}, {{criteria}}, {{category}}, {{context}}. │          │
+│          │Task fields and context are always delivered; a placeholder only chooses    │          │
+│          │where. {{context}} is runtime-only: previews show a labelled stand-in.      │          │
+│          │In a template line, \n is a line break; write \{{ for a literal {{.         │          │
+│          │The supervisor's rules, evidence handling and response schema are added     │          │
+│          │around every template and cannot be edited here.                            │          │
+│          │Category                                                                    │          │
+│          │< New category >   click / Space to change                                  │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Category Poster art (project) #2 · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Queue preference · Next #2: Poster task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisi╭ Category Poster art (project) ─────────────────────────────────────────────╮          │
+│          │Placeholders: {{title}}, {{goal}}, {{criteria}}, {{category}}, {{context}}. │          │
+│Defaults a│Task fields and context are always delivered; a placeholder only chooses    │          │
+│u User def│where. {{context}} is runtime-only: previews show a labelled stand-in.      │          │
+│f Profiles│In a template line, \n is a line break; write \{{ for a literal {{.         │          │
+│w Work cat│The supervisor's rules, evidence handling and response schema are added     │ediate    │
+│code, docu│around every template and cannot be edited here.                            │          │
+│L Review l│Save in the project scope to override a user or built-in category of the    │n) and the│
+│project's │same name for this project only. Choose Project checks Do not apply for     │          │
+│Checks: li│documents or art-only work.                                                 │          │
+│Keyboard r│Preview shows the effective prompt for task #2, with runtime-only parts     │          │
+│i Report l│labelled; nothing is saved until Save.                                      │ole in m  │
+│Defaults. │Category name                                                               │          │
+│E Export s│Poster art▏                                                                 │.         │
+│          │Action                                                                      │          │
+│          │< Save >   click / Space to change                                          │          │
+│          │Save in                                                                     │          │
+│          │< Project scope >   click / Space to change                                 │          │
+│          │Project checks                                                              │          │
+│          │< Apply >   click / Space to change                                         │          │
+│          │Description                                                                 │          │
+│          │Print posters                                                               │          │
+│          │Execution template                                                          │          │
+│          │Paint {{title}}.\nGoal: {{goal}}                                            │          │
+│          │Review template                                                             │          │
+│          │Independently review the change as a senior engineer holding the Clean Code │          │
+│          │Validation template                                                         │          │
+│          │Independently validate that the objective was achieved as written, not a nar│          │
+│          │Remediation template                                                        │          │
+│          │Remediate the reported problems of this code task. Hold the Clean Code bar. │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Deleted project category Poster art · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Queue preference · Next #2: Poster task · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: list, add, edit, enable or disable.                                                       │
+│Keyboard remains available with mouse disabled.                                                   │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m  │
+│Defaults.                                                                                         │
+│E Export settings and o Import settings move this project's settings to another computer.         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Deleted project category Poster art; it inherits again
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

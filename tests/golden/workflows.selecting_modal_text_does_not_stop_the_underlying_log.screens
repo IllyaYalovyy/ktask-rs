@@ -1,0 +1,162 @@
+@@ MODAL MOUSE SELECTED · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Keyboard help ─────────────────────────────────────────────────────╮
+│0 Projects  1 Current  2 Queue  3 History  4 Config  5 About        │
+│Tab / Shift-Tab: next / previous screen                             │
+│Click tabs, rows, buttons, and fields; wheel scrolls.               │
+│Drag body text to select; click Copy or press F6 for OSC 52.        │
+│Ctrl-Shift-C copies selection when terminal reports modifiers.      │
+│F2 selects a text pane; F2 again moves to the next pane.            │
+│Shift-arrows extend selection; Enter copies; Esc clears.            │
+│F7 releases mouse capture for native terminal selection.            │
+│Current: r Run / Resume / Retry / Answer, p pause, s stop (back to  │
+│Pending)                                                            │
+│Current: D mark done, x cancel pending, R supersede pending         │
+│Current: c models/limits, e edit, b break down; v approve, n reject │
+│Current: w answer, o report / raw log, u readiness, m run mode      │
+│Queue: a add, i insert, e edit, m move, b break down, r run current │
+│Wheel / PgUp / PgDn: scroll · Esc: close                            │
+│                                                                    │
+│[Copy] [Close] [Up] [Down]                                          │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Current running · simulation only
+@@ MODAL MOUSE CLOSED · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · <t> |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ #1 Recover a failed check
+ Running (simulated) · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Include every task on the final…│
+│Attempt 2 · step <n>/6      ││Proof: All 240 tasks are reachable.   │
+│Budget 1 of 3 used          │╰──────────────────────────────────────╯
+│Model economy / medium      │╭ Log · following · attempt 2 ─────────╮
+│Cost <cost> (mock)          ││Executor: economy / medium · revision │
+╰────────────────────────────╯│1 · session 1 (mock)                  │
+╭ Activity · l: all ─────────╮│                                      │
+│• Current running ·         ││                                      │
+│  simulation only           ││                                      │
+│• Workspace #1: retained    ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+Sent 9 characters via OSC 52 · F7: native selection fallback
+@@ MODAL KEYBOARD CLOSED · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · <t> |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ #1 Recover a failed check
+ Running (simulated) · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Include every task on the final…│
+│Attempt 2 · step <n>/6      ││Proof: All 240 tasks are reachable.   │
+│Budget 1 of 3 used          │╰──────────────────────────────────────╯
+│Model economy / medium      │╭ Log · following · attempt 2 ─────────╮
+│Cost <cost> (mock)          ││Executor: economy / medium · revision │
+╰────────────────────────────╯│1 · session 1 (mock)                  │
+╭ Activity · l: all ─────────╮│                                      │
+│• Current running ·         ││                                      │
+│  simulation only           ││                                      │
+│• Workspace #1: retained    ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+Sent 9 characters via OSC 52 · F7: native selection fallback
+@@ MODAL MOUSE SELECTED · 120x30 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Curre╭ Keyboard help ─────────────────────────────────────────────────────────────╮
+ Current #1 · Running│0 Projects  1 Current  2 Queue  3 History  4 Config  5 About                │
+ Queue preference · N│Tab / Shift-Tab: next / previous screen                                     │
+ #1 Recover a failed │Click tabs, rows, buttons, and fields; wheel scrolls.                       │
+ Running (simulated) │Drag body text to select; click Copy or press F6 for OSC 52.                │
+╭ Status · Enter: det│Ctrl-Shift-C copies selection when terminal reports modifiers.              │────────────────────╮
+│Running · AI        │F2 selects a text pane; F2 again moves to the next pane.                    │                    │
+│Attempt 2 · step <n>/6│Shift-arrows extend selection; Enter copies; Esc clears.                    │                    │
+│Budget 1 of 3 used  │F7 releases mouse capture for native terminal selection.                    │────────────────────╯
+│Model economy / medi│Current: r Run / Resume / Retry / Answer, p pause, s stop (back to Pending) │────────────────────╮
+│Cost <cost> (mock)  │Current: D mark done, x cancel pending, R supersede pending                 │(mock)              │
+│                    │Current: c models/limits, e edit, b break down; v approve, n reject         │                    │
+│                    │Current: w answer, o report / raw log, u readiness, m run mode              │                    │
+│                    │Queue: a add, i insert, e edit, m move, b break down, r run current         │                    │
+│                    │Queue: s stop, D mark done, x cancel, R supersede, o import, E export       │                    │
+│                    │Queue: c models/limits; v approve; n reject                                 │                    │
+╰────────────────────│Queue/History: / search, f filter, Esc clear                                │                    │
+╭ Activity · l: all ─│History: C copy to queue, V reviews, F failures                             │                    │
+│• Current running · │j/k or arrows: move/scroll; PgUp/PgDn: page                                 │                    │
+│• Workspace #1: reta│Home/End: first/last; End follows current output                            │                    │
+│  retry/resume (mock│Enter: inspect selected task; [ / ]: inspect attempts                       │                    │
+│• Configuration appl│Details: s summary, v reviews, f failures, g results, o output, t           │                    │
+│• Check failed · #1 │transcripts                                                                 │                    │
+╰────────────────────│Wheel / PgUp / PgDn: scroll · Esc: close                                    │────────────────────╯
+[Copy] [p Pause] [s S│                                                                            │dd] [i Investigate]
+[f Fix] [S Stats] [? │[Copy] [Close] [Up] [Down]                                                  │
+                     │                                                                            │
+Current running · sim╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MODAL MOUSE CLOSED · 120x30 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · <t> |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ #1 Recover a failed check
+ Running (simulated) · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Include every task on the final queue page.                       │
+│Attempt 2 · step <n>/6                      ││Proof: All 240 tasks are reachable.                                     │
+│Budget 1 of 3 used                          │╰────────────────────────────────────────────────────────────────────────╯
+│Model economy / medium                      │╭ Log · following · attempt 2 ───────────────────────────────────────────╮
+│Cost <cost> (mock)                          ││Executor: economy / medium · revision 1 · session 1 (mock)              │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · l: all ─────────────────────────╮│                                                                        │
+│• Current running · simulation only         ││                                                                        │
+│• Workspace #1: retained for same-task      ││                                                                        │
+│  retry/resume (mock)                       ││                                                                        │
+│• Configuration applied · session only      ││                                                                        │
+│• Check failed · #1                         ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+
+Sent 9 characters via OSC 52 · F7: native selection fallback
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MODAL KEYBOARD CLOSED · 120x30 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · <t> |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ #1 Recover a failed check
+ Running (simulated) · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Include every task on the final queue page.                       │
+│Attempt 2 · step <n>/6                      ││Proof: All 240 tasks are reachable.                                     │
+│Budget 1 of 3 used                          │╰────────────────────────────────────────────────────────────────────────╯
+│Model economy / medium                      │╭ Log · following · attempt 2 ───────────────────────────────────────────╮
+│Cost <cost> (mock)                          ││Executor: economy / medium · revision 1 · session 1 (mock)              │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · l: all ─────────────────────────╮│                                                                        │
+│• Current running · simulation only         ││                                                                        │
+│• Workspace #1: retained for same-task      ││                                                                        │
+│  retry/resume (mock)                       ││                                                                        │
+│• Configuration applied · session only      ││                                                                        │
+│• Check failed · #1                         ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+
+Sent 9 characters via OSC 52 · F7: native selection fallback
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

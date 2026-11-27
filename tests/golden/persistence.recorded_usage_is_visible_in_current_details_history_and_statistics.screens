@@ -1,0 +1,322 @@
+@@ USAGE CURRENT · 100x45 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Failed current
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Failed · AI                                 ││Goal: Persist a real task                           │
+│Attempt 1                                   ││Proof: Survives restart                             │
+│Model codex/fixture-judge-2 / high          │╰────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Report · attempt 1 · o: raw log ───────────────────╮
+│Tokens 10 new · 15 cached · 7 out           ││Outcome: Failed check with review finding           │
+│Cost $0.000100 + 1 call(s) without cost     ││                                                    │
+│Budget 1 of 3 used                          ││Review · failed · codex/fixture-model verdict:      │
+│Run blocked (6) · u Readiness               ││review structured finding                           │
+│Review      ✗ failed                        ││                                                    │
+│Validation  ✗ failed                        ││Validation · failed · codex/fixture-model verdict:  │
+│                                            ││validation structured finding                       │
+│                                            ││                                                    │
+│                                            ││Supervisor outcome: Failed check with review finding│
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #1 · l: all ────────────────────╮│                                                    │
+│• #1 revision 2 saved                       ││                                                    │
+│• Failed check with review finding          ││                                                    │
+│• Current task attempt recorded             ││                                                    │
+│• #1 created: Failed current                ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ USAGE DETAILS · 100x45 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects╭ Task details / attempts ───────────────────────────────────────────────────╮
+ Current #1│Attempt 1 / 1 · #1 · revision 1 · failed                                    │
+ Queue pref│Outcome: Failed check with review finding                                   │
+ #1 Failed │Output page 1 / 1 · chunk 1 / 1 · 1 records · newest first · snapshot #1    │
+ Failed · r│                                                                            │
+╭ Status · │#1 [stderr] Check failed: transcript evidence                               │──────────╮
+│Failed · A│                                                                            │          │
+│Attempt 1 │Attempt inputs: revision 1 · session not recorded                           │          │
+│Model code│Revision 1 · Failed current                                                 │──────────╯
+│Active <t>│Approval: ready · human: owner · Category: code (built-in, checks apply)    │──────────╮
+│Tokens 10 │Goal: Persist a real task                                                   │          │
+│Cost $0.00│Acceptance: 1: Survives restart                                             │          │
+│Budget 1 o│execution: codex/fixture-model / high                                       │ict:      │
+│Run blocke│review: codex/fixture-judge-1 / high                                        │          │
+│Review    │validation: codex/fixture-judge-2 / high                                    │          │
+│Validation│remediation: codex/fixture-judge-3 / high                                   │verdict:  │
+│          │Attempt limit: 3 · Task limit: 10 min · Stage limit: Off                    │          │
+│          │Active <t> · waiting <t>                                                    │          │
+│          │Usage: 2 calls · uncached 10 · cache read 15 · cache write 0 · output 7 (+1 │ew finding│
+╰──────────│call(s) unreported) · cost $0.000100 + 1 call(s) without cost               │          │
+╭ Activity │review: codex/fixture-model / none · 1 calls · uncached 10 · cache read 5 · │          │
+│• #1 revis│cache write 0 · output 3 · cost $0.000100 · provider time <t>               │          │
+│• Failed c│validation: codex/fixture-model / none · 1 calls · uncached unknown · cache │          │
+│• Current │read 10 · cache write unknown · output 4 · 4 new tokens + 1 call(s)         │          │
+│• #1 creat│unreported · provider time <t>                                              │          │
+│          │                                                                            │          │
+│          │#1 v4 · Failed · ai                                                         │          │
+│          │Failed current                                                              │          │
+│          │Actions: Retry, Edit, Stop, Restart, Mark done                              │          │
+│          │Current Revision 2 · Failed current                                         │          │
+│          │Approval: ready · human: owner · Category: code (built-in, checks apply)    │          │
+│          │Goal: Persist a real task                                                   │          │
+│          │Acceptance: 1: Survives restart                                             │          │
+│          │execution: codex/fixture-model / high                                       │          │
+│          │review: codex/new-review-model / high                                       │          │
+│          │validation: codex/fixture-judge-2 / high                                    │          │
+│          │Find output                                                                 │          │
+│          │▏                                                                           │          │
+╰──────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │──────────╯
+[Copy] [r R│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │Run mode]
+[Enter Deta│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │
+           │[Refresh] [Up] [Down] [Close] [Copy]                                        │
+Runs happen╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ USAGE STATS · 100x45 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Failed current
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Failed · AI                                 ││Goal: Persist a real task                           │
+│Attempt 1                                   ││Proof: Survives restart                             │
+│Model codex/fixture-judge-2 / high          │╰────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Report · attempt 1 · o: raw log ───────────────────╮
+│Tokens 10 new · 15 cached · 7 out           ││Outcome: Failed check with review finding           │
+│Cost $0.000100 + 1 call(s) without cost     ││                                                    │
+│Budget 1 of 3 used                          ││Review · failed · codex/fixture-model verdict:      │
+│Run blocked (6) · u Readiness               ││review structured finding                           │
+│Review    ╭ Project statistics · SQLite ───────────────────────────────────────────────╮          │
+│Validation│Queue: 1                                                                    │verdict:  │
+│          │History: 0                                                                  │          │
+│          │Attempts: 1 (1 failed/interrupted)                                          │          │
+│          │Active time: <t>                                                            │ew finding│
+╰──────────│Waiting time: <t>                                                           │          │
+╭ Activity │Project usage: 2 calls · uncached 10 · cache read 15 · cache write 0 ·      │          │
+│• #1 revis│output 7 (+1 call(s) unreported) · cost $0.000100 + 1 call(s) without cost  │          │
+│• Failed c│Human tasks are marked done without AI attempts.                            │          │
+│• Current │Wheel / PgUp / PgDn: scroll · Esc: close                                    │          │
+│• #1 creat│                                                                            │          │
+│          │[Copy] [Close] [Up] [Down]                                                  │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ USAGE HISTORY · 70x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Queue preference · no queued work · m: run mode in Current
+ History · 1 shown / 1 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 1 · Finished Attempts Time Usage ────────────────────╮
+│› #1   Done     Failed current <date> 1 <t> $0.00 +1 no$            │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures]
+[f Filter] [/ Search] [Esc Clear] [E Export] [S Stats] [? Help]
+[q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ USAGE HISTORY DETAILS · 70x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Output page 1 / 1 · chunk 1 / 1 · 1 records · newest first ·        │
+│snapshot #1                                                         │
+│                                                                    │
+│#1 [stderr] Check failed: transcript evidence                       │
+│                                                                    │
+│Attempt inputs: revision 1 · session not recorded                   │
+│Revision 1 · Failed current                                         │
+│Approval: ready · human: owner · Category: code (built-in, checks   │
+│apply)                                                              │
+│Goal: Persist a real task                                           │
+│Acceptance: 1: Survives restart                                     │
+│execution: codex/fixture-model / high                               │
+│review: codex/fixture-judge-1 / high                                │
+│validation: codex/fixture-judge-2 / high                            │
+│remediation: codex/fixture-judge-3 / high                           │
+│Attempt limit: 3 · Task limit: 10 min · Stage limit: Off            │
+│Active <t> · waiting <t>                                            │
+│Usage: 2 calls · uncached 10 · cache read 15 · cache write 0 ·      │
+│output 7 (+1 call(s) unreported) · cost $0.000100 + 1 call(s)       │
+│without cost                                                        │
+│review: codex/fixture-model / none · 1 calls · uncached 10 · cache  │
+│read 5 · cache write 0 · output 3 · cost $0.000100 · provider time  │
+│<t>                                                                 │
+│validation: codex/fixture-model / none · 1 calls · uncached unknown │
+│· cache read 10 · cache write unknown · output 4 · 4 new tokens + 1 │
+│call(s) unreported · provider time <t>                              │
+│                                                                    │
+│#1 v5 · Done · ai                                                   │
+│Failed current                                                      │
+│Actions: Copy to queue                                              │
+│Current Revision 2 · Failed current                                 │
+│Approval: ready · human: owner · Category: code (built-in, checks   │
+│apply)                                                              │
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ USAGE HISTORY · 100x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Queue preference · no queued work · m: run mode in Current
+ History · 1 shown / 1 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 1 · Finished Attempts Time Usage ───────────────╮╭ Details · click for full ───────╮
+│› #1   Done     Failed current <date> 1 <t> $0.00 +1 no$       ││Failed current                   │
+│                                                               ││#1 · Done · AI · finished <date> │
+│                                                               ││<date>                           │
+│                                                               ││                                 │
+│                                                               ││Goal: Persist a real task        │
+│                                                               ││                                 │
+│                                                               ││Check: Survives restart          │
+│                                                               ││                                 │
+│                                                               ││Attempts: 1 · $0.000100 + 1      │
+│                                                               ││call(s) without cost             │
+│                                                               ││                                 │
+│                                                               ││Models:                          │
+│                                                               ││Execution: codex/fixture-model / │
+│                                                               ││high                             │
+│                                                               ││Review: codex/new-review-model / │
+│                                                               ││high                             │
+│                                                               ││Validation: codex/fixture-judge-2│
+│                                                               ││/ high                           │
+│                                                               ││Remediation:                     │
+│                                                               ││codex/fixture-judge-3 / high     │
+│                                                               ││Attempt 1 · Failed · Active <t>  │
+│                                                               ││2 calls · uncached 10 · cache    │
+│                                                               ││read 15 · cache write 0 · output │
+│                                                               ││7 (+1 call(s) unreported) · cost │
+│                                                               ││$0.000100 + 1 call(s) without    │
+│                                                               ││cost                             │
+│                                                               ││                                 │
+│                                                               ││                                 │
+│                                                               ││                                 │
+│                                                               ││                                 │
+│                                                               ││                                 │
+│                                                               ││                                 │
+╰───────────────────────────────────────────────────────────────╯╰─────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear]
+[E Export] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ USAGE HISTORY DETAILS · 100x45 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects╭ Task details / attempts ───────────────────────────────────────────────────╮
+ No current│Attempt 1 / 1 · #1 · revision 1 · failed                                    │
+ Queue pref│Outcome: Failed check with review finding                                   │
+ History · │Output page 1 / 1 · chunk 1 / 1 · 1 records · newest first · snapshot #1    │
+ Filter: Al│                                                                            │
+╭ History ·│#1 [stderr] Check failed: transcript evidence                               │ll ───────╮
+│› #1   Don│                                                                            │          │
+│          │Attempt inputs: revision 1 · session not recorded                           │ed <date> │
+│          │Revision 1 · Failed current                                                 │          │
+│          │Approval: ready · human: owner · Category: code (built-in, checks apply)    │          │
+│          │Goal: Persist a real task                                                   │sk        │
+│          │Acceptance: 1: Survives restart                                             │          │
+│          │execution: codex/fixture-model / high                                       │          │
+│          │review: codex/fixture-judge-1 / high                                        │          │
+│          │validation: codex/fixture-judge-2 / high                                    │ + 1      │
+│          │remediation: codex/fixture-judge-3 / high                                   │          │
+│          │Attempt limit: 3 · Task limit: 10 min · Stage limit: Off                    │          │
+│          │Active <t> · waiting <t>                                                    │          │
+│          │Usage: 2 calls · uncached 10 · cache read 15 · cache write 0 · output 7 (+1 │e-model / │
+│          │call(s) unreported) · cost $0.000100 + 1 call(s) without cost               │          │
+│          │review: codex/fixture-model / none · 1 calls · uncached 10 · cache read 5 · │w-model / │
+│          │cache write 0 · output 3 · cost $0.000100 · provider time <t>               │          │
+│          │validation: codex/fixture-model / none · 1 calls · uncached unknown · cache │re-judge-2│
+│          │read 10 · cache write unknown · output 4 · 4 new tokens + 1 call(s)         │          │
+│          │unreported · provider time <t>                                              │          │
+│          │                                                                            │ high     │
+│          │#1 v5 · Done · ai                                                           │tive <t>  │
+│          │Failed current                                                              │ cache    │
+│          │Actions: Copy to queue                                                      │ · output │
+│          │Current Revision 2 · Failed current                                         │d) · cost │
+│          │Approval: ready · human: owner · Category: code (built-in, checks apply)    │ithout    │
+│          │Goal: Persist a real task                                                   │          │
+│          │Acceptance: 1: Survives restart                                             │          │
+│          │execution: codex/fixture-model / high                                       │          │
+│          │review: codex/new-review-model / high                                       │          │
+│          │validation: codex/fixture-judge-2 / high                                    │          │
+│          │Find output                                                                 │          │
+│          │▏                                                                           │          │
+╰──────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │──────────╯
+[Copy] [C C│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │Esc Clear]
+[E Export] │[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │
+           │[Refresh] [Up] [Down] [Close] [Copy]                                        │
+Runs happen╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

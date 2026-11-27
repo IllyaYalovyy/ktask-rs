@@ -1,0 +1,270 @@
+@@ link-incompatible-1-list · 110x30 · keyboard+mouse
+ ktask-dev  / alpha   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 2 / 3 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│    (no projects) older Incompatible last contact <date> …      ││alpha · open                              │
+│› * alpha         local Idle           0 queued · No unfinished…││Host: local                               │
+│    beta          kept  Incompatible last contact <date> …      ││State: Idle                               │
+│                                                                ││Current: No unfinished task               │
+│                                                                ││Queue: 0 unfinished · History: 0 finished │
+│                                                                ││                                          │
+│                                                                ││Runner: not running                       │
+│                                                                ││/tmp/ktask-screens-----------------------/│
+│                                                                ││ktask-test-scratch/run-000000/parent/alpha│
+│                                                                ││                                          │
+│                                                                ││This project is open · Enter returns to   │
+│                                                                ││it.                                       │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ link-incompatible-2-kept-selected · 110x30 · keyboard+mouse
+ ktask-dev  / alpha   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ kept's project: move, delete and settings are local-only there
+╭ Projects · 3 / 3 · * open ─────────────────────────────────────╮╭ Project · read-only ─────────────────────╮
+│    (no projects) older Incompatible last contact <date> …      ││beta                                      │
+│  * alpha         local Idle           0 queued · No unfinished…││Host: kept · incompatible                 │
+│›   beta          kept  Incompatible last contact <date> …      ││last contact <date>                       │
+│                                                                ││incompatible: the parent runs ktask <ver> │
+│                                                                ││(protocol 2), the child ktask <ver>       │
+│                                                                ││(protocol 99)                             │
+│                                                                ││State: Incompatible                       │
+│                                                                ││Current: #3 on kept · Approve it · Needs  │
+│                                                                ││approval                                  │
+│                                                                ││Queue: 1 unfinished · History: 0 finished │
+│                                                                ││                                          │
+│                                                                ││Runner: unknown while the host is not     │
+│                                                                ││linked                                    │
+│                                                                ││/srv/beta                                 │
+│                                                                ││                                          │
+│                                                                ││Read-only here · manage it on kept.       │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ link-incompatible-3-kept-refused · 110x30 · keyboard+mouse
+ ktask-dev  / alpha   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ kept's project: move, delete and settings are local-only there
+╭ Projects · 3 / 3 · * open ─────────────────────────────────────╮╭ Project · read-only ─────────────────────╮
+│    (no projects) older Incompatible last contact <date> …      ││beta                                      │
+│  * alpha         local Idle           0 queued · No unfinished…││Host: kept · incompatible                 │
+│›   beta          kept  Incompatible last contact <date> …      ││last contact <date>                       │
+│                                                                ││incompatible: the parent runs ktask <ver> │
+│                                                                ││(protocol 2), the child ktask <ver>       │
+│                                                                ││(protocol 99)                             │
+│                                                                ││State: Incompatible                       │
+│                                                                ││Current: #3 on kept · Approve it · Needs  │
+│                                                                ││approval                                  │
+│                                                                ││Queue: 1 unfinished · History: 0 finished │
+│                                                                ││                                          │
+│                                                                ││Runner: unknown while the host is not     │
+│                                                                ││linked                                    │
+│                                                                ││/srv/beta                                 │
+│                                                                ││                                          │
+│                                                                ││Read-only here · manage it on kept.       │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [? Help] [q Quit]
+
+
+Read-only here: this project is on kept · manage it there
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ link-incompatible-4-older-selected · 110x30 · keyboard+mouse
+ ktask-dev  / alpha   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ older's project: move, delete and settings are local-only there
+╭ Projects · 1 / 3 · * open ─────────────────────────────────────╮╭ Project · read-only ─────────────────────╮
+│›   (no projects) older Incompatible last contact <date> …      ││Host: older · incompatible                │
+│  * alpha         local Idle           0 queued · No unfinished…││last contact <date>                       │
+│    beta          kept  Incompatible last contact <date> …      ││incompatible: the parent runs ktask <ver> │
+│                                                                ││(protocol 2), the child ktask 0.0.1       │
+│                                                                ││(protocol 2)                              │
+│                                                                ││                                          │
+│                                                                ││Read-only here · manage it on older.      │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [? Help] [q Quit]
+
+
+Read-only here: this project is on kept · manage it there
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ link-incompatible-5-older-refused · 110x30 · keyboard+mouse
+ ktask-dev  / alpha   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ older's project: move, delete and settings are local-only there
+╭ Projects · 1 / 3 · * open ─────────────────────────────────────╮╭ Project · read-only ─────────────────────╮
+│›   (no projects) older Incompatible last contact <date> …      ││Host: older · incompatible                │
+│  * alpha         local Idle           0 queued · No unfinished…││last contact <date>                       │
+│    beta          kept  Incompatible last contact <date> …      ││incompatible: the parent runs ktask <ver> │
+│                                                                ││(protocol 2), the child ktask 0.0.1       │
+│                                                                ││(protocol 2)                              │
+│                                                                ││                                          │
+│                                                                ││Read-only here · manage it on older.      │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [? Help] [q Quit]
+
+
+Read-only here: this project is on older · manage it there
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ link-incompatible-1-list · 70x22 · keyboard+mouse
+ ktask-dev  / alpha   SQLite · real tasks   Projects: 0 need you · 0 r
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 2 / 3 · * open ─────────────╮╭ Project · click to open ─╮
+│    (no projects) older Incompatible    ││alpha · open              │
+│› * alpha         local Idle            ││Host: local               │
+│    beta          kept  Incompatible    ││State: Idle               │
+│                                        ││Current: No unfinished    │
+│                                        ││task                      │
+│                                        ││Queue: 0 unfinished ·     │
+│                                        ││History: 0 finished       │
+│                                        ││                          │
+│                                        ││Runner: not running       │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix]
+[? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ link-incompatible-2-kept-selected · 70x22 · keyboard+mouse
+ ktask-dev  / alpha   SQLite · real tasks   Projects: 0 need you · 0 r
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ kept's project: move, delete and settings are local-only there
+╭ Projects · 3 / 3 · * open ─────────────╮╭ Project · read-only ─────╮
+│    (no projects) older Incompatible    ││beta                      │
+│  * alpha         local Idle            ││Host: kept · incompatible │
+│›   beta          kept  Incompatible    ││last contact <date>       │
+│                                        ││incompatible: the parent  │
+│                                        ││runs ktask <ver>          │
+│                                        ││(protocol 2), the child   │
+│                                        ││ktask <ver> (protocol 99) │
+│                                        ││State: Incompatible       │
+│                                        ││Current: #3 on kept ·     │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ link-incompatible-3-kept-refused · 70x22 · keyboard+mouse
+ ktask-dev  / alpha   SQLite · real tasks   Projects: 0 need you · 0 r
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ kept's project: move, delete and settings are local-only there
+╭ Projects · 3 / 3 · * open ─────────────╮╭ Project · read-only ─────╮
+│    (no projects) older Incompatible    ││beta                      │
+│  * alpha         local Idle            ││Host: kept · incompatible │
+│›   beta          kept  Incompatible    ││last contact <date>       │
+│                                        ││incompatible: the parent  │
+│                                        ││runs ktask <ver>          │
+│                                        ││(protocol 2), the child   │
+│                                        ││ktask <ver> (protocol 99) │
+│                                        ││State: Incompatible       │
+│                                        ││Current: #3 on kept ·     │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [? Help] [q Quit]
+
+
+Read-only here: this project is on kept · manage it there
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ link-incompatible-4-older-selected · 70x22 · keyboard+mouse
+ ktask-dev  / alpha   SQLite · real tasks   Projects: 0 need you · 0 r
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ older's project: move, delete and settings are local-only there
+╭ Projects · 1 / 3 · * open ─────────────╮╭ Project · read-only ─────╮
+│›   (no projects) older Incompatible    ││Host: older · incompatible│
+│  * alpha         local Idle            ││last contact <date>       │
+│    beta          kept  Incompatible    ││incompatible: the parent  │
+│                                        ││runs ktask <ver>          │
+│                                        ││(protocol 2), the child   │
+│                                        ││ktask 0.0.1 (protocol 2)  │
+│                                        ││                          │
+│                                        ││Read-only here · manage it│
+│                                        ││on older.                 │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [? Help] [q Quit]
+
+
+Read-only here: this project is on kept · manage it there
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ link-incompatible-5-older-refused · 70x22 · keyboard+mouse
+ ktask-dev  / alpha   SQLite · real tasks   Projects: 0 need you · 0 r
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ older's project: move, delete and settings are local-only there
+╭ Projects · 1 / 3 · * open ─────────────╮╭ Project · read-only ─────╮
+│›   (no projects) older Incompatible    ││Host: older · incompatible│
+│  * alpha         local Idle            ││last contact <date>       │
+│    beta          kept  Incompatible    ││incompatible: the parent  │
+│                                        ││runs ktask <ver>          │
+│                                        ││(protocol 2), the child   │
+│                                        ││ktask 0.0.1 (protocol 2)  │
+│                                        ││                          │
+│                                        ││Read-only here · manage it│
+│                                        ││on older.                 │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [? Help] [q Quit]
+
+
+Read-only here: this project is on older · manage it there
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

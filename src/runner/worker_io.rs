@@ -39,7 +39,8 @@ pub(super) fn execute(
         return Ok(Finish::Stopped(outcome));
     }
     let ai = stream.is_some();
-    let mut spec = with_evidence(spec, run, step, ctx);
+    // A check's completed collection says what it left, also when that is nothing.
+    let mut spec = with_evidence(spec, run, step, ctx, !ai);
     spec.scratch_limits = Some(service.scratch_limits(run.attempt)?);
     // A check's timeout is for its command, which only the guardian can time exactly. An
     // agent's stage limit stays here.
@@ -116,7 +117,13 @@ fn launch_refused(service: &Service, run: &Run, ctx: &Context<'_>) -> Result<Opt
 }
 
 /// The worker's evidence files are archived as this step's.
-fn with_evidence(spec: &Invocation, run: &Run, step: &Step, ctx: &Context<'_>) -> Invocation {
+fn with_evidence(
+    spec: &Invocation,
+    run: &Run,
+    step: &Step,
+    ctx: &Context<'_>,
+    record_empty: bool,
+) -> Invocation {
     let mut spec = spec.clone();
     spec.artifact_target = Some(process::ArtifactTarget {
         state: ctx.paths.state.clone(),
@@ -125,6 +132,7 @@ fn with_evidence(spec: &Invocation, run: &Run, step: &Step, ctx: &Context<'_>) -
         attempt: run.attempt,
         token: run.token.clone(),
         relative_prefix: format!("evidence/attempt-{}/step-{}", run.attempt, step.id),
+        record_empty,
     });
     spec
 }

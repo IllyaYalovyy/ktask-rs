@@ -1,0 +1,70 @@
+@@ INDIVIDUAL CHECK TIMEOUT · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 2 · History 0
+ Session: Queue · waiting · Next #2 · Task #1 stopped (check_timeout): Supervisor check timeout needs attention: build …
+ #1 Keep supervisor checks bounded
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: Supervisor check timeout needs attention: build (400 ms). The integration fixture needs an owner decision.    ┃
+┃Not resolved automatically: Automatic recovery stopped. Read the transcript and decision, then use check-set to adjust┃
+┃the named check before retrying.                                                                                      ┃
+┃Next: Configuration > Checks or check-set: adjust the named check, then r Retry                                       ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Failed · AI                                 ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Model codex/remediation / none              │╰────────────────────────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────╮
+│Tokens 60 new · 40 cached · 10 out          ││Outcome: Supervisor check timeout needs attention: build (400 ms). The  │
+│70 new tokens + 1 call(s) unreported        ││integration fixture needs an owner decision.                            │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│Worker claim (unverified):                                              │
+│• Supervisor check timeout needs attention: ││Verified result                                                         │
+│  build (400 ms). The integration fixture…  ││                                                                        │
+│• Workflow · Check · repair round 0/10      ││Supervisor check build · failed                                         │
+│• Workflow · Check · repair round 0/10      ││Check build: test counts unavailable                                    │
+│• Workflow · Implement · repair round 0/10  ││Check build timed out after 400 ms.                                     │
+│• Supervisor started                        ││                                                                        │
+│• Current task attempt recorded             ││Remediation · succeeded · codex/remediation verdict: The integration    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CHECK TIMEOUT MANUAL RETRY · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 2
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                       │
+│Inspect results in History, or add more work.                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

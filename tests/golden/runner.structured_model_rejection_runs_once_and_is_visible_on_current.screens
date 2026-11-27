@@ -1,0 +1,37 @@
+@@ PROVIDER REJECTION CURRENT setting=model · 120x36 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 1 · History 0
+ Session: Run one · stopped · Task #1 stopped (configuration): execution model rejected by Codex for codex/execution (e…
+ #1 Rejected provider model
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: execution model rejected by Codex for codex/execution (exit 1):                                               ┃
+┃{"error":{"code":"model_not_found","message":"The model `execution` does not exist or you do not have access to       ┃
+┃it","param":"model","status":404},"type":"turn.failed"}. Fix the model setting before retrying                        ┃
+┃Not resolved automatically: The provider rejected a role's model or effort setting; automatic retry is stopped.       ┃
+┃Next: c Models: correct the named role and setting, then r Retry                                                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Failed · AI                                 ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Model codex/remediation / none              │╰────────────────────────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────╮
+│Tokens none reported yet                    ││Outcome: execution model rejected by Codex for codex/execution (exit    │
+│? new tokens                                ││1): {"error":{"code":"model_not_found","message":"The model `execution` │
+│Budget 0 of 3 used                          ││does not exist or you do not have access to                             │
+│Can run · u Readiness                       ││it","param":"model","status":404},"type":"turn.failed"}. Fix the model  │
+│Execution   ✗ failed                        ││setting before retrying                                                 │
+│Remediation ✗ failed                        ││                                                                        │
+╰────────────────────────────────────────────╯│Execution · failed · codex/execution verdict: execution model rejected  │
+╭ Activity · #1 · l: all ────────────────────╮│by Codex for codex/execution (exit 1):                                  │
+│• execution model rejected by Codex for     ││{"error":{"code":"model_not_found","message":"The model `execution`     │
+│  codex/execution (exit 1):…                ││does not exist or you do not have access to                             │
+│• Workflow · Implement · repair round 0/10  ││it","param":"model","status":404},"type":"turn.failed"}. Fix the model  │
+│• Current task attempt recorded             ││setting before retrying                                                 │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

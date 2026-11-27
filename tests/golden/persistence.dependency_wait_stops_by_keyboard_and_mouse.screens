@@ -1,0 +1,29 @@
+@@ dependency stop · 100x28 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Stop missing dependency
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Pending · AI                                ││Goal: Persist a real task                           │
+│No attempts yet                             ││Proof: Survives restart                             │
+│Run blocked (6) · u Readiness               │╰────────────────────────────────────────────────────╯
+│Model unconfigured / none                   │╭ Log · following ───────────────────────────────────╮
+│Budget 0 of 3 used                          ││Run is blocked. Press u Readiness for each cause    │
+│                                            ││and a direct action. Refresh after setup; Run       │
+╰────────────────────────────────────────────╯│retries from Current.                               │
+╭ Activity · #1 · l: all ────────────────────╮│                                                    │
+│• Back to Pending; the next Run starts fresh││                                                    │
+│• Prerequisite probe did not pass:          ││                                                    │
+│  executable…                               ││                                                    │
+│• executable                                ││                                                    │
+│  /tmp/ktask-screens-----------------------…││                                                    │
+│• #1 created: Stop missing dependency       ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down]
+[u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help]
+[q Quit]
+#1 stopped · back to Pending
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

@@ -1,0 +1,1420 @@
+@@ No current task · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────╮
+│No current task.                                                                                  │
+│Set up this project first: u Readiness lists what is missing.                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Storage: SQLite · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: list, add, edit, enable or disable.                                                       │
+│Keyboard remains available with mouse disabled.                                                   │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m  │
+│Defaults.                                                                                         │
+│E Export settings and o Import settings move this project's settings to another computer.         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Model profiles · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles╭ Model profiles ────────────────────────────────────────────────────────────╮          │
+│w Work cat│A profile maps roles to models the existing providers run; it does not add  │ediate    │
+│code, docu│providers. Precedence: user defaults, then the project's profile, then      │          │
+│L Review l│project overrides, then a task's own models.                                │n) and the│
+│project's │This project: no profile · new projects: no default profile                 │          │
+│Checks: li│                                                                            │          │
+│Keyboard r│Effective models for tasks defined now:                                     │          │
+│i Report l│planning: claude/opus / high [project override]                             │ole in m  │
+│Defaults. │execution: claude/opus / high [project override]                            │          │
+│E Export s│review: claude/opus / high [project override]                               │.         │
+│          │validation: claude/opus / high [project override]                           │          │
+│          │remediation: claude/opus / high [project override]                          │          │
+│          │operator: claude/opus / high [project override]                             │          │
+│          │                                                                            │          │
+│          │Profiles:                                                                   │          │
+│          │No profiles yet.                                                            │          │
+│          │Changes reach only tasks defined afterwards; existing revisions and         │          │
+│          │attempts stay pinned, and pending tasks change only when you apply the      │          │
+│          │current defaults from their Models form.                                    │          │
+│          │Select a profile and choose Apply to edit, select or delete it.             │          │
+│          │Profile                                                                     │          │
+│          │< New profile >   click / Space to change                                   │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Profile name · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner ap╭ New profile ───────────────────────────────────────────────────────────────╮          │
+│Delivery: │Blank roles inherit the user defaults. Use provider/model: codex/gpt-6-sol, │          │
+│Dependenci│claude/opus, opencode/anthropic/claude-sonnet-5-5; effort uses the          │ a        │
+│prerequisi│provider's own spellings.                                                   │          │
+│          │A profile in use can change a role's model but not drop the role; Delete is │          │
+│Defaults a│refused while a project or the new-project default selects it.              │          │
+│u User def│Future tasks use the new values; existing revisions and attempts stay       │          │
+│f Profiles│pinned.                                                                     │          │
+│w Work cat│Profile name                                                                │ediate    │
+│code, docu│▏                                                                           │          │
+│L Review l│Action                                                                      │n) and the│
+│project's │< Save >   click / Space to change                                          │          │
+│Checks: li│planning provider/model                                                     │          │
+│Keyboard r│claude/opus                                                                 │          │
+│i Report l│planning effort (optional)                                                  │ole in m  │
+│Defaults. │high                                                                        │          │
+│E Export s│execution provider/model                                                    │.         │
+│          │claude/opus                                                                 │          │
+│          │execution effort (optional)                                                 │          │
+│          │high                                                                        │          │
+│          │review provider/model                                                       │          │
+│          │claude/opus                                                                 │          │
+│          │review effort (optional)                                                    │          │
+│          │high                                                                        │          │
+│          │validation provider/model                                                   │          │
+│          │claude/opus                                                                 │          │
+│          │validation effort (optional)                                                │          │
+│          │high                                                                        │          │
+│          │remediation provider/model                                                  │          │
+│          │claude/opus                                                                 │          │
+│          │remediation effort (optional)                                               │          │
+│          │high                                                                        │          │
+│          │operator provider/model                                                     │          │
+│          │claude/opus                                                                 │          │
+│          │operator effort (optional)                                                  │          │
+│          │high                                                                        │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Saved profile Anthropic; this project uses it · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: list, add, edit, enable or disable.                                                       │
+│Keyboard remains available with mouse disabled.                                                   │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m  │
+│Defaults.                                                                                         │
+│E Export settings and o Import settings move this project's settings to another computer.         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved profile Anthropic; this project uses it
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project model defaults · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│          ╭ Project model defaults ────────────────────────────────────────────────────╮          │
+│Mouse: Ena│Effective models for tasks defined now, and where each comes from (user     │          │
+│Run mode: │defaults, then the selected profile, then these overrides):                 │          │
+│Planner ap│planning: claude/opus / high [project override]                             │          │
+│Delivery: │execution: claude/opus / high [project override]                            │          │
+│Dependenci│review: claude/opus / high [project override]                               │ a        │
+│prerequisi│validation: claude/opus / high [project override]                           │          │
+│          │remediation: claude/opus / high [project override]                          │          │
+│Defaults a│operator: claude/opus / high [project override]                             │          │
+│u User def│New tasks copy these; existing revisions stay pinned. Break down uses the   │          │
+│f Profiles│planning model.                                                             │          │
+│w Work cat│The fields below are this project's own overrides: blank inherits the       │ediate    │
+│code, docu│profile or user default. "Start with these" also makes the models you set   │          │
+│L Review l│the user defaults for every project.                                        │n) and the│
+│project's │Use provider/model: codex/gpt-6-sol, claude/sonnet,                         │          │
+│Checks: li│opencode/anthropic/claude-sonnet-5-5.                                       │          │
+│Keyboard r│planning provider/model                                                     │          │
+│i Report l│claude/opus▏                                                                │ole in m  │
+│Defaults. │planning effort (optional)                                                  │          │
+│E Export s│high                                                                        │.         │
+│          │execution provider/model                                                    │          │
+│          │claude/opus                                                                 │          │
+│          │execution effort (optional)                                                 │          │
+│          │high                                                                        │          │
+│          │review provider/model                                                       │          │
+│          │claude/opus                                                                 │          │
+│          │review effort (optional)                                                    │          │
+│          │high                                                                        │          │
+│          │validation provider/model                                                   │          │
+│          │claude/opus                                                                 │          │
+│          │validation effort (optional)                                                │          │
+│          │high                                                                        │          │
+│          │remediation provider/model                                                  │          │
+│          │claude/opus                                                                 │          │
+│          │remediation effort (optional)                                               │          │
+│          │high                                                                        │          │
+│          │operator provider/model                                                     │          │
+│          │claude/opus                                                                 │          │
+│          │operator effort (optional)                                                  │          │
+│          │high                                                                        │          │
+│          │New projects                                                                │          │
+│          │< Keep their defaults >   click / Space to change                           │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved profile Anthropic; this project uses it
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Anthropic v1 · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User def╭ Model profiles ────────────────────────────────────────────────────────────╮          │
+│f Profiles│A profile maps roles to models the existing providers run; it does not add  │          │
+│w Work cat│providers. Precedence: user defaults, then the project's profile, then      │ediate    │
+│code, docu│project overrides, then a task's own models.                                │          │
+│L Review l│This project: Anthropic · new projects: no default profile                  │n) and the│
+│project's │                                                                            │          │
+│Checks: li│Effective models for tasks defined now:                                     │          │
+│Keyboard r│planning: claude/opus / high [profile Anthropic]                            │          │
+│i Report l│execution: claude/opus / high [profile Anthropic]                           │ole in m  │
+│Defaults. │review: claude/opus / high [profile Anthropic]                              │          │
+│E Export s│validation: claude/opus / high [profile Anthropic]                          │.         │
+│          │remediation: claude/opus / high [profile Anthropic]                         │          │
+│          │operator: claude/opus / high [profile Anthropic]                            │          │
+│          │                                                                            │          │
+│          │Profiles:                                                                   │          │
+│          │Anthropic v1 · used by project run-000000 · planning claude/opus / high,    │          │
+│          │execution claude/opus / high, review claude/opus / high, validation         │          │
+│          │claude/opus / high, remediation claude/opus / high, operator claude/opus /  │          │
+│          │high                                                                        │          │
+│          │Changes reach only tasks defined afterwards; existing revisions and         │          │
+│          │attempts stay pinned, and pending tasks change only when you apply the      │          │
+│          │current defaults from their Models form.                                    │          │
+│          │Select a profile and choose Apply to edit, select or delete it.             │          │
+│          │Profile                                                                     │          │
+│          │< 1. Anthropic (this project) >   click / Space to change                   │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Profile name #2 · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner ap╭ New profile ───────────────────────────────────────────────────────────────╮          │
+│Delivery: │Blank roles inherit the user defaults. Use provider/model: codex/gpt-6-sol, │          │
+│Dependenci│claude/opus, opencode/anthropic/claude-sonnet-5-5; effort uses the          │ a        │
+│prerequisi│provider's own spellings.                                                   │          │
+│          │A profile in use can change a role's model but not drop the role; Delete is │          │
+│Defaults a│refused while a project or the new-project default selects it.              │          │
+│u User def│Future tasks use the new values; existing revisions and attempts stay       │          │
+│f Profiles│pinned.                                                                     │          │
+│w Work cat│Profile name                                                                │ediate    │
+│code, docu│▏                                                                           │          │
+│L Review l│Action                                                                      │n) and the│
+│project's │< Save >   click / Space to change                                          │          │
+│Checks: li│planning provider/model                                                     │          │
+│Keyboard r│                                                                            │          │
+│i Report l│planning effort (optional)                                                  │ole in m  │
+│Defaults. │                                                                            │          │
+│E Export s│execution provider/model                                                    │.         │
+│          │                                                                            │          │
+│          │execution effort (optional)                                                 │          │
+│          │                                                                            │          │
+│          │review provider/model                                                       │          │
+│          │                                                                            │          │
+│          │review effort (optional)                                                    │          │
+│          │                                                                            │          │
+│          │validation provider/model                                                   │          │
+│          │                                                                            │          │
+│          │validation effort (optional)                                                │          │
+│          │                                                                            │          │
+│          │remediation provider/model                                                  │          │
+│          │                                                                            │          │
+│          │remediation effort (optional)                                               │          │
+│          │                                                                            │          │
+│          │operator provider/model                                                     │          │
+│          │                                                                            │          │
+│          │operator effort (optional)                                                  │          │
+│          │                                                                            │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Saved profile Qwen · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: list, add, edit, enable or disable.                                                       │
+│Keyboard remains available with mouse disabled.                                                   │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m  │
+│Defaults.                                                                                         │
+│E Export settings and o Import settings move this project's settings to another computer.         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved profile Qwen
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Qwen v1 · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults a╭ Model profiles ────────────────────────────────────────────────────────────╮          │
+│u User def│A profile maps roles to models the existing providers run; it does not add  │          │
+│f Profiles│providers. Precedence: user defaults, then the project's profile, then      │          │
+│w Work cat│project overrides, then a task's own models.                                │ediate    │
+│code, docu│This project: Anthropic · new projects: no default profile                  │          │
+│L Review l│                                                                            │n) and the│
+│project's │Effective models for tasks defined now:                                     │          │
+│Checks: li│planning: claude/opus / high [profile Anthropic]                            │          │
+│Keyboard r│execution: claude/opus / high [profile Anthropic]                           │          │
+│i Report l│review: claude/opus / high [profile Anthropic]                              │ole in m  │
+│Defaults. │validation: claude/opus / high [profile Anthropic]                          │          │
+│E Export s│remediation: claude/opus / high [profile Anthropic]                         │.         │
+│          │operator: claude/opus / high [profile Anthropic]                            │          │
+│          │                                                                            │          │
+│          │Profiles:                                                                   │          │
+│          │Anthropic v1 · used by project run-000000 · planning claude/opus / high,    │          │
+│          │execution claude/opus / high, review claude/opus / high, validation         │          │
+│          │claude/opus / high, remediation claude/opus / high, operator claude/opus /  │          │
+│          │high                                                                        │          │
+│          │Qwen v1 · unused · execution opencode/vendor/qwen                           │          │
+│          │Changes reach only tasks defined afterwards; existing revisions and         │          │
+│          │attempts stay pinned, and pending tasks change only when you apply the      │          │
+│          │current defaults from their Models form.                                    │          │
+│          │Select a profile and choose Apply to edit, select or delete it.             │          │
+│          │Profile                                                                     │          │
+│          │< 1. Anthropic (this project) >   click / Space to change                   │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved profile Qwen
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Profile Anthropic · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner ap╭ Profile Anthropic ─────────────────────────────────────────────────────────╮          │
+│Delivery: │This profile is used by project run-000000. Blank roles inherit the user    │          │
+│Dependenci│defaults. Use provider/model: codex/gpt-6-sol, claude/opus,                 │ a        │
+│prerequisi│opencode/anthropic/claude-sonnet-5-5; effort uses the provider's own        │          │
+│          │spellings.                                                                  │          │
+│Defaults a│A profile in use can change a role's model but not drop the role; Delete is │          │
+│u User def│refused while a project or the new-project default selects it.              │          │
+│f Profiles│Future tasks use the new values; existing revisions and attempts stay       │          │
+│w Work cat│pinned.                                                                     │ediate    │
+│code, docu│Profile name                                                                │          │
+│L Review l│Anthropic▏                                                                  │n) and the│
+│project's │Action                                                                      │          │
+│Checks: li│< Save >   click / Space to change                                          │          │
+│Keyboard r│planning provider/model                                                     │          │
+│i Report l│claude/opus                                                                 │ole in m  │
+│Defaults. │planning effort (optional)                                                  │          │
+│E Export s│high                                                                        │.         │
+│          │execution provider/model                                                    │          │
+│          │claude/opus                                                                 │          │
+│          │execution effort (optional)                                                 │          │
+│          │high                                                                        │          │
+│          │review provider/model                                                       │          │
+│          │claude/opus                                                                 │          │
+│          │review effort (optional)                                                    │          │
+│          │high                                                                        │          │
+│          │validation provider/model                                                   │          │
+│          │claude/opus                                                                 │          │
+│          │validation effort (optional)                                                │          │
+│          │high                                                                        │          │
+│          │remediation provider/model                                                  │          │
+│          │claude/opus                                                                 │          │
+│          │remediation effort (optional)                                               │          │
+│          │high                                                                        │          │
+│          │operator provider/model                                                     │          │
+│          │claude/opus                                                                 │          │
+│          │operator effort (optional)                                                  │          │
+│          │high                                                                        │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved profile Qwen
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DELETE REFUSED · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner ap╭ Profile Anthropic ─────────────────────────────────────────────────────────╮          │
+│Delivery: │This profile is used by project run-000000. Blank roles inherit the user    │          │
+│Dependenci│defaults. Use provider/model: codex/gpt-6-sol, claude/opus,                 │ a        │
+│prerequisi│opencode/anthropic/claude-sonnet-5-5; effort uses the provider's own        │          │
+│          │spellings.                                                                  │          │
+│Defaults a│A profile in use can change a role's model but not drop the role; Delete is │          │
+│u User def│refused while a project or the new-project default selects it.              │          │
+│f Profiles│Future tasks use the new values; existing revisions and attempts stay       │          │
+│w Work cat│pinned.                                                                     │ediate    │
+│code, docu│Profile name                                                                │          │
+│L Review l│Anthropic                                                                   │n) and the│
+│project's │Action                                                                      │          │
+│Checks: li│< Delete profile >   click / Space to change                                │          │
+│Keyboard r│planning provider/model                                                     │          │
+│i Report l│claude/opus                                                                 │ole in m  │
+│Defaults. │planning effort (optional)                                                  │          │
+│E Export s│high                                                                        │.         │
+│          │execution provider/model                                                    │          │
+│          │claude/opus                                                                 │          │
+│          │execution effort (optional)                                                 │          │
+│          │high                                                                        │          │
+│          │review provider/model                                                       │          │
+│          │claude/opus                                                                 │          │
+│          │review effort (optional)                                                    │          │
+│          │high                                                                        │          │
+│          │validation provider/model                                                   │          │
+│          │claude/opus                                                                 │          │
+│          │validation effort (optional)                                                │          │
+│          │high                                                                        │          │
+│          │remediation provider/model                                                  │          │
+│          │claude/opus                                                                 │          │
+│          │remediation effort (optional)                                               │          │
+│          │high                                                                        │          │
+│          │operator provider/model                                                     │          │
+│          │claude/opus                                                                 │          │
+│          │operator effort (optional)                                                  │          │
+│          │high                                                                        │          │
+│          │command conflict: Profile Anthropic is used by project run-000000; select   │          │
+│          │another profile first                                                       │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved profile Qwen
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Qwen v1 #2 · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults a╭ Model profiles ────────────────────────────────────────────────────────────╮          │
+│u User def│A profile maps roles to models the existing providers run; it does not add  │          │
+│f Profiles│providers. Precedence: user defaults, then the project's profile, then      │          │
+│w Work cat│project overrides, then a task's own models.                                │ediate    │
+│code, docu│This project: Anthropic · new projects: no default profile                  │          │
+│L Review l│                                                                            │n) and the│
+│project's │Effective models for tasks defined now:                                     │          │
+│Checks: li│planning: claude/opus / high [profile Anthropic]                            │          │
+│Keyboard r│execution: claude/opus / high [profile Anthropic]                           │          │
+│i Report l│review: claude/opus / high [profile Anthropic]                              │ole in m  │
+│Defaults. │validation: claude/opus / high [profile Anthropic]                          │          │
+│E Export s│remediation: claude/opus / high [profile Anthropic]                         │.         │
+│          │operator: claude/opus / high [profile Anthropic]                            │          │
+│          │                                                                            │          │
+│          │Profiles:                                                                   │          │
+│          │Anthropic v1 · used by project run-000000 · planning claude/opus / high,    │          │
+│          │execution claude/opus / high, review claude/opus / high, validation         │          │
+│          │claude/opus / high, remediation claude/opus / high, operator claude/opus /  │          │
+│          │high                                                                        │          │
+│          │Qwen v1 · unused · execution opencode/vendor/qwen                           │          │
+│          │Changes reach only tasks defined afterwards; existing revisions and         │          │
+│          │attempts stay pinned, and pending tasks change only when you apply the      │          │
+│          │current defaults from their Models form.                                    │          │
+│          │Select a profile and choose Apply to edit, select or delete it.             │          │
+│          │Profile                                                                     │          │
+│          │< 1. Anthropic (this project) >   click / Space to change                   │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved profile Qwen
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project uses the user defaults without a profile · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: list, add, edit, enable or disable.                                                       │
+│Keyboard remains available with mouse disabled.                                                   │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m  │
+│Defaults.                                                                                         │
+│E Export settings and o Import settings move this project's settings to another computer.         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project uses the user defaults without a profile
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Anthropic v1 #2 · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User def╭ Model profiles ────────────────────────────────────────────────────────────╮          │
+│f Profiles│A profile maps roles to models the existing providers run; it does not add  │          │
+│w Work cat│providers. Precedence: user defaults, then the project's profile, then      │ediate    │
+│code, docu│project overrides, then a task's own models.                                │          │
+│L Review l│This project: no profile · new projects: no default profile                 │n) and the│
+│project's │                                                                            │          │
+│Checks: li│Effective models for tasks defined now:                                     │          │
+│Keyboard r│planning: unconfigured [unset]                                              │          │
+│i Report l│execution: unconfigured [unset]                                             │ole in m  │
+│Defaults. │review: unconfigured [unset]                                                │          │
+│E Export s│validation: unconfigured [unset]                                            │.         │
+│          │remediation: unconfigured [unset]                                           │          │
+│          │operator: unconfigured [unset]                                              │          │
+│          │                                                                            │          │
+│          │Profiles:                                                                   │          │
+│          │Anthropic v1 · unused · planning claude/opus / high, execution claude/opus  │          │
+│          │/ high, review claude/opus / high, validation claude/opus / high,           │          │
+│          │remediation claude/opus / high, operator claude/opus / high                 │          │
+│          │Qwen v1 · unused · execution opencode/vendor/qwen                           │          │
+│          │Changes reach only tasks defined afterwards; existing revisions and         │          │
+│          │attempts stay pinned, and pending tasks change only when you apply the      │          │
+│          │current defaults from their Models form.                                    │          │
+│          │Select a profile and choose Apply to edit, select or delete it.             │          │
+│          │Profile                                                                     │          │
+│          │< New profile >   click / Space to change                                   │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project uses the user defaults without a profile
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Profile Anthropic #2 · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner ap╭ Profile Anthropic ─────────────────────────────────────────────────────────╮          │
+│Delivery: │This profile is unused. Blank roles inherit the user defaults. Use          │          │
+│Dependenci│provider/model: codex/gpt-6-sol, claude/opus,                               │ a        │
+│prerequisi│opencode/anthropic/claude-sonnet-5-5; effort uses the provider's own        │          │
+│          │spellings.                                                                  │          │
+│Defaults a│A profile in use can change a role's model but not drop the role; Delete is │          │
+│u User def│refused while a project or the new-project default selects it.              │          │
+│f Profiles│Future tasks use the new values; existing revisions and attempts stay       │          │
+│w Work cat│pinned.                                                                     │ediate    │
+│code, docu│Profile name                                                                │          │
+│L Review l│Anthropic▏                                                                  │n) and the│
+│project's │Action                                                                      │          │
+│Checks: li│< Save >   click / Space to change                                          │          │
+│Keyboard r│planning provider/model                                                     │          │
+│i Report l│claude/opus                                                                 │ole in m  │
+│Defaults. │planning effort (optional)                                                  │          │
+│E Export s│high                                                                        │.         │
+│          │execution provider/model                                                    │          │
+│          │claude/opus                                                                 │          │
+│          │execution effort (optional)                                                 │          │
+│          │high                                                                        │          │
+│          │review provider/model                                                       │          │
+│          │claude/opus                                                                 │          │
+│          │review effort (optional)                                                    │          │
+│          │high                                                                        │          │
+│          │validation provider/model                                                   │          │
+│          │claude/opus                                                                 │          │
+│          │validation effort (optional)                                                │          │
+│          │high                                                                        │          │
+│          │remediation provider/model                                                  │          │
+│          │claude/opus                                                                 │          │
+│          │remediation effort (optional)                                               │          │
+│          │high                                                                        │          │
+│          │operator provider/model                                                     │          │
+│          │claude/opus                                                                 │          │
+│          │operator effort (optional)                                                  │          │
+│          │high                                                                        │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project uses the user defaults without a profile
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Deleted profile Anthropic · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: list, add, edit, enable or disable.                                                       │
+│Keyboard remains available with mouse disabled.                                                   │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m  │
+│Defaults.                                                                                         │
+│E Export settings and o Import settings move this project's settings to another computer.         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Deleted profile Anthropic
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Qwen v1 #3 · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles╭ Model profiles ────────────────────────────────────────────────────────────╮          │
+│w Work cat│A profile maps roles to models the existing providers run; it does not add  │ediate    │
+│code, docu│providers. Precedence: user defaults, then the project's profile, then      │          │
+│L Review l│project overrides, then a task's own models.                                │n) and the│
+│project's │This project: no profile · new projects: no default profile                 │          │
+│Checks: li│                                                                            │          │
+│Keyboard r│Effective models for tasks defined now:                                     │          │
+│i Report l│planning: unconfigured [unset]                                              │ole in m  │
+│Defaults. │execution: unconfigured [unset]                                             │          │
+│E Export s│review: unconfigured [unset]                                                │.         │
+│          │validation: unconfigured [unset]                                            │          │
+│          │remediation: unconfigured [unset]                                           │          │
+│          │operator: unconfigured [unset]                                              │          │
+│          │                                                                            │          │
+│          │Profiles:                                                                   │          │
+│          │Qwen v1 · unused · execution opencode/vendor/qwen                           │          │
+│          │Changes reach only tasks defined afterwards; existing revisions and         │          │
+│          │attempts stay pinned, and pending tasks change only when you apply the      │          │
+│          │current defaults from their Models form.                                    │          │
+│          │Select a profile and choose Apply to edit, select or delete it.             │          │
+│          │Profile                                                                     │          │
+│          │< New profile >   click / Space to change                                   │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Deleted profile Anthropic
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Profile Qwen · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner ap╭ Profile Qwen ──────────────────────────────────────────────────────────────╮          │
+│Delivery: │This profile is unused. Blank roles inherit the user defaults. Use          │          │
+│Dependenci│provider/model: codex/gpt-6-sol, claude/opus,                               │ a        │
+│prerequisi│opencode/anthropic/claude-sonnet-5-5; effort uses the provider's own        │          │
+│          │spellings.                                                                  │          │
+│Defaults a│A profile in use can change a role's model but not drop the role; Delete is │          │
+│u User def│refused while a project or the new-project default selects it.              │          │
+│f Profiles│Future tasks use the new values; existing revisions and attempts stay       │          │
+│w Work cat│pinned.                                                                     │ediate    │
+│code, docu│Profile name                                                                │          │
+│L Review l│Qwen▏                                                                       │n) and the│
+│project's │Action                                                                      │          │
+│Checks: li│< Save >   click / Space to change                                          │          │
+│Keyboard r│planning provider/model                                                     │          │
+│i Report l│                                                                            │ole in m  │
+│Defaults. │planning effort (optional)                                                  │          │
+│E Export s│                                                                            │.         │
+│          │execution provider/model                                                    │          │
+│          │opencode/vendor/qwen                                                        │          │
+│          │execution effort (optional)                                                 │          │
+│          │                                                                            │          │
+│          │review provider/model                                                       │          │
+│          │                                                                            │          │
+│          │review effort (optional)                                                    │          │
+│          │                                                                            │          │
+│          │validation provider/model                                                   │          │
+│          │                                                                            │          │
+│          │validation effort (optional)                                                │          │
+│          │                                                                            │          │
+│          │remediation provider/model                                                  │          │
+│          │                                                                            │          │
+│          │remediation effort (optional)                                               │          │
+│          │                                                                            │          │
+│          │operator provider/model                                                     │          │
+│          │                                                                            │          │
+│          │operator effort (optional)                                                  │          │
+│          │                                                                            │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Deleted profile Anthropic
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ new projects start with it · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: list, add, edit, enable or disable.                                                       │
+│Keyboard remains available with mouse disabled.                                                   │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m  │
+│Defaults.                                                                                         │
+│E Export settings and o Import settings move this project's settings to another computer.         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved profile Qwen; new projects start with it
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

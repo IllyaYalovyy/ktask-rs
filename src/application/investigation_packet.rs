@@ -178,7 +178,7 @@ impl Service {
                 self.attempt_evidence(latest.id, state)?,
                 self.failure_decisions(id)?
             );
-            self.review_bundle(latest.id, state, &folder, "not-computed", &context)?;
+            self.review_bundle(latest.id, state, &folder, "not-computed", &context, false)?;
             index.push_str(&format!(
                 "task-{id}/steps.jsonl, step-*.txt, artifacts.jsonl, criteria.jsonl, workflow.txt: evidence of its attempts (latest #{})\n",
                 latest.id

@@ -1,0 +1,248 @@
+@@ DURABLE GATE queue=true human=true · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 2 · History 1
+ Session: Queue · waiting · Next #3 · Queue stopped for human work or approval
+ #2 Owner gate
+ Human task · D Mark done when it is done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Pending · Human                             ││Goal: Confirm direction                             │
+│No attempts yet                             ││Proof: Direction confirmed                          │
+│Run blocked (1) · u Readiness               │╰────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────╮
+│Budget 0 of 3 used                          ││Human task: do the work, then D Mark done.          │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #2 · l: all ────────────────────╮│                                                    │
+│• #2 created: Owner gate                    ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RESTORED SESSION queue=true human=true · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 3
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                   │
+│Inspect results in History, or add more work.                                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DURABLE GATE queue=true human=false · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Needs approval   |   Queue 2 · History 1
+ Session: Queue · waiting · Next #3 · Queue stopped for human work or approval
+ #2 Owner gate
+ Pending revision 1 · needs approval · v Approve / n Reject
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Needs approval · AI                         ││Goal: Confirm direction                             │
+│No attempts yet                             ││Proof: Direction confirmed                          │
+│Run blocked (2) · u Readiness               │╰────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────╮
+│Budget 0 of 3 used                          ││Needs approval. Review the task, then Approve or    │
+│                                            ││Reject.                                             │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #2 · l: all ────────────────────╮│                                                    │
+│• #2 created: Owner gate                    ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [v Approve] [n Reject] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RESTORED SESSION queue=true human=false · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 3
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                   │
+│Inspect results in History, or add more work.                                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DURABLE GATE queue=false human=true · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 2 · History 1
+ Session: Run one · stopped · Next #3 · Run one completed the current task
+ #2 Owner gate
+ Human task · D Mark done when it is done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Pending · Human                             ││Goal: Confirm direction                             │
+│No attempts yet                             ││Proof: Direction confirmed                          │
+│Run blocked (1) · u Readiness               │╰────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────╮
+│Budget 0 of 3 used                          ││Human task: do the work, then D Mark done.          │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #2 · l: all ────────────────────╮│                                                    │
+│• #2 created: Owner gate                    ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RESTORED SESSION queue=false human=true · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #3 · Pending   |   Queue 1 · History 2
+ Session: Run one · stopped · Intervention resolved; Run one awaits explicit Run or Resume
+ #3 Work after gate
+ Run one selected · m Run mode to continue the queue
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified         │
+│No attempts yet                             ││Proof: result.txt contains verified                 │
+│Can run · u Readiness                       │╰────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────╮
+│Budget 0 of 3 used                          ││Ready. r starts an attempt in the background        │
+│                                            ││supervisor; this pane follows its log.              │
+│                                            ││Defaults and checks live in Config; c pins models   │
+│                                            ││for this task.                                      │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #3 · l: all ────────────────────╮│                                                    │
+│• #3 created: Work after gate               ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Run one] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down]
+[u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help]
+[q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DURABLE GATE queue=false human=false · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Needs approval   |   Queue 2 · History 1
+ Session: Run one · stopped · Next #3 · Run one completed the current task
+ #2 Owner gate
+ Pending revision 1 · needs approval · v Approve / n Reject
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Needs approval · AI                         ││Goal: Confirm direction                             │
+│No attempts yet                             ││Proof: Direction confirmed                          │
+│Run blocked (2) · u Readiness               │╰────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────╮
+│Budget 0 of 3 used                          ││Needs approval. Review the task, then Approve or    │
+│                                            ││Reject.                                             │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #2 · l: all ────────────────────╮│                                                    │
+│• #2 created: Owner gate                    ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [v Approve] [n Reject] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RESTORED SESSION queue=false human=false · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 2 · History 1
+ Session: Run one · stopped · Next #3 · Intervention resolved; Run one awaits explicit Run or Resume
+ #2 Owner gate
+ Run one selected · m Run mode to continue the queue
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Pending · AI                                ││Goal: Confirm direction                             │
+│No attempts yet                             ││Proof: Direction confirmed                          │
+│Can run · u Readiness                       │╰────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────╮
+│Budget 0 of 3 used                          ││Ready. r starts an attempt in the background        │
+│                                            ││supervisor; this pane follows its log.              │
+│                                            ││Defaults and checks live in Config; c pins models   │
+│                                            ││for this task.                                      │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #2 · l: all ────────────────────╮│                                                    │
+│• #2 revision 1 approved by human: owner    ││                                                    │
+│• #2 created: Owner gate                    ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Run one] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down]
+[u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help]
+[q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

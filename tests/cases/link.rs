@@ -757,15 +757,6 @@ fn row<'a>(screen: &'a str, name: &str, host: &str) -> &'a str {
         .unwrap_or("")
 }
 
-/// Prints a screen into the check transcript and, in a supervised run, keeps its picture.
-fn record(screen: &str, name: &str) -> Result {
-    println!("{name}\n{screen}");
-    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-        support::screen_png(screen, &Path::new(&directory).join(format!("{name}.png")))?;
-    }
-    Ok(())
-}
-
 /// The details pane beside the list, its wrapped lines joined.
 fn details(screen: &str) -> String {
     screen
@@ -817,8 +808,8 @@ fn projects_screen_lists_local_and_remote_projects_by_keyboard_and_mouse() -> Re
                 s.contains("Projects · 5 registered · 0 running · 1 need you")
                     && !row(s, "gamma", "laptop").is_empty()
             })?;
-            let case = format!("link-{columns}x{rows}-mouse-{mouse}");
-            record(&listed, &format!("{case}-1-flat-list"))?;
+            let case = "link";
+            crate::support::record(&format!("{case}-1-flat-list"), mouse, &listed);
             let order = [
                 ("alpha", "local", "Idle"),
                 ("beta", "devbox", "Idle"),
@@ -844,7 +835,7 @@ fn projects_screen_lists_local_and_remote_projects_by_keyboard_and_mouse() -> Re
             let selected = t.screen("remote selected", |s| {
                 s.contains("Projects · 4 / 5") && s.contains("Project · linked")
             })?;
-            record(&selected, &format!("{case}-2-remote-selected"))?;
+            crate::support::record(&format!("{case}-2-remote-selected"), mouse, &selected);
             let pane = details(&selected);
             assert!(pane.contains("Host: devbox · online"), "{selected}");
             assert!(pane.contains("State: Needs approval"), "{selected}");
@@ -869,7 +860,7 @@ fn projects_screen_lists_local_and_remote_projects_by_keyboard_and_mouse() -> Re
                     && s.contains("last contact")
                     && s.contains("0 need you")
             })?;
-            record(&offline, &format!("{case}-3-offline"))?;
+            crate::support::record(&format!("{case}-3-offline"), mouse, &offline);
             assert!(row(&offline, "gamma", "laptop").contains("Idle"));
             let pane = details(&offline);
             assert!(pane.contains("Host: devbox · offline"), "{offline}");
@@ -890,7 +881,7 @@ fn projects_screen_lists_local_and_remote_projects_by_keyboard_and_mouse() -> Re
             let back = t.screen("devbox returns with its change", |s| {
                 row(s, "beta", "devbox").contains("Ready") && s.contains("1 need you")
             })?;
-            record(&back, &format!("{case}-4-returned"))?;
+            crate::support::record(&format!("{case}-4-returned"), mouse, &back);
 
             // A local project still opens.
             if mouse {
@@ -905,7 +896,7 @@ fn projects_screen_lists_local_and_remote_projects_by_keyboard_and_mouse() -> Re
                 t.send("\r")?;
             }
             let opened = t.screen("the local project opens", |s| s.contains("/ shared "))?;
-            record(&opened, &format!("{case}-5-local-opened"))?;
+            crate::support::record(&format!("{case}-5-local-opened"), mouse, &opened);
             t.send("q")?;
             t.finish()?;
             first.stop()?;
@@ -986,8 +977,8 @@ fn projects_screen_lists_incompatible_hosts_by_keyboard_and_mouse() -> Result {
                 s.contains("Projects · 2 registered · 0 running · 0 need you")
                     && row(s, "beta", "kept").contains("Incompatible")
             })?;
-            let case = format!("link-incompatible-{columns}x{rows}-mouse-{mouse}");
-            record(&listed, &format!("{case}-1-list"))?;
+            let case = "link-incompatible";
+            crate::support::record(&format!("{case}-1-list"), mouse, &listed);
             assert!(
                 row(&listed, "(no projects)", "older").contains("Incompatible"),
                 "{listed}"
@@ -1011,7 +1002,7 @@ fn projects_screen_lists_incompatible_hosts_by_keyboard_and_mouse() -> Result {
                 let selected = t.screen(host, |s| {
                     s.contains("Project · read-only") && s.contains(&format!("Host: {host}"))
                 })?;
-                record(&selected, &format!("{case}-{step}-{host}-selected"))?;
+                crate::support::record(&format!("{case}-{step}-{host}-selected"), mouse, &selected);
                 assert_incompatible_details(&selected, host, &child);
 
                 if mouse {
@@ -1022,7 +1013,11 @@ fn projects_screen_lists_incompatible_hosts_by_keyboard_and_mouse() -> Result {
                 let refused = t.screen("read-only", |s| {
                     s.contains(&format!("Read-only here: this project is on {host}"))
                 })?;
-                record(&refused, &format!("{case}-{}-{host}-refused", step + 1))?;
+                crate::support::record(
+                    &format!("{case}-{}-{host}-refused", step + 1),
+                    mouse,
+                    &refused,
+                );
                 assert!(refused.contains("/ alpha"), "{refused}");
             }
             t.send("q")?;

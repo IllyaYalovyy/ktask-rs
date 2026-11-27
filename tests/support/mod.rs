@@ -1,7 +1,15 @@
+pub mod gate;
+pub mod golden;
+pub mod normalise;
+mod screens;
+pub mod settle;
+#[allow(unused_imports)] // not every test binary records screens
+pub use screens::{accepted, record};
+
 use std::{
     io::{Read, Write},
-    path::Path,
-    process::{Command, Stdio},
+    path::{Path, PathBuf},
+    process::Stdio,
     sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
@@ -113,6 +121,26 @@ pub fn eventually<T>(what: &str, mut probe: impl FnMut() -> Result<Option<T>>) -
     }
 }
 
+/// A supervisor that is still leaving although the screen already shows its result: a task
+/// paused with a live supervisor, or a session still running with an emptied queue or a
+/// current task that is neither running nor next to run. The header, Session line and
+/// controls are about to change, so no wait settles on such a screen.
+fn leaving(screen: &str) -> bool {
+    let line = |start: &str| screen.lines().find(|line| line.starts_with(start));
+    let ended = line(" Current #")
+        .is_some_and(|task| !task.contains("· Running") && !task.contains("· Pending"));
+    screen.contains("· Paused · supervisor alive")
+        || line(" Session: ").is_some_and(|session| {
+            session.contains("· running ·") && (ended || session.contains("no queued work"))
+        })
+}
+
+/// The end of a run as the TUI settles on it. Current Task already says the queue is
+/// complete while the supervisor is still leaving; a screen to record waits for both.
+pub fn finished(screen: &str) -> bool {
+    screen.contains("· complete · no queued work")
+}
+
 pub fn location(screen: &str, needle: &str) -> Result<(usize, usize)> {
     screen
         .lines()
@@ -144,47 +172,6 @@ pub fn dialog_text(screen: &str, title: &str, stop_at: Option<&str>) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-/// Render the terminal parser's observed cells as a readable image for visual evidence.
-/// The source is a real PTY frame; no screen text is reconstructed by this renderer.
-pub fn screen_png(screen: &str, path: &Path) -> Result {
-    let mut child = Command::new("python3")
-        .args([
-            "-c",
-            r##"import subprocess, sys
-from PIL import Image, ImageDraw, ImageFont
-
-font_path = subprocess.check_output(
-    ["fc-match", "-f", "%{file}", "monospace"], text=True
-)
-font = ImageFont.truetype(font_path, 18)
-lines = sys.stdin.read().splitlines()
-cell = round(font.getlength("M"))
-width = max(1, max((len(line) for line in lines), default=0)) * cell + 32
-image = Image.new("RGB", (width, max(1, len(lines)) * 26 + 24), "#111827")
-draw = ImageDraw.Draw(image)
-for row, line in enumerate(lines):
-    draw.text((16, 12 + row * 26), line, font=font, fill="#e5e7eb")
-image.save(sys.argv[1], "PNG")
-"##,
-        ])
-        .arg(path)
-        .stdin(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    child
-        .stdin
-        .take()
-        .ok_or("image renderer stdin")?
-        .write_all(screen.as_bytes())?;
-    let output = child.wait_with_output()?;
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    Ok(())
 }
 
 pub fn drag(t: &mut Terminal, from: (usize, usize), to: (usize, usize)) -> Result {
@@ -307,6 +294,12 @@ pub struct Terminal {
     exited: bool,
     /// The screen before input that no wait has observed yet.
     before_input: Mutex<Option<String>>,
+    /// Where the stores are whose changes this TUI shows.
+    state_homes: Vec<PathBuf>,
+    settle: Mutex<settle::Settle>,
+    /// Whether this terminal has been sent mouse input, so its later frames are not proof
+    /// of the keyboard path.
+    mouse_used: bool,
     _sandbox: Option<Sandbox>,
 }
 
@@ -366,7 +359,12 @@ impl Terminal {
         command.env("TERM", "xterm-256color");
         command.env("HOME", sandbox);
         command.env("XDG_CONFIG_HOME", sandbox.join("config"));
-        command.env("XDG_STATE_HOME", sandbox.join("state"));
+        let state_home = extra_env
+            .iter()
+            .rev()
+            .find(|(key, _)| *key == "XDG_STATE_HOME")
+            .map_or_else(|| sandbox.join("state"), |(_, value)| value.into());
+        command.env("XDG_STATE_HOME", &state_home);
         command.env("XDG_CACHE_HOME", sandbox.join("cache"));
         command.env("XDG_DATA_HOME", sandbox.join("data"));
         command.env("XDG_RUNTIME_DIR", sandbox.join("runtime"));
@@ -428,6 +426,9 @@ impl Terminal {
             reader: Some(reader),
             exited: false,
             before_input: Mutex::new(None),
+            state_homes: vec![state_home],
+            settle: Mutex::new(settle::Settle::new(Instant::now())),
+            mouse_used: false,
             _sandbox: None,
         })
     }
@@ -438,6 +439,8 @@ impl Terminal {
             .unwrap()
             .get_or_insert_with(|| self.parser.lock().unwrap().screen().contents());
         while self.frames.try_recv().is_ok() {}
+        // An SGR mouse report: a press, release, drag, wheel or motion.
+        self.mouse_used |= keys.contains("\x1b[<");
         self.writer.write_all(keys.as_bytes())?;
         self.writer.flush()?;
         Ok(())
@@ -526,10 +529,20 @@ impl Terminal {
     }
 
     pub fn current_screen(&self) -> String {
-        self.parser.lock().unwrap().screen().contents()
+        let parser = self.parser.lock().unwrap();
+        let (rows, cols) = parser.screen().size();
+        let screen = parser.screen().contents();
+        screens::shown(&screen, (cols, rows), false, self.mouse_used);
+        screen
     }
 
-    /// Waits until the screen matches. After input, the condition must describe its result:
+    /// Also settle on the store under `state_home`: a linked host's, whose project the
+    /// screens show.
+    pub fn watch(&mut self, state_home: PathBuf) {
+        self.state_homes.push(state_home);
+    }
+
+    /// Waits until the screen matches and is not [`leaving`] a finished queue. After input, the condition must describe its result:
     /// one that the screen before the input already met cannot tell whether the input has
     /// been handled, so the wait fails at once. Use `still` to check that input changed nothing.
     /// The condition must depend only on the screen text it is given; for state outside the
@@ -553,27 +566,45 @@ impl Terminal {
         self.wait_for(description, matches)
     }
 
+    /// Returns the first matching screen that is settled ([`settle`]): quiet, and not
+    /// behind what the store held a refresh cycle ago. Only such a screen can be recorded.
     fn wait_for(&self, description: &str, matches: impl Fn(&str) -> bool) -> Result<String> {
         let deadline = Instant::now() + PATIENCE;
         let mut last = self.parser.lock().unwrap().screen().contents();
-        let mut matched = matches(&last);
+        let accepted = |screen: &str| matches(screen) && !leaving(screen);
+        let mut matched = accepted(&last);
+        let mut store = settle::Watch::new(&self.state_homes);
+        let mut settle = self.settle.lock().unwrap_or_else(|held| held.into_inner());
+        settle.store(store.content(), Instant::now());
+        settle.frame(&last, Instant::now());
         loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            let wait = if matched {
-                remaining.min(Duration::from_millis(40))
-            } else {
-                remaining
-            };
-            match self.frames.recv_timeout(wait) {
+            let now = Instant::now();
+            if matched && now >= settle.due() {
+                settle.settled();
+                let (rows, cols) = self.parser.lock().unwrap().screen().size();
+                screens::shown(&last, (cols, rows), true, self.mouse_used);
+                return Ok(last);
+            }
+            if now >= deadline {
+                let why = if matched {
+                    "never settled"
+                } else {
+                    "timed out"
+                };
+                return Err(format!("{description}: {why}\nLast screen:\n{last}").into());
+            }
+            match self.frames.recv_timeout(settle::QUIET) {
                 Ok(frame) => {
                     last = frame;
-                    matched = matches(&last);
+                    matched = accepted(&last);
+                    settle.frame(&last, Instant::now());
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) if matched => return Ok(last),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(error) => {
                     return Err(format!("{description}: {error}\nLast screen:\n{last}").into());
                 }
             }
+            settle.store(store.content(), Instant::now());
         }
     }
 
@@ -640,7 +671,18 @@ impl Drop for Terminal {
 }
 
 pub fn sandbox() -> std::io::Result<Sandbox> {
-    Scratch::new(&std::env::temp_dir().join("ktask-test-scratch")).map(|s| Sandbox(Some(s)))
+    let temporary = std::env::temp_dir();
+    // Padded to one length in any environment, so screens wrap and cut its path alike.
+    let root = temporary.join(normalise::sandboxes(&temporary.to_string_lossy()));
+    // Named after the test, so that a path on screen is the same on every run.
+    let scratch = loop {
+        match Scratch::named(&root, &screens::sandbox_name()) {
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            scratch => break scratch?,
+        }
+    };
+    screens::sandbox_opened(scratch.path());
+    Ok(Sandbox(Some(scratch)))
 }
 
 /// A test's private directory. A test must stop everything it starts: when the sandbox

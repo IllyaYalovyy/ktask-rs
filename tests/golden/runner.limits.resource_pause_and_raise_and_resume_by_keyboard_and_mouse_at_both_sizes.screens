@@ -1,0 +1,248 @@
+@@ resource-pause · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused: Resource limit: check transcript evidence incomplete: command conflict: Artifact bui…
+ #1 Raise and resume the pause
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Limit artifact_file_bytes                   ││Proof: result.txt contains verified                                     │
+│Now 1024 · needed 3000                      │╰────────────────────────────────────────────────────────────────────────╯
+│+ Raise to 4096 and resume                  │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
+│Attempt 1                                   ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│Model codex/remediation / none              ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│Active <t> · waited <t>                     ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│Tokens 60 new · 40 cached · 10 out          ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│70 new tokens + 1 call(s) unreported        ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│Budget 0 of 3 used                          ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│Can run · u Readiness                       ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│Execution   ✓ succeeded                     ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│Checks      ✓ succeeded                     ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+╰────────────────────────────────────────────╯│yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+╭ Activity · #1 · l: all ────────────────────╮│yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│• Supervisor yielded this attempt for resume││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│• Resource limit: check transcript evidence ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│  incomplete: command conflict: Artifact…   ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│• Resource limit artifact_file_bytes:       ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│  measured 3000 against 1024; decision…     ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy                        │
+│• Workflow · Check · repair round 0/10      ││Diagnosing resource limit breach: codex/remediation · read-only         │
+│• Workflow · Check · repair round 0/10      ││{"judgment":{"action":"escalate","reason":"The use is not something a   │
+│• Workflow · Implement · repair round 0/10  ││worker repair would change"}}                                           │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [+ Raise and resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ resource-refused · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused: Resource limit: check transcript evidence incomplete: command conflict: Artifact bui…
+ #1 Raise and resume the pause
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Limit artifact_file_bytes                   ││Proof: result.txt contains verified                                     │
+│Now 1024 · needed 3000                      │╰────────────────────────────────────────────────────────────────────────╯
+│+ Raise to 4096 and resume                  │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
+│Attempt 1           ╭ Raise and resume ──────────────────────────────────────────────────────────╮yyyyyyyyyyyyyyyyyyyy│
+│Model codex/remediat│Resume refused: artifact_file_bytes is 1024 bytes, needed 3000 bytes and    │yyyyyyyyyyyyyyyyyyyy│
+│Active <t> · waited 0│nothing that caused the pause has changed, so the same work would pause     │yyyyyyyyyyyyyyyyyyyy│
+│Tokens 60 new · 40 c│again. Raise and resume sets artifact_file_bytes to 4096 bytes (TUI + on    │yyyyyyyyyyyyyyyyyyyy│
+│70 new tokens + 1 ca│Current, or ktask run --raise)                                              │yyyyyyyyyyyyyyyyyyyy│
+│Budget 0 of 3 used  │Raise this project's artifact_file_bytes (ceiling 4096) and resume the same │yyyyyyyyyyyyyyyyyyyy│
+│Can run · u Readines│attempt. Recorded results are not repeated.                                 │yyyyyyyyyyyyyyyyyyyy│
+│Execution   ✓ succee│New value                                                                   │yyyyyyyyyyyyyyyyyyyy│
+│Checks      ✓ succee│4096▏                                                                       │yyyyyyyyyyyyyyyyyyyy│
+╰────────────────────│Enter / Ctrl-S: raise and resume · Esc: cancel                              │yyyyyyyyyyyyyyyyyyyy│
+╭ Activity · #1 · l: │                                                                            │yyyyyyyyyyyyyyyyyyyy│
+│• command conflict: │[Copy] [Raise and resume] [Cancel] [Up] [Down]                              │yyyyyyyyyyyyyyyyyyyy│
+│  artifact_file_byte│                                                                            │yyyyyyyyyyyyyyyyyyyy│
+│• Supervisor yielded╰────────────────────────────────────────────────────────────────────────────╯yyyyyyyyyyyyyyyyyyyy│
+│• Resource limit: check transcript evidence ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│  incomplete: command conflict: Artifact…   ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy                        │
+│• Resource limit artifact_file_bytes:       ││Diagnosing resource limit breach: codex/remediation · read-only         │
+│  measured 3000 against 1024; decision…     ││{"judgment":{"action":"escalate","reason":"The use is not something a   │
+│• Workflow · Check · repair round 0/10      ││worker repair would change"}}                                           │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [+ Raise and resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+command conflict: Resume refused: artifact_file_bytes is 1024 bytes, needed 3000 bytes and nothing that caused the paus…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ resource-raise · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused: Resource limit: check transcript evidence incomplete: command conflict: Artifact bui…
+ #1 Raise and resume the pause
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Limit artifact_file_bytes                   ││Proof: result.txt contains verified                                     │
+│Now 1024 · needed 3000                      │╰────────────────────────────────────────────────────────────────────────╯
+│+ Raise to 4096 and resume                  │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
+│Attempt 1                                   ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│Model codex/remediat╭ Raise and resume ──────────────────────────────────────────────────────────╮yyyyyyyyyyyyyyyyyyyy│
+│Active <t> · waited 0│Task #1 is paused on a resource limit: artifact_file_bytes is 1024 bytes,   │yyyyyyyyyyyyyyyyyyyy│
+│Tokens 60 new · 40 c│needed 3000 bytes.                                                          │yyyyyyyyyyyyyyyyyyyy│
+│70 new tokens + 1 ca│Raise this project's artifact_file_bytes (ceiling 4096) and resume the same │yyyyyyyyyyyyyyyyyyyy│
+│Budget 0 of 3 used  │attempt. Recorded results are not repeated.                                 │yyyyyyyyyyyyyyyyyyyy│
+│Can run · u Readines│New value                                                                   │yyyyyyyyyyyyyyyyyyyy│
+│Execution   ✓ succee│4096▏                                                                       │yyyyyyyyyyyyyyyyyyyy│
+│Checks      ✓ succee│Enter / Ctrl-S: raise and resume · Esc: cancel                              │yyyyyyyyyyyyyyyyyyyy│
+╰────────────────────│                                                                            │yyyyyyyyyyyyyyyyyyyy│
+╭ Activity · #1 · l: │[Copy] [Raise and resume] [Cancel] [Up] [Down]                              │yyyyyyyyyyyyyyyyyyyy│
+│• command conflict: │                                                                            │yyyyyyyyyyyyyyyyyyyy│
+│  artifact_file_byte╰────────────────────────────────────────────────────────────────────────────╯yyyyyyyyyyyyyyyyyyyy│
+│• Supervisor yielded this attempt for resume││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│• Resource limit: check transcript evidence ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│  incomplete: command conflict: Artifact…   ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy                        │
+│• Resource limit artifact_file_bytes:       ││Diagnosing resource limit breach: codex/remediation · read-only         │
+│  measured 3000 against 1024; decision…     ││{"judgment":{"action":"escalate","reason":"The use is not something a   │
+│• Workflow · Check · repair round 0/10      ││worker repair would change"}}                                           │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [+ Raise and resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+command conflict: Resume refused: artifact_file_bytes is 1024 bytes, needed 3000 bytes and nothing that caused the paus…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ resource-resumed · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                       │
+│Inspect results in History, or add more work.                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ resource-pause · 80x24 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused: Resource limit: check transcript evidence in…
+ #1 Raise and resume the pause
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ──────────────╮
+│Paused · AI                 ││Goal: Create result.txt containing verified     │
+│Limit artifact_file_bytes   ││Proof: result.txt contains verified             │
+│Now 1024 · needed 3000      │╰────────────────────────────────────────────────╯
+│+ Raise to 4096 and resume  │╭ Log · following · attempt 1 · o: report ───────╮
+│Attempt 1                   ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+│Model codex/remediation / n…││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+╰────────────────────────────╯│yyyyyyyyyyyyyyyyyyyyyyyy                        │
+╭ Activity · #1 · l: all ────╮│Diagnosing resource limit breach:               │
+│• Supervisor yielded this   ││codex/remediation · read-only                   │
+│  attempt for resume        ││{"judgment":{"action":"escalate","reason":"The  │
+│• Resource limit: check     ││use is not something a worker repair would      │
+│  transcript evidence…      ││change"}}                                       │
+╰────────────────────────────╯╰────────────────────────────────────────────────╯
+[Copy] [r Resume] [+ Raise and resume] [s Stop] [T Restart] [D Mark done]
+[c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details] [o Report]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Supervisor started · close TUI safely · Pause stops execution
+@@ resource-refused · 80x24 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused: Resource limit: check transcript evidence in…
+ #1 Raise and resume the pause
+ ╭ Raise and resume ──────────────────────────────────────────────────────────╮
+╭│Resume refused: artifact_file_bytes is 1024 bytes, needed 3000 bytes and    │╮
+││nothing that caused the pause has changed, so the same work would pause     ││
+││again. Raise and resume sets artifact_file_bytes to 4096 bytes (TUI + on    ││
+││Current, or ktask run --raise)                                              │╯
+││Raise this project's artifact_file_bytes (ceiling 4096) and resume the same │╮
+││attempt. Recorded results are not repeated.                                 ││
+││New value                                                                   ││
+╰│4096▏                                                                       ││
+╭│Enter / Ctrl-S: raise and resume · Esc: cancel                              ││
+││                                                                            ││
+││[Copy] [Raise and resume] [Cancel] [Up] [Down]                              ││
+││                                                                            ││
+│╰────────────────────────────────────────────────────────────────────────────╯│
+╰────────────────────────────╯╰────────────────────────────────────────────────╯
+[Copy] [r Resume] [+ Raise and resume] [s Stop] [T Restart] [D Mark done]
+[c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details] [o Report]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+command conflict: Resume refused: artifact_file_bytes is 1024 bytes, needed 300…
+@@ resource-raise · 80x24 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused: Resource limit: check transcript evidence in…
+ #1 Raise and resume the pause
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭╭ Raise and resume ──────────────────────────────────────────────────────────╮╮
+││Task #1 is paused on a resource limit: artifact_file_bytes is 1024 bytes,   ││
+││needed 3000 bytes.                                                          ││
+││Raise this project's artifact_file_bytes (ceiling 4096) and resume the same │╯
+││attempt. Recorded results are not repeated.                                 │╮
+││New value                                                                   ││
+││4096▏                                                                       ││
+╰│Enter / Ctrl-S: raise and resume · Esc: cancel                              ││
+╭│                                                                            ││
+││[Copy] [Raise and resume] [Cancel] [Up] [Down]                              ││
+││                                                                            ││
+│╰────────────────────────────────────────────────────────────────────────────╯│
+│  attempt for resume        ││change"}}                                       │
+╰────────────────────────────╯╰────────────────────────────────────────────────╯
+[Copy] [r Resume] [+ Raise and resume] [s Stop] [T Restart] [D Mark done]
+[c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details] [o Report]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+command conflict: Resume refused: artifact_file_bytes is 1024 bytes, needed 300…
+@@ resource-resumed · 80x24 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                               │
+│Inspect results in History, or add more work.                                 │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution

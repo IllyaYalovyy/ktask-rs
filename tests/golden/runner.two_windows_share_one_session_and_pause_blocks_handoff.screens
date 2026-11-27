@@ -1,0 +1,93 @@
+@@ SECOND WINDOW LIVE · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 2 · History 0
+ Session: Queue · running · Workflow · Implement · repair round 0/10 · Next #2 · Run requested
+ #1 Slow current
+ Workflow · Implement · repair round 0/10 · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Step: Execution                             │╰────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following · attempt 1 · o: report ───────────╮
+│Active <t>                                  ││Execution started; results require checks, review   │
+│Tokens none reported yet                    ││and validation                                      │
+│? new tokens                                ││execution: codex/execution · new session            │
+│Budget 0 of 3 used                          ││                                                    │
+│Execution   … running                       ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #1 · l: all ────────────────────╮│                                                    │
+│• Workflow · Implement · repair round 0/10  ││                                                    │
+│• Supervisor started                        ││                                                    │
+│• Current task attempt recorded             ││                                                    │
+│• #1 created: Slow current                  ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details]
+[o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ FIRST WINDOW PAUSED · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 2 · History 0
+ Session: Queue · paused · Next #2 · Paused; worker stopped, Resume continues the same attempt
+ #1 Slow current
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ───────────╮
+│Tokens none reported yet                    ││Execution started; results require checks, review   │
+│? new tokens                                ││and validation                                      │
+│Budget 0 of 3 used                          ││execution: codex/execution · new session            │
+│Can run · u Readiness                       ││                                                    │
+│Execution   ! interrupted                   ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #1 · l: all ────────────────────╮│                                                    │
+│• Supervisor yielded this attempt for resume││                                                    │
+│• Paused; useful work and session retained  ││                                                    │
+│• Pause requested; stopping worker          ││                                                    │
+│• Workflow · Implement · repair round 0/10  ││                                                    │
+│• Supervisor started                        ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ REOPENED PAUSE · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 2 · History 0
+ Session: Queue · paused · Next #2 · Paused; worker stopped, Resume continues the same attempt
+ #1 Slow current
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ───────────╮
+│Tokens none reported yet                    ││Execution started; results require checks, review   │
+│? new tokens                                ││and validation                                      │
+│Budget 0 of 3 used                          ││execution: codex/execution · new session            │
+│Can run · u Readiness                       ││                                                    │
+│Execution   ! interrupted                   ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #1 · l: all ────────────────────╮│                                                    │
+│• Supervisor yielded this attempt for resume││                                                    │
+│• Paused; useful work and session retained  ││                                                    │
+│• Pause requested; stopping worker          ││                                                    │
+│• Workflow · Implement · repair round 0/10  ││                                                    │
+│• Supervisor started                        ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

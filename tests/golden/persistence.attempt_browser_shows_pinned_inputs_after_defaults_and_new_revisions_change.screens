@@ -1,0 +1,156 @@
+@@ HISTORICAL INPUTS PAGE 0 · 110x38 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 ╭ Task details / attempts ───────────────────────────────────────────────────╮
+ Current #1 · Ne│Attempt 1 / 1 · #1 · revision 1 · failed                                    │
+ Queue preferenc│Outcome: Historical failed outcome                                          │
+ #1 New ready in│Output page 1 / 1 · chunk 1 / 1 · 0 records · newest first · snapshot #0    │
+ Pending revisio│No output records on this page.                                             │
+╭ Status · Enter│                                                                            │───────────────╮
+│Needs approval │                                                                            │               │
+│Attempt 1      │Attempt inputs: revision 1 · session 1                                      │               │
+│Model codex/old│Revision 1 · Historical intent                                              │───────────────╯
+│Active <t>     │Approval: ready · ai: Evidence AI · Category: code (built-in, checks apply) │───────────────╮
+│Tokens none rep│Goal: Original pinned goal                                                  │               │
+│? new tokens   │Acceptance: 1: Original pinned criterion                                    │               │
+│Budget 1 of 7 u│execution: codex/old-role-0 / high                                          │               │
+│Run blocked (7)│review: codex/old-role-1 / low                                              │               │
+│Execution   ✓ s│validation: codex/old-role-2 / none                                         │               │
+│               │remediation: codex/old-role-3 / medium                                      │               │
+│               │Attempt limit: 7 · Task limit: 2 min 3 s · Stage limit: Off                 │               │
+│               │Active <t> · waiting <t>                                                    │               │
+│               │Usage: 1 calls · uncached unknown · cache read unknown · cache write        │               │
+╰───────────────│unknown · output unknown · ? new tokens                                     │               │
+╭ Activity · #1 │execution: codex/old-role-0 / high · 1 calls · uncached unknown · cache     │               │
+│• #1 revision 3│read unknown · cache write unknown · output unknown · ? new tokens ·        │               │
+│• #1 revision 2│provider time <t>                                                           │               │
+│• Historical fa│                                                                            │               │
+│• Current task │#1 v6 · Needs approval · ai                                                 │               │
+│• #1 revision 1│New ready intent                                                            │               │
+│• #1 created: H│Actions: Approve, Reject, Edit, Move, Mark done                             │               │
+│               │Current Revision 2 · New ready intent                                       │               │
+│               │Approval: ready · ai: Evidence AI · Category: code (built-in, checks apply) │               │
+│               │Find output                                                                 │               │
+│               │▏                                                                           │               │
+╰───────────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │───────────────╯
+[Copy] [v Approv│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │ter Details]
+[o Log] [a Add] │[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │
+                │[Refresh] [Up] [Down] [Close] [Copy]                                        │
+Runs happen in a╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORICAL INPUTS PAGE 1 · 110x38 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 ╭ Task details / attempts ───────────────────────────────────────────────────╮
+ Current #1 · Ne│Approval: ready · ai: Evidence AI · Category: code (built-in, checks apply) │
+ Queue preferenc│Goal: Original pinned goal                                                  │
+ #1 New ready in│Acceptance: 1: Original pinned criterion                                    │
+ Pending revisio│execution: codex/old-role-0 / high                                          │
+╭ Status · Enter│review: codex/old-role-1 / low                                              │───────────────╮
+│Needs approval │validation: codex/old-role-2 / none                                         │               │
+│Attempt 1      │remediation: codex/old-role-3 / medium                                      │               │
+│Model codex/old│Attempt limit: 7 · Task limit: 2 min 3 s · Stage limit: Off                 │───────────────╯
+│Active <t>     │Active <t> · waiting <t>                                                    │───────────────╮
+│Tokens none rep│Usage: 1 calls · uncached unknown · cache read unknown · cache write        │               │
+│? new tokens   │unknown · output unknown · ? new tokens                                     │               │
+│Budget 1 of 7 u│execution: codex/old-role-0 / high · 1 calls · uncached unknown · cache     │               │
+│Run blocked (7)│read unknown · cache write unknown · output unknown · ? new tokens ·        │               │
+│Execution   ✓ s│provider time <t>                                                           │               │
+│               │                                                                            │               │
+│               │#1 v6 · Needs approval · ai                                                 │               │
+│               │New ready intent                                                            │               │
+│               │Actions: Approve, Reject, Edit, Move, Mark done                             │               │
+╰───────────────│Current Revision 2 · New ready intent                                       │               │
+╭ Activity · #1 │Approval: ready · ai: Evidence AI · Category: code (built-in, checks apply) │               │
+│• #1 revision 3│Goal: New ready goal                                                        │               │
+│• #1 revision 2│Acceptance: 1: Survives restart                                             │               │
+│• Historical fa│execution: codex/new-default-1 / xhigh                                      │               │
+│• Current task │review: codex/new-default-2 / xhigh                                         │               │
+│• #1 revision 1│validation: codex/new-default-3 / xhigh                                     │               │
+│• #1 created: H│remediation: codex/new-default-4 / xhigh                                    │               │
+│               │Attempt limit: 9 · Task limit: 16 min 39 s · Stage limit: Off               │               │
+│               │Task usage: ? new tokens                                                    │               │
+│               │Find output                                                                 │               │
+│               │▏                                                                           │               │
+╰───────────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │───────────────╯
+[Copy] [v Approv│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │ter Details]
+[o Log] [a Add] │[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │
+                │[Refresh] [Up] [Down] [Close] [Copy]                                        │
+Runs happen in a╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORICAL INPUTS PAGE 2 · 110x38 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 ╭ Task details / attempts ───────────────────────────────────────────────────╮
+ Current #1 · Ne│Active <t> · waiting <t>                                                    │
+ Queue preferenc│Usage: 1 calls · uncached unknown · cache read unknown · cache write        │
+ #1 New ready in│unknown · output unknown · ? new tokens                                     │
+ Pending revisio│execution: codex/old-role-0 / high · 1 calls · uncached unknown · cache     │
+╭ Status · Enter│read unknown · cache write unknown · output unknown · ? new tokens ·        │───────────────╮
+│Needs approval │provider time <t>                                                           │               │
+│Attempt 1      │                                                                            │               │
+│Model codex/old│#1 v6 · Needs approval · ai                                                 │───────────────╯
+│Active <t>     │New ready intent                                                            │───────────────╮
+│Tokens none rep│Actions: Approve, Reject, Edit, Move, Mark done                             │               │
+│? new tokens   │Current Revision 2 · New ready intent                                       │               │
+│Budget 1 of 7 u│Approval: ready · ai: Evidence AI · Category: code (built-in, checks apply) │               │
+│Run blocked (7)│Goal: New ready goal                                                        │               │
+│Execution   ✓ s│Acceptance: 1: Survives restart                                             │               │
+│               │execution: codex/new-default-1 / xhigh                                      │               │
+│               │review: codex/new-default-2 / xhigh                                         │               │
+│               │validation: codex/new-default-3 / xhigh                                     │               │
+│               │remediation: codex/new-default-4 / xhigh                                    │               │
+╰───────────────│Attempt limit: 9 · Task limit: 16 min 39 s · Stage limit: Off               │               │
+╭ Activity · #1 │Task usage: ? new tokens                                                    │               │
+│• #1 revision 3│Earlier Revision 1 · Historical intent                                      │               │
+│• #1 revision 2│Approval: ready · ai: Evidence AI · Category: code (built-in, checks apply) │               │
+│• Historical fa│Goal: Original pinned goal                                                  │               │
+│• Current task │Acceptance: 1: Original pinned criterion                                    │               │
+│• #1 revision 1│execution: codex/old-role-0 / high                                          │               │
+│• #1 created: H│review: codex/old-role-1 / low                                              │               │
+│               │validation: codex/old-role-2 / none                                         │               │
+│               │remediation: codex/old-role-3 / medium                                      │               │
+│               │Find output                                                                 │               │
+│               │▏                                                                           │               │
+╰───────────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │───────────────╯
+[Copy] [v Approv│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │ter Details]
+[o Log] [a Add] │[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │
+                │[Refresh] [Up] [Down] [Close] [Copy]                                        │
+Runs happen in a╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORICAL INPUTS PAGE 3 · 110x38 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 ╭ Task details / attempts ───────────────────────────────────────────────────╮
+ Current #1 · Ne│New ready intent                                                            │
+ Queue preferenc│Actions: Approve, Reject, Edit, Move, Mark done                             │
+ #1 New ready in│Current Revision 2 · New ready intent                                       │
+ Pending revisio│Approval: ready · ai: Evidence AI · Category: code (built-in, checks apply) │
+╭ Status · Enter│Goal: New ready goal                                                        │───────────────╮
+│Needs approval │Acceptance: 1: Survives restart                                             │               │
+│Attempt 1      │execution: codex/new-default-1 / xhigh                                      │               │
+│Model codex/old│review: codex/new-default-2 / xhigh                                         │───────────────╯
+│Active <t>     │validation: codex/new-default-3 / xhigh                                     │───────────────╮
+│Tokens none rep│remediation: codex/new-default-4 / xhigh                                    │               │
+│? new tokens   │Attempt limit: 9 · Task limit: 16 min 39 s · Stage limit: Off               │               │
+│Budget 1 of 7 u│Task usage: ? new tokens                                                    │               │
+│Run blocked (7)│Earlier Revision 1 · Historical intent                                      │               │
+│Execution   ✓ s│Approval: ready · ai: Evidence AI · Category: code (built-in, checks apply) │               │
+│               │Goal: Original pinned goal                                                  │               │
+│               │Acceptance: 1: Original pinned criterion                                    │               │
+│               │execution: codex/old-role-0 / high                                          │               │
+│               │review: codex/old-role-1 / low                                              │               │
+╰───────────────│validation: codex/old-role-2 / none                                         │               │
+╭ Activity · #1 │remediation: codex/old-role-3 / medium                                      │               │
+│• #1 revision 3│Attempt limit: 7 · Task limit: 2 min 3 s · Stage limit: Off                 │               │
+│• #1 revision 2│Newer draft revision 3 (needs approval)                                     │               │
+│• Historical fa│Revision 3 · New draft intent                                               │               │
+│• Current task │Approval: draft · ai: Evidence AI · Category: code (built-in, checks apply) │               │
+│• #1 revision 1│Goal: New draft goal                                                        │               │
+│• #1 created: H│Acceptance: 1: Survives restart                                             │               │
+│               │execution: codex/new-default-1 / xhigh                                      │               │
+│               │review: codex/new-default-2 / xhigh                                         │               │
+│               │Find output                                                                 │               │
+│               │▏                                                                           │               │
+╰───────────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │───────────────╯
+[Copy] [v Approv│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │ter Details]
+[o Log] [a Add] │[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │
+                │[Refresh] [Up] [Down] [Close] [Copy]                                        │
+Runs happen in a╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

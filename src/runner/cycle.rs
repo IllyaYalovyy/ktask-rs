@@ -4,6 +4,7 @@ use super::{
     judge::{judge, judge_attempt},
     record_pause, resource_breach,
     turn::ai,
+    workspace::ReviewScope,
 };
 use crate::{
     application::{
@@ -132,7 +133,8 @@ fn phases(
             Phase::Integrate => super::delivery::continue_integration(service, run, ctx)?,
             Phase::Baseline => {
                 let tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
-                checks::run(service, run, ctx, checks, &tree)?
+                let base = review_range(service, run, ctx, &tree)?;
+                checks::run(service, run, ctx, checks, (&tree, base.base()))?
             }
             Phase::Judge if progress.round == 0 => judge(service, run, ctx)?,
             // After exhausted check repair the judge recovers the failed attempt itself;
@@ -153,7 +155,8 @@ fn phases(
             Phase::Check => {
                 let workers = ctx.scratch_root();
                 let before = ctx.workspace.fingerprint(&workers)?;
-                match checks::run(service, run, ctx, checks, &before)? {
+                let base = review_range(service, run, ctx, &before)?;
+                match checks::run(service, run, ctx, checks, (&before, base.base()))? {
                     Outcome::Passed(evidence) => {
                         let after = ctx.workspace.fingerprint(&workers)?;
                         if before != after {
@@ -402,6 +405,16 @@ fn refresh_verified_proof(
 
 /// What the reviewers examine: the attempt's change from its baseline to the verified tree.
 fn review_scope(service: &Service, run: &Run, ctx: &Context<'_>, tree: &str) -> Result<String> {
+    Ok(review_range(service, run, ctx, tree)?.describe())
+}
+
+/// The commits and files between the review base and `tree`. Checks are told the same base.
+fn review_range(
+    service: &Service,
+    run: &Run,
+    ctx: &Context<'_>,
+    tree: &str,
+) -> Result<ReviewScope> {
     let original_base = service
         .attempt_base(run.task)?
         .ok_or_else(|| Error::Conflict("Attempt has no recorded baseline".into()))?;
@@ -414,7 +427,7 @@ fn review_scope(service: &Service, run: &Run, ctx: &Context<'_>, tree: &str) -> 
                 .flatten()
         })
         .unwrap_or(&original_base);
-    Ok(ctx.workspace.review_scope(base, tree)?.describe())
+    ctx.workspace.review_scope(base, tree)
 }
 
 pub(super) fn request_fixes(

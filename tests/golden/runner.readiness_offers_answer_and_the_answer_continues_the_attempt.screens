@@ -1,0 +1,37 @@
+@@ READINESS QUESTION OPEN · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs input · runner stopped · <t> |   Queue 1 · History 0
+ Session: Run one · w╭ Execution readiness ───────────────────────────────────────────────────────╮
+ #1 Answer then resum│Can run · 0 blocker(s)                                                      │
+ The worker needs you│                                                                            │
+╭ Status · Enter: det│OK · Execution state                                                        │────────────────────╮
+│Needs input · AI    │OK · Project checks                                                         │                    │
+│Attempt 1           │OK · Approval                                                               │                    │
+│Waiting for your ans│OK · Task                                                                   │────────────────────╯
+│Model codex/remediat│OK · execution model                                                        │────────────────────╮
+│Active <t> · waited 0│OK · review model                                                           │                    │
+│Tokens 60 new · 40 c│OK · validation model                                                       │────────────────────╯
+│70 new tokens + 1 ca│OK · remediation model                                                      │────────────────────╮
+│Budget 0 of 3 used  │OK · Writable workers (execution and repair) · Agent network Off · Codex    │                    │
+│Can run · u Readines│OK · Codex CLI                                                              │                    │
+│Execution   ✓ succee│OK · Read-only sandbox                                                      │                    │
+│Repair      ✓ succee│OK · Commit identity: Project Author <project@example.com>                  │                    │
+│Remediation ! waitin│OK · Supervisor ownership                                                   │                    │
+│                    │OK · Worker ownership                                                       │wner action is      │
+╰────────────────────│OK · Workspace baseline                                                     │                    │
+╭ Activity · #1 · l: │                                                                            │                    │
+│• Supervisor yielded│Queue: waiting · Waiting for answer: Which content?                         │                    │
+│• Which content?    │                                                                            │                    │
+│• Workflow · Impleme│After fixing setup, Refresh here or press r on Current. Inspection creates  │                    │
+│• Current task attem│no attempt.                                                                 │                    │
+│• #1 created: Answer│Wheel / PgUp / PgDn: scroll · Esc: close                                    │                    │
+│                    │                                                                            │                    │
+│                    │[c Checks] [m Models] [r Answer] [u Refresh] [Close]                        │                    │
+│                    │                                                                            │                    │
+╰────────────────────│                                                                            │────────────────────╯
+[Copy] [r Answer] [s ╰────────────────────────────────────────────────────────────────────────────╯ [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

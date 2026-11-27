@@ -1,0 +1,49 @@
+@@ REVISION POSITION DETAILS · 140x48 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs approval   |   Queue 1 · History 0
+ Queue preference · last task ·╭ Task details / attempts ───────────────────────────────────────────────────╮
+ #1 Current ready revision     │#1 v3 · Needs approval · ai                                                 │
+ Pending revision 3 · needs app│Current ready revision                                                      │
+╭ Status · Enter: details ─────│Actions: Approve, Reject, Edit, Move, Mark done                             │──────────────────────────────╮
+│Needs approval · AI           │Current Revision 2 · Current ready revision                                 │                              │
+│No attempts yet               │Approval: ready · human: owner · Category: code (built-in, checks apply)    │                              │
+│Run blocked (10) · u Readiness│Goal: Approved goal                                                         │──────────────────────────────╯
+│Model unconfigured / none     │Acceptance: 1: Survives restart                                             │──────────────────────────────╮
+│Budget 0 of 3 used            │execution: unconfigured                                                     │action. Refresh after setup;  │
+│                              │review: unconfigured                                                        │                              │
+│                              │validation: unconfigured                                                    │                              │
+│                              │remediation: unconfigured                                                   │                              │
+│                              │Attempt limit: 3 · Task limit: 10 min · Stage limit: Off                    │                              │
+│                              │Task usage: none yet                                                        │                              │
+│                              │Earlier Revision 1 · Original revision                                      │                              │
+│                              │Approval: ready · human: owner · Category: code (built-in, checks apply)    │                              │
+│                              │Goal: Persist a real task                                                   │                              │
+╰──────────────────────────────│Acceptance: 1: Survives restart                                             │                              │
+╭ Activity · #1 · l: all ──────│execution: unconfigured                                                     │                              │
+│• #1 revision 3 saved         │review: unconfigured                                                        │                              │
+│• #1 revision 2 saved         │validation: unconfigured                                                    │                              │
+│• #1 created: Original revisio│remediation: unconfigured                                                   │                              │
+│                              │Attempt limit: 3 · Task limit: 10 min · Stage limit: Off                    │                              │
+│                              │Newer draft revision 3 (needs approval)                                     │                              │
+│                              │Revision 3 · Unapproved newer draft                                         │                              │
+│                              │Approval: draft · human: owner · Category: code (built-in, checks apply)    │                              │
+│                              │Goal: Proposed goal                                                         │                              │
+│                              │Acceptance: 1: Survives restart                                             │                              │
+│                              │execution: unconfigured                                                     │                              │
+│                              │review: unconfigured                                                        │                              │
+│                              │validation: unconfigured                                                    │                              │
+│                              │remediation: unconfigured                                                   │                              │
+│                              │Attempt limit: 3 · Task limit: 10 min · Stage limit: Off                    │                              │
+│                              │No attempt evidence recorded.                                               │                              │
+│                              │Find output                                                                 │                              │
+│                              │▏                                                                           │                              │
+│                              │[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │                              │
+│                              │[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │                              │
+│                              │[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │                              │
+╰──────────────────────────────│[Refresh] [Up] [Down] [Close] [Copy]                                        │──────────────────────────────╯
+[Copy] [v Approve] [n Reject] [╰────────────────────────────────────────────────────────────────────────────╯ Add] [i Investigate] [f Fix]
+[S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

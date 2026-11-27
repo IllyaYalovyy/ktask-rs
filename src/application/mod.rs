@@ -63,6 +63,7 @@ pub(crate) mod resource_breach;
 pub mod resource_limits;
 mod review_bundle;
 pub use evidence::{EvidenceCursor, EvidenceMatch, EvidenceSearch};
+pub(crate) use review_bundle::{SCREEN_REPORT, has_golden_screens};
 pub mod categories;
 pub mod collection;
 pub mod configuration;

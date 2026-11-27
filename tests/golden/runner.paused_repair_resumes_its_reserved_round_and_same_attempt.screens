@@ -1,0 +1,93 @@
+@@ REPAIR RUNNING · 100x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 1 · History 0
+ Session: Queue · running · Workflow · Fix · repair round 1/10 · Run requested
+ #1 Pause and resume repair
+ Workflow · Fix · repair round 1/10 · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Step: Repair                                │╰────────────────────────────────────────────────────╯
+│Why: The check failed on a missing file     │╭ Log · following · attempt 1 · o: report ───────────╮
+│Model codex/execution / none                ││Check build: test -f result.txt (timeout 600000 ms) │
+│Active <t>                                  ││review: codex/review · new session                  │
+│Tokens 180 new · 120 cached · 30 out        ││Review verdict · changes requested: result.txt:1:   │
+│210 new tokens + 1 call(s) unreported       ││boundary case is wrong                              │
+│Budget 0 of 3 used                          ││Review criterion verdict #1 · needs work: Boundary  │
+│Execution   ✓ succeeded                     ││case fails                                          │
+╰────────────────────────────────────────────╯│Changes requested · planning fix round 1/10 ·       │
+╭ Activity · #1 · l: all ────────────────────╮│result.txt:1: boundary case is wrong                │
+│• Workflow · Fix · repair round 1/10        ││Fix planning: codex/remediation · read-only         │
+│  Why: The check failed on a missing file   ││{"judgment":{"action":"repair","plan":"Rerun the    │
+│• Workflow · Plan fixes · repair round 1/10 ││check after writing result.txt","reason":"The check │
+│  Why: result.txt:1: boundary case is wrong ││failed on a missing file"}}                         │
+│• Workflow · Review · repair round 0/10     ││repair: codex/execution · resume session            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details]
+[o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ REPAIR PAUSED · 100x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused; worker stopped, Resume continues the same attempt
+ #1 Pause and resume repair
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ───────────╮
+│Tokens 180 new · 120 cached · 30 out        ││Check build: test -f result.txt (timeout 600000 ms) │
+│210 new tokens + 1 call(s) unreported       ││review: codex/review · new session                  │
+│Budget 0 of 3 used                          ││Review verdict · changes requested: result.txt:1:   │
+│Can run · u Readiness                       ││boundary case is wrong                              │
+│Execution   ✓ succeeded                     ││Review criterion verdict #1 · needs work: Boundary  │
+│Checks      ✓ succeeded                     ││case fails                                          │
+╰────────────────────────────────────────────╯│Changes requested · planning fix round 1/10 ·       │
+╭ Activity · #1 · l: all ────────────────────╮│result.txt:1: boundary case is wrong                │
+│• Supervisor yielded this attempt for resume││Fix planning: codex/remediation · read-only         │
+│• Paused; useful work and session retained  ││{"judgment":{"action":"repair","plan":"Rerun the    │
+│• Pause requested; stopping worker          ││check after writing result.txt","reason":"The check │
+│• Workflow · Fix · repair round 1/10        ││failed on a missing file"}}                         │
+│  Why: The check failed on a missing file   ││repair: codex/execution · resume session            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Pause requested · waiting for worker shutdown and cleanup
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ REPAIR RESUMED · 100x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                   │
+│Inspect results in History, or add more work.                                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

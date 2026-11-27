@@ -1,0 +1,81 @@
+@@ MCP DRAFT · 100x26 · keyboard
+ ktask-dev  / project   SQLite · real tasks   Projects: 1 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #3 · Needs approval   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ #3 Draft from MCP
+ Pending revision 1 · needs approval · v Approve / n Reject
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Needs approval · AI                         ││Goal: Preserve read position                        │
+│No attempts yet                             ││Proof: The last row remains visible                 │
+│Run blocked (7) · u Readiness               │╰────────────────────────────────────────────────────╯
+│Model unconfigured / none                   │╭ Log · following ───────────────────────────────────╮
+│Budget 0 of 3 used                          ││Needs approval. Review the task, then Approve or    │
+│                                            ││Reject.                                             │
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #3 · l: all ────────────────────╮│                                                    │
+│• #3 created: Draft from MCP                ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [v Approve] [n Reject] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MCP QUEUE · 100x26 · mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 1 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #3 · Needs approval   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ Queue · 1 shown / 1 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 1 · Model ───────────────────────────────────╮╭ Details · click for full ────────────╮
+│› #3   Needs approval Draft from MCP          unconfigured││Draft from MCP                        │
+│                                                          ││#3 · Needs approval · AI              │
+│                                                          ││                                      │
+│                                                          ││Goal: Preserve read position          │
+│                                                          ││                                      │
+│                                                          ││Check: The last row remains visible   │
+│                                                          ││                                      │
+│                                                          ││Attempts: 0 · none yet                │
+│                                                          ││                                      │
+│                                                          ││Models:                               │
+│                                                          ││Execution: unconfigured / none        │
+│                                                          ││Review: unconfigured / none           │
+│                                                          ││Validation: unconfigured / none       │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [a Add] [i Insert] [e Edit] [m Move] [v Approve] [n Reject] [c Models] [D Mark done]
+[o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MCP APPROVED · 100x26 · mouse
+ ktask-dev  / project   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #3 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ #3 Draft from MCP
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Pending · AI                                ││Goal: Preserve read position                        │
+│No attempts yet                             ││Proof: The last row remains visible                 │
+│Run blocked (5) · u Readiness               │╰────────────────────────────────────────────────────╯
+│Model unconfigured / none                   │╭ Log · following ───────────────────────────────────╮
+│Budget 0 of 3 used                          ││Run is blocked. Press u Readiness for each cause    │
+│                                            ││and a direct action. Refresh after setup; Run       │
+╰────────────────────────────────────────────╯│retries from Current.                               │
+╭ Activity · #3 · l: all ────────────────────╮│                                                    │
+│• #3 revision 1 approved by human: owner    ││                                                    │
+│• #3 created: Draft from MCP                ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down]
+[u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help]
+[q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

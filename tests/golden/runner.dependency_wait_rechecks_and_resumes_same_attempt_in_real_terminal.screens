@@ -1,0 +1,116 @@
+@@ dependency live wait · 100x28 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs dependency   |   Queue 1 · History 0
+ Session: Run one · waiting · Waiting for dependency: executable missing-runtime-tool 1.2.3: fixtur…
+ #1 Resume dependency in Current
+ Dependency setup needed · r Recheck after setup · u Readiness · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Needs dependency · AI                       ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ───────────────────╮
+│Tokens none reported yet                    ││Outcome: Waiting                                    │
+│? new tokens                                ││                                                    │
+╰────────────────────────────────────────────╯│Execution · waiting · codex/execution verdict:      │
+╭ Activity · #1 · l: all ────────────────────╮│executable missing-runtime-tool 1.2.3: fixture      │
+│• Supervisor yielded this attempt for resume││tool: command not found                             │
+│• executable missing-runtime-tool 1.2.3:    ││                                                    │
+│  fixture tool: command not found           ││Supervisor outcome: executable missing-runtime-tool │
+│• executable missing-runtime-tool required  ││1.2.3: fixture tool: command not found              │
+│  for execution: fixture tool: command not… ││                                                    │
+│• Workflow · Implement · repair round 0/10  ││                                                    │
+│• Current task attempt recorded             ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Recheck] [t Tools and install plan] [s Stop] [D Mark done] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ dependency live paused · 100x28 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Run one · waiting · Waiting for dependency: executable missing-runtime-tool 1.2.3: fixtur…
+ #1 Resume dependency in Current
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ───────────╮
+│Tokens none reported yet                    ││Execution started; results require checks, review   │
+│? new tokens                                ││and validation                                      │
+╰────────────────────────────────────────────╯│execution: codex/execution · new session            │
+╭ Activity · #1 · l: all ────────────────────╮│                                                    │
+│• All prerequisites verified; Run resumes   ││                                                    │
+│  the task                                  ││                                                    │
+│• Supervisor yielded this attempt for resume││                                                    │
+│• executable missing-runtime-tool 1.2.3:    ││                                                    │
+│  fixture tool: command not found           ││                                                    │
+│• executable missing-runtime-tool required  ││                                                    │
+│  for execution: fixture tool: command not… ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Dependencies verified · r Resume continues the task
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ dependency admission wait · 100x28 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs dependency   |   Queue 1 · History 0
+ Session: Run one · waiting · Waiting for dependency on task #1; use dependency recheck after setup
+ #1 Resume dependency in Current
+ Dependency setup needed · r Recheck after setup · u Readiness · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Needs dependency · AI                       ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ───────────────────╮
+│Tokens none reported yet                    ││Outcome: Waiting                                    │
+│? new tokens                                ││                                                    │
+╰────────────────────────────────────────────╯│Execution · waiting · codex/execution verdict:      │
+╭ Activity · #1 · l: all ────────────────────╮│executable missing-runtime-tool 1.2.3: fixture      │
+│• Prerequisite probe did not pass:          ││tool: command not found                             │
+│  executable missing-runtime-tool: MISSING:…││                                                    │
+│• All prerequisites verified; Run resumes   ││Supervisor outcome: Prerequisite probe did not      │
+│  the task                                  ││pass: executable missing-runtime-tool: MISSING:     │
+│• Supervisor yielded this attempt for resume││missing-runtime-tool is not executable on PATH. Fix │
+│• executable missing-runtime-tool 1.2.3:    ││it externally, then Recheck                         │
+│  fixture tool: command not found           ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Recheck] [t Tools and install plan] [s Stop] [D Mark done] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Dependency not verified · u Readiness shows the observed result
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ dependency live complete · 100x28 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Run one · complete · no queued work · Checks, independent review and validation passed af…
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                   │
+│Inspect results in History, or add more work.                                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

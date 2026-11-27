@@ -1,0 +1,62 @@
+@@ READY HANDOFF · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Session: Queue · running · Run requested
+ #2 Do not start across pause
+ Supervisor preparing the next task · p Pause stops the queue
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified         │
+│No attempts yet                             ││Proof: result.txt contains verified                 │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────╯
+│Budget 0 of 3 used                          │╭ Log · following ───────────────────────────────────╮
+│                                            ││Run is blocked. Press u Readiness for each cause    │
+│                                            ││and a direct action. Refresh after setup; Run       │
+│                                            ││retries from Current.                               │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #2 · l: all ────────────────────╮│                                                    │
+│• #2 created: Do not start across pause     ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [p Pause] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down]
+[u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help]
+[q Quit]
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PAUSED AT HANDOFF · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Session: Queue · paused · Pause requested; no later task will start
+ #2 Do not start across pause
+ Queue paused before the next task
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified         │
+│No attempts yet                             ││Proof: result.txt contains verified                 │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────╯
+│Budget 0 of 3 used                          │╭ Log · following ───────────────────────────────────╮
+│                                            ││Run is blocked. Press u Readiness for each cause    │
+│                                            ││and a direct action. Refresh after setup; Run       │
+│                                            ││retries from Current.                               │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #2 · l: all ────────────────────╮│                                                    │
+│• Pause requested; no later task will start ││                                                    │
+│• #2 created: Do not start across pause     ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Pause requested · waiting for worker shutdown and cleanup
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

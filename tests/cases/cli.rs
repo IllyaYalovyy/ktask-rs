@@ -690,13 +690,7 @@ fn registered_tool_is_visible_in_real_config_by_keyboard_and_mouse() -> Result {
         let registry = tool_registry_text(s);
         registry.contains("rg 14.1") && registry.contains("bound v1")
     })?;
-    println!("TOOL REGISTRY KEYBOARD SCREEN\n{keyboard}");
-    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-        support::screen_png(
-            &keyboard,
-            &std::path::PathBuf::from(directory).join("tool-registry-keyboard.png"),
-        )?;
-    }
+    crate::support::record("TOOL REGISTRY KEYBOARD SCREEN", false, &keyboard);
     terminal.send("\x1b")?;
     terminal.screen("Tool dialog closed", |s| {
         s.contains("t Tools") && !s.contains("Project tools")
@@ -705,13 +699,7 @@ fn registered_tool_is_visible_in_real_config_by_keyboard_and_mouse() -> Result {
     let mouse = terminal.screen("Tool registry mouse", |s| {
         s.contains("Project tools") && s.contains("rg 14.1")
     })?;
-    println!("TOOL REGISTRY MOUSE SCREEN\n{mouse}");
-    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-        support::screen_png(
-            &mouse,
-            &std::path::PathBuf::from(directory).join("tool-registry-mouse.png"),
-        )?;
-    }
+    crate::support::record("TOOL REGISTRY MOUSE SCREEN", true, &mouse);
     terminal.click_after("Tool action", "Register")?;
     terminal.screen("Mouse Bind choice", |s| s.contains("< Bind >"))?;
     terminal.click_after("Tool action", "Bind")?;
@@ -757,14 +745,7 @@ fn real_tool_dialog_runs_every_mutation_by_keyboard_and_mouse() -> Result {
             }
         };
         let save_screen = |name: &str, screen: &str| -> Result {
-            println!("{name}\n{screen}");
-            if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-                support::screen_png(
-                    screen,
-                    &std::path::PathBuf::from(directory)
-                        .join(format!("tool-{name}-mouse-{mouse}.png")),
-                )?;
-            }
+            crate::support::record(name, mouse, screen);
             Ok(())
         };
         let inspect = |t: &mut Terminal, name: &str, expected: &str| -> Result {
@@ -2239,9 +2220,10 @@ fn cli_and_tui_share_commands_refresh_and_conflict_guards() -> Result {
     let mut tui = Terminal::open_real(DEV, root, 70, 22)?;
     tui.screen("empty", |s| s.contains("No current task."))?;
     add(root, "Added through CLI")?;
-    println!(
-        "CLI → TUI\n{}",
-        tui.screen("external addition", |s| s.contains("Added through CLI"))?
+    crate::support::record(
+        "CLI → TUI",
+        false,
+        &tui.screen("external addition", |s| s.contains("Added through CLI"))?,
     );
     tui.click("e Edit")?;
     tui.screen("edit", |s| s.contains("Edit task"))?;
@@ -2251,9 +2233,10 @@ fn cli_and_tui_share_commands_refresh_and_conflict_guards() -> Result {
         0,
     )?;
     tui.send("\x01Stale TUI change\r")?;
-    println!(
-        "CONFLICT\n{}",
-        tui.screen("stale", |s| s.contains("Task changed elsewhere"))?
+    crate::support::record(
+        "CONFLICT",
+        true,
+        &tui.screen("stale", |s| s.contains("Task changed elsewhere"))?,
     );
     tui.send("\x1b")?;
     tui.screen("fresh", |s| s.contains("CLI wins"))?;

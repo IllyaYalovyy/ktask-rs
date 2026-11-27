@@ -1,0 +1,58 @@
+@@ CONFIGURATION FORM · 100x28 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue pref╭ Configuration ─────────────────────────────────────────────────────────────╮
+ Config    │Mouse and keyboard are supported equally.                                   │
+           │Changing Demo dataset resets this mock workspace only.                      │
+╭ Config ──│Mouse                                                                       │──────────╮
+│Mouse: Ena│< Enabled >   click / Space to change                                       │          │
+│Simulation│Step delay (ms)                                                             │          │
+│Planner ap│400                                                                         │          │
+│Continue q│Demo dataset                                                                │          │
+│Same-task │< Keep >   click / Space to change                                          │          │
+│Cleanup: S│Planner approval                                                            │          │
+│          │< Automatic >   click / Space to change                                     │          │
+│Demo datas│Cleanup simulation                                                          │          │
+│Configure │< Success >   click / Space to change                                       │          │
+│Keyboard r│Same-task retry                                                             │          │
+│          │< Keep useful work >   click / Space to change                              │          │
+│          │Continue queue                                                              │          │
+│          │< Enabled >   click / Space to change                                       │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+╰──────────│[Copy] [Apply] [Cancel] [Up] [Down]                                         │──────────╯
+[Copy] [e C│                                                                            │ [S Stats]
+[? Help] [q╰────────────────────────────────────────────────────────────────────────────╯
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ EMPTY WORKSPACE · 100x28 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────╮
+│No current task.                                                                                  │
+│Add or import work to begin.                                                                      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Configuration applied · session only
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

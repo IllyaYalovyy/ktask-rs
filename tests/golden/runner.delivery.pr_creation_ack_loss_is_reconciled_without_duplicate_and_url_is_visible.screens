@@ -1,0 +1,37 @@
+@@ PULL REQUEST HISTORY · 140x36 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Que╭ Task details / attempts ───────────────────────────────────────────────────╮
+ No current task   |   Queue 0 │Attempt 1 / 1 · #1 · revision 1 · succeeded                                 │
+ Session: Run one · complete · │Outcome: Checks, independent review and validation passed after 0 repair    │ir rounds; pull request https:…
+ History · 1 shown / 1 total · │rounds; pull request https://github.com/Owner/Repo/pull/1                   │
+ Filter: All  |  Search: / to s│Output page 1 / 1 · chunk 1 / 1 · 9 records · newest first · snapshot #9    │
+╭ History · 1 / 1 · Finished At│                                                                            │for full ─────────────────────╮
+│› #1   Done     Publish useful│#9 [system] Git delivery retry: gh pr create: response lost                 │ description                  │
+│                              │#8 [stdout] Validation verdict · complete: Verified result                  │finished <date>               │
+│                              │Validation criterion verdict #1 · claimed pass: Inspected result.txt        │                              │
+│                              │#7 [system] validation: codex/validation · new session                      │lt.txt containing verified    │
+│                              │#6 [stdout] Review verdict · complete: Verified result                      │                              │
+│                              │Review criterion verdict #1 · claimed pass: Inspected result.txt            │ contains verified            │
+│                              │#5 [system] review: codex/review · new session                              │                              │
+│                              │#4 [system] Check build: test -f result.txt (timeout 600000 ms)             │ new tokens                   │
+│                              │#3 [stdout] Worker claim (unverified) · complete: Verified result           │                              │
+│                              │Worker criterion claim (unverified) #1 · claimed pass: Inspected result.txt │                              │
+│                              │#2 [system] execution: codex/execution · new session                        │execution / none              │
+│                              │#1 [system] Execution started; results require checks, review and validation│iew / none                    │
+│                              │                                                                            │/validation / none            │
+│                              │Attempt inputs: revision 1 · session 1                                      │x/remediation / none          │
+│                              │Revision 1 · Publish useful PR description                                  │· Active <t>                  │
+│                              │Approval: ready · human: owner · Category: code (built-in, checks apply)    │d 180 · cache read 120 · cache│
+│                              │Goal: Create result.txt containing verified                                 │30 · 210 new tokens           │
+│                              │Acceptance: 1: result.txt contains verified                                 │                              │
+│                              │execution: codex/execution / none                                           │                              │
+│                              │review: codex/review / none                                                 │                              │
+│                              │validation: codex/validation / none                                         │                              │
+│                              │Find output                                                                 │                              │
+│                              │▏                                                                           │                              │
+╰──────────────────────────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │──────────────────────────────╯
+[Copy] [C Copy to queue] [Enter│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │] [S Stats] [? Help] [q Quit]
+                               │[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │
+                               │[Refresh] [Up] [Down] [Close] [Copy]                                        │
+Runs happen in a background sup╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

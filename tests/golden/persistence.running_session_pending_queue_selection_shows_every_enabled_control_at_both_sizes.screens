@@ -1,0 +1,54 @@
+@@ RUNNING PENDING QUEUE · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 2 · History 0
+ Queue preference · Next #2: Pending second · m: run mode in Current
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 2 · Model ───────────────────────────────────╮╭ Details · click for full ────────────╮
+│  #1   Running  Running first          codex/fixture-model││Pending second                        │
+│› #2   Pending  Pending second         codex/fixture-model││#2 · Pending · AI                     │
+│                                                          ││                                      │
+│                                                          ││Goal: Persist a real task             │
+│                                                          ││                                      │
+│                                                          ││Check: Survives restart               │
+│                                                          ││                                      │
+│                                                          ││Attempts: 0 · none yet                │
+│                                                          ││                                      │
+│                                                          ││Models:                               │
+│                                                          ││Execution: codex/fixture-model / none │
+│                                                          ││Review: codex/fixture-judge-1 / none  │
+│                                                          ││Validation: codex/fixture-judge-2 /   │
+│                                                          ││none                                  │
+│                                                          ││Remediation: codex/fixture-judge-3 /  │
+│                                                          ││none                                  │
+│                                                          ││                                      │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done]
+[x Cancel] [R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear]
+[S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RUNNING PENDING QUEUE · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 2 · History 0
+ Queue preference · Next #2: Pending second · m: run mode in Current
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 2 ─────────────────────────╮╭ Details · click for full ╮
+│  #1   Running  Running first           ││Pending second            │
+│› #2   Pending  Pending second          ││#2 · Pending · AI         │
+│                                        ││                          │
+│                                        ││Goal: Persist a real task │
+│                                        ││                          │
+│                                        ││Check: Survives restart   │
+│                                        ││                          │
+│                                        ││Attempts: 0 · none yet    │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [p Pause] [a Add] [i Insert] [e Edit] [m Move] [b Break down]
+[c Models] [D Mark done] [x Cancel] [R Supersede] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats]
+[? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

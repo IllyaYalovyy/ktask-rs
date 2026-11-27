@@ -1,0 +1,152 @@
+@@ CAPACITY WAIT · 105x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Queue · waiting · Storage capacity reserve reached: 2895872 of 1048576 bytes and 9 of 100000 f…
+ #1 Wait for shared capacity
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ───────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified              │
+│No attempts yet                             ││Proof: result.txt contains verified                      │
+│Can run · u Readiness                       │╰─────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Ready. r starts an attempt in the background supervisor; │
+│                                            ││this pane follows its log.                               │
+│                                            ││Defaults and checks live in Config; c pins models for    │
+│                                            ││this task.                                               │
+│                                            ││                                                         │
+│                                            ││                                                         │
+╰────────────────────────────────────────────╯│                                                         │
+╭ Activity · #1 · l: all ────────────────────╮│                                                         │
+│• #1 created: Wait for shared capacity      ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+│                                            ││                                                         │
+╰────────────────────────────────────────────╯╰─────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down]
+[u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CAPACITY RESUMED · 105x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                        │
+│Inspect results in History, or add more work.                                                          │
+│                                                                                                       │
+│                                                                                                       │
+│                                                                                                       │
+│                                                                                                       │
+│                                                                                                       │
+│                                                                                                       │
+│                                                                                                       │
+│                                                                                                       │
+│                                                                                                       │
+│                                                                                                       │
+│                                                                                                       │
+│                                                                                                       │
+│                                                                                                       │
+│                                                                                                       │
+│                                                                                                       │
+│                                                                                                       │
+│                                                                                                       │
+╰───────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CAPACITY WAIT · 120x42 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Queue · waiting · Storage capacity reserve reached: 2895872 of 1048576 bytes and 9 of 100000 files/directorie…
+ #1 Wait for shared capacity
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                             │
+│No attempts yet                             ││Proof: result.txt contains verified                                     │
+│Can run · u Readiness                       │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Ready. r starts an attempt in the background supervisor; this pane      │
+│                                            ││follows its log.                                                        │
+│                                            ││Defaults and checks live in Config; c pins models for this task.        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• #1 created: Wait for shared capacity      ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CAPACITY RESUMED · 120x42 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                       │
+│Inspect results in History, or add more work.                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

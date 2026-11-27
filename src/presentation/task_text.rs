@@ -206,6 +206,12 @@ fn evidence(text: &mut String, a: &crate::application::Attempt, escape: fn(&str)
         text.push_str(&format!("  Supervisor outcome: {}\n", escape(report)));
     }
     for artifact in &a.artifacts {
+        if artifact.name == crate::application::SCREEN_REPORT && !artifact.pruned {
+            text.push_str(&format!(
+                "  Changed-screens report: artifact {0} (read it with: artifact {0})\n",
+                artifact.id
+            ));
+        }
         text.push_str(&format!(
             "  Artifact {}: {} · {} · {} bytes · sha256 {} · tree {}{}\n",
             artifact.id,

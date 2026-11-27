@@ -381,22 +381,16 @@ fn real_tui_restart_recovers_stale_checkpoint_by_keyboard_and_mouse() -> Result 
         } else {
             t.send("\r")?;
         }
-        let after = t.screen("restart completed", |s| s.contains("Queue complete."))?;
+        let after = t.screen("restart completed", |s| {
+            crate::support::finished(s) && s.contains("Queue complete.")
+        })?;
         assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
-        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            let prefix = if mouse { "mouse" } else { "keyboard" };
-            let dir = PathBuf::from(dir);
-            for (phase, screen) in [
-                ("control", &before),
-                ("confirm", &dialog),
-                ("outcome", &after),
-            ] {
-                support::screen_png(screen, &dir.join(format!("restart-{prefix}-{phase}.png")))?;
-            }
-            fs::write(
-                dir.join(format!("restart-{prefix}-pty.txt")),
-                format!("BEFORE\n{before}\nDIALOG\n{dialog}\nAFTER\n{after}"),
-            )?;
+        for (phase, screen) in [
+            ("control", &before),
+            ("confirm", &dialog),
+            ("outcome", &after),
+        ] {
+            crate::support::record(&format!("restart {phase}"), mouse, screen);
         }
         t.send("q")?;
         t.finish()?;
@@ -523,18 +517,13 @@ fn stopped_checkpoint_uses_current_delivery_settings_in_real_remotes() -> Result
             rows[1].3, 0,
             "adoption must finish before delivery: {change}: {rows:?}"
         );
-        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            fs::write(
-                PathBuf::from(dir).join(format!("stopped-delivery-{change}.txt")),
-                format!(
-                    "change={change}\ncheckpoint={}\nold_origin_main={}\nnew_origin_main={}\nnew_attempt={:?}\n",
-                    checkpoint.trim(),
-                    old_remote.trim(),
-                    f.git(&["ls-remote", "origin", "refs/heads/main"])?.trim(),
-                    rows[1]
-                ),
-            )?;
-        }
+        println!(
+            "change={change}\ncheckpoint={}\nold_origin_main={}\nnew_origin_main={}\nnew_attempt={:?}",
+            checkpoint.trim(),
+            old_remote.trim(),
+            f.git(&["ls-remote", "origin", "refs/heads/main"])?.trim(),
+            rows[1]
+        );
     }
     Ok(())
 }
@@ -681,11 +670,14 @@ fn retargeted_direct_branch_serves_the_next_queued_task_in_real_pty() -> Result 
     })?;
     t.send("r")?;
     let done = t.screen("queue completed", |s| {
-        s.contains("No current task") && s.contains("History 2")
+        crate::support::finished(s) && { s.contains("No current task") && s.contains("History 2") }
     })?;
     t.send("3")?;
     let history = t.screen("both delivered tasks", |s| {
-        s.contains("Retain verified checkpoint") && s.contains("Second queued task uses alternate")
+        crate::support::finished(s) && {
+            s.contains("Retain verified checkpoint")
+                && s.contains("Second queued task uses alternate")
+        }
     })?;
     assert_eq!(f.git(&["branch", "--show-current"])?.trim(), "alternate");
     assert_eq!(f.git(&["rev-parse", "main"])?, checkpoint);
@@ -696,14 +688,9 @@ fn retargeted_direct_branch_serves_the_next_queued_task_in_real_pty() -> Result 
             .starts_with(head.trim())
     );
     assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
-    if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-        fs::write(
-            PathBuf::from(dir).join("retargeted-queue-pty.txt"),
-            format!(
-                "Before Run:\n{ready}\nAfter Run:\n{done}\nHistory:\n{history}\norigin_main={main}\nalternate_head={head}"
-            ),
-        )?;
-    }
+    crate::support::record("retargeted queue before run", false, &ready);
+    crate::support::record("retargeted queue after run", false, &done);
+    crate::support::record("retargeted queue history", false, &history);
     t.send("\x03")?;
     t.finish()?;
     Ok(())
@@ -732,11 +719,15 @@ fn retargeted_direct_repair_edits_survive_pause_and_resume_in_real_pty() -> Resu
         .then_some(()))
     })?;
     let running = t.screen("repair running", |s| {
-        s.contains("p Pause") && s.contains("Step: Repair")
+        s.contains("repair: codex/execution · new session") && {
+            s.contains("p Pause") && s.contains("Step: Repair")
+        }
     })?;
     t.send("p")?;
     let paused = t.screen("repair paused", |s| {
-        s.contains("Paused · runner stopped") && s.contains("r Resume")
+        s.contains("Paused; worker stopped, Resume continues") && {
+            s.contains("Paused · runner stopped") && s.contains("r Resume")
+        }
     })?;
     let attempt: i64 = f
         .db()?
@@ -748,7 +739,9 @@ fn retargeted_direct_repair_edits_survive_pause_and_resume_in_real_pty() -> Resu
     );
     f.provider("resolve-conflict")?;
     t.send("r")?;
-    let done = t.screen("repair completed", |s| s.contains("No current task"))?;
+    let done = t.screen("repair completed", |s| {
+        crate::support::finished(s) && s.contains("No current task")
+    })?;
     assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
     assert_eq!(
         f.db()?
@@ -776,14 +769,9 @@ fn retargeted_direct_repair_edits_survive_pause_and_resume_in_real_pty() -> Resu
         )?;
         assert!(count >= 2, "{role}: {count}");
     }
-    if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-        fs::write(
-            PathBuf::from(dir).join("retargeted-repair-pty.txt"),
-            format!(
-                "Running:\n{running}\nPaused:\n{paused}\nResumed:\n{done}\nattempt={attempt}\n"
-            ),
-        )?;
-    }
+    crate::support::record("retargeted repair running", false, &running);
+    crate::support::record("retargeted repair paused", false, &paused);
+    crate::support::record("retargeted repair resumed", false, &done);
     t.send("\x03")?;
     t.finish()?;
     Ok(())
@@ -903,23 +891,16 @@ fn stopped_checkpoint_delivery_change_runs_from_real_pty_with_keyboard_and_mouse
         } else {
             t.send("1r")?;
         }
-        let done = t.screen("local completion", |s| s.contains("No current task"))?;
-        println!("RECONFIGURED DELIVERY mouse={mouse}\n{done}");
+        let done = t.screen("local completion", |s| {
+            crate::support::finished(s) && s.contains("No current task")
+        })?;
+        crate::support::record("RECONFIGURED DELIVERY", mouse, &done);
         assert_eq!(f.git(&["rev-parse", "HEAD"])?, checkpoint);
         assert_eq!(
             f.git(&["ls-remote", "origin", "refs/heads/main"])?,
             remote_before
         );
-        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            fs::write(
-                PathBuf::from(dir).join(format!("stopped-delivery-pty-{mouse}.txt")),
-                format!(
-                    "Configuration after save:\n{saved}\nCurrent Task after Run:\n{done}\ncheckpoint={}\norigin_main={}\n",
-                    checkpoint.trim(),
-                    remote_before.trim()
-                ),
-            )?;
-        }
+        crate::support::record("stopped delivery configuration after save", mouse, &saved);
         t.send("\x03")?;
         t.finish()?;
     }
@@ -965,16 +946,18 @@ exec /usr/bin/git "$@"
         }
         let preparing = t.screen("preparing", |s| s.contains("Git delivery · preparing"))?;
         assert!(!preparing.contains("Run blocked"), "{preparing}");
-        println!("DELIVERY PREPARING mouse={mouse}\n{preparing}");
+        crate::support::record("DELIVERY PREPARING", mouse, &preparing);
         if mouse {
             t.click("p Pause")?;
         } else {
             t.send("p")?;
         }
-        println!(
-            "DELIVERY PAUSED mouse={mouse}\n{}",
-            t.screen("paused", |s| s.contains("Paused · runner stopped")
-                && s.contains("r Resume"))?
+        crate::support::record(
+            "DELIVERY PAUSED",
+            mouse,
+            &t.screen("paused", |s| {
+                s.contains("Paused · runner stopped") && s.contains("r Resume")
+            })?,
         );
         fs::write(f.scratch.path().join("release-fetch"), "")?;
         if mouse {
@@ -988,10 +971,12 @@ exec /usr/bin/git "$@"
         } else {
             t.send("3")?;
         }
-        println!(
-            "DELIVERY HISTORY mouse={mouse}\n{}",
-            t.screen("delivery history", |s| s.contains("Pause Git preparation")
-                && s.contains(" Done "))?
+        crate::support::record(
+            "DELIVERY HISTORY",
+            mouse,
+            &t.screen("delivery history", |s| {
+                s.contains("Pause Git preparation") && s.contains(" Done ")
+            })?,
         );
         one_attempt(&f)?;
         t.send("\x03")?;
@@ -1048,9 +1033,10 @@ fn pr_creation_ack_loss_is_reconciled_without_duplicate_and_url_is_visible() -> 
     t.send("3")?;
     t.screen("history", |s| s.contains("Publish useful PR description"))?;
     t.send("\r")?;
-    println!(
-        "PULL REQUEST HISTORY\n{}",
-        t.screen("PR URL", |s| s.contains("github.com/Owner/Repo/pull/1"))?
+    crate::support::record(
+        "PULL REQUEST HISTORY",
+        false,
+        &t.screen("PR URL", |s| s.contains("github.com/Owner/Repo/pull/1"))?,
     );
     t.send("\x1b\x03")?;
     t.finish()?;
@@ -1419,11 +1405,12 @@ fi"#,
         format!("{calls}remediation\n")
     );
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 130, 36)?;
-    println!(
-        "BOUNDED REMOTE SYNC\n{}",
-        t.screen("retained synchronization", |s| s
-            .contains("Current #1 · Paused")
-            && s.contains("six synchronization cycles"))?
+    crate::support::record(
+        "BOUNDED REMOTE SYNC",
+        false,
+        &t.screen("retained synchronization", |s| {
+            s.contains("Current #1 · Paused") && s.contains("six synchronization cycles")
+        })?,
     );
     t.send("\x03")?;
     t.finish()?;
@@ -1553,17 +1540,12 @@ fn content_changed_by_commit_hooks_is_verified_before_any_delivery() -> Result {
                     "{case}: unverified content was published"
                 );
             }
-            if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-                fs::write(
-                    PathBuf::from(dir).join(format!("hook-reverification-{mode}-{change}.txt")),
-                    format!(
-                        "case={case}\nchecks={checks:?}\nreviews={reviews:?}\nvalidations={validations:?}\nhook_runs={}\nhead={}\nlog:\n{}\n",
-                        runs.lines().count(),
-                        f.git(&["rev-parse", "HEAD"])?.trim(),
-                        f.git(&["log", "--format=%H %s", "-3"])?
-                    ),
-                )?;
-            }
+            println!(
+                "case={case}\nchecks={checks:?}\nreviews={reviews:?}\nvalidations={validations:?}\nhook_runs={}\nhead={}\nlog:\n{}",
+                runs.lines().count(),
+                f.git(&["rev-parse", "HEAD"])?.trim(),
+                f.git(&["log", "--format=%H %s", "-3"])?
+            );
         }
     }
     Ok(())
@@ -1628,13 +1610,7 @@ fn hook_changed_checkpoint_interrupted_before_it_is_recorded_is_verified_on_resu
                 && s.contains("Commit hooks changed checkpoint")
                 && s.contains("paths: A stamp.txt")
         })?;
-        println!("HOOK REVERIFICATION DETAILS mouse={mouse}\n{details}");
-        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            support::screen_png(
-                &details,
-                &PathBuf::from(dir).join(format!("hook-reverification-details-mouse-{mouse}.png")),
-            )?;
-        }
+        crate::support::record("HOOK REVERIFICATION DETAILS", mouse, &details);
         t.send("\x1b\x03")?;
         t.finish()?;
     }

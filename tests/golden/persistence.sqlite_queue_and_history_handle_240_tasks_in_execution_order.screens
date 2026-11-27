@@ -1,0 +1,69 @@
+@@ LARGE SQLITE QUEUE · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #121 · Pending   |   Queue 120 · History 120
+ Queue preference · Next #122: Durable task 122 · m: run mode in Curr…
+ Queue · 120 shown / 120 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 120 / 120 ─────────────────────╮╭ Details · click for full ╮
+│  #233 Pending  Durable task 233        ││Durable task 240          │
+│  #234 Pending  Durable task 234        ││#240 · Pending · AI       │
+│  #235 Pending  Durable task 235        ││                          │
+│  #236 Pending  Durable task 236        ││Goal: Persist a real task │
+│  #237 Pending  Durable task 237        ││                          │
+│  #238 Pending  Durable task 238        ││Check: Survives restart   │
+│  #239 Pending  Durable task 239        ││                          │
+│› #240 Pending  Durable task 240        ││Attempts: 0 · none yet    │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move]
+[b Break down] [c Models] [D Mark done] [x Cancel] [R Supersede]
+[o Import] [E Export] [Enter Details] [f Filter] [/ Search]
+[Esc Clear] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LARGE SQLITE HISTORY · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #121 · Pending   |   Queue 120 · History 120
+ Queue preference · Next #122: Durable task 122 · m: run mode in Curr…
+ History · 120 shown / 120 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 120 · Finished Attempts Time Usage ──────────────────╮
+│› #120 Done     [Human] Durable task 120 <date> 0 <t> -             │
+│  #119 Done     [Human] Durable task 119 <date> 0 <t> -             │
+│  #118 Done     [Human] Durable task 118 <date> 0 <t> -             │
+│  #117 Done     [Human] Durable task 117 <date> 0 <t> -             │
+│  #116 Done     [Human] Durable task 116 <date> 0 <t> -             │
+│  #115 Done     [Human] Durable task 115 <date> 0 <t> -             │
+│  #114 Done     [Human] Durable task 114 <date> 0 <t> -             │
+│  #113 Done     [Human] Durable task 113 <date> 0 <t> -             │
+│  #112 Done     [Human] Durable task 112 <date> 0 <t> -             │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures]
+[f Filter] [/ Search] [Esc Clear] [E Export] [S Stats] [? Help]
+[q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LARGE SQLITE HISTORY DETAILS · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│#120 v2 · Done · human                                              │
+│Durable task 120                                                    │
+│Actions: Copy to queue                                              │
+│Current Revision 1 · Durable task 120                               │
+│Approval: ready · human: owner                                      │
+│Goal: Persist a real task                                           │
+│Acceptance: 1: Survives restart                                     │
+│execution: unconfigured                                             │
+│review: unconfigured                                                │
+│validation: unconfigured                                            │
+│remediation: unconfigured                                           │
+│Attempt limit: 3 · Task limit: 10 min · Stage limit: Off            │
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

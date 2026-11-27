@@ -1,0 +1,92 @@
+@@ BROWSER PAGE BEFORE 80 APPENDS · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · running                           │
+│Outcome: No outcome recorded                                        │
+│Output page 2 / 3 · chunk 1 / 1 · 161 records · newest first ·      │
+│snapshot #161                                                       │
+│                                                                    │
+│#81 [stdout] ORIGINAL OUTPUT 081                                    │
+│#80 [stdout] ORIGINAL OUTPUT 080                                    │
+│#79 [stdout] ORIGINAL OUTPUT 079                                    │
+│#78 [stdout] ORIGINAL OUTPUT 078                                    │
+│#77 [stdout] ORIGINAL OUTPUT 077                                    │
+│#76 [stdout] ORIGINAL OUTPUT 076                                    │
+│#75 [stdout] ORIGINAL OUTPUT 075                                    │
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…
+@@ BROWSER PAGE AFTER 80 APPENDS · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · running                           │
+│Outcome: No outcome recorded                                        │
+│Output page 2 / 3 · chunk 1 / 1 · 161 records · newest first ·      │
+│snapshot #161                                                       │
+│                                                                    │
+│#81 [stdout] ORIGINAL OUTPUT 081                                    │
+│#80 [stdout] ORIGINAL OUTPUT 080                                    │
+│#79 [stdout] ORIGINAL OUTPUT 079                                    │
+│#78 [stdout] ORIGINAL OUTPUT 078                                    │
+│#77 [stdout] ORIGINAL OUTPUT 077                                    │
+│#76 [stdout] ORIGINAL OUTPUT 076                                    │
+│#75 [stdout] ORIGINAL OUTPUT 075                                    │
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…
+@@ KEYBOARD REFRESH ADOPTS NEW OUTPUT · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · running                           │
+│Outcome: No outcome recorded                                        │
+│Output page 1 / 4 · chunk 1 / 1 · 241 records · newest first ·      │
+│snapshot #241                                                       │
+│                                                                    │
+│#241 [stdout] APPENDED OUTPUT 241                                   │
+│#240 [stdout] APPENDED OUTPUT 240                                   │
+│#239 [stdout] APPENDED OUTPUT 239                                   │
+│#238 [stdout] APPENDED OUTPUT 238                                   │
+│#237 [stdout] APPENDED OUTPUT 237                                   │
+│#236 [stdout] APPENDED OUTPUT 236                                   │
+│#235 [stdout] APPENDED OUTPUT 235                                   │
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…
+@@ MOUSE REFRESH ADOPTS NEW OUTPUT · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · running                           │
+│Outcome: No outcome recorded                                        │
+│Output page 1 / 5 · chunk 1 / 1 · 321 records · newest first ·      │
+│snapshot #321                                                       │
+│                                                                    │
+│#321 [stdout] MOUSE APPENDED 321                                    │
+│#320 [stdout] MOUSE APPENDED 320                                    │
+│#319 [stdout] MOUSE APPENDED 319                                    │
+│#318 [stdout] MOUSE APPENDED 318                                    │
+│#317 [stdout] MOUSE APPENDED 317                                    │
+│#316 [stdout] MOUSE APPENDED 316                                    │
+│#315 [stdout] MOUSE APPENDED 315                                    │
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…

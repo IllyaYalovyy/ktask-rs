@@ -1,0 +1,46 @@
+@@ MODELS · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Task models and limits ────────────────────────────────────────────╮
+│Save creates a Human-approved revision. Earlier attempts keep their │
+│inputs.                                                             │
+│Execution model                                                     │
+│economy▏                                                            │
+│Execution effort                                                    │
+│< medium >   click / Space to change                                │
+│Review model                                                        │
+│capable                                                             │
+│Review effort                                                       │
+│< high >   click / Space to change                                  │
+│Validation model                                                    │
+│capable                                                             │
+│Validation effort                                                   │
+│< high >   click / Space to change                                  │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Configuration applied · session only
+@@ MODEL LIMITS · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Task models and limits ────────────────────────────────────────────╮
+│Save creates a Human-approved revision. Earlier attempts keep their │
+│inputs.                                                             │
+│Validation effort                                                   │
+│< high >   click / Space to change                                  │
+│Remediation model                                                   │
+│capable                                                             │
+│Remediation effort                                                  │
+│< high >   click / Space to change                                  │
+│Attempt limit (blank = unlimited)                                   │
+│4                                                                   │
+│Task time limit (all attempts)                                      │
+│< 6 h >   click / Space to change                                   │
+│Stage time limit (one agent turn)                                   │
+│< 30 min >   click / Space to change                                │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Configuration applied · session only

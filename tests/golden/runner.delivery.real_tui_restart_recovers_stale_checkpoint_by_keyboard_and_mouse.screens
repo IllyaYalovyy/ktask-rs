@@ -1,0 +1,111 @@
+@@ restart control · 130x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Recover stale checkpoint intent
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                                       │
+│Attempt 1                                   ││Proof: result.txt contains verified                                               │
+│Model codex/execution / none                │╰──────────────────────────────────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Log · following · attempt 1 ─────────────────────────────────────────────────────╮
+│Tokens none reported yet                    ││                                                                                  │
+│none yet                                    ││                                                                                  │
+│Budget 0 of 3 used                          ││                                                                                  │
+│Can run · u Readiness                       ││                                                                                  │
+│                                            ││                                                                                  │
+│                                            ││                                                                                  │
+│                                            ││                                                                                  │
+│                                            ││                                                                                  │
+│                                            ││                                                                                  │
+╰────────────────────────────────────────────╯│                                                                                  │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                  │
+│• Fixture handoff                           ││                                                                                  │
+│• Current task attempt recorded             ││                                                                                  │
+│• #1 created: Recover stale checkpoint      ││                                                                                  │
+│  intent                                    ││                                                                                  │
+│                                            ││                                                                                  │
+│                                            ││                                                                                  │
+│                                            ││                                                                                  │
+│                                            ││                                                                                  │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ restart confirm · 130x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Recover stale checkpoint intent
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                                       │
+│Attempt 1                                   ││Proof: result.txt contains verified                                               │
+│Model codex/execution / none                │╰──────────────────────────────────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Log · following · attempt 1 ─────────────────────────────────────────────────────╮
+│Tokens none reported yet                    ││                                                                                  │
+│none yet                 ╭ Restart #1 Recover stale checkpoint intent ────────────────────────────────╮                         │
+│Budget 0 of 3 used       │The worker stops and this attempt ends. Uncommitted changes are saved as a  │                         │
+│Can run · u Readiness    │named git stash. The task then starts fresh from the current HEAD with      │                         │
+│                         │required checks, review and validation before delivery.                     │                         │
+│                         │                                                                            │                         │
+│                         │Reason (optional)                                                           │                         │
+│                         │▏                                                                           │                         │
+│                         │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                         │
+╰─────────────────────────│                                                                            │                         │
+╭ Activity · #1 · l: all ─│[Copy] [Apply] [Cancel] [Up] [Down]                                         │                         │
+│• Fixture handoff        │                                                                            │                         │
+│• Current task attempt re╰────────────────────────────────────────────────────────────────────────────╯                         │
+│• #1 created: Recover stale checkpoint      ││                                                                                  │
+│  intent                                    ││                                                                                  │
+│                                            ││                                                                                  │
+│                                            ││                                                                                  │
+│                                            ││                                                                                  │
+│                                            ││                                                                                  │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ restart outcome · 130x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                                 │
+│Inspect results in History, or add more work.                                                                                   │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

@@ -1,0 +1,138 @@
+@@ RUN PREFERENCES queue=false · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Project preferences ───────────────────────────────────────────────╮
+│Saved per project in this instance. Keyboard stays available.       │
+│This policy controls new breakdown and repair tasks.                │
+│Run mode applies to the next Run/resume/retry.                      │
+│Agent network applies to execution and repair workers. On permits   │
+│Mouse                                                               │
+│< Enabled >   click / Space to change                               │
+│Planner approval                                                    │
+│< Automatic >   click / Space to change                             │
+│Run mode                                                            │
+│< Continue queue >   click / Space to change                        │
+│Agent network                                                       │
+│< Off >   click / Space to change                                   │
+│Check before task                                                   │
+│< Off >   click / Space to change                                   │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ QUEUE BEFORE RUN queue=false · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Run one preference · Next #2: Second configured task · m: run mode i…
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 2 ─────────────────────────╮╭ Details · click for full ╮
+│  #1   Pending  First configured task   ││Second configured task    │
+│› #2   Pending  Second configured task  ││#2 · Pending · AI         │
+│                                        ││                          │
+│                                        ││Goal: Create result.txt   │
+│                                        ││containing verified       │
+│                                        ││                          │
+│                                        ││Check: result.txt contains│
+│                                        ││verified                  │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [r Run one] [a Add] [i Insert] [e Edit] [m Move] [b Break down]
+[c Models] [D Mark done] [x Cancel] [R Supersede] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats]
+[? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RUN RESULT queue=false · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Session: Run one · stopped · Run one completed the current task
+ Queue · 1 shown / 1 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 1 ─────────────────────────╮╭ Details · click for full ╮
+│› #2   Pending  Second configured task  ││Second configured task    │
+│                                        ││#2 · Pending · AI         │
+│                                        ││                          │
+│                                        ││Goal: Create result.txt   │
+│                                        ││containing verified       │
+│                                        ││                          │
+│                                        ││Check: result.txt contains│
+│                                        ││verified                  │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [r Run one] [a Add] [i Insert] [e Edit] [m Move] [b Break down]
+[c Models] [D Mark done] [x Cancel] [R Supersede] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats]
+[? Help] [q Quit]
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RUN PREFERENCES queue=true · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Project preferences ───────────────────────────────────────────────╮
+│Saved per project in this instance. Keyboard stays available.       │
+│This policy controls new breakdown and repair tasks.                │
+│Run mode applies to the next Run/resume/retry.                      │
+│Agent network applies to execution and repair workers. On permits   │
+│Mouse                                                               │
+│< Enabled >   click / Space to change                               │
+│Planner approval                                                    │
+│< Automatic >   click / Space to change                             │
+│Run mode                                                            │
+│< Continue queue >   click / Space to change                        │
+│Agent network                                                       │
+│< Off >   click / Space to change                                   │
+│Check before task                                                   │
+│< Off >   click / Space to change                                   │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ QUEUE BEFORE RUN queue=true · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Queue preference · Next #2: Second configured task · m: run mode in …
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 2 ─────────────────────────╮╭ Details · click for full ╮
+│  #1   Pending  First configured task   ││Second configured task    │
+│› #2   Pending  Second configured task  ││#2 · Pending · AI         │
+│                                        ││                          │
+│                                        ││Goal: Create result.txt   │
+│                                        ││containing verified       │
+│                                        ││                          │
+│                                        ││Check: result.txt contains│
+│                                        ││verified                  │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move]
+[b Break down] [c Models] [D Mark done] [x Cancel] [R Supersede]
+[o Import] [E Export] [Enter Details] [f Filter] [/ Search]
+[Esc Clear] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RUN RESULT queue=true · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 2
+ Session: Queue · complete · no queued work
+ Queue · 0 shown / 0 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 0 / 0 ─────────────────────────╮╭ Details · click for full ╮
+│No tasks here.                          ││Nothing selected.         │
+│                                        ││                          │
+│                                        ││                          │
+│                                        ││                          │
+│                                        ││                          │
+│                                        ││                          │
+│                                        ││                          │
+│                                        ││                          │
+│                                        ││                          │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [a Add] [i Insert] [o Import] [E Export] [f Filter] [/ Search]
+[Esc Clear] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

@@ -1,0 +1,54 @@
+@@ PENDING QUEUE · 100x30 · keyboard
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Queue · 120 shown / 120 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 120 · Model ─────────────────────────────────╮╭ Details · click for full ────────────╮
+│  #1   Failed   Recover a failed check      economy medium││Approve the queue interaction         │
+│› #2   Pending  [Human] Approve the queue … economy medium││#2 · Pending · Human                  │
+│  #3   Pending  Choose the export format    economy medium││                                      │
+│  #4   Pending  Failure recovery · case 4   economy medium││Goal: Inspect the queue and mark the  │
+│  #5   Pending  Workspace cleanup · case 5  economy medium││result done.                          │
+│  #6   Pending  Instance isolation · case 6 economy medium││                                      │
+│  #7   Pending  Queue pagination · case 7   economy medium││Check: A person confirms the          │
+│  #8   Pending  Keyboard navigation · case… economy medium││interaction works.                    │
+│  #9   Pending  Search matching · case 9    economy medium││                                      │
+│  #10  Pending  Failure recovery · case 10  economy medium││Attempts: 0 · $0.00                   │
+│  #11  Pending  Workspace cleanup · case 11 economy medium││                                      │
+│  #12  Pending  Instance isolation · case … economy medium││Models:                               │
+│  #13  Pending  Queue pagination · case 13  economy medium││Execution: economy / medium           │
+│  #14  Pending  Keyboard navigation · case… economy medium││Review: capable / high                │
+│  #15  Pending  Search matching · case 15   economy medium││Validation: capable / high            │
+│  #16  Pending  Failure recovery · case 16  economy medium││Remediation: capable / high           │
+│  #17  Pending  Workspace cleanup · case 17 economy medium││                                      │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Retry] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done]
+[x Cancel] [R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear]
+[S Stats] [? Help] [q Quit]
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PENDING QUEUE · 70x22 · keyboard
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Queue · 120 shown / 120 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 120 ───────────────────────╮╭ Details · click for full ╮
+│  #1   Failed   Recover a failed check  ││Approve the queue         │
+│› #2   Pending  [Human] Approve the que…││interaction               │
+│  #3   Pending  Choose the export format││#2 · Pending · Human      │
+│  #4   Pending  Failure recovery · case…││                          │
+│  #5   Pending  Workspace cleanup · cas…││Goal: Inspect the queue   │
+│  #6   Pending  Instance isolation · ca…││and mark the result done. │
+│  #7   Pending  Queue pagination · case…││                          │
+│  #8   Pending  Keyboard navigation · c…││Check: A person confirms  │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [r Retry] [a Add] [i Insert] [e Edit] [m Move] [b Break down]
+[c Models] [D Mark done] [x Cancel] [R Supersede] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats]
+[? Help] [q Quit]
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

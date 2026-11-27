@@ -1,0 +1,37 @@
+@@ QUEUE MODELS · 140x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Queue preference · Next #2: Sol everywhere · m: run mode in Current
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 2 · Model ───────────────────────────────────────────────────────────╮╭ Details · click for full ────────────────────────────╮
+│› #1   Pending  Mixed models                                  codex/execution     ││Mixed models                                          │
+│  #2   Pending  Sol everywhere                                codex/gpt-6-sol high││#1 · Pending · AI                                     │
+│                                                                                  ││                                                      │
+│                                                                                  ││Goal: Create result.txt containing verified           │
+│                                                                                  ││                                                      │
+│                                                                                  ││Check: result.txt contains verified                   │
+│                                                                                  ││                                                      │
+│                                                                                  ││Attempts: 0 · none yet                                │
+│                                                                                  ││                                                      │
+│                                                                                  ││Models:                                               │
+│                                                                                  ││Execution: codex/execution / none                     │
+│                                                                                  ││Review: codex/review / none                           │
+│                                                                                  ││Validation: codex/validation / none                   │
+│                                                                                  ││Remediation: codex/remediation / none                 │
+│                                                                                  ││                                                      │
+│                                                                                  ││                                                      │
+│                                                                                  ││                                                      │
+│                                                                                  ││                                                      │
+│                                                                                  ││                                                      │
+│                                                                                  ││                                                      │
+│                                                                                  ││                                                      │
+│                                                                                  ││                                                      │
+│                                                                                  ││                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel] [R Supersede] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

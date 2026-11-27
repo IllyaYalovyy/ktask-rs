@@ -1,0 +1,46 @@
+@@ TUI SEARCH done · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #3 · Pending   |   Queue 1 · History 2
+ Queue preference · last task · m: run mode in Current
+ History · 1 shown / 2 total · closed tasks
+Search: done▏
+╭ History · 1 / 1 · Finished Attempts Time Usage ────────────────────╮
+│› #1   Done     Alpha shipped <date> 0 <t> -                        │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Enter Apply search] [Esc Cancel search]
+
+
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ TUI SEARCH cancelled · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #3 · Pending   |   Queue 1 · History 2
+ Queue preference · last task · m: run mode in Current
+ History · 1 shown / 2 total · closed tasks
+Search: cancelled▏
+╭ History · 1 / 1 · Finished Attempts Time Usage ────────────────────╮
+│› #2   Cancelled Bravo dropped <date> 0 <t> -                       │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Enter Apply search] [Esc Cancel search]
+
+
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

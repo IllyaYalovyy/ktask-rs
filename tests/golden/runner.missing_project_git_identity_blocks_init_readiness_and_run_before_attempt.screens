@@ -1,0 +1,78 @@
+@@ MISSING IDENTITY SCREEN · 160x38 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Needs a commit identity              ╭ Execution readiness ───────────────────────────────────────────────────────╮
+ Run blocked · u Readiness shows causes a│Run blocked · 1 blocker(s)                                                  │
+╭ Status · Enter: details ───────────────│                                                                            │────────────────────────────────────────╮
+│Pending · AI                            │OK · Execution state                                                        │                                        │
+│No attempts yet                         │OK · Project checks                                                         │                                        │
+│Run blocked (1) · u Readiness           │OK · Approval                                                               │────────────────────────────────────────╯
+│Model codex/execution / none            │OK · Task                                                                   │────────────────────────────────────────╮
+│Budget 0 of 3 used                      │OK · execution model                                                        │fresh after setup; Run retries from     │
+│                                        │OK · review model                                                           │                                        │
+│                                        │OK · validation model                                                       │                                        │
+│                                        │OK · remediation model                                                      │                                        │
+│                                        │OK · Writable workers (execution and repair) · Agent network Off · Codex    │                                        │
+│                                        │OK · Codex CLI                                                              │                                        │
+│                                        │OK · Read-only sandbox                                                      │                                        │
+│                                        │BLOCK · Git commit identity: Git user.name and user.email must be           │                                        │
+│                                        │configured for this project → git config user.name 'Your Name' && git       │                                        │
+╰────────────────────────────────────────│config user.email 'you@example.com'                                         │                                        │
+╭ Activity · #1 · l: all ────────────────│OK · Supervisor ownership                                                   │                                        │
+│• #1 created: Needs a commit identity   │OK · Worker ownership                                                       │                                        │
+│                                        │OK · Workspace baseline                                                     │                                        │
+│                                        │                                                                            │                                        │
+│                                        │After fixing setup, Refresh here or press r on Current. Inspection creates  │                                        │
+│                                        │no attempt.                                                                 │                                        │
+│                                        │Wheel / PgUp / PgDn: scroll · Esc: close                                    │                                        │
+│                                        │                                                                            │                                        │
+│                                        │[c Checks] [m Models] [r Run queue] [u Refresh] [Close]                     │                                        │
+│                                        │                                                                            │                                        │
+│                                        │                                                                            │                                        │
+╰────────────────────────────────────────╰────────────────────────────────────────────────────────────────────────────╯────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RESOLVED IDENTITY SCREEN · 160x38 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Needs a commit identity
+ Ready · r Run queue; checks and repair r╭ Execution readiness ───────────────────────────────────────────────────────╮
+╭ Status · Enter: details ───────────────│Can run · 0 blocker(s)                                                      │────────────────────────────────────────╮
+│Pending · AI                            │                                                                            │                                        │
+│No attempts yet                         │OK · Execution state                                                        │                                        │
+│Can run · u Readiness                   │OK · Project checks                                                         │────────────────────────────────────────╯
+│Model codex/execution / none            │OK · Approval                                                               │────────────────────────────────────────╮
+│Budget 0 of 3 used                      │OK · Task                                                                   │ws its log.                             │
+│                                        │OK · execution model                                                        │                                        │
+│                                        │OK · review model                                                           │                                        │
+│                                        │OK · validation model                                                       │                                        │
+│                                        │OK · remediation model                                                      │                                        │
+│                                        │OK · Writable workers (execution and repair) · Agent network Off · Codex    │                                        │
+│                                        │OK · Codex CLI                                                              │                                        │
+│                                        │OK · Read-only sandbox                                                      │                                        │
+│                                        │OK · Commit identity: Project Author <project@example.com>                  │                                        │
+╰────────────────────────────────────────│OK · Supervisor ownership                                                   │                                        │
+╭ Activity · #1 · l: all ────────────────│OK · Worker ownership                                                       │                                        │
+│• #1 created: Needs a commit identity   │OK · Workspace baseline                                                     │                                        │
+│                                        │                                                                            │                                        │
+│                                        │After fixing setup, Refresh here or press r on Current. Inspection creates  │                                        │
+│                                        │no attempt.                                                                 │                                        │
+│                                        │Wheel / PgUp / PgDn: scroll · Esc: close                                    │                                        │
+│                                        │                                                                            │                                        │
+│                                        │[c Checks] [m Models] [r Run queue] [u Refresh] [Close]                     │                                        │
+│                                        │                                                                            │                                        │
+│                                        │                                                                            │                                        │
+│                                        ╰────────────────────────────────────────────────────────────────────────────╯                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

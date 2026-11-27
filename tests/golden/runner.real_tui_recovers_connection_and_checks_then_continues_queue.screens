@@ -1,0 +1,93 @@
+@@ AUTONOMOUS QUEUE · 100x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Queue preference · Next #2: Continue without another Run · m: run mode in Current
+ #1 Recover connection and failed check
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified         │
+│No attempts yet                             ││Proof: result.txt contains verified                 │
+│Can run · u Readiness                       │╰────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────╮
+│Budget 0 of 3 used                          ││Ready. r starts an attempt in the background        │
+│                                            ││supervisor; this pane follows its log.              │
+│                                            ││Defaults and checks live in Config; c pins models   │
+│                                            ││for this task.                                      │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯│                                                    │
+╭ Activity · #1 · l: all ────────────────────╮│                                                    │
+│• #1 created: Recover connection and failed ││                                                    │
+│  check                                     ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+│                                            ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down]
+[u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help]
+[q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CONNECTION RECOVERY · 100x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 2 · History 0
+ Session: Queue · running · Workflow · Implement · repair round 0/10 · Next #2 · Run requested
+ #1 Recover connection and failed check
+ Workflow · Implement · repair round 0/10 · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Step: Workflow · Implement · repair round 0…│╰────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following · attempt 1 · o: report ───────────╮
+│Active <t>                                  ││Execution started; results require checks, review   │
+│Tokens none reported yet                    ││and validation                                      │
+│? new tokens                                ││execution: codex/execution · new session            │
+│Budget 0 of 3 used                          ││{"error":{"message":"connection                     │
+│Execution   ✗ failed                        ││reset"},"type":"turn.failed"}                       │
+│                                            ││Provider turn failed · automatic retry 1/2 after 1s │
+╰────────────────────────────────────────────╯│· same attempt, work retained; Pause cancels        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                    │
+│• Workflow · Implement · repair round 0/10  ││                                                    │
+│• Supervisor started                        ││                                                    │
+│• Current task attempt recorded             ││                                                    │
+│• #1 created: Recover connection and failed ││                                                    │
+│  check                                     ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details]
+[o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ AUTONOMOUS RESULT · 100x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 2
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                   │
+│Inspect results in History, or add more work.                                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

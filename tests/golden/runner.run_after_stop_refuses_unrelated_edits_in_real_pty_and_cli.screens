@@ -1,0 +1,123 @@
+@@ STOP DIALOG · 140x40 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 1 · History 0
+ Session: Queue · running · Workflow · Implement · repair round 0/10 · Run requested
+ #1 Stopped then edited
+ Workflow · Implement · repair round 0/10 · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Step: Execution                             │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following · attempt 1 · o: report ───────────────────────────────────────────────────╮
+│Active <t>                                  ││Execution started; results require checks, review and validation                            │
+│Tokens none reported yet                    ││execution: codex/execution · new session                                                    │
+│? new tokens                                ││                                                                                            │
+│Budget 0 of 1 used            ╭ Stop #1 Stopped then edited ───────────────────────────────────────────────╮                              │
+│Execution   … running         │The worker stops and this attempt ends. Its uncommitted changes are saved   │                              │
+│                              │as a git stash (git stash pop restores them).                               │                              │
+│                              │The task returns to Pending; Run starts it fresh with full limits.          │                              │
+│                              │                                                                            │                              │
+│                              │Reason (optional)                                                           │                              │
+╰──────────────────────────────│▏                                                                           │                              │
+╭ Activity · #1 · l: all ──────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                              │
+│• Workflow · Implement · repai│                                                                            │                              │
+│• Supervisor started          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                              │
+│• Current task attempt recorde│                                                                            │                              │
+│• #1 revision 2 saved         ╰────────────────────────────────────────────────────────────────────────────╯                              │
+│• #1 created: Stopped then edited           ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [o Report] [a Add] [i Investigate] [f Fix]
+[S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RUN AFTER STOP REFUSED · 140x40 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Queue · stopped · Workspace has uncommitted work from outside this task; commit or preserve it before switching tasks
+ #1 Stopped then edited
+ Run blocked · u Readiness shows causes and actions
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: Workspace has uncommitted work from outside this task; commit or preserve it before switching tasks                               ┃
+┃Not resolved automatically: The supervisor could not start or continue this task.                                                         ┃
+┃Next: Fix the cause, then r Run (u Readiness lists each blocker)                                                                          ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────────────────────────╮
+│Tokens none reported yet                    ││Outcome: Stopped: Rethink                                                                   │
+│? new tokens                                ││                                                                                            │
+│Budget 0 of 1 used                          ││Execution · interrupted · codex/execution verdict: Paused; useful work and session retained │
+│Run blocked (1) · u Readiness               ││                                                                                            │
+│Execution   ! interrupted                   ││Supervisor outcome: Stopped: Rethink                                                        │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯│                                                                                            │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                            │
+│• command conflict: Workspace has           ││                                                                                            │
+│  uncommitted work from outside this task;… ││                                                                                            │
+│• Back to Pending; the next Run starts fresh││                                                                                            │
+│• Stopped: Rethink                          ││                                                                                            │
+│• Uncommitted changes saved as git stash    ││                                                                                            │
+│  "ktask: task #1 attempt #1"               ││                                                                                            │
+│• Supervisor yielded this attempt for resume││                                                                                            │
+│• Paused; useful work and session retained  ││                                                                                            │
+│• Pause requested; stopping worker          ││                                                                                            │
+│• Workflow · Implement · repair round 0/10  ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+command conflict: Workspace has uncommitted work from outside this task; commit or preserve it before switching tasks
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RUN AFTER STOP REFUSED · 140x40 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Queue · stopped · Workspace has uncommitted work from outside this task; commit or preserve it before switching tasks
+ #1 Stopped then edited
+ Run blocked · u Readiness shows causes and actions
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: Workspace has uncommitted work from outside this task; commit or preserve it before switching tasks                               ┃
+┃Not resolved automatically: The supervisor could not start or continue this task.                                                         ┃
+┃Next: Fix the cause, then r Run (u Readiness lists each blocker)                                                                          ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────────────────────────╮
+│Tokens none reported yet                    ││Outcome: Stopped by owner                                                                   │
+│? new tokens                                ││                                                                                            │
+│Budget 0 of 1 used                          ││Execution · interrupted · codex/execution verdict: Paused; useful work and session retained │
+│Run blocked (1) · u Readiness               ││                                                                                            │
+│Execution   ! interrupted                   ││Supervisor outcome: Stopped by owner                                                        │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯│                                                                                            │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                            │
+│• command conflict: Workspace has           ││                                                                                            │
+│  uncommitted work from outside this task;… ││                                                                                            │
+│• Back to Pending; the next Run starts fresh││                                                                                            │
+│• Stopped by owner                          ││                                                                                            │
+│• Uncommitted changes saved as git stash    ││                                                                                            │
+│  "ktask: task #1 attempt #1"               ││                                                                                            │
+│• Supervisor yielded this attempt for resume││                                                                                            │
+│• Paused; useful work and session retained  ││                                                                                            │
+│• Pause requested; stopping worker          ││                                                                                            │
+│• Workflow · Implement · repair round 0/10  ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+command conflict: Workspace has uncommitted work from outside this task; commit or preserve it before switching tasks
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

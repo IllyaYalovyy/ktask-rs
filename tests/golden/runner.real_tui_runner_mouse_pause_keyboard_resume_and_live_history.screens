@@ -1,0 +1,132 @@
+@@ RUNNING · 110x32 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 1 · History 0
+ Session: Queue · running · Workflow · Implement · repair round 0/10 · Run requested
+ #1 Observed execution
+ Workflow · Implement · repair round 0/10 · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified                   │
+│Attempt 1                                   ││Proof: result.txt contains verified                           │
+│Step: Execution                             │╰──────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following · attempt 1 · o: report ─────────────────────╮
+│Active <t>                                  ││Execution started; results require checks, review and         │
+│Tokens none reported yet                    ││validation                                                    │
+│? new tokens                                ││execution: codex/execution · new session                      │
+│Budget 0 of 3 used                          ││                                                              │
+│Execution   … running                       ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯│                                                              │
+╭ Activity · #1 · l: all ────────────────────╮│                                                              │
+│• Workflow · Implement · repair round 0/10  ││                                                              │
+│• Supervisor started                        ││                                                              │
+│• Current task attempt recorded             ││                                                              │
+│• #1 created: Observed execution            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [o Report]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PAUSED · 110x32 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused; worker stopped, Resume continues the same attempt
+ #1 Observed execution
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                   │
+│Attempt 1                                   ││Proof: result.txt contains verified                           │
+│Model codex/execution / none                │╰──────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ─────────────────────╮
+│Tokens none reported yet                    ││Execution started; results require checks, review and         │
+│? new tokens                                ││validation                                                    │
+│Budget 0 of 3 used                          ││execution: codex/execution · new session                      │
+│Can run · u Readiness                       ││                                                              │
+│Execution   ! interrupted                   ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯│                                                              │
+╭ Activity · #1 · l: all ────────────────────╮│                                                              │
+│• Supervisor yielded this attempt for resume││                                                              │
+│• Paused; useful work and session retained  ││                                                              │
+│• Pause requested; stopping worker          ││                                                              │
+│• Workflow · Implement · repair round 0/10  ││                                                              │
+│• Supervisor started                        ││                                                              │
+│• Current task attempt recorded             ││                                                              │
+│• #1 created: Observed execution            ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Pause requested · waiting for worker shutdown and cleanup
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ COMPLETE · 110x32 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                             │
+│Inspect results in History, or add more work.                                                               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY · 110x32 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ History · 1 shown / 1 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 1 · Finished Attempts Time Usage ──────────────────────╮╭ Details · click for full ──────────╮
+│› #1   Done     Observed execution <date> 1 <t> 210 tkn +1 ?          ││Observed execution                  │
+│                                                                      ││#1 · Done · AI · finished <date>    │
+│                                                                      ││<date>                              │
+│                                                                      ││                                    │
+│                                                                      ││Goal: Create result.txt containing  │
+│                                                                      ││verified                            │
+│                                                                      ││                                    │
+│                                                                      ││Check: result.txt contains verified │
+│                                                                      ││                                    │
+│                                                                      ││Attempts: 1 · 210 new tokens + 1    │
+│                                                                      ││call(s) unreported                  │
+│                                                                      ││                                    │
+│                                                                      ││Models:                             │
+│                                                                      ││Execution: codex/execution / none   │
+│                                                                      ││Review: codex/review / none         │
+│                                                                      ││Validation: codex/validation / none │
+│                                                                      ││Remediation: codex/remediation /    │
+│                                                                      ││none                                │
+│                                                                      ││Attempt 1 · Done · Active <t> ·     │
+╰──────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export]
+[S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

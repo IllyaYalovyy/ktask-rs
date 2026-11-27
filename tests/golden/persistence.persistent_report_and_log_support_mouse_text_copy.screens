@@ -1,0 +1,92 @@
+@@ PERSISTENT REPORT BEFORE SELECTION · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Failed current
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Failed · AI                 ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+│Tokens none reported yet    │╰──────────────────────────────────────╯
+│Model codex/fixture-judge-2…│╭ Report · attempt 1 · o: raw log ─────╮
+│Active <t>                  ││Outcome: Failed check with review     │
+╰────────────────────────────╯│finding                               │
+╭ Activity · #1 · l: all ────╮│                                      │
+│• Failed check with review  ││Review · failed · codex/fixture-model │
+│  finding                   ││verdict: review structured finding    │
+│• Current task attempt      ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models]
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [o Log] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ PERSISTENT GOAL SELECTED · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Failed current
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Failed · AI                 ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+│Tokens none reported yet    │╰──────────────────────────────────────╯
+│Model codex/fixture-judge-2…│╭ Report · attempt 1 · o: raw log ─────╮
+│Active <t>                  ││Outcome: Failed check with review     │
+╰────────────────────────────╯│finding                               │
+╭ Activity · #1 · l: all ────╮│                                      │
+│• Failed check with review  ││Review · failed · codex/fixture-model │
+│  finding                   ││verdict: review structured finding    │
+│• Current task attempt      ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models]
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [o Log] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ PERSISTENT RAW LOG · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Failed current
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Failed · AI                 ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+│Tokens none reported yet    │╰──────────────────────────────────────╯
+│Model codex/fixture-judge-2…│╭ Log · following · attempt 1 · o: repo╮
+│Active <t>                  ││Check failed: transcript evidence     │
+╰────────────────────────────╯│                                      │
+╭ Activity · #1 · l: all ────╮│                                      │
+│• Failed check with review  ││                                      │
+│  finding                   ││                                      │
+│• Current task attempt      ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models]
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [o Report] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Sent 15 characters via OSC 52 · F7: native selection fallback
+@@ PERSISTENT EVIDENCE DIALOG · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 1 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Output page 1 / 1 · chunk 1 / 1 · 1 records · newest first ·        │
+│snapshot #1                                                         │
+│                                                                    │
+│#1 [stderr] Check failed: transcript evidence                       │
+│                                                                    │
+│Attempt inputs: revision 1 · session not recorded                   │
+│Revision 1 · Failed current                                         │
+│Approval: ready · human: owner · Category: code (built-in, checks   │
+│apply)                                                              │
+│Goal: Persist a real task                                           │
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 20 characters via OSC 52 · F7: native selection fallback

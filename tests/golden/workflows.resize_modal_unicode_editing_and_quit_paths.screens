@@ -1,0 +1,49 @@
+@@ MINIMUM INSERT FORM · 70x22 · keyboard
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Insert task ───────────────────────────────────────────────────────╮
+│Position: after #120 / before end                                   │
+│Title, goal, and acceptance check are required.                     │
+│Title                                                               │
+│▏                                                                   │
+│Goal                                                                │
+│                                                                    │
+│Acceptance check                                                    │
+│                                                                    │
+│Kind                                                                │
+│< AI >   click / Space to change                                    │
+│Before task ID                                                      │
+│                                                                    │
+│Execution provider/model (blank = default)                          │
+│                                                                    │
+│Alt-Up/Down: position · Ctrl-S: apply · Esc: cancel                 │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +] [Earlier] │
+│[Later]                                                             │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ TINY RESIZE · 40x10 · keyboard
+Please resize to at least 70 x 22.
+q or Ctrl-C: quit
+@@ RESTORED FORM · 70x22 · keyboard
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Insert task ───────────────────────────────────────────────────────╮
+│Position: after #120 / before end                                   │
+│Title, goal, and acceptance check are required.                     │
+│Title                                                               │
+│!界🙂 taXk▏                                                         │
+│Goal                                                                │
+│                                                                    │
+│Acceptance check                                                    │
+│                                                                    │
+│Kind                                                                │
+│< AI >   click / Space to change                                    │
+│Before task ID                                                      │
+│                                                                    │
+│Execution provider/model (blank = default)                          │
+│                                                                    │
+│Alt-Up/Down: position · Ctrl-S: apply · Esc: cancel                 │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +] [Earlier] │
+│[Later]                                                             │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

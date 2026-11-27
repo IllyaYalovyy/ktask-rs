@@ -1,0 +1,217 @@
+@@ STARTUP IN A PROJECT · 110x30 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 1 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #111 · Pending   |   Queue 110 · History 110
+ Queue preference · Next #112: Projects fixture 112 · m: run mode in Current
+ #111 Projects fixture 111
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Pending · AI                                ││Goal: Show this project among the others                      │
+│No attempts yet                             ││Proof: Listed on Projects                                     │
+│Run blocked (9) · u Readiness               │╰──────────────────────────────────────────────────────────────╯
+│Model unconfigured / none                   │╭ Log · following ─────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Run is blocked. Press u Readiness for each cause and a direct │
+│                                            ││action. Refresh after setup; Run retries from Current.        │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯│                                                              │
+╭ Activity · #111 · l: all ──────────────────╮│                                                              │
+│• #111 created: Projects fixture 111        ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PROJECTS · 110x30 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 1 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #111 · Pending   |   Queue 110 · History 110
+ Queue preference · Next #112: Projects fixture 112 · m: run mode in Current
+ Projects · 4 registered · 0 running · 1 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 1 / 4 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│› * alpha-app  Ready          110 queued · #111 Projects fixtur…││alpha-app · open                          │
+│    beta-lib   Needs approval   1 queued · #221 Approve the bet…││/tmp/ktask-screens-----------------------/│
+│    delta-gone Missing folder   0 queued · No unfinished task   ││ktask-test-scratch/run-000000/alpha-app   │
+│    gamma-docs Idle             0 queued · No unfinished task   ││                                          │
+│                                                                ││State: Ready                              │
+│                                                                ││Runner: not running                       │
+│                                                                ││Current: #111 Projects fixture 111 ·      │
+│                                                                ││Pending                                   │
+│                                                                ││Queue: 110 unfinished · History: 110      │
+│                                                                ││finished                                  │
+│                                                                ││                                          │
+│                                                                ││This project is open · Enter returns to   │
+│                                                                ││it.                                       │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LIVE CHANGE · 110x30 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 1 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #111 · Pending   |   Queue 110 · History 110
+ Queue preference · Next #112: Projects fixture 112 · m: run mode in Current
+ Projects · 4 registered · 0 running · 1 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 1 / 4 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│› * alpha-app  Ready          110 queued · #111 Projects fixtur…││alpha-app · open                          │
+│    beta-lib   Needs approval   1 queued · #221 Approve the bet…││/tmp/ktask-screens-----------------------/│
+│    delta-gone Missing folder   0 queued · No unfinished task   ││ktask-test-scratch/run-000000/alpha-app   │
+│    gamma-docs Ready            1 queued · #222 Write the gamma…││                                          │
+│                                                                ││State: Ready                              │
+│                                                                ││Runner: not running                       │
+│                                                                ││Current: #111 Projects fixture 111 ·      │
+│                                                                ││Pending                                   │
+│                                                                ││Queue: 110 unfinished · History: 110      │
+│                                                                ││finished                                  │
+│                                                                ││                                          │
+│                                                                ││This project is open · Enter returns to   │
+│                                                                ││it.                                       │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LIVE RUNNER · 110x30 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 1 need you · 1 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #111 · Pending   |   Queue 110 · History 110
+ Queue preference · Next #112: Projects fixture 112 · m: run mode in Current
+ Projects · 4 registered · 1 running · 1 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 1 / 4 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│› * alpha-app  Ready          110 queued · #111 Projects fixtur…││alpha-app · open                          │
+│    beta-lib   Needs approval   1 queued · #221 Approve the bet…││/tmp/ktask-screens-----------------------/│
+│    delta-gone Missing folder   0 queued · No unfinished task   ││ktask-test-scratch/run-000000/alpha-app   │
+│    gamma-docs Running          1 queued · #222 Write the gamma…││                                          │
+│                                                                ││State: Ready                              │
+│                                                                ││Runner: not running                       │
+│                                                                ││Current: #111 Projects fixture 111 ·      │
+│                                                                ││Pending                                   │
+│                                                                ││Queue: 110 unfinished · History: 110      │
+│                                                                ││finished                                  │
+│                                                                ││                                          │
+│                                                                ││This project is open · Enter returns to   │
+│                                                                ││it.                                       │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ OPENED ANOTHER PROJECT · 110x30 · keyboard+mouse
+ ktask-dev  / beta-lib   SQLite · real tasks   Projects: 1 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #221 · Needs approval   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #221 Approve the beta plan
+ Pending revision 1 · needs approval · v Approve / n Reject
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Needs approval · AI                         ││Goal: Show this project among the others                      │
+│No attempts yet                             ││Proof: Listed on Projects                                     │
+│Run blocked (11) · u Readiness              │╰──────────────────────────────────────────────────────────────╯
+│Model unconfigured / none                   │╭ Log · following ─────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Needs approval. Review the task, then Approve or Reject.      │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯│                                                              │
+╭ Activity · #221 · l: all ──────────────────╮│                                                              │
+│• #221 created: Approve the beta plan       ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [v Approve] [n Reject] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Opened beta-lib · 0 Projects lists every project; runs continue in the background
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MISSING FOLDER · 110x30 · keyboard+mouse
+ ktask-dev  / beta-lib   SQLite · real tasks   Projects: 1 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #221 · Needs approval   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Projects · 4 registered · 0 running · 1 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 3 / 4 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│    alpha-app  Ready          110 queued · #111 Projects fixtur…││delta-gone                                │
+│  * beta-lib   Needs approval   1 queued · #221 Approve the bet…││/tmp/ktask-screens-----------------------/│
+│›   delta-gone Missing folder   0 queued · No unfinished task   ││ktask-test-scratch/run-000000/delta-gone  │
+│    gamma-docs Ready            1 queued · #222 Write the gamma…││                                          │
+│                                                                ││State: Missing folder                     │
+│                                                                ││Runner: not running                       │
+│                                                                ││Current: No unfinished task               │
+│                                                                ││Queue: 0 unfinished · History: 0 finished │
+│                                                                ││                                          │
+│                                                                ││Restore the folder to open this project;  │
+│                                                                ││its tasks and history are kept.           │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+delta-gone: folder is missing · restore /tmp/ktask-screens-----------------------/ktask-test-scratch/run-0000…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RETURNED TO THE FIRST PROJECT · 110x30 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 1 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #111 · Pending   |   Queue 110 · History 110
+ Queue preference · Next #112: Projects fixture 112 · m: run mode in Current
+ Queue · 110 shown / 110 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 4 / 110 · Model ───────────────────────────────────────╮╭ Details · click for full ────────────────╮
+│  #111 Pending  Projects fixture 111                unconfigured││Projects fixture 114                      │
+│  #112 Pending  Projects fixture 112                unconfigured││#114 · Pending · AI                       │
+│  #113 Pending  Projects fixture 113                unconfigured││                                          │
+│› #114 Pending  Projects fixture 114                unconfigured││Goal: Show this project among the others  │
+│  #115 Pending  Projects fixture 115                unconfigured││                                          │
+│  #116 Pending  Projects fixture 116                unconfigured││Check: Listed on Projects                 │
+│  #117 Pending  Projects fixture 117                unconfigured││                                          │
+│  #118 Pending  Projects fixture 118                unconfigured││Attempts: 0 · none yet                    │
+│  #119 Pending  Projects fixture 119                unconfigured││                                          │
+│  #120 Pending  Projects fixture 120                unconfigured││Models:                                   │
+│  #121 Pending  Projects fixture 121                unconfigured││Execution: unconfigured / none            │
+│  #122 Pending  Projects fixture 122                unconfigured││Review: unconfigured / none               │
+│  #123 Pending  Projects fixture 123                unconfigured││Validation: unconfigured / none           │
+│  #124 Pending  Projects fixture 124                unconfigured││Remediation: unconfigured / none          │
+│  #125 Pending  Projects fixture 125                unconfigured││                                          │
+│  #126 Pending  Projects fixture 126                unconfigured││                                          │
+│  #127 Pending  Projects fixture 127                unconfigured││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel]
+[R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help]
+[q Quit]
+Opened alpha-app · 0 Projects lists every project; runs continue in the background
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

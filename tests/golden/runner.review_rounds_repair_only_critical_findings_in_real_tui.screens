@@ -1,0 +1,216 @@
+@@ REVIEW LOOP READY critical=false · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Queue preference · Next #2: Next task · m: run mode in Current
+ #1 Normal review and fix cycle
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · AI                ││Goal: Create result.txt containing ve…│
+│No attempts yet             ││Proof: result.txt contains verified   │
+│Can run · u Readiness       │╰──────────────────────────────────────╯
+│Model codex/execution / none│╭ Log · following ─────────────────────╮
+│Budget 0 of 1 used          ││Ready. r starts an attempt in the     │
+╰────────────────────────────╯│background supervisor; this pane      │
+╭ Activity · #1 · l: all ────╮│follows its log.                      │
+│• #1 revision 2 saved       ││Defaults and checks live in Config; c │
+│• #1 created: Normal review ││pins models for this task.            │
+│  and fix cycle             ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models]
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ REVIEW LOOP DECISION critical=false · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 2
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────╮
+│Queue complete.                                                     │
+│Inspect results in History, or add more work.                       │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix]
+[S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+@@ REVIEW LOOP READY critical=true · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Queue preference · Next #2: Next task · m: run mode in Current
+ #1 Normal review and fix cycle
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · AI                ││Goal: Create result.txt containing ve…│
+│No attempts yet             ││Proof: result.txt contains verified   │
+│Can run · u Readiness       │╰──────────────────────────────────────╯
+│Model codex/execution / none│╭ Log · following ─────────────────────╮
+│Budget 0 of 1 used          ││Ready. r starts an attempt in the     │
+╰────────────────────────────╯│background supervisor; this pane      │
+╭ Activity · #1 · l: all ────╮│follows its log.                      │
+│• #1 revision 2 saved       ││Defaults and checks live in Config; c │
+│• #1 created: Normal review ││pins models for this task.            │
+│  and fix cycle             ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models]
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ REVIEW LOOP DECISION critical=true · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 2 · History 0
+ Session: Queue · waiting · Next #2 · Task #1 stopped (review): Criti…
+ #1 Normal review and fix cycle
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: Critical findings remain after 10 repair rounds. Work and   ┃
+┃evidence are preserved; no additional repair worker will start      ┃
+┃automatically. Inspect the findings, change the task or its models  ┃
+┃if needed, then retry.                                              ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Failed · AI                 ││Goal: Create result.txt containing ve…│
+╰────────────────────────────╯╰──────────────────────────────────────╯
+╭ Activity · #1 · l: all ────╮╭ Report · attempt 1 · o: raw log ─────╮
+│• Critical findings remain  ││Outcome: Critical findings remain     │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models]
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [o Log] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Supervisor started · close TUI safely · Pause stops execution
+@@ REVIEW LOOP READY critical=false · 120x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Queue preference · Next #2: Next task · m: run mode in Current
+ #1 Normal review and fix cycle
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                             │
+│No attempts yet                             ││Proof: result.txt contains verified                                     │
+│Can run · u Readiness                       │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 1 used                          ││Ready. r starts an attempt in the background supervisor; this pane      │
+│                                            ││follows its log.                                                        │
+│                                            ││Defaults and checks live in Config; c pins models for this task.        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• #1 revision 2 saved                       ││                                                                        │
+│• #1 created: Normal review and fix cycle   ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ REVIEW LOOP DECISION critical=false · 120x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 2
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                       │
+│Inspect results in History, or add more work.                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ REVIEW LOOP READY critical=true · 120x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Queue preference · Next #2: Next task · m: run mode in Current
+ #1 Normal review and fix cycle
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                             │
+│No attempts yet                             ││Proof: result.txt contains verified                                     │
+│Can run · u Readiness                       │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 1 used                          ││Ready. r starts an attempt in the background supervisor; this pane      │
+│                                            ││follows its log.                                                        │
+│                                            ││Defaults and checks live in Config; c pins models for this task.        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• #1 revision 2 saved                       ││                                                                        │
+│• #1 created: Normal review and fix cycle   ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ REVIEW LOOP DECISION critical=true · 120x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 2 · History 0
+ Session: Queue · waiting · Next #2 · Task #1 stopped (review): Critical findings remain after 10 repair rounds. Work a…
+ #1 Normal review and fix cycle
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: Critical findings remain after 10 repair rounds. Work and evidence are preserved; no additional repair worker ┃
+┃will start automatically. Inspect the findings, change the task or its models if needed, then retry.                  ┃
+┃Not resolved automatically: Ten repair rounds left critical findings; what to accept or change is your decision.      ┃
+┃Next: Read the findings, then change the task or c Models and r Retry, or D Mark done                                 ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Failed · AI                                 ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Tokens 240 new · 160 cached · 40 out        │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/remediation / none              │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────╮
+│Active <t>                                  ││Outcome: Critical findings remain after 10 repair rounds. Work and      │
+╰────────────────────────────────────────────╯│evidence are preserved; no additional repair worker will start          │
+╭ Activity · #1 · l: all ────────────────────╮│automatically. Inspect the findings, change the task or its models if   │
+│• Critical findings remain after 10 repair  ││needed, then retry.                                                     │
+│  rounds. Work and evidence are preserved;… ││                                                                        │
+│• Workflow · Critical findings need a       ││Worker claim (unverified):                                              │
+│  decision · repair round 10/10             ││Verified result                                                         │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

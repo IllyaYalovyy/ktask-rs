@@ -1,0 +1,62 @@
+@@ QUESTION BEFORE EXIT · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs input · runner stopped · <t> |   Queue 2 · History 0
+ Session: Queue · waiting · Next #2 · Awaiting answer to current task
+ #1 Question before exit
+ The worker needs your answer · r Answer · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Needs input · AI                            ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Waiting for your answer · r Answer          │╰────────────────────────────────────────────────────╯
+│Model codex/remediation / none              │╭ Question from the worker · r: answer ──────────────╮
+│Active <t> · waited <t>                     ││Which content?                                      │
+│Tokens 60 new · 40 cached · 10 out          │╰────────────────────────────────────────────────────╯
+│70 new tokens + 1 call(s) unreported        │╭ Report · attempt 1 · o: raw log ───────────────────╮
+│Budget 0 of 3 used                          ││Outcome: Waiting                                    │
+│Can run · u Readiness                       ││                                                    │
+│Execution   ✓ succeeded                     ││Worker claim (unverified):                          │
+╰────────────────────────────────────────────╯│Need direction                                      │
+╭ Activity · #1 · l: all ────────────────────╮│                                                    │
+│• Supervisor yielded this attempt for resume││Remediation · waiting · codex/remediation verdict:  │
+│• Which content?                            ││Owner action is required before delivery can        │
+│• Workflow · Implement · repair round 0/10  ││continue                                            │
+│• Supervisor started                        ││                                                    │
+│• Current task attempt recorded             ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Answer] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ ANSWER AFTER EXIT · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 2
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                   │
+│Inspect results in History, or add more work.                                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

@@ -1,0 +1,115 @@
+@@ OWNER GATE human=false · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Needs approval   |   Queue 2 · History 1
+ Session: Queue · waiting · Next #3 · Queue stopped for human work or…
+ #2 Owner gate
+ Pending revision 1 · needs approval · v Approve / n Reject
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Needs approval · AI         ││Goal: Confirm direction               │
+│No attempts yet             ││Proof: Direction confirmed            │
+│Run blocked (2) · u Readines│╰──────────────────────────────────────╯
+│Model codex/execution / none│╭ Log · following ─────────────────────╮
+│Budget 0 of 3 used          ││Needs approval. Review the task, then │
+╰────────────────────────────╯│Approve or Reject.                    │
+╭ Activity · #2 · l: all ────╮│                                      │
+│• #2 created: Owner gate    ││                                      │
+│                            ││                                      │
+│                            ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [v Approve] [n Reject] [D Mark done] [c Models] [e Edit]
+[u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+Supervisor started · close TUI safely · Pause stops execution
+@@ GATE CLEARED human=false · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 3
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────╮
+│Queue complete.                                                     │
+│Inspect results in History, or add more work.                       │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix]
+[S Stats] [? Help] [q Quit]
+
+Saved to SQLite · execution continuing
+@@ OWNER GATE human=true · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 2 · History 1
+ Session: Queue · waiting · Next #3 · Queue stopped for human work or…
+ #2 Owner gate
+ Human task · D Mark done when it is done
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · Human             ││Goal: Confirm direction               │
+│No attempts yet             ││Proof: Direction confirmed            │
+│Run blocked (1) · u Readines│╰──────────────────────────────────────╯
+│Model codex/execution / none│╭ Log · following ─────────────────────╮
+│Budget 0 of 3 used          ││Human task: do the work, then D Mark  │
+╰────────────────────────────╯│done.                                 │
+╭ Activity · #2 · l: all ────╮│                                      │
+│• #2 created: Owner gate    ││                                      │
+│                            ││                                      │
+│                            ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit]
+[b Break down] [u Readiness] [m Run mode] [Enter Details] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Supervisor started · close TUI safely · Pause stops execution
+@@ MARK DONE DIALOG · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 2 · History 1
+ Session: Queue · waiting · Next #3 · Queue stopped for human work or…
+ #2 Owner gate
+╭ Mark done #2 Owner gate ───────────────────────────────────────────╮
+│Records the task as done by your decision and moves it to History.  │
+│A live attempt stops first and its uncommitted changes are stashed; │
+│commit them first to keep them in the tree.                         │
+│                                                                    │
+│Reason (optional)                                                   │
+│▏                                                                   │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit]
+[b Break down] [u Readiness] [m Run mode] [Enter Details] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Supervisor started · close TUI safely · Pause stops execution
+@@ GATE CLEARED human=true · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 3
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────╮
+│Queue complete.                                                     │
+│Inspect results in History, or add more work.                       │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix]
+[S Stats] [? Help] [q Quit]
+
+Saved to SQLite · execution continuing

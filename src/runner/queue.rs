@@ -221,6 +221,9 @@ fn run_inner(
             service.supervisor_continuing_queue()?;
         }
         if options.notify && !notified {
+            // Recorded before the launcher hears of the run, so it always precedes the
+            // events of the run itself.
+            service.record_launch_result(task.id, "")?;
             // The launcher may have closed its end of this pipe already: a detached
             // runner never depends on it, so a failed notification is no failure.
             let mut stdout = std::io::stdout();

@@ -87,7 +87,7 @@ fn projects_screen_lists_live_states_and_switches_projects_by_keyboard_and_mouse
                 && s.contains("Current #111 · Pending")
                 && s.contains("Projects: 1 need you · 0 running")
         })?;
-        println!("STARTUP IN A PROJECT mouse={mouse}\n{current}");
+        crate::support::record("STARTUP IN A PROJECT", mouse, &current);
 
         t.send("2")?;
         t.screen("alpha queue", |s| s.contains("Queue · 1 / 110"))?;
@@ -103,7 +103,7 @@ fn projects_screen_lists_live_states_and_switches_projects_by_keyboard_and_mouse
             s.contains("Projects · 4 registered · 0 running · 1 need you")
                 && row(s, "gamma-docs").contains("Idle")
         })?;
-        println!("PROJECTS mouse={mouse}\n{listed}");
+        crate::support::record("PROJECTS", mouse, &listed);
         assert!(row(&listed, "alpha-app").contains("* alpha-app"));
         assert!(row(&listed, "alpha-app").contains("Ready"));
         assert!(row(&listed, "alpha-app").contains("110 queued · #111"));
@@ -117,7 +117,7 @@ fn projects_screen_lists_live_states_and_switches_projects_by_keyboard_and_mouse
         let ready = t.screen("list follows another project's queue", |s| {
             row(s, "gamma-docs").contains("Ready") && row(s, "gamma-docs").contains("#222")
         })?;
-        println!("LIVE CHANGE mouse={mouse}\n{ready}");
+        crate::support::record("LIVE CHANGE", mouse, &ready);
         let runners = state(root).join("runners");
         fs::create_dir_all(&runners)?;
         let lease = fs::File::create(runners.join(format!("{}.lock", gamma.project_id)))?;
@@ -126,7 +126,7 @@ fn projects_screen_lists_live_states_and_switches_projects_by_keyboard_and_mouse
             row(s, "gamma-docs").contains("Running")
                 && s.contains("Projects: 1 need you · 1 running")
         })?;
-        println!("LIVE RUNNER mouse={mouse}\n{running}");
+        crate::support::record("LIVE RUNNER", mouse, &running);
         drop(lease);
         t.screen("runner gone", |s| row(s, "gamma-docs").contains("Ready"))?;
 
@@ -148,7 +148,7 @@ fn projects_screen_lists_live_states_and_switches_projects_by_keyboard_and_mouse
                 && s.contains("Current #221 · Needs approval")
                 && s.contains("Opened beta-lib")
         })?;
-        println!("OPENED ANOTHER PROJECT mouse={mouse}\n{beta}");
+        crate::support::record("OPENED ANOTHER PROJECT", mouse, &beta);
 
         if mouse {
             t.click("0 Projects")?;
@@ -174,7 +174,7 @@ fn projects_screen_lists_live_states_and_switches_projects_by_keyboard_and_mouse
         let missing = t.screen("a missing folder does not open", |s| {
             s.contains("delta-gone: folder") && s.contains("is missing")
         })?;
-        println!("MISSING FOLDER mouse={mouse}\n{missing}");
+        crate::support::record("MISSING FOLDER", mouse, &missing);
         assert!(missing.contains("/ beta-lib"));
 
         if mouse {
@@ -192,7 +192,7 @@ fn projects_screen_lists_live_states_and_switches_projects_by_keyboard_and_mouse
         let returned = t.screen("alpha reopens where it was left", |s| {
             s.contains("/ alpha-app") && s.contains("Queue · 4 / 110")
         })?;
-        println!("RETURNED TO THE FIRST PROJECT mouse={mouse}\n{returned}");
+        crate::support::record("RETURNED TO THE FIRST PROJECT", mouse, &returned);
 
         t.send("q")?;
         t.finish()?;
@@ -214,7 +214,7 @@ fn starting_outside_a_project_opens_projects_and_adds_the_folder_only_on_request
                 && s.contains("is not a project · n adds it")
                 && s.contains("n Add this folder")
         })?;
-        println!("STARTUP OUTSIDE A PROJECT mouse={mouse}\n{started}");
+        crate::support::record("STARTUP OUTSIDE A PROJECT", mouse, &started);
         assert!(started.contains("/ alpha-app"));
         assert_eq!(
             overview::projects(&Database::open_in(&state(root))?)?.len(),
@@ -230,7 +230,7 @@ fn starting_outside_a_project_opens_projects_and_adds_the_folder_only_on_request
         let form = t.screen("register form", |s| {
             s.contains("Add this folder as a project") && s.contains("Project name")
         })?;
-        println!("ADD THIS FOLDER mouse={mouse}\n{form}");
+        crate::support::record("ADD THIS FOLDER", mouse, &form);
         assert!(form.contains("fresh-folder"));
         if mouse {
             t.click("Apply")?;
@@ -242,7 +242,7 @@ fn starting_outside_a_project_opens_projects_and_adds_the_folder_only_on_request
                 && s.contains("No current task")
                 && s.contains("Opened fresh-folder")
         })?;
-        println!("ADDED AND OPENED mouse={mouse}\n{opened}");
+        crate::support::record("ADDED AND OPENED", mouse, &opened);
         let names: Vec<_> = overview::projects(&Database::open_in(&state(root))?)?
             .into_iter()
             .map(|project| project.name)
@@ -402,7 +402,7 @@ fn projects_is_screen_zero_and_the_first_tab_by_keyboard_and_mouse() -> Result {
             project(root, "beta-lib")?;
             let mut t = Terminal::open_project(DEV, root, &root.join("alpha-app"), columns, rows)?;
             let started = t.screen("startup opens Current", |s| s.contains(TABS[1].1))?;
-            println!("{columns}x{rows} mouse={mouse} STARTUP\n{started}");
+            crate::support::record("STARTUP", mouse, &started);
             assert_tab_bar(&t, &started, 1);
 
             for n in [0, 1, 2, 3, 4, 5, 0] {
@@ -413,7 +413,7 @@ fn projects_is_screen_zero_and_the_first_tab_by_keyboard_and_mouse() -> Result {
                     t.send(&label[..1])?;
                 }
                 let shown = t.screen(label, |s| s.contains(marker))?;
-                println!("{columns}x{rows} mouse={mouse} {label}\n{shown}");
+                crate::support::record(label, mouse, &shown);
                 assert_tab_bar(&t, &shown, n);
             }
 
@@ -433,11 +433,11 @@ fn projects_is_screen_zero_and_the_first_tab_by_keyboard_and_mouse() -> Result {
                 t.send("6")?;
                 let ignored =
                     t.still("6 on Projects changes nothing", |s| s.contains(TABS[0].1))?;
-                println!("{columns}x{rows} AFTER KEY 6\n{ignored}");
+                crate::support::record("AFTER KEY 6", mouse, &ignored);
                 assert_tab_bar(&t, &ignored, 0);
                 t.send("?")?;
                 let help = t.screen("help names the screens", |s| s.contains("Keyboard help"))?;
-                println!("{columns}x{rows} HELP\n{help}");
+                crate::support::record("HELP", mouse, &help);
                 assert!(
                     help.contains("0 Projects  1 Current  2 Queue  3 History  4 Config  5 About")
                 );
@@ -464,7 +464,7 @@ fn projects_fit_the_smallest_terminal_and_the_simulator_lists_no_real_project() 
     let narrow = t.screen("projects at 70 x 22", |s| {
         s.contains("Projects · 5 registered") && row(s, "gamma-docs").contains("Idle")
     })?;
-    println!("PROJECTS AT 70 x 22\n{narrow}");
+    crate::support::record("PROJECTS AT 70 x 22", false, &narrow);
     assert!(row(&narrow, "beta-lib").contains("* beta-lib"));
     assert!(narrow.contains("[Enter Open]") && narrow.contains("[q Quit]"));
     let (column, line) = support::location(&narrow, "gamma-docs")?;
@@ -488,7 +488,7 @@ fn projects_fit_the_smallest_terminal_and_the_simulator_lists_no_real_project() 
     let simulated = demo.screen("demo projects", |s| {
         s.contains("The simulator has one mock workspace")
     })?;
-    println!("PROJECTS IN THE SIMULATOR\n{simulated}");
+    crate::support::record("PROJECTS IN THE SIMULATOR", true, &simulated);
     assert!(!simulated.contains("alpha-app") && !simulated.contains("Enter Open"));
     demo.send("\r")?;
     demo.send("1")?;
@@ -552,7 +552,7 @@ fn a_project_is_moved_and_deleted_from_projects_by_keyboard_and_mouse() -> Resul
         let form = t.screen("move form", |s| {
             s.contains("Move project delta-gone") && s.contains("New folder")
         })?;
-        println!("MOVE FORM mouse={mouse}\n{form}");
+        crate::support::record("MOVE FORM", mouse, &form);
         assert!(form.contains("ktask moves no files"));
         assert!(form.contains("delta-restored"));
         if mouse {
@@ -565,7 +565,7 @@ fn a_project_is_moved_and_deleted_from_projects_by_keyboard_and_mouse() -> Resul
                 && row(s, "delta-gone").contains("Idle")
                 && !s.contains("n Add this folder")
         })?;
-        println!("MOVED mouse={mouse}\n{moved}");
+        crate::support::record("MOVED", mouse, &moved);
         assert!(moved.contains("delta-restored"));
 
         // The open project is never deleted from under its own screens.
@@ -589,7 +589,7 @@ fn a_project_is_moved_and_deleted_from_projects_by_keyboard_and_mouse() -> Resul
         let danger = t.screen("delete form", |s| {
             s.contains("DANGER · Delete project beta-lib") && s.contains("Type the project name")
         })?;
-        println!("DELETE FORM mouse={mouse}\n{danger}");
+        crate::support::record("DELETE FORM", mouse, &danger);
         assert!(danger.contains("This cannot be undone"));
         assert!(danger.contains("1 unfinished and 0 finished"));
         assert!(danger.contains("is touched"));
@@ -602,7 +602,7 @@ fn a_project_is_moved_and_deleted_from_projects_by_keyboard_and_mouse() -> Resul
             t.send("\r")?;
         }
         let kept = t.screen("a wrong name is refused", |s| s.contains("exact name"))?;
-        println!("WRONG NAME mouse={mouse}\n{kept}");
+        crate::support::record("WRONG NAME", mouse, &kept);
         assert!(kept.contains("DANGER · Delete project beta-lib"));
         assert!(beta_files.iter().all(|file| file.exists()));
 
@@ -617,7 +617,7 @@ fn a_project_is_moved_and_deleted_from_projects_by_keyboard_and_mouse() -> Resul
                 && s.contains("Deleted project beta-lib: 1 tasks, 0 attempts")
                 && row(s, "beta-lib").is_empty()
         })?;
-        println!("DELETED mouse={mouse}\n{deleted}");
+        crate::support::record("DELETED", mouse, &deleted);
         assert!(deleted.contains("Projects: 0 need you"));
         assert!(beta_files.iter().all(|file| !file.exists()));
         assert!(gamma_files.iter().all(|file| file.exists()));

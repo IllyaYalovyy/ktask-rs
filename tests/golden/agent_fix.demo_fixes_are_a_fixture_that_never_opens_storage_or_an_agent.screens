@@ -1,0 +1,480 @@
+@@ DEMO FORM · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Agent fixes · demo workspace ──────────────────────────────────────╮
+│An agent repairs this project on this host, records every change    │
+│and verifies the result. Apply shows what it may do before it       │
+│starts.                                                             │
+│1 fix(es):                                                          │
+│#3 · fix · Done · <date> · Carry out report #1                      │
+│Fix                                                                 │
+│< New fix >   click / Space to change                               │
+│Carry out                                                           │
+│< The instruction below >   click / Space to change                 │
+│Instruction (when not a report)                                     │
+│                                                                    │
+│When verified                                                       │
+│< Leave the runner paused >   click / Space to change               │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Mock workspace · changes last only for this session
+@@ DEMO REFUSAL · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Agent fixes · demo workspace ──────────────────────────────────────╮
+│An agent repairs this project on this host, records every change    │
+│and verifies the result. Apply shows what it may do before it       │
+│starts.                                                             │
+│1 fix(es):                                                          │
+│#3 · fix · Done · <date> · Carry out report #1                      │
+│Fix                                                                 │
+│< New fix >   click / Space to change                               │
+│Carry out                                                           │
+│< The instruction below >   click / Space to change                 │
+│Instruction (when not a report)                                     │
+│                                                                    │
+│When verified                                                       │
+│< Leave the runner paused >   click / Space to change               │
+│Type an instruction, or choose a report                             │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Mock workspace · changes last only for this session
+@@ DEMO CONFIRMATION · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Start agent fix · demo workspace? ─────────────────────────────────╮
+│Project: demo workspace                                             │
+│Carries out the proposed steps of report #1                         │
+│When verified: leave the runner paused                              │
+│Model: codex/demo-operator · 30m 00s · $5.00                        │
+│The runner is paused first.                                         │
+│May: use ktask commands for this project; repair its folder and Git │
+│state without discarding work; change this account's setup, never   │
+│with elevated privileges.                                           │
+│Never: delete or move projects, touch other projects, shut ktask    │
+│down, approve drafts unless told, or write product code (it adds    │
+│tasks).                                                             │
+│Enter / Ctrl-S: start the fix · Esc: cancel                         │
+│                                                                    │
+│[Copy] [Start fix] [Cancel] [Up] [Down]                             │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Mock workspace · changes last only for this session
+@@ DEMO RUNNING · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Agent fix #4 · Running · demo workspace ───────────────────────────╮
+│VERIFICATION                                                        │
+│Not verified yet.                                                   │
+│                                                                    │
+│STEPS                                                               │
+│No step yet.                                                        │
+│                                                                    │
+│CHANGED (files, settings, where work went)                          │
+│Nothing recorded.                                                   │
+│                                                                    │
+│WHAT REMAINS                                                        │
+│Not known yet.                                                      │
+│                                                                    │
+│PROGRESS                                                            │
+│                                                                    │
+│s stop · [ ] older/newer · b fixes · Esc: close, it keeps running   │
+│                                                                    │
+│[Copy] [s Stop] [Older] [Newer] [b Fixes] [Up] [Down] [Close]       │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #4 started · closing keeps it running
+@@ DEMO PROGRESS · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Agent fix #4 · Running · demo workspace ───────────────────────────╮
+│                                                                    │
+│STEPS                                                               │
+│1. [applied] supervisor: Pause the project runner — simulated       │
+│                                                                    │
+│CHANGED (files, settings, where work went)                          │
+│Nothing recorded.                                                   │
+│                                                                    │
+│WHAT REMAINS                                                        │
+│Not known yet.                                                      │
+│                                                                    │
+│PROGRESS                                                            │
+│» The demo runner is paused                                         │
+│» The demo check command names a missing file                       │
+│                                                                    │
+│s stop · [ ] older/newer · b fixes · Esc: close, it keeps running   │
+│                                                                    │
+│[Copy] [s Stop] [Older] [Newer] [b Fixes] [Up] [Down] [Close]       │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #4 started · closing keeps it running
+@@ DEMO FINISHED · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Agent fix #4 · Done · demo workspace ──────────────────────────────╮
+│Agent fix #4 · Done                                                 │
+│The runner stays paused (ktask run continues).                      │
+│                                                                    │
+│AGENT SUMMARY                                                       │
+│The simulated check command was corrected.                          │
+│                                                                    │
+│VERIFICATION                                                        │
+│Verified: check demo-check failed before and passes now             │
+│- check demo-check: before failed · after passed                    │
+│                                                                    │
+│STEPS                                                               │
+│1. [applied] supervisor: Pause the project runner — simulated       │
+│2. [applied] ktask: ktask check-set demo-check --command demo —     │
+│Check saved (simulated)                                             │
+│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close│
+│                                                                    │
+│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #4 started · closing keeps it running
+@@ DEMO OLDER · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Agent fix #3 · Done · demo workspace ──────────────────────────────╮
+│Agent fix #3 · Done                                                 │
+│The runner stays paused (ktask run continues).                      │
+│                                                                    │
+│AGENT SUMMARY                                                       │
+│The simulated check command was corrected.                          │
+│                                                                    │
+│VERIFICATION                                                        │
+│Verified: check demo-check failed before and passes now             │
+│- check demo-check: before failed · after passed                    │
+│                                                                    │
+│STEPS                                                               │
+│1. [applied] supervisor: Pause the project runner — simulated       │
+│2. [applied] ktask: ktask check-set demo-check --command demo —     │
+│Check saved (simulated)                                             │
+│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close│
+│                                                                    │
+│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Agent fix #4 started · closing keeps it running
+@@ DEMO PROJECTS FORM · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Agent fixes · demo workspace ──────────────────────────────────────╮
+│An agent repairs this project on this host, records every change    │
+│and verifies the result. Apply shows what it may do before it       │
+│starts.                                                             │
+│2 fix(es):                                                          │
+│#4 · fix · Done · <date> · Carry out report #1                      │
+│#3 · fix · Done · <date> · Carry out report #1                      │
+│Fix                                                                 │
+│< New fix >   click / Space to change                               │
+│Carry out                                                           │
+│< The instruction below >   click / Space to change                 │
+│Instruction (when not a report)                                     │
+│                                                                    │
+│When verified                                                       │
+│< Leave the runner paused >   click / Space to change               │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DEMO FORM · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ #1 Recover a failed check
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Failed · AI                                 ││Goal: Include every task on the final queue page.                       │
+│Attempt 1 · step <n>/6                      ││Proof: All 240 tasks are reachable.                                     │
+│Budget 1 of 3 used  ╭ Agent fixes · demo workspace ──────────────────────────────────────────────╮────────────────────╯
+│Model economy / medi│An agent repairs this project on this host, records every change and        │────────────────────╮
+│Cost <cost> (mock)  │verifies the result. Apply shows what it may do before it starts.           │                    │
+│                    │1 fix(es):                                                                  │                    │
+│                    │#3 · fix · Done · <date> · Carry out report #1                              │                    │
+│                    │Fix                                                                         │                    │
+│                    │< New fix >   click / Space to change                                       │                    │
+│                    │Carry out                                                                   │                    │
+│                    │< The instruction below >   click / Space to change                         │                    │
+│                    │Instruction (when not a report)                                             │                    │
+│                    │                                                                            │                    │
+╰────────────────────│When verified                                                               │                    │
+╭ Activity · l: all ─│< Leave the runner paused >   click / Space to change                       │                    │
+│• Check failed · #1 │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│• Execution stopped │                                                                            │                    │
+│• Stopped for a deci│[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││FAIL  final_page_includes_last_row                                      │
+│                                            ││Expected 240 tasks; received 239.                                       │
+│                                            ││Execution stopped after a failing check.                                │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DEMO REFUSAL · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ #1 Recover a failed check
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Failed · AI                                 ││Goal: Include every task on the final queue page.                       │
+│Attempt 1 · step <n>/6                      ││Proof: All 240 tasks are reachable.                                     │
+│Budget 1 of 3 used  ╭ Agent fixes · demo workspace ──────────────────────────────────────────────╮────────────────────╯
+│Model economy / medi│An agent repairs this project on this host, records every change and        │────────────────────╮
+│Cost <cost> (mock)  │verifies the result. Apply shows what it may do before it starts.           │                    │
+│                    │1 fix(es):                                                                  │                    │
+│                    │#3 · fix · Done · <date> · Carry out report #1                              │                    │
+│                    │Fix                                                                         │                    │
+│                    │< New fix >   click / Space to change                                       │                    │
+│                    │Carry out                                                                   │                    │
+│                    │< The instruction below >   click / Space to change                         │                    │
+│                    │Instruction (when not a report)                                             │                    │
+│                    │                                                                            │                    │
+╰────────────────────│When verified                                                               │                    │
+╭ Activity · l: all ─│< Leave the runner paused >   click / Space to change                       │                    │
+│• Check failed · #1 │Type an instruction, or choose a report                                     │                    │
+│• Execution stopped │                                                                            │                    │
+│• Stopped for a deci│[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││FAIL  final_page_includes_last_row                                      │
+│                                            ││Expected 240 tasks; received 239.                                       │
+│                                            ││Execution stopped after a failing check.                                │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DEMO CONFIRMATION · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ #1 Recover a failed check
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Failed · AI                                 ││Goal: Include every task on the final queue page.                       │
+│Attempt 1 · step <n>/6                      ││Proof: All 240 tasks are reachable.                                     │
+│Budget 1 of 3 used                          │╰────────────────────────────────────────────────────────────────────────╯
+│Model economy / medi╭ Start agent fix · demo workspace? ─────────────────────────────────────────╮────────────────────╮
+│Cost <cost> (mock)  │Project: demo workspace                                                     │                    │
+│                    │Carries out the proposed steps of report #1                                 │                    │
+│                    │When verified: leave the runner paused                                      │                    │
+│                    │Model: codex/demo-operator · 30m 00s · $5.00                                │                    │
+│                    │The runner is paused first.                                                 │                    │
+│                    │May: use ktask commands for this project; repair its folder and Git state   │                    │
+│                    │without discarding work; change this account's setup, never with elevated   │                    │
+│                    │privileges.                                                                 │                    │
+│                    │Never: delete or move projects, touch other projects, shut ktask down,      │                    │
+╰────────────────────│approve drafts unless told, or write product code (it adds tasks).          │                    │
+╭ Activity · l: all ─│Enter / Ctrl-S: start the fix · Esc: cancel                                 │                    │
+│• Check failed · #1 │                                                                            │                    │
+│• Execution stopped │[Copy] [Start fix] [Cancel] [Up] [Down]                                     │                    │
+│• Stopped for a deci│                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││PASS  queue fixture 64                                                  │
+│                                            ││FAIL  final_page_includes_last_row                                      │
+│                                            ││Expected 240 tasks; received 239.                                       │
+│                                            ││Execution stopped after a failing check.                                │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DEMO RUNNING · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · N╭ Agent fix #4 · Running · demo workspace ───────────────────────────────────╮
+ #1 Recover a failed │Agent fix #4 · Running                                                      │
+ Failed · r Retry kee│                                                                            │
+╭ Status · Enter: det│From: Carry out report #1                                                   │────────────────────╮
+│Failed · AI         │When verified: leave the runner paused                                      │                    │
+│Attempt 1 · step <n>/6│Requested by human: owner                                                   │                    │
+│Budget 1 of 3 used  │Model: codex/demo-operator                                                  │────────────────────╯
+│Model economy / medi│Started <date> · running for <t>                                            │────────────────────╮
+│Cost <cost> (mock)  │Usage: tokens not reported                                                  │                    │
+│                    │Cost: not reported (limit $5.00) · time limit 30m 00s                       │                    │
+│                    │                                                                            │                    │
+│                    │VERIFICATION                                                                │                    │
+│                    │Not verified yet.                                                           │                    │
+│                    │                                                                            │                    │
+│                    │STEPS                                                                       │                    │
+│                    │No step yet.                                                                │                    │
+│                    │                                                                            │                    │
+╰────────────────────│CHANGED (files, settings, where work went)                                  │                    │
+╭ Activity · l: all ─│Nothing recorded.                                                           │                    │
+│• Check failed · #1 │                                                                            │                    │
+│• Execution stopped │WHAT REMAINS                                                                │                    │
+│• Stopped for a deci│Not known yet.                                                              │                    │
+│                    │                                                                            │                    │
+│                    │PROGRESS                                                                    │                    │
+│                    │                                                                            │                    │
+│                    │s stop · [ ] older/newer · b fixes · Esc: close, it keeps running           │                    │
+│                    │                                                                            │                    │
+╰────────────────────│[Copy] [s Stop] [Older] [Newer] [b Fixes] [Up] [Down] [Close]               │────────────────────╯
+[Copy] [r Retry] [s S│                                                                            │[Enter Details]
+[a Add] [i Investigat╰────────────────────────────────────────────────────────────────────────────╯
+
+Agent fix #4 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DEMO PROGRESS · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Curre╭ Agent fix #4 · Running · demo workspace ───────────────────────────────────╮
+ Current #1 · Failed │Agent fix #4 · Running                                                      │
+ Queue preference · N│                                                                            │
+ #1 Recover a failed │From: Carry out report #1                                                   │
+ Failed · r Retry kee│When verified: leave the runner paused                                      │
+╭ Status · Enter: det│Requested by human: owner                                                   │────────────────────╮
+│Failed · AI         │Model: codex/demo-operator                                                  │                    │
+│Attempt 1 · step <n>/6│Started <date> · running for <t>                                            │                    │
+│Budget 1 of 3 used  │Usage: tokens not reported                                                  │────────────────────╯
+│Model economy / medi│Cost: not reported (limit $5.00) · time limit 30m 00s                       │────────────────────╮
+│Cost <cost> (mock)  │                                                                            │                    │
+│                    │VERIFICATION                                                                │                    │
+│                    │Not verified yet.                                                           │                    │
+│                    │- check demo-check: before failed · after not run                           │                    │
+│                    │                                                                            │                    │
+│                    │STEPS                                                                       │                    │
+│                    │1. [applied] supervisor: Pause the project runner — simulated               │                    │
+│                    │                                                                            │                    │
+│                    │CHANGED (files, settings, where work went)                                  │                    │
+╰────────────────────│Nothing recorded.                                                           │                    │
+╭ Activity · l: all ─│                                                                            │                    │
+│• Check failed · #1 │WHAT REMAINS                                                                │                    │
+│• Execution stopped │Not known yet.                                                              │                    │
+│• Stopped for a deci│                                                                            │                    │
+│                    │PROGRESS                                                                    │                    │
+│                    │» The demo runner is paused                                                 │                    │
+│                    │» The demo check command names a missing file                               │                    │
+│                    │                                                                            │                    │
+│                    │s stop · [ ] older/newer · b fixes · Esc: close, it keeps running           │                    │
+╰────────────────────│                                                                            │────────────────────╯
+[Copy] [r Retry] [s S│[Copy] [s Stop] [Older] [Newer] [b Fixes] [Up] [Down] [Close]               │[Enter Details]
+[a Add] [i Investigat│                                                                            │
+                     ╰────────────────────────────────────────────────────────────────────────────╯
+Agent fix #4 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DEMO FINISHED · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Curre╭ Agent fix #4 · Done · demo workspace ──────────────────────────────────────╮
+ Current #1 · Failed │Agent fix #4 · Done                                                         │
+ Queue preference · N│The runner stays paused (ktask run continues).                              │
+ #1 Recover a failed │                                                                            │
+ Failed · r Retry kee│AGENT SUMMARY                                                               │
+╭ Status · Enter: det│The simulated check command was corrected.                                  │────────────────────╮
+│Failed · AI         │                                                                            │                    │
+│Attempt 1 · step <n>/6│VERIFICATION                                                                │                    │
+│Budget 1 of 3 used  │Verified: check demo-check failed before and passes now                     │────────────────────╯
+│Model economy / medi│- check demo-check: before failed · after passed                            │────────────────────╮
+│Cost <cost> (mock)  │                                                                            │                    │
+│                    │STEPS                                                                       │                    │
+│                    │1. [applied] supervisor: Pause the project runner — simulated               │                    │
+│                    │2. [applied] ktask: ktask check-set demo-check --command demo — Check saved │                    │
+│                    │(simulated)                                                                 │                    │
+│                    │                                                                            │                    │
+│                    │CHANGED (files, settings, where work went)                                  │                    │
+│                    │- setting check demo-check: old -> demo                                     │                    │
+│                    │                                                                            │                    │
+╰────────────────────│WHAT REMAINS                                                                │                    │
+╭ Activity · l: all ─│Nothing.                                                                    │                    │
+│• Check failed · #1 │                                                                            │                    │
+│• Execution stopped │From: Carry out report #1                                                   │                    │
+│• Stopped for a deci│When verified: leave the runner paused                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/demo-operator                                                  │                    │
+│                    │Started <date> · took <t>                                                   │                    │
+│                    │Usage: tokens not reported                                                  │                    │
+│                    │Cost: not reported (limit $5.00) · time limit 30m 00s                       │                    │
+╰────────────────────│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close        │────────────────────╯
+[Copy] [r Retry] [s S│                                                                            │[Enter Details]
+[a Add] [i Investigat│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                        │
+                     │                                                                            │
+Agent fix #4 started ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DEMO OLDER · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Curre╭ Agent fix #3 · Done · demo workspace ──────────────────────────────────────╮
+ Current #1 · Failed │Agent fix #3 · Done                                                         │
+ Queue preference · N│The runner stays paused (ktask run continues).                              │
+ #1 Recover a failed │                                                                            │
+ Failed · r Retry kee│AGENT SUMMARY                                                               │
+╭ Status · Enter: det│The simulated check command was corrected.                                  │────────────────────╮
+│Failed · AI         │                                                                            │                    │
+│Attempt 1 · step <n>/6│VERIFICATION                                                                │                    │
+│Budget 1 of 3 used  │Verified: check demo-check failed before and passes now                     │────────────────────╯
+│Model economy / medi│- check demo-check: before failed · after passed                            │────────────────────╮
+│Cost <cost> (mock)  │                                                                            │                    │
+│                    │STEPS                                                                       │                    │
+│                    │1. [applied] supervisor: Pause the project runner — simulated               │                    │
+│                    │2. [applied] ktask: ktask check-set demo-check --command demo — Check saved │                    │
+│                    │(simulated)                                                                 │                    │
+│                    │                                                                            │                    │
+│                    │CHANGED (files, settings, where work went)                                  │                    │
+│                    │- setting check demo-check: old -> demo                                     │                    │
+│                    │                                                                            │                    │
+╰────────────────────│WHAT REMAINS                                                                │                    │
+╭ Activity · l: all ─│Nothing.                                                                    │                    │
+│• Check failed · #1 │                                                                            │                    │
+│• Execution stopped │From: Carry out report #1                                                   │                    │
+│• Stopped for a deci│When verified: leave the runner paused                                      │                    │
+│                    │Requested by human: owner                                                   │                    │
+│                    │Model: codex/demo-operator                                                  │                    │
+│                    │Started <date> · took <t>                                                   │                    │
+│                    │Usage: tokens not reported                                                  │                    │
+│                    │Cost: not reported (limit $5.00) · time limit 30m 00s                       │                    │
+╰────────────────────│[ ] older/newer · b fixes · Wheel / PgUp / PgDn: scroll · Esc: close        │────────────────────╯
+[Copy] [r Retry] [s S│                                                                            │[Enter Details]
+[a Add] [i Investigat│[Copy] [Older] [Newer] [b Fixes] [Up] [Down] [Close]                        │
+                     │                                                                            │
+Agent fix #4 started ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ DEMO PROJECTS FORM · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Projects · 0 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│The simulator has one mock workspace.                                                                                 │
+│Start without --demo╭ Agent fixes · demo workspace ──────────────────────────────────────────────╮                    │
+│                    │An agent repairs this project on this host, records every change and        │                    │
+│                    │verifies the result. Apply shows what it may do before it starts.           │                    │
+│                    │2 fix(es):                                                                  │                    │
+│                    │#4 · fix · Done · <date> · Carry out report #1                              │                    │
+│                    │#3 · fix · Done · <date> · Carry out report #1                              │                    │
+│                    │Fix                                                                         │                    │
+│                    │< New fix >   click / Space to change                                       │                    │
+│                    │Carry out                                                                   │                    │
+│                    │< The instruction below >   click / Space to change                         │                    │
+│                    │Instruction (when not a report)                                             │                    │
+│                    │                                                                            │                    │
+│                    │When verified                                                               │                    │
+│                    │< Leave the runner paused >   click / Space to change                       │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Agent fix #4 started · closing keeps it running
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

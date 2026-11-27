@@ -8,7 +8,7 @@ use ktask_rs_mk3::{
 };
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, Output},
 };
 
@@ -436,12 +436,7 @@ fn real_tools_plan_is_visible_from_config_by_keyboard_and_mouse() -> Result {
         let current_screen = terminal.screen("current dependency opens", |s| {
             s.contains("Current #1 · Needs dependency") && s.contains("t Tools and install plan")
         })?;
-        if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            support::screen_png(
-                &current_screen,
-                &PathBuf::from(directory).join(format!("provision-current-mouse-{mouse}.png")),
-            )?;
-        }
+        crate::support::record("provision current", mouse, &current_screen);
         if mouse {
             terminal.click("t Tools and install plan")?;
         } else {
@@ -449,20 +444,18 @@ fn real_tools_plan_is_visible_from_config_by_keyboard_and_mouse() -> Result {
         }
         let current_tools =
             terminal.screen("current tools opens", |s| s.contains("Project tools"))?;
-        if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            support::screen_png(
-                &current_tools,
-                &PathBuf::from(directory)
-                    .join(format!("provision-current-tools-mouse-{mouse}.png")),
-            )?;
+        crate::support::record("provision current tools", mouse, &current_tools);
+        if mouse {
+            terminal.click("Cancel")?;
+        } else {
+            terminal.send("\x1b")?;
         }
-        terminal.click("Cancel")?;
         terminal.screen("current tools closes", |s| !s.contains("Project tools"))?;
         if mouse {
             terminal.click("4 Config")?;
             let config =
                 terminal.screen("configuration opened", |s| s.contains("Configuration"))?;
-            println!("PROVISION CONFIG\n{config}");
+            crate::support::record("PROVISION CONFIG", mouse, &config);
             terminal.click("t Tools")?;
         } else {
             terminal.send("4t")?;
@@ -488,19 +481,17 @@ fn real_tools_plan_is_visible_from_config_by_keyboard_and_mouse() -> Result {
         let screen = terminal.screen("reviewed install plan", |s| {
             s.contains("Android install plan")
         })?;
-        println!("PROVISION PLAN mouse={mouse}\n{screen}");
+        crate::support::record("PROVISION PLAN", mouse, &screen);
         assert!(
             screen.contains("Stage capacity")
                 && screen.contains("License consent")
                 && screen.contains("system-images")
         );
-        if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            support::screen_png(
-                &screen,
-                &PathBuf::from(directory).join(format!("provision-plan-mouse-{mouse}.png")),
-            )?;
+        if mouse {
+            terminal.click("Close")?;
+        } else {
+            terminal.send("\x1b")?;
         }
-        terminal.click("Close")?;
         terminal.screen("plan closed", |s| !s.contains("Android install plan"))?;
         let open_tools = |terminal: &mut Terminal| -> Result {
             if mouse {
@@ -591,13 +582,16 @@ fn real_tools_plan_is_visible_from_config_by_keyboard_and_mouse() -> Result {
             s.contains("Android install progress")
                 && s.contains("Downloading reviewed Android packages")
         })?;
-        if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            support::screen_png(
-                &progress,
-                &PathBuf::from(directory).join(format!("provision-progress-mouse-{mouse}.png")),
-            )?;
+        crate::support::record("provision progress", mouse, &progress);
+        if mouse {
+            terminal.click("Close")?;
+        } else {
+            terminal.send("\x1b")?;
         }
-        terminal.click("Close")?;
+        // A key sent right after Esc would be read as one Alt chord.
+        terminal.screen("progress closed", |s| {
+            !s.contains("Android install progress")
+        })?;
         open_tools(&mut terminal)?;
         choose(&mut terminal, 10, "Cancel install")?;
         terminal.screen("installer cancellation requested", |s| {
@@ -615,12 +609,7 @@ fn real_tools_plan_is_visible_from_config_by_keyboard_and_mouse() -> Result {
         let stopped = terminal.screen("install stays in dependency wait", |s| {
             s.contains("Android provisioning stopped") && s.contains("Needs dependency")
         })?;
-        if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            support::screen_png(
-                &stopped,
-                &PathBuf::from(directory).join(format!("provision-install-wait-mouse-{mouse}.png")),
-            )?;
-        }
+        crate::support::record("provision install wait", mouse, &stopped);
         terminal.send("q")?;
         terminal.finish()?;
     }
@@ -756,12 +745,7 @@ truncate -s 131072 "$ANDROID_HOME/system-images/android-36/google_apis/x86_64/sy
     let started = terminal.screen("real installer started", |s| {
         s.contains("Android installer started")
     })?;
-    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-        support::screen_png(
-            &started,
-            &PathBuf::from(directory).join("provision-real-installer-started.png"),
-        )?;
-    }
+    crate::support::record("provision real installer started", false, &started);
     terminal.send("t")?;
     terminal.screen("installer tools", |s| s.contains("Project tools"))?;
     terminal.send("         ")?;
@@ -770,12 +754,7 @@ truncate -s 131072 "$ANDROID_HOME/system-images/android-36/google_apis/x86_64/sy
     let progress = terminal.screen("real installer progress", |s| {
         s.contains("Android install progress") && s.contains("Installing fixed Android packages")
     })?;
-    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-        support::screen_png(
-            &progress,
-            &PathBuf::from(directory).join("provision-real-installer-progress.png"),
-        )?;
-    }
+    crate::support::record("provision real installer progress", false, &progress);
     terminal.click("Close")?;
     terminal.send("t")?;
     terminal.screen("tools for cancellation", |s| s.contains("Project tools"))?;
@@ -785,12 +764,7 @@ truncate -s 131072 "$ANDROID_HOME/system-images/android-36/google_apis/x86_64/sy
     let cancelled = terminal.screen("real installer cancelled", |s| {
         s.contains("Android provisioning stopped") && s.contains("Needs dependency")
     })?;
-    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-        support::screen_png(
-            &cancelled,
-            &PathBuf::from(directory).join("provision-real-installer-cancelled.png"),
-        )?;
-    }
+    crate::support::record("provision real installer cancelled", true, &cancelled);
     assert!(
         !paths
             .data
@@ -813,12 +787,7 @@ truncate -s 131072 "$ANDROID_HOME/system-images/android-36/google_apis/x86_64/sy
         s.contains("Current #1 · Pending")
             && s.contains("dependency rechecked: true; resumed: false")
     })?;
-    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-        support::screen_png(
-            &ready,
-            &PathBuf::from(directory).join("provision-real-installer-ready.png"),
-        )?;
-    }
+    crate::support::record("provision real installer ready", true, &ready);
     terminal.send("q")?;
     terminal.finish()?;
     let service = Service::open(Database::open(&paths)?, &project, None)?;

@@ -1,0 +1,270 @@
+@@ SELECTED QUEUE · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Queue · 120 shown / 120 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 120 ───────────────────────╮╭ Details · click for full ╮
+│› #1   Failed   Recover a failed check  ││Recover a failed check    │
+│  #2   Pending  [Human] Approve the que…││#1 · Failed · AI          │
+│  #3   Pending  Choose the export format││                          │
+│  #4   Pending  Failure recovery · case…││Goal: Include every task  │
+│  #5   Pending  Workspace cleanup · cas…││on the final queue page.  │
+│  #6   Pending  Instance isolation · ca…││                          │
+│  #7   Pending  Queue pagination · case…││Check: All 240 tasks are  │
+│  #8   Pending  Keyboard navigation · c…││reachable.                │
+│  #9   Pending  Search matching · case 9││                          │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [r Retry] [a Add] [i Insert] [e Edit] [c Models] [s Stop]
+[T Restart] [D Mark done] [o Import] [E Export] [Enter Details]
+[f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ KEYBOARD AFTER MOUSE · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Queue · 120 shown / 120 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 120 ───────────────────────╮╭ Details · click for full ╮
+│› #1   Failed   Recover a failed check  ││Recover a failed check    │
+│  #2   Pending  [Human] Approve the que…││#1 · Failed · AI          │
+│  #3   Pending  Choose the export format││                          │
+│  #4   Pending  Failure recovery · case…││Goal: Include every task  │
+│  #5   Pending  Workspace cleanup · cas…││on the final queue page.  │
+│  #6   Pending  Instance isolation · ca…││                          │
+│  #7   Pending  Queue pagination · case…││Check: All 240 tasks are  │
+│  #8   Pending  Keyboard navigation · c…││reachable.                │
+│  #9   Pending  Search matching · case 9││                          │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [r Retry] [a Add] [i Insert] [e Edit] [c Models] [s Stop]
+[T Restart] [D Mark done] [o Import] [E Export] [Enter Details]
+[f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+Sent 34 characters via OSC 52 · F7: native selection fallback
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ KEYBOARD SELECTION · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Queue · 120 shown / 120 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 120 ───────────────────────╮╭ Details · click for full ╮
+│  #1   Failed   Recover a failed check  ││Approve the queue         │
+│› #2   Pending  [Human] Approve the que…││interaction               │
+│  #3   Pending  Choose the export format││#2 · Pending · Human      │
+│  #4   Pending  Failure recovery · case…││                          │
+│  #5   Pending  Workspace cleanup · cas…││Goal: Inspect the queue   │
+│  #6   Pending  Instance isolation · ca…││and mark the result done. │
+│  #7   Pending  Queue pagination · case…││                          │
+│  #8   Pending  Keyboard navigation · c…││Check: A person confirms  │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [r Retry] [a Add] [i Insert] [e Edit] [m Move] [b Break down]
+[c Models] [D Mark done] [x Cancel] [R Supersede] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats]
+[? Help] [q Quit]
+Sent 34 characters via OSC 52 · F7: native selection fallback
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ F2 NORMAL KEY REACHES HISTORY · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ History · 120 shown / 120 total · read-only
+ Filter: All  |  Search: / to search
+╭ History · 1 / 120 · Attempts Time Usage ───────────────────────────╮
+│› #121 Done     Queue pagination · case 121               1 <t> $0.03│
+│  #122 Done     Keyboard navigation · case 122            1 <t> $0.03│
+│  #123 Done     Search matching · case 123                1 <t> $0.03│
+│  #124 Done     Failure recovery · case 124               1 <t> $0.03│
+│  #125 Done     Workspace cleanup · case 125              1 <t> $0.03│
+│  #126 Done     Instance isolation · case 126             1 <t> $0.03│
+│  #127 Done     Queue pagination · case 127               1 <t> $0.03│
+│  #128 Done     Keyboard navigation · case 128            1 <t> $0.03│
+│  #129 Done     Search matching · case 129                1 <t> $0.03│
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures]
+[f Filter] [/ Search] [Esc Clear] [E Export] [S Stats] [? Help]
+[q Quit]
+Sent 36 characters via OSC 52 · F7: native selection fallback
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ NATIVE FALLBACK · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Queue · 120 shown / 120 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 120 ───────────────────────╮╭ Details · click for full ╮
+│  #1   Failed   Recover a failed check  ││Approve the queue         │
+│› #2   Pending  [Human] Approve the que…││interaction               │
+│  #3   Pending  Choose the export format││#2 · Pending · Human      │
+│  #4   Pending  Failure recovery · case…││                          │
+│  #5   Pending  Workspace cleanup · cas…││Goal: Inspect the queue   │
+│  #6   Pending  Instance isolation · ca…││and mark the result done. │
+│  #7   Pending  Queue pagination · case…││                          │
+│  #8   Pending  Keyboard navigation · c…││Check: A person confirms  │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [r Retry] [a Add] [i Insert] [e Edit] [m Move] [b Break down]
+[c Models] [D Mark done] [x Cancel] [R Supersede] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats]
+[? Help] [q Quit]
+Mouse capture off · use the terminal's native text selection
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SELECTED QUEUE · 120x30 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Queue · 120 shown / 120 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 120 · Model ─────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│› #1   Failed   Recover a failed check                  economy medium││Recover a failed check                        │
+│  #2   Pending  [Human] Approve the queue interaction   economy medium││#1 · Failed · AI                              │
+│  #3   Pending  Choose the export format                economy medium││                                              │
+│  #4   Pending  Failure recovery · case 4               economy medium││Goal: Include every task on the final queue   │
+│  #5   Pending  Workspace cleanup · case 5              economy medium││page.                                         │
+│  #6   Pending  Instance isolation · case 6             economy medium││                                              │
+│  #7   Pending  Queue pagination · case 7               economy medium││Check: All 240 tasks are reachable.           │
+│  #8   Pending  Keyboard navigation · case 8            economy medium││                                              │
+│  #9   Pending  Search matching · case 9                economy medium││Attempts: 1 · $0.08                           │
+│  #10  Pending  Failure recovery · case 10              economy medium││                                              │
+│  #11  Pending  Workspace cleanup · case 11             economy medium││Models:                                       │
+│  #12  Pending  Instance isolation · case 12            economy medium││Execution: economy / medium                   │
+│  #13  Pending  Queue pagination · case 13              economy medium││Review: capable / high                        │
+│  #14  Pending  Keyboard navigation · case 14           economy medium││Validation: capable / high                    │
+│  #15  Pending  Search matching · case 15               economy medium││Remediation: capable / high                   │
+│  #16  Pending  Failure recovery · case 16              economy medium││                                              │
+│  #17  Pending  Workspace cleanup · case 17             economy medium││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Retry] [a Add] [i Insert] [e Edit] [c Models] [s Stop] [T Restart] [D Mark done] [o Import] [E Export]
+[Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ KEYBOARD AFTER MOUSE · 120x30 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Queue · 120 shown / 120 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 120 · Model ─────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│› #1   Failed   Recover a failed check                  economy medium││Recover a failed check                        │
+│  #2   Pending  [Human] Approve the queue interaction   economy medium││#1 · Failed · AI                              │
+│  #3   Pending  Choose the export format                economy medium││                                              │
+│  #4   Pending  Failure recovery · case 4               economy medium││Goal: Include every task on the final queue   │
+│  #5   Pending  Workspace cleanup · case 5              economy medium││page.                                         │
+│  #6   Pending  Instance isolation · case 6             economy medium││                                              │
+│  #7   Pending  Queue pagination · case 7               economy medium││Check: All 240 tasks are reachable.           │
+│  #8   Pending  Keyboard navigation · case 8            economy medium││                                              │
+│  #9   Pending  Search matching · case 9                economy medium││Attempts: 1 · $0.08                           │
+│  #10  Pending  Failure recovery · case 10              economy medium││                                              │
+│  #11  Pending  Workspace cleanup · case 11             economy medium││Models:                                       │
+│  #12  Pending  Instance isolation · case 12            economy medium││Execution: economy / medium                   │
+│  #13  Pending  Queue pagination · case 13              economy medium││Review: capable / high                        │
+│  #14  Pending  Keyboard navigation · case 14           economy medium││Validation: capable / high                    │
+│  #15  Pending  Search matching · case 15               economy medium││Remediation: capable / high                   │
+│  #16  Pending  Failure recovery · case 16              economy medium││                                              │
+│  #17  Pending  Workspace cleanup · case 17             economy medium││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Retry] [a Add] [i Insert] [e Edit] [c Models] [s Stop] [T Restart] [D Mark done] [o Import] [E Export]
+[Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Sent 49 characters via OSC 52 · F7: native selection fallback
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ KEYBOARD SELECTION · 120x30 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Queue · 120 shown / 120 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 120 · Model ─────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│  #1   Failed   Recover a failed check                  economy medium││Approve the queue interaction                 │
+│› #2   Pending  [Human] Approve the queue interaction   economy medium││#2 · Pending · Human                          │
+│  #3   Pending  Choose the export format                economy medium││                                              │
+│  #4   Pending  Failure recovery · case 4               economy medium││Goal: Inspect the queue and mark the result   │
+│  #5   Pending  Workspace cleanup · case 5              economy medium││done.                                         │
+│  #6   Pending  Instance isolation · case 6             economy medium││                                              │
+│  #7   Pending  Queue pagination · case 7               economy medium││Check: A person confirms the interaction      │
+│  #8   Pending  Keyboard navigation · case 8            economy medium││works.                                        │
+│  #9   Pending  Search matching · case 9                economy medium││                                              │
+│  #10  Pending  Failure recovery · case 10              economy medium││Attempts: 0 · $0.00                           │
+│  #11  Pending  Workspace cleanup · case 11             economy medium││                                              │
+│  #12  Pending  Instance isolation · case 12            economy medium││Models:                                       │
+│  #13  Pending  Queue pagination · case 13              economy medium││Execution: economy / medium                   │
+│  #14  Pending  Keyboard navigation · case 14           economy medium││Review: capable / high                        │
+│  #15  Pending  Search matching · case 15               economy medium││Validation: capable / high                    │
+│  #16  Pending  Failure recovery · case 16              economy medium││Remediation: capable / high                   │
+│  #17  Pending  Workspace cleanup · case 17             economy medium││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Retry] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel] [R Supersede]
+[o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Sent 49 characters via OSC 52 · F7: native selection fallback
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ F2 NORMAL KEY REACHES HISTORY · 120x30 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ History · 120 shown / 120 total · read-only
+ Filter: All  |  Search: / to search
+╭ History · 1 / 120 · Attempts Time Usage ───────────────────────────────────╮╭ Details · click for full ──────────────╮
+│› #121 Done     Queue pagination · case 121                       1 <t> $0.03││Queue pagination · case 121             │
+│  #122 Done     Keyboard navigation · case 122                    1 <t> $0.03││#121 · Done · AI                        │
+│  #123 Done     Search matching · case 123                        1 <t> $0.03││                                        │
+│  #124 Done     Failure recovery · case 124                       1 <t> $0.03││Goal: Make the requested change.        │
+│  #125 Done     Workspace cleanup · case 125                      1 <t> $0.03││                                        │
+│  #126 Done     Instance isolation · case 126                     1 <t> $0.03││Check: Automated checks pass.           │
+│  #127 Done     Queue pagination · case 127                       1 <t> $0.03││                                        │
+│  #128 Done     Keyboard navigation · case 128                    1 <t> $0.03││Attempts: 1 · $0.03                     │
+│  #129 Done     Search matching · case 129                        1 <t> $0.03││                                        │
+│  #130 Done     Failure recovery · case 130                       1 <t> $0.03││Models:                                 │
+│  #131 Done     Workspace cleanup · case 131                      1 <t> $0.03││Execution: economy / medium             │
+│  #132 Done     Instance isolation · case 132                     1 <t> $0.03││Review: capable / high                  │
+│  #133 Done     Queue pagination · case 133                       1 <t> $0.03││Validation: capable / high              │
+│  #134 Done     Keyboard navigation · case 134                    1 <t> $0.03││Remediation: capable / high             │
+│  #135 Done     Search matching · case 135                        1 <t> $0.03││                                        │
+│  #136 Done     Failure recovery · case 136                       1 <t> $0.03││                                        │
+│  #137 Done     Workspace cleanup · case 137                      1 <t> $0.03││                                        │
+╰────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats]
+[? Help] [q Quit]
+
+Sent 68 characters via OSC 52 · F7: native selection fallback
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ NATIVE FALLBACK · 120x30 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Queue · 120 shown / 120 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 120 · Model ─────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│  #1   Failed   Recover a failed check                  economy medium││Approve the queue interaction                 │
+│› #2   Pending  [Human] Approve the queue interaction   economy medium││#2 · Pending · Human                          │
+│  #3   Pending  Choose the export format                economy medium││                                              │
+│  #4   Pending  Failure recovery · case 4               economy medium││Goal: Inspect the queue and mark the result   │
+│  #5   Pending  Workspace cleanup · case 5              economy medium││done.                                         │
+│  #6   Pending  Instance isolation · case 6             economy medium││                                              │
+│  #7   Pending  Queue pagination · case 7               economy medium││Check: A person confirms the interaction      │
+│  #8   Pending  Keyboard navigation · case 8            economy medium││works.                                        │
+│  #9   Pending  Search matching · case 9                economy medium││                                              │
+│  #10  Pending  Failure recovery · case 10              economy medium││Attempts: 0 · $0.00                           │
+│  #11  Pending  Workspace cleanup · case 11             economy medium││                                              │
+│  #12  Pending  Instance isolation · case 12            economy medium││Models:                                       │
+│  #13  Pending  Queue pagination · case 13              economy medium││Execution: economy / medium                   │
+│  #14  Pending  Keyboard navigation · case 14           economy medium││Review: capable / high                        │
+│  #15  Pending  Search matching · case 15               economy medium││Validation: capable / high                    │
+│  #16  Pending  Failure recovery · case 16              economy medium││Remediation: capable / high                   │
+│  #17  Pending  Workspace cleanup · case 17             economy medium││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Retry] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel] [R Supersede]
+[o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Mouse capture off · use the terminal's native text selection
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

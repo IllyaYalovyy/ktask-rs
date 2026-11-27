@@ -1,0 +1,93 @@
+@@ EXHAUSTED CHECK REPAIR QUESTION · 100x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs input · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · waiting · Awaiting answer to current task
+ #1 Exhaust check repair
+ The worker needs your answer · r Answer · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Needs input · AI                            ││Goal: Create result.txt containing verified         │
+│Attempt 2                                   ││Proof: result.txt contains verified                 │
+│Waiting for your answer · r Answer          │╰────────────────────────────────────────────────────╯
+│Model codex/remediation / none              │╭ Question from the worker · r: answer ──────────────╮
+│Active <t> · waited <t>                     ││Keep or drop the legacy export?                     │
+│Tokens 60 new · 40 cached · 10 out          │╰────────────────────────────────────────────────────╯
+│70 new tokens                               │╭ Report · attempt 2 · o: raw log ───────────────────╮
+│Budget 1 of 3 used                          ││Outcome: Waiting                                    │
+│Can run · u Readiness                       ││                                                    │
+│Remediation ! waiting                       ││Remediation · waiting · codex/remediation verdict:  │
+╰────────────────────────────────────────────╯│Owner decision needed: Both readings satisfy the    │
+╭ Activity · #1 · l: all ────────────────────╮│criteria                                            │
+│• Supervisor yielded this attempt for resume││                                                    │
+│• Keep or drop the legacy export?           ││                                                    │
+│• Workflow · Plan fixes · repair round 10/10││                                                    │
+│• Current task attempt recorded             ││                                                    │
+│• Checks still fail after 10 repair rounds  ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Answer] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ ANSWER JUDGE QUESTION · 100x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs input · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · waiting · Awaiting answer to current task
+ #1 Exhaust check repair
+ The worker needs your answer · r Answer · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Needs input · AI                            ││Goal: Create result.txt containing verified         │
+│Attempt 2                                   ││Proof: result.txt contains verified                 │
+│Waiting fo╭ Answer AI question ────────────────────────────────────────────────────────╮──────────╯
+│Model code│Keep or drop the legacy export?                                             │──────────╮
+│Active <t>│                                                                            │          │
+│Tokens 60 │                                                                            │──────────╯
+│70 new tok│                                                                            │──────────╮
+│Budget 1 o│Answer                                                                      │          │
+│Can run · │▏                                                                           │          │
+│Remediatio│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │verdict:  │
+╰──────────│                                                                            │fy the    │
+╭ Activity │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│• Supervis│                                                                            │          │
+│• Keep or ╰────────────────────────────────────────────────────────────────────────────╯          │
+│• Workflow · Plan fixes · repair round 10/10││                                                    │
+│• Current task attempt recorded             ││                                                    │
+│• Checks still fail after 10 repair rounds  ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Answer] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ ANSWERED RECOVERY COMPLETE · 100x30 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                   │
+│Inspect results in History, or add more work.                                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Saved to SQLite · execution continuing
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

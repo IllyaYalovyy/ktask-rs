@@ -1,0 +1,82 @@
+@@ EXHAUSTED CURRENT · 100x40 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 1 · History 0
+ Session: Run one · stopped · Task #1 stopped (review): Critical findings remain after 10 repair ro…
+ #1 Original at its coding limit
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: Critical findings remain after 10 repair rounds. Work and evidence are preserved; no      ┃
+┃additional repair worker will start automatically. Inspect the findings, change the task or its   ┃
+┃models if needed, then retry.                                                                     ┃
+┃Not resolved automatically: Ten repair rounds left critical findings; what to accept or change is ┃
+┃your decision.                                                                                    ┃
+┃Next: Read the findings, then change the task or c Models and r Retry, or D Mark done             ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Failed · AI                                 ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Model codex/remediation / none              │╰────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Report · attempt 1 · o: raw log ───────────────────╮
+│Tokens 240 new · 160 cached · 40 out        ││Outcome: Critical findings remain after 10 repair   │
+│280 new tokens + 1 call(s) unreported       ││rounds. Work and evidence are preserved; no         │
+│Budget 1 of 1 used                          ││additional repair worker will start automatically.  │
+│Can run · u Readiness                       ││Inspect the findings, change the task or its models │
+│Repair      ✓ succeeded                     ││if needed, then retry.                              │
+│Checks      ✓ succeeded                     ││                                                    │
+╰────────────────────────────────────────────╯│Worker claim (unverified):                          │
+╭ Activity · #1 · l: all ────────────────────╮│Verified result                                     │
+│• Critical findings remain after 10 repair  ││                                                    │
+│  rounds. Work and evidence are preserved;… ││Review · fixes requested · codex/review verdict:    │
+│• Workflow · Critical findings need a       ││Review findings to address                          │
+│  decision · repair round 10/10             ││Critical: result.txt:1: missing boundary handling   │
+│• Workflow · Review · repair round 10/10    ││produces incorrect results; implement the boundary  │
+│• Workflow · Check · repair round 10/10     ││case                                                │
+│  Why: The check failed on a missing file   ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RETRIED CURRENT · 100x40 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                   │
+│Inspect results in History, or add more work.                                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

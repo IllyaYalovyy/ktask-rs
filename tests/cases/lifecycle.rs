@@ -99,7 +99,11 @@ fn dataset(t: &mut Terminal, spaces: &str, choice: &str) -> Result {
 #[test]
 fn model_form_all_fields_mouse_keyboard_validation_and_attempt_snapshot() -> Result {
     let mut t = open()?;
-    println!("MODELS\n{}", click(&mut t, "c Models", "Execution model")?);
+    crate::support::record(
+        "MODELS",
+        true,
+        &click(&mut t, "c Models", "Execution model")?,
+    );
     // Space cycles medium → high → xhigh → max → none.
     key(&mut t, "\x01worker-v2\t    ", "< none >")?;
     // Tab reaches all fields even when they don't fit; page buttons support mouse-only access.
@@ -109,9 +113,10 @@ fn model_form_all_fields_mouse_keyboard_validation_and_attempt_snapshot() -> Res
     key(&mut t, "\x014\t", "< Off >")?;
     key(&mut t, " ", "< 6 h >")?;
     key(&mut t, "\t ", "< 30 min >")?;
-    println!(
-        "MODEL LIMITS\n{}",
-        t.screen("last model fields", |s| s.contains("Stage time limit"))?
+    crate::support::record(
+        "MODEL LIMITS",
+        true,
+        &t.screen("last model fields", |s| s.contains("Stage time limit"))?,
     );
     click(&mut t, "Fields -", "Validation model")?;
     click(&mut t, "Fields -", "Execution model")?;
@@ -139,7 +144,7 @@ fn approval_and_rejection_use_normal_tasks_without_losing_ready_revision() -> Re
     let mut t = open()?;
     dataset(&mut t, "     ", "< Approvals >")?;
     let new = t.screen("new current", |s| s.contains("Current #1 · Needs approval"))?;
-    println!("NEEDS APPROVAL\n{new}");
+    crate::support::record("NEEDS APPROVAL", false, &new);
     key(&mut t, "r", "Approve a revision first")?;
     click(&mut t, "v Approve", "approved by Human")?;
     key(&mut t, "r", "Current #1 · Running")?;
@@ -169,9 +174,10 @@ fn approval_and_rejection_use_normal_tasks_without_losing_ready_revision() -> Re
     t.screen("draft over ready", |s| {
         s.contains("Current #1 · Needs approval") && s.contains("Ready inputs")
     })?;
-    println!(
-        "REJECT REVISION\n{}",
-        click(&mut t, "n Reject", "Reject pending revision")?
+    crate::support::record(
+        "REJECT REVISION",
+        true,
+        &click(&mut t, "n Reject", "Reject pending revision")?,
     );
     key(&mut t, "\r", "A reason is required")?;
     key(&mut t, "Keep the ready inputs\r", "Current #1 · Pending")?;
@@ -218,7 +224,7 @@ fn mark_done_preserves_failed_attempt_evidence_with_mouse_and_keyboard() -> Resu
         };
         assert!(focused(&form, "Reason (optional)"), "{form}");
         if mouse {
-            println!("MARK DONE FORM\n{form}");
+            crate::support::record("MARK DONE FORM", mouse, &form);
         }
         key(&mut t, "Accepted with evidence", "Accepted with evidence")?;
         if mouse {
@@ -241,7 +247,8 @@ fn mark_done_preserves_failed_attempt_evidence_with_mouse_and_keyboard() -> Resu
         assert!(details.contains("Failed: final row omitted"), "{details}");
         let resolution = key(&mut t, "\x1b[F", "Accepted with evidence")?;
         if mouse {
-            println!("DONE HISTORY\n{details}\n{resolution}");
+            crate::support::record("DONE HISTORY", mouse, &details);
+            crate::support::record("DONE HISTORY RESOLUTION", mouse, &resolution);
         }
         quit(&mut t)?;
     }
@@ -263,9 +270,10 @@ fn insertion_before_stopped_current_cleanup_failure_and_running_guard() -> Resul
         "Current #241 · Pending",
     )?;
     key(&mut t, "1r", "Cleanup blocked")?;
-    println!(
-        "CLEANUP BLOCKED\n{}",
-        t.screen("blocked start", |s| s.contains("No attempts yet"))?
+    crate::support::record(
+        "CLEANUP BLOCKED",
+        false,
+        &t.screen("blocked start", |s| s.contains("No attempts yet"))?,
     );
     key(&mut t, "r", "Current #241 · Running")?;
     key(
@@ -281,10 +289,12 @@ fn insertion_before_stopped_current_cleanup_failure_and_running_guard() -> Resul
         "Current #242 · Pending",
     )?;
     key(&mut t, "1l", "Project events")?;
-    println!(
-        "HANDOFF EVENTS\n{}",
-        t.screen("preservation and cleanup", |s| s.contains("checkpointed")
-            && s.contains("cleaned"))?
+    crate::support::record(
+        "HANDOFF EVENTS",
+        false,
+        &t.screen("preservation and cleanup", |s| {
+            s.contains("checkpointed") && s.contains("cleaned")
+        })?,
     );
     quit(&mut t)
 }
@@ -295,10 +305,12 @@ fn timed_wait_keeps_attempt_session_and_active_time() -> Result {
     dataset(&mut t, "    ", "< Waits >")?;
     key(&mut t, "r", "Current #1 · Running")?;
     // A provider wait stays Running: the supervisor resumes it by itself.
-    println!(
-        "RATE WAIT\n{}",
-        t.screen("rate wait", |s| s.contains("Current #1 · Running")
-            && s.contains("resumes by itself"))?
+    crate::support::record(
+        "RATE WAIT",
+        false,
+        &t.screen("rate wait", |s| {
+            s.contains("Current #1 · Running") && s.contains("resumes by itself")
+        })?,
     );
     t.screen("same attempt resumes", |s| {
         s.contains("Current #1 · Running")
@@ -321,7 +333,7 @@ fn timed_wait_keeps_attempt_session_and_active_time() -> Result {
         Ok(number.parse()?)
     };
     let (steps, elapsed) = (value("Execution steps: ")?, value("Elapsed execution: ")?);
-    println!("WAIT NOT CHARGED\n{stats}");
+    crate::support::record("WAIT NOT CHARGED", false, &stats);
     assert!(
         (elapsed - steps * 0.4).abs() < 0.05,
         "wait time was charged:\n{stats}"
@@ -343,17 +355,20 @@ fn new_task_rejection_mouse_and_configuration_field_paging() -> Result {
     key(&mut t, "Not needed", "Not needed")?;
     click(&mut t, "Apply", "Current #2 · Pending")?;
     key(&mut t, "4e", "Planner approval")?;
-    println!(
-        "CONFIG FIRST PAGE\n{}",
-        t.screen("first page", |s| s.contains("Cleanup simulation"))?
+    crate::support::record(
+        "CONFIG FIRST PAGE",
+        true,
+        &t.screen("first page", |s| s.contains("Cleanup simulation"))?,
     );
     click(&mut t, "Fields +", "Continue queue")?;
     click(&mut t, "Same-task retry", "< Clean after checkpoint >")?;
     click(&mut t, "Continue queue", "< Enabled >")?;
-    println!(
-        "CONFIG SECOND PAGE\n{}",
-        t.screen("second page", |s| s.contains("Keep useful work")
-            || s.contains("Clean after checkpoint"))?
+    crate::support::record(
+        "CONFIG SECOND PAGE",
+        true,
+        &t.screen("second page", |s| {
+            s.contains("Keep useful work") || s.contains("Clean after checkpoint")
+        })?,
     );
     click(&mut t, "Apply", "Configuration applied")?;
     quit(&mut t)
@@ -372,7 +387,7 @@ fn review_all_views_at_minimum_size() -> Result {
     ] {
         let screen = click(&mut t, tab, marker)?;
         assert!(screen.contains("q Quit"), "{screen}");
-        println!("VIEW {tab}\n{screen}");
+        crate::support::record(&format!("VIEW {tab}"), true, &screen);
     }
     quit(&mut t)
 }

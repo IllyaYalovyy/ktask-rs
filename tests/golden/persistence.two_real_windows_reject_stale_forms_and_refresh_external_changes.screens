@@ -1,0 +1,23 @@
+@@ CONFLICT · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Edit task ─────────────────────────────────────────────────────────╮
+│Save commits a new revision in SQLite. Earlier attempts remain      │
+│unchanged.                                                          │
+│Title                                                               │
+│Stale writer▏                                                       │
+│Goal                                                                │
+│Persist a real task                                                 │
+│Acceptance check                                                    │
+│Survives restart                                                    │
+│Kind                                                                │
+│< AI >   click / Space to change                                    │
+│Approval                                                            │
+│< Ready >   click / Space to change                                 │
+│Work category                                                       │
+│< code >   click / Space to change                                  │
+│command conflict: Task changed elsewhere; refresh the task          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…

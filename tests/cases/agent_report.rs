@@ -827,9 +827,9 @@ fn press(t: &mut Terminal, mouse: bool, label: &str, key: &str) -> Result {
     if mouse { t.click(label) } else { t.send(key) }
 }
 
-fn shows(t: &mut Terminal, what: &str, parts: &[&str]) -> Result<String> {
+fn shows(t: &mut Terminal, mouse: bool, what: &str, parts: &[&str]) -> Result<String> {
     let screen = t.screen(what, |s| parts.iter().all(|part| s.contains(part)))?;
-    println!("{}\n{screen}", what.to_uppercase());
+    crate::support::record(&what.to_uppercase(), mouse, &screen);
     Ok(screen)
 }
 
@@ -838,7 +838,7 @@ fn scroll_to(t: &mut Terminal, mouse: bool, part: &str) -> Result {
     for _ in 0..20 {
         if t.current_screen().contains(part) {
             let screen = t.still(part, |s| s.contains(part))?;
-            println!("SCROLLED TO {part}\n{screen}");
+            crate::support::record(&format!("SCROLLED TO {part}"), mouse, &screen);
             return Ok(());
         }
         let before = t.current_screen();
@@ -864,7 +864,6 @@ fn close(t: &mut Terminal, mouse: bool, back: &str) -> Result {
 fn reports_start_progress_and_read_back_by_keyboard_and_mouse_at_both_sizes() -> Result {
     for (cols, rows) in SIZES {
         for mouse in [false, true] {
-            println!("=== {cols}x{rows} mouse={mouse} ===");
             drive(cols, rows, mouse)?;
         }
     }
@@ -909,6 +908,7 @@ fn drive(cols: u16, rows: u16, mouse: bool) -> Result {
     press(&mut t, mouse, "i Investigate", "i")?;
     shows(
         &mut t,
+        mouse,
         "report form",
         &[
             "Agent reports · project",
@@ -923,12 +923,18 @@ fn drive(cols: u16, rows: u16, mouse: bool) -> Result {
     }
     shows(
         &mut t,
+        mouse,
         "live progress",
-        &["Agent report #1 · Running · project", "Fixture agent read"],
+        &[
+            "Agent report #1 · Running · project",
+            "Fixture agent read",
+            "fixture disk",
+        ],
     )?;
     fs::write(&release, "")?;
     shows(
         &mut t,
+        mouse,
         "finished report",
         &[
             "Agent report #1 · Finished",
@@ -945,19 +951,25 @@ fn drive(cols: u16, rows: u16, mouse: bool) -> Result {
     press(&mut t, mouse, "0 Projects", "0")?;
     t.screen("projects", |s| s.contains("Projects · 2 registered"))?;
     press(&mut t, mouse, "another", "k")?;
-    shows(&mut t, "other project selected", &["›   another"])?;
+    shows(&mut t, mouse, "other project selected", &["›   another"])?;
     press(&mut t, mouse, "i Investigate", "i")?;
-    shows(&mut t, "projects form", &["Agent reports · another"])?;
+    shows(&mut t, mouse, "projects form", &["Agent reports · another"])?;
     press(&mut t, mouse, "[Apply]", "\r")?;
     shows(
         &mut t,
+        mouse,
         "projects live progress",
-        &["Agent report #2 · Running · another", "Fixture agent read"],
+        &[
+            "Agent report #2 · Running · another",
+            "Fixture agent read",
+            "fixture disk",
+        ],
     )?;
     // Stop it from the view; what it found stays, marked unfinished.
     press(&mut t, mouse, "s Stop", "s")?;
     shows(
         &mut t,
+        mouse,
         "stopped report",
         &[
             "Agent report #2 · Stopped · another",
@@ -968,10 +980,11 @@ fn drive(cols: u16, rows: u16, mouse: bool) -> Result {
 
     // Read the open project's past report from Projects.
     press(&mut t, mouse, "* project", "j")?;
-    shows(&mut t, "own project selected", &["› * project"])?;
+    shows(&mut t, mouse, "own project selected", &["› * project"])?;
     press(&mut t, mouse, "i Investigate", "i")?;
     shows(
         &mut t,
+        mouse,
         "past reports",
         &["Agent reports · project", "1 report(s):", "#1 · Finished"],
     )?;
@@ -980,6 +993,7 @@ fn drive(cols: u16, rows: u16, mouse: bool) -> Result {
     press(&mut t, mouse, "[Apply]", "\r")?;
     shows(
         &mut t,
+        mouse,
         "past report",
         &["Agent report #1 · Finished · project", "WHAT HAPPENED"],
     )?;
@@ -990,13 +1004,24 @@ fn drive(cols: u16, rows: u16, mouse: bool) -> Result {
     press(&mut t, mouse, "[Apply]", "\r")?;
     shows(
         &mut t,
+        mouse,
         "second report",
         &["Agent report #3 · Finished", "WHAT HAPPENED"],
     )?;
     press(&mut t, mouse, "[Older]", "[")?;
-    shows(&mut t, "older report", &["Agent report #1 · Finished"])?;
+    shows(
+        &mut t,
+        mouse,
+        "older report",
+        &["Agent report #1 · Finished"],
+    )?;
     press(&mut t, mouse, "[Newer]", "]")?;
-    shows(&mut t, "newer report", &["Agent report #3 · Finished"])?;
+    shows(
+        &mut t,
+        mouse,
+        "newer report",
+        &["Agent report #3 · Finished"],
+    )?;
     close(&mut t, mouse, "Projects · 2 registered")?;
 
     // The limits are configuration of the open project.
@@ -1005,6 +1030,7 @@ fn drive(cols: u16, rows: u16, mouse: bool) -> Result {
     press(&mut t, mouse, "i Report limits", "i")?;
     shows(
         &mut t,
+        mouse,
         "limits form",
         &["Agent report limits", "Time limit per report", "2.00"],
     )?;
@@ -1040,27 +1066,43 @@ fn drive(cols: u16, rows: u16, mouse: bool) -> Result {
 fn demo_reports_are_a_fixture_that_never_opens_storage_or_an_agent() -> Result {
     for (cols, rows) in SIZES {
         for mouse in [false, true] {
-            println!("=== DEMO {cols}x{rows} mouse={mouse} ===");
             let sandbox = support::sandbox()?;
             let mut t = Terminal::open_at(DEV, sandbox.path(), cols, rows)?;
             t.screen("demo", |s| s.contains("Current #1 · Failed"))?;
             press(&mut t, mouse, "i Investigate", "i")?;
             shows(
                 &mut t,
+                mouse,
                 "demo form",
                 &["Agent reports · demo workspace", "2 report(s):"],
             )?;
             press(&mut t, mouse, "[Apply]", "\r")?;
-            shows(&mut t, "demo running", &["Agent report #3 · Running"])?;
-            shows(&mut t, "demo progress", &["The demo check failed on its"])?;
             shows(
                 &mut t,
+                mouse,
+                "demo running",
+                &["Agent report #3 · Running"],
+            )?;
+            shows(
+                &mut t,
+                mouse,
+                "demo progress",
+                // The last finding, so what is shown does not depend on how soon it is read.
+                &[
+                    "Agent report #3 · Running",
+                    "The demo workspace has disk space",
+                ],
+            )?;
+            shows(
+                &mut t,
+                mouse,
                 "demo finished",
                 &["Agent report #3 · Finished", "WHAT HAPPENED"],
             )?;
             press(&mut t, mouse, "[Older]", "[")?;
             shows(
                 &mut t,
+                mouse,
                 "demo stopped",
                 &["Agent report #2 · Stopped", "NOT A FINISHED REPORT"],
             )?;
@@ -1070,7 +1112,7 @@ fn demo_reports_are_a_fixture_that_never_opens_storage_or_an_agent() -> Result {
                 s.contains("The simulator has one mock workspace") && s.contains("[i Investigate]")
             })?;
             press(&mut t, mouse, "i Investigate", "i")?;
-            shows(&mut t, "demo projects form", &["3 report(s):"])?;
+            shows(&mut t, mouse, "demo projects form", &["3 report(s):"])?;
             press(&mut t, mouse, "[Cancel]", "\x1b")?;
             t.screen("closed", |s| !s.contains("[Cancel]"))?;
             t.send("q")?;

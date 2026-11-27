@@ -1,0 +1,600 @@
+@@ demo CONFIG · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Mouse: Enabled                                                      │
+│Simulation step delay: 400 ms                                       │
+│Planner approval: Automatic                                         │
+│Continue queue: Enabled                                             │
+│Same-task retry: Keep useful work                                   │
+│Cleanup: Success (mock)                                             │
+│                                                                    │
+│Demo datasets: Large, Guided, Empty, Waits, Approvals.              │
+│Configure edits these session-only settings.                        │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings]
+[o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo EXPORT · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Config
+╭ Export settings · in-memory demo files ────────────────────────────╮
+│Writes the session's settings to the virtual file shelf, NOT disk.  │
+│Use the destination in Import settings to read it back.             │
+│                                                                    │
+│                                                                    │
+│Destination                                                         │
+│/demo/my-settings.json▏                                             │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings]
+[o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo IMPORT · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Config
+╭ Import settings · in-memory demo files ────────────────────────────╮
+│Available: /demo/settings.json (valid), /demo/settings-newer.json   │
+│A preview shows every setting before anything changes.              │
+│                                                                    │
+│                                                                    │
+│Source                                                              │
+│/demo/settings.json▏                                                │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings]
+[o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+Exported to /demo/my-settings.json · in memory, NOT disk
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo PREVIEW · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+╭ Import settings preview · simulated ───────────────────────────────╮
+│Preview, nothing applied yet: 0 to add, 2 to change, 1 left as they │
+│are                                                                 │
+│Folder: /demo/project                                               │
+│Project: demo (simulated)                                           │
+│Settings (shared ones apply to every project of this instance):     │
+│- change preferences run_mode: queue -> single                      │
+│- change preferences planner_approval: automatic -> review_required │
+│- unchanged preferences mouse: true                                 │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+Exported to /demo/my-settings.json · in memory, NOT disk
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo IMPORTED · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Run one preference · Next #2: Approve the queue interaction · m: run…
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Mouse: Enabled                                                      │
+│Simulation step delay: 400 ms                                       │
+│Planner approval: Review required                                   │
+│Continue queue: Disabled                                            │
+│Same-task retry: Keep useful work                                   │
+│Cleanup: Success (mock)                                             │
+│                                                                    │
+│Demo datasets: Large, Guided, Empty, Waits, Approvals.              │
+│Configure edits these session-only settings.                        │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings]
+[o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+Settings imported · simulated session only
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo PATH my-settings.json · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Run one preference · Next #2: Approve the queue interaction · m: run…
+ Config
+╭ Import settings · in-memory demo files ────────────────────────────╮
+│Available: /demo/settings.json (valid), /demo/settings-newer.json   │
+│A preview shows every setting before anything changes.              │
+│                                                                    │
+│                                                                    │
+│Source                                                              │
+│/demo/my-settings.json▏                                             │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings]
+[o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+Settings imported · simulated session only
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo PREVIEW BACK · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Run one preference · Next #2: Approve the queue interaction · m: run…
+╭ Import settings preview · simulated ───────────────────────────────╮
+│Preview, nothing applied yet: 0 to add, 2 to change, 1 left as they │
+│are                                                                 │
+│Folder: /demo/project                                               │
+│Project: demo (simulated)                                           │
+│Settings (shared ones apply to every project of this instance):     │
+│- change preferences run_mode: single -> queue                      │
+│- change preferences planner_approval: review_required -> automatic │
+│- unchanged preferences mouse: true                                 │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+Settings imported · simulated session only
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo RESTORED · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Mouse: Enabled                                                      │
+│Simulation step delay: 400 ms                                       │
+│Planner approval: Automatic                                         │
+│Continue queue: Enabled                                             │
+│Same-task retry: Keep useful work                                   │
+│Cleanup: Success (mock)                                             │
+│                                                                    │
+│Demo datasets: Large, Guided, Empty, Waits, Approvals.              │
+│Configure edits these session-only settings.                        │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings]
+[o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+Settings imported · simulated session only
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo PATH settings-newer.json · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Config
+╭ Import settings · in-memory demo files ────────────────────────────╮
+│Available: /demo/settings.json (valid), /demo/settings-newer.json   │
+│A preview shows every setting before anything changes.              │
+│                                                                    │
+│                                                                    │
+│Source                                                              │
+│/demo/settings-newer.json▏                                          │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings]
+[o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+Settings imported · simulated session only
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo NEWER · 70x22 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Config
+╭ Import settings · in-memory demo files ────────────────────────────╮
+│Available: /demo/settings.json (valid), /demo/settings-newer.json   │
+│A preview shows every setting before anything changes.              │
+│                                                                    │
+│                                                                    │
+│Source                                                              │
+│/demo/settings-newer.json▏                                          │
+│command conflict: Settings file format 2 is newer than this ktask   │
+│reads (1); upgrade ktask to import it                               │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings]
+[o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+Settings imported · simulated session only
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo CONFIG · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Mouse: Enabled                                                                                                        │
+│Simulation step delay: 400 ms                                                                                         │
+│Planner approval: Automatic                                                                                           │
+│Continue queue: Enabled                                                                                               │
+│Same-task retry: Keep useful work                                                                                     │
+│Cleanup: Success (mock)                                                                                               │
+│                                                                                                                      │
+│Demo datasets: Large, Guided, Empty, Waits, Approvals.                                                                │
+│Configure edits these session-only settings.                                                                          │
+│Keyboard remains available with mouse disabled.                                                                       │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings] [o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo EXPORT · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Mouse: Enabled                                                                                                        │
+│Simulation step delay: 400 ms                                                                                         │
+│Planner approval: Automatic                                                                                           │
+│Continue queue: Enabled                                                                                               │
+│Same-task retry: Keep useful work                                                                                     │
+│Cleanup: Success (mo╭ Export settings · in-memory demo files ────────────────────────────────────╮                    │
+│                    │Writes the session's settings to the virtual file shelf, NOT disk.          │                    │
+│Demo datasets: Large│Use the destination in Import settings to read it back.                     │                    │
+│Configure edits thes│                                                                            │                    │
+│Keyboard remains ava│                                                                            │                    │
+│                    │Destination                                                                 │                    │
+│                    │/demo/my-settings.json▏                                                     │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings] [o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo IMPORT · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Mouse: Enabled                                                                                                        │
+│Simulation step delay: 400 ms                                                                                         │
+│Planner approval: Automatic                                                                                           │
+│Continue queue: Enabled                                                                                               │
+│Same-task retry: Keep useful work                                                                                     │
+│Cleanup: Success (mo╭ Import settings · in-memory demo files ────────────────────────────────────╮                    │
+│                    │Available: /demo/settings.json (valid), /demo/settings-newer.json           │                    │
+│Demo datasets: Large│A preview shows every setting before anything changes.                      │                    │
+│Configure edits thes│                                                                            │                    │
+│Keyboard remains ava│                                                                            │                    │
+│                    │Source                                                                      │                    │
+│                    │/demo/settings.json▏                                                        │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings] [o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+
+Exported to /demo/my-settings.json · in memory, NOT disk
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo PREVIEW · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Mouse: Enabled                                                                                                        │
+│Simulation step delay: 400 ms                                                                                         │
+│Planner approval: Automatic                                                                                           │
+│Continue queue: Enabled                                                                                               │
+│Same-task retry: Kee╭ Import settings preview · simulated ───────────────────────────────────────╮                    │
+│Cleanup: Success (mo│Preview, nothing applied yet: 0 to add, 2 to change, 1 left as they are     │                    │
+│                    │Folder: /demo/project                                                       │                    │
+│Demo datasets: Large│Project: demo (simulated)                                                   │                    │
+│Configure edits thes│Settings (shared ones apply to every project of this instance):             │                    │
+│Keyboard remains ava│- change preferences run_mode: queue -> single                              │                    │
+│                    │- change preferences planner_approval: automatic -> review_required         │                    │
+│                    │- unchanged preferences mouse: true                                         │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings] [o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+
+Exported to /demo/my-settings.json · in memory, NOT disk
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo IMPORTED · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Run one preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Mouse: Enabled                                                                                                        │
+│Simulation step delay: 400 ms                                                                                         │
+│Planner approval: Review required                                                                                     │
+│Continue queue: Disabled                                                                                              │
+│Same-task retry: Keep useful work                                                                                     │
+│Cleanup: Success (mock)                                                                                               │
+│                                                                                                                      │
+│Demo datasets: Large, Guided, Empty, Waits, Approvals.                                                                │
+│Configure edits these session-only settings.                                                                          │
+│Keyboard remains available with mouse disabled.                                                                       │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings] [o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+
+Settings imported · simulated session only
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo PATH my-settings.json · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Run one preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Mouse: Enabled                                                                                                        │
+│Simulation step delay: 400 ms                                                                                         │
+│Planner approval: Review required                                                                                     │
+│Continue queue: Disabled                                                                                              │
+│Same-task retry: Keep useful work                                                                                     │
+│Cleanup: Success (mo╭ Import settings · in-memory demo files ────────────────────────────────────╮                    │
+│                    │Available: /demo/settings.json (valid), /demo/settings-newer.json           │                    │
+│Demo datasets: Large│A preview shows every setting before anything changes.                      │                    │
+│Configure edits thes│                                                                            │                    │
+│Keyboard remains ava│                                                                            │                    │
+│                    │Source                                                                      │                    │
+│                    │/demo/my-settings.json▏                                                     │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings] [o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+
+Settings imported · simulated session only
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo PREVIEW BACK · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Run one preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Mouse: Enabled                                                                                                        │
+│Simulation step delay: 400 ms                                                                                         │
+│Planner approval: Review required                                                                                     │
+│Continue queue: Disabled                                                                                              │
+│Same-task retry: Kee╭ Import settings preview · simulated ───────────────────────────────────────╮                    │
+│Cleanup: Success (mo│Preview, nothing applied yet: 0 to add, 2 to change, 1 left as they are     │                    │
+│                    │Folder: /demo/project                                                       │                    │
+│Demo datasets: Large│Project: demo (simulated)                                                   │                    │
+│Configure edits thes│Settings (shared ones apply to every project of this instance):             │                    │
+│Keyboard remains ava│- change preferences run_mode: single -> queue                              │                    │
+│                    │- change preferences planner_approval: review_required -> automatic         │                    │
+│                    │- unchanged preferences mouse: true                                         │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings] [o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+
+Settings imported · simulated session only
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo RESTORED · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Mouse: Enabled                                                                                                        │
+│Simulation step delay: 400 ms                                                                                         │
+│Planner approval: Automatic                                                                                           │
+│Continue queue: Enabled                                                                                               │
+│Same-task retry: Keep useful work                                                                                     │
+│Cleanup: Success (mock)                                                                                               │
+│                                                                                                                      │
+│Demo datasets: Large, Guided, Empty, Waits, Approvals.                                                                │
+│Configure edits these session-only settings.                                                                          │
+│Keyboard remains available with mouse disabled.                                                                       │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings] [o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+
+Settings imported · simulated session only
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo PATH settings-newer.json · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Mouse: Enabled                                                                                                        │
+│Simulation step delay: 400 ms                                                                                         │
+│Planner approval: Automatic                                                                                           │
+│Continue queue: Enabled                                                                                               │
+│Same-task retry: Keep useful work                                                                                     │
+│Cleanup: Success (mo╭ Import settings · in-memory demo files ────────────────────────────────────╮                    │
+│                    │Available: /demo/settings.json (valid), /demo/settings-newer.json           │                    │
+│Demo datasets: Large│A preview shows every setting before anything changes.                      │                    │
+│Configure edits thes│                                                                            │                    │
+│Keyboard remains ava│                                                                            │                    │
+│                    │Source                                                                      │                    │
+│                    │/demo/settings-newer.json▏                                                  │                    │
+│                    │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│                    │                                                                            │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings] [o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+
+Settings imported · simulated session only
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ demo NEWER · 120x36 · keyboard+mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Mouse: Enabled                                                                                                        │
+│Simulation step delay: 400 ms                                                                                         │
+│Planner approval: Automatic                                                                                           │
+│Continue queue: Enabled                                                                                               │
+│Same-task retry: Keep useful work                                                                                     │
+│Cleanup: Success (mo╭ Import settings · in-memory demo files ────────────────────────────────────╮                    │
+│                    │Available: /demo/settings.json (valid), /demo/settings-newer.json           │                    │
+│Demo datasets: Large│A preview shows every setting before anything changes.                      │                    │
+│Configure edits thes│                                                                            │                    │
+│Keyboard remains ava│                                                                            │                    │
+│                    │Source                                                                      │                    │
+│                    │/demo/settings-newer.json▏                                                  │                    │
+│                    │command conflict: Settings file format 2 is newer than this ktask reads     │                    │
+│                    │(1); upgrade ktask to import it                                             │                    │
+│                    │[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│                    │                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [e Configure] [i Report limits] [E Export settings] [o Import settings] [Esc Back] [S Stats] [? Help] [q Quit]
+
+
+Settings imported · simulated session only
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

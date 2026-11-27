@@ -81,7 +81,8 @@ fn both_instances_run_side_by_side_in_one_checkout() -> Result {
     let development = dev.screen("development", |s| {
         s.contains("ktask-dev") && s.contains("MOCK DATA")
     })?;
-    println!("PRODUCTION\n{production}\nDEVELOPMENT\n{development}");
+    crate::support::record("PRODUCTION", false, &production);
+    crate::support::record("DEVELOPMENT", false, &development);
     dev.send("2j")?;
     dev.screen("dev selection", |s| s.contains("› #2"))?;
     dev.send("q")?;
@@ -108,10 +109,10 @@ fn shutdown_restores_live_terminals_across_instances() -> Result {
     for (name, terminal) in [("production", &production), ("development", &development)] {
         let screen = terminal.screen(name, |s| s.contains("Current") && s.contains("Queue"))?;
         assert!(terminal.mouse_capture());
-        println!("Before shutdown ({name})\n{screen}");
+        crate::support::record(&format!("Before shutdown ({name})"), false, &screen);
     }
     let demo = simulator.screen("isolated demo before shutdown", |s| s.contains("MOCK DATA"))?;
-    println!("Before shutdown (demo)\n{demo}");
+    crate::support::record("Before shutdown (demo)", false, &demo);
 
     let output = Command::new(PROD)
         .args(["shutdown", "--json"])

@@ -1,0 +1,29 @@
+@@ BREAKDOWN · 100x28 · keyboard
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ #1 Recover a failed check
+ Ready · r Run starts a simulated attempt
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Pending · AI                                ││Goal: Include every task on the final queue page.   │
+│Attempt 1 ╭ Break down task · capable model (mock) ────────────────────────────────────╮          │
+│Budget 1 o│Replace #1 in place with the edited subtasks below.                         │──────────╯
+│Model econ│Original and attempts move to History. Cancel changes nothing.              │──────────╮
+│Cost $0.08│Step 1 title                                                                │          │
+│          │Implement the focused change▏                                               │          │
+╰──────────│Step 2 title                                                                │          │
+╭ Activity │Verify the acceptance checks                                                │          │
+│• #1 stopp│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│  starts i│                                                                            │          │
+│• Check fa│[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│• Executio│                                                                            │          │
+│• Stopped ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                            ││Expected 240 tasks; received 239.                   │
+│                                            ││Execution stopped after a failing check.            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down]
+[u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help]
+[q Quit]
+#1 stopped · changes stashed (mock) · Run starts it fresh
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

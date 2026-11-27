@@ -1,0 +1,78 @@
+@@ READINESS MULTIPLE BLOCKERS · 120x38 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Blocked setup    ╭ Execution readiness ───────────────────────────────────────────────────────╮
+ Run blocked · u Read│Run blocked · 4 blocker(s)                                                  │
+╭ Status · Enter: det│                                                                            │────────────────────╮
+│Pending · AI        │OK · Execution state                                                        │                    │
+│No attempts yet     │BLOCK · Project checks: No enabled check → c Checks                         │                    │
+│Run blocked (4) · u │OK · Approval                                                               │────────────────────╯
+│Model codex/executio│OK · Task                                                                   │────────────────────╮
+│Budget 0 of 3 used  │OK · execution model                                                        │ a direct action.   │
+│                    │OK · review model                                                           │                    │
+│                    │BLOCK · validation model: No model selected → m Models                      │                    │
+│                    │OK · remediation model                                                      │                    │
+│                    │OK · Writable workers (execution and repair) · Agent network Off · Codex    │                    │
+│                    │BLOCK · Codex CLI: command conflict: codex executable not found on PATH →   │                    │
+│                    │install/sign in to Codex, then Refresh                                      │                    │
+│                    │OK · Read-only sandbox                                                      │                    │
+│                    │OK · Commit identity: Project Author <project@example.com>                  │                    │
+╰────────────────────│OK · Supervisor ownership                                                   │                    │
+╭ Activity · #1 · l: │OK · Worker ownership                                                       │                    │
+│• #1 revision 2 save│BLOCK · Workspace baseline: Uncommitted work from outside this task;        │                    │
+│• #1 created: Blocke│preserve or commit it before switching → inspect Git worktree               │                    │
+│                    │                                                                            │                    │
+│                    │After fixing setup, Refresh here or press r on Current. Inspection creates  │                    │
+│                    │no attempt.                                                                 │                    │
+│                    │Wheel / PgUp / PgDn: scroll · Esc: close                                    │                    │
+│                    │                                                                            │                    │
+│                    │[c Checks] [m Models] [r Run queue] [u Refresh] [Close]                     │                    │
+│                    │                                                                            │                    │
+│                    │                                                                            │                    │
+╰────────────────────╰────────────────────────────────────────────────────────────────────────────╯────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ READINESS CHECK ACTION · 120x38 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Blocked setup
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                             │
+│No attempts yet                             ││Proof: result.txt contains verified                                     │
+│Run blocked (4) · u Readiness               │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Run is blocked. Press u Readiness for each cause and a direct action.   │
+│                                            ││Refresh after setup; Run retries from Current.                          │
+│                    ╭ Project checks ────────────────────────────────────────────────────────────╮                    │
+│                    │Select a check, then Apply to edit or enable/disable.                       │                    │
+│                    │build [disabled]: test -f result.txt                                        │                    │
+│                    │                                                                            │                    │
+│                    │                                                                            │                    │
+│                    │Check to open                                                               │                    │
+│                    │< Add new check >   click / Space to change                                 │                    │
+╰────────────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+╭ Activity · #1 · l: │                                                                            │                    │
+│• #1 revision 2 save│[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│• #1 created: Blocke│                                                                            │                    │
+│                    ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

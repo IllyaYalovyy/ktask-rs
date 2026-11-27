@@ -1,0 +1,81 @@
+@@ Before shutdown (production) · 100x26 · keyboard
+ ktask  / checkout   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────╮
+│No current task.                                                                                  │
+│Set up this project first: u Readiness lists what is missing.                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Before shutdown (development) · 100x26 · keyboard
+ ktask-dev  / checkout   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────╮
+│No current task.                                                                                  │
+│Set up this project first: u Readiness lists what is missing.                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Before shutdown (demo) · 100x26 · keyboard
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ #1 Recover a failed check
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Failed · AI                                 ││Goal: Include every task on the final queue page.   │
+│Attempt 1 · step <n>/6                      ││Proof: All 240 tasks are reachable.                 │
+│Budget 1 of 3 used                          │╰────────────────────────────────────────────────────╯
+│Model economy / medium                      │╭ Log · following · attempt 1 ───────────────────────╮
+│Cost <cost> (mock)                          ││PASS  queue fixture 59                              │
+│                                            ││PASS  queue fixture 60                              │
+╰────────────────────────────────────────────╯│PASS  queue fixture 61                              │
+╭ Activity · l: all ─────────────────────────╮│PASS  queue fixture 62                              │
+│• Check failed · #1                         ││PASS  queue fixture 63                              │
+│• Execution stopped                         ││PASS  queue fixture 64                              │
+│• Stopped for a decision                    ││FAIL  final_page_includes_last_row                  │
+│                                            ││Expected 240 tasks; received 239.                   │
+│                                            ││Execution stopped after a failing check.            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

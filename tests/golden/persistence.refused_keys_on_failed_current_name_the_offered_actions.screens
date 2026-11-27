@@ -1,0 +1,70 @@
+@@ REFUSED Cancel · 120x34 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Failed current
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Failed · AI                                 ││Goal: Persist a real task                                               │
+│Attempt 1                                   ││Proof: Survives restart                                                 │
+│Model codex/fixture-judge-2 / high          │╰────────────────────────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────╮
+│Tokens none reported yet                    ││Outcome: Failed check with review finding                               │
+│? new tokens                                ││                                                                        │
+│Budget 1 of 3 used                          ││Review · failed · codex/fixture-model verdict: review structured finding│
+│Run blocked (6) · u Readiness               ││                                                                        │
+│Review      ✗ failed                        ││Validation · failed · codex/fixture-model verdict: validation           │
+│Validation  ✗ failed                        ││structured finding                                                      │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│Supervisor outcome: Failed check with review finding                    │
+│• Failed check with review finding          ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #1 created: Failed current                ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+#1: Cancel is not available for a failed task; it offers Retry, Edit, Stop, Restart, Mark done
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ REFUSED Supersede · 120x34 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Failed current
+ Failed · r Retry keeps the code and restarts the limits · s Stop · D Mark done
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Failed · AI                                 ││Goal: Persist a real task                                               │
+│Attempt 1                                   ││Proof: Survives restart                                                 │
+│Model codex/fixture-judge-2 / high          │╰────────────────────────────────────────────────────────────────────────╯
+│Active <t>                                  │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────╮
+│Tokens none reported yet                    ││Outcome: Failed check with review finding                               │
+│? new tokens                                ││                                                                        │
+│Budget 1 of 3 used                          ││Review · failed · codex/fixture-model verdict: review structured finding│
+│Run blocked (6) · u Readiness               ││                                                                        │
+│Review      ✗ failed                        ││Validation · failed · codex/fixture-model verdict: validation           │
+│Validation  ✗ failed                        ││structured finding                                                      │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│Supervisor outcome: Failed check with review finding                    │
+│• Failed check with review finding          ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #1 created: Failed current                ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+#1: Supersede is not available for a failed task; it offers Retry, Edit, Stop, Restart, Mark done
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

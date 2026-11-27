@@ -1,0 +1,432 @@
+@@ LIVE SQLITE BEFORE release_over_copy=false · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live log selection
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+│Step: Supervisor preparing …│╰──────────────────────────────────────╯
+│Tokens none reported yet    │╭ Log · following · attempt 1 ─────────╮
+│Model codex/fixture-model /…││Persistent line 13                    │
+╰────────────────────────────╯│Persistent line 14                    │
+╭ Activity · #1 · l: all ────╮│Persistent line 15                    │
+│• Current task attempt      ││Persistent line 16                    │
+│  recorded                  ││Persistent line 17                    │
+│• #1 created: Live log      ││ANCHOR fixed text for mouse copy      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ LIVE SQLITE SELECTED release_over_copy=false · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live log selection
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+│Step: Supervisor preparing …│╰──────────────────────────────────────╯
+│Tokens none reported yet    │╭ Log · scrolled · attempt 1 ──────────╮
+│Model codex/fixture-model /…││Persistent line 13                    │
+╰────────────────────────────╯│Persistent line 14                    │
+╭ Activity · #1 · l: all ────╮│Persistent line 15                    │
+│• Current task attempt      ││Persistent line 16                    │
+│  recorded                  ││Persistent line 17                    │
+│• #1 created: Live log      ││ANCHOR fixed text for mouse copy      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [End Follow] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ LIVE SQLITE UPDATED release_over_copy=false · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live log selection
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+│Step: Supervisor preparing …│╰──────────────────────────────────────╯
+│Tokens none reported yet    │╭ Log · scrolled · attempt 1 ──────────╮
+│Model codex/fixture-model /…││Persistent line 13                    │
+╰────────────────────────────╯│Persistent line 14                    │
+╭ Activity · #1 · l: all ────╮│Persistent line 15                    │
+│• Current task attempt      ││Persistent line 16                    │
+│  recorded                  ││Persistent line 17                    │
+│• #1 created: Live log      ││ANCHOR fixed text for mouse copy      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [End Follow] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ LIVE SQLITE FOLLOWED release_over_copy=false · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live log selection
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+│Step: Supervisor preparing …│╰──────────────────────────────────────╯
+│Tokens none reported yet    │╭ Log · following · attempt 1 ─────────╮
+│Model codex/fixture-model /…││NEW SQLITE OUTPUT 02                  │
+╰────────────────────────────╯│NEW SQLITE OUTPUT 03                  │
+╭ Activity · #1 · l: all ────╮│NEW SQLITE OUTPUT 04                  │
+│• Current task attempt      ││NEW SQLITE OUTPUT 05                  │
+│  recorded                  ││NEW SQLITE OUTPUT 06                  │
+│• #1 created: Live log      ││NEW SQLITE OUTPUT 07                  │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ LIVE SQLITE BEFORE release_over_copy=false · 120x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live log selection
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Persist a real task                                               │
+│Attempt 1                                   ││Proof: Survives restart                                                 │
+│Step: Supervisor preparing the next step    │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/fixture-model / none            │╭ Log · following · attempt 1 ───────────────────────────────────────────╮
+│Active <t>                                  ││Persistent line 06                                                      │
+│Tokens none reported yet                    ││Persistent line 07                                                      │
+│none yet                                    ││Persistent line 08                                                      │
+│Budget 0 of 3 used                          ││Persistent line 09                                                      │
+│                                            ││Persistent line 10                                                      │
+│                                            ││Persistent line 11                                                      │
+╰────────────────────────────────────────────╯│Persistent line 12                                                      │
+╭ Activity · #1 · l: all ────────────────────╮│Persistent line 13                                                      │
+│• Current task attempt recorded             ││Persistent line 14                                                      │
+│• #1 created: Live log selection            ││Persistent line 15                                                      │
+│                                            ││Persistent line 16                                                      │
+│                                            ││Persistent line 17                                                      │
+│                                            ││ANCHOR fixed text for mouse copy                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LIVE SQLITE SELECTED release_over_copy=false · 120x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live log selection
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Persist a real task                                               │
+│Attempt 1                                   ││Proof: Survives restart                                                 │
+│Step: Supervisor preparing the next step    │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/fixture-model / none            │╭ Log · scrolled · attempt 1 ────────────────────────────────────────────╮
+│Active <t>                                  ││Persistent line 06                                                      │
+│Tokens none reported yet                    ││Persistent line 07                                                      │
+│none yet                                    ││Persistent line 08                                                      │
+│Budget 0 of 3 used                          ││Persistent line 09                                                      │
+│                                            ││Persistent line 10                                                      │
+│                                            ││Persistent line 11                                                      │
+╰────────────────────────────────────────────╯│Persistent line 12                                                      │
+╭ Activity · #1 · l: all ────────────────────╮│Persistent line 13                                                      │
+│• Current task attempt recorded             ││Persistent line 14                                                      │
+│• #1 created: Live log selection            ││Persistent line 15                                                      │
+│                                            ││Persistent line 16                                                      │
+│                                            ││Persistent line 17                                                      │
+│                                            ││ANCHOR fixed text for mouse copy                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [End Follow] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LIVE SQLITE UPDATED release_over_copy=false · 120x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live log selection
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Persist a real task                                               │
+│Attempt 1                                   ││Proof: Survives restart                                                 │
+│Step: Supervisor preparing the next step    │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/fixture-model / none            │╭ Log · scrolled · attempt 1 ────────────────────────────────────────────╮
+│Active <t>                                  ││Persistent line 06                                                      │
+│Tokens none reported yet                    ││Persistent line 07                                                      │
+│none yet                                    ││Persistent line 08                                                      │
+│Budget 0 of 3 used                          ││Persistent line 09                                                      │
+│                                            ││Persistent line 10                                                      │
+│                                            ││Persistent line 11                                                      │
+╰────────────────────────────────────────────╯│Persistent line 12                                                      │
+╭ Activity · #1 · l: all ────────────────────╮│Persistent line 13                                                      │
+│• Current task attempt recorded             ││Persistent line 14                                                      │
+│• #1 created: Live log selection            ││Persistent line 15                                                      │
+│                                            ││Persistent line 16                                                      │
+│                                            ││Persistent line 17                                                      │
+│                                            ││ANCHOR fixed text for mouse copy                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [End Follow] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Sent 12 characters via OSC 52 · F7: native selection fallback
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LIVE SQLITE FOLLOWED release_over_copy=false · 120x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live log selection
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Persist a real task                                               │
+│Attempt 1                                   ││Proof: Survives restart                                                 │
+│Step: Supervisor preparing the next step    │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/fixture-model / none            │╭ Log · following · attempt 1 ───────────────────────────────────────────╮
+│Active <t>                                  ││Persistent line 14                                                      │
+│Tokens none reported yet                    ││Persistent line 15                                                      │
+│none yet                                    ││Persistent line 16                                                      │
+│Budget 0 of 3 used                          ││Persistent line 17                                                      │
+│                                            ││ANCHOR fixed text for mouse copy                                        │
+│                                            ││NEW SQLITE OUTPUT 00                                                    │
+╰────────────────────────────────────────────╯│NEW SQLITE OUTPUT 01                                                    │
+╭ Activity · #1 · l: all ────────────────────╮│NEW SQLITE OUTPUT 02                                                    │
+│• Current task attempt recorded             ││NEW SQLITE OUTPUT 03                                                    │
+│• #1 created: Live log selection            ││NEW SQLITE OUTPUT 04                                                    │
+│                                            ││NEW SQLITE OUTPUT 05                                                    │
+│                                            ││NEW SQLITE OUTPUT 06                                                    │
+│                                            ││NEW SQLITE OUTPUT 07                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+
+Sent 12 characters via OSC 52 · F7: native selection fallback
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LIVE SQLITE BEFORE release_over_copy=true · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live log selection
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+│Step: Supervisor preparing …│╰──────────────────────────────────────╯
+│Tokens none reported yet    │╭ Log · following · attempt 1 ─────────╮
+│Model codex/fixture-model /…││Persistent line 13                    │
+╰────────────────────────────╯│Persistent line 14                    │
+╭ Activity · #1 · l: all ────╮│Persistent line 15                    │
+│• Current task attempt      ││Persistent line 16                    │
+│  recorded                  ││Persistent line 17                    │
+│• #1 created: Live log      ││ANCHOR fixed text for mouse copy      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ LIVE SQLITE SELECTED release_over_copy=true · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live log selection
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+│Step: Supervisor preparing …│╰──────────────────────────────────────╯
+│Tokens none reported yet    │╭ Log · scrolled · attempt 1 ──────────╮
+│Model codex/fixture-model /…││Persistent line 13                    │
+╰────────────────────────────╯│Persistent line 14                    │
+╭ Activity · #1 · l: all ────╮│Persistent line 15                    │
+│• Current task attempt      ││Persistent line 16                    │
+│  recorded                  ││Persistent line 17                    │
+│• #1 created: Live log      ││ANCHOR fixed text for mouse copy      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [End Follow] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ LIVE SQLITE UPDATED release_over_copy=true · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live log selection
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+│Step: Supervisor preparing …│╰──────────────────────────────────────╯
+│Tokens none reported yet    │╭ Log · scrolled · attempt 1 ──────────╮
+│Model codex/fixture-model /…││Persistent line 13                    │
+╰────────────────────────────╯│Persistent line 14                    │
+╭ Activity · #1 · l: all ────╮│Persistent line 15                    │
+│• Current task attempt      ││Persistent line 16                    │
+│  recorded                  ││Persistent line 17                    │
+│• #1 created: Live log      ││ANCHOR fixed text for mouse copy      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [End Follow] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ LIVE SQLITE FOLLOWED release_over_copy=true · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live log selection
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+│Step: Supervisor preparing …│╰──────────────────────────────────────╯
+│Tokens none reported yet    │╭ Log · following · attempt 1 ─────────╮
+│Model codex/fixture-model /…││NEW SQLITE OUTPUT 02                  │
+╰────────────────────────────╯│NEW SQLITE OUTPUT 03                  │
+╭ Activity · #1 · l: all ────╮│NEW SQLITE OUTPUT 04                  │
+│• Current task attempt      ││NEW SQLITE OUTPUT 05                  │
+│  recorded                  ││NEW SQLITE OUTPUT 06                  │
+│• #1 created: Live log      ││NEW SQLITE OUTPUT 07                  │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ LIVE SQLITE BEFORE release_over_copy=true · 120x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live log selection
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Persist a real task                                               │
+│Attempt 1                                   ││Proof: Survives restart                                                 │
+│Step: Supervisor preparing the next step    │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/fixture-model / none            │╭ Log · following · attempt 1 ───────────────────────────────────────────╮
+│Active <t>                                  ││Persistent line 06                                                      │
+│Tokens none reported yet                    ││Persistent line 07                                                      │
+│none yet                                    ││Persistent line 08                                                      │
+│Budget 0 of 3 used                          ││Persistent line 09                                                      │
+│                                            ││Persistent line 10                                                      │
+│                                            ││Persistent line 11                                                      │
+╰────────────────────────────────────────────╯│Persistent line 12                                                      │
+╭ Activity · #1 · l: all ────────────────────╮│Persistent line 13                                                      │
+│• Current task attempt recorded             ││Persistent line 14                                                      │
+│• #1 created: Live log selection            ││Persistent line 15                                                      │
+│                                            ││Persistent line 16                                                      │
+│                                            ││Persistent line 17                                                      │
+│                                            ││ANCHOR fixed text for mouse copy                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LIVE SQLITE SELECTED release_over_copy=true · 120x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live log selection
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Persist a real task                                               │
+│Attempt 1                                   ││Proof: Survives restart                                                 │
+│Step: Supervisor preparing the next step    │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/fixture-model / none            │╭ Log · scrolled · attempt 1 ────────────────────────────────────────────╮
+│Active <t>                                  ││Persistent line 06                                                      │
+│Tokens none reported yet                    ││Persistent line 07                                                      │
+│none yet                                    ││Persistent line 08                                                      │
+│Budget 0 of 3 used                          ││Persistent line 09                                                      │
+│                                            ││Persistent line 10                                                      │
+│                                            ││Persistent line 11                                                      │
+╰────────────────────────────────────────────╯│Persistent line 12                                                      │
+╭ Activity · #1 · l: all ────────────────────╮│Persistent line 13                                                      │
+│• Current task attempt recorded             ││Persistent line 14                                                      │
+│• #1 created: Live log selection            ││Persistent line 15                                                      │
+│                                            ││Persistent line 16                                                      │
+│                                            ││Persistent line 17                                                      │
+│                                            ││ANCHOR fixed text for mouse copy                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [End Follow] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LIVE SQLITE UPDATED release_over_copy=true · 120x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live log selection
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Persist a real task                                               │
+│Attempt 1                                   ││Proof: Survives restart                                                 │
+│Step: Supervisor preparing the next step    │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/fixture-model / none            │╭ Log · scrolled · attempt 1 ────────────────────────────────────────────╮
+│Active <t>                                  ││Persistent line 06                                                      │
+│Tokens none reported yet                    ││Persistent line 07                                                      │
+│none yet                                    ││Persistent line 08                                                      │
+│Budget 0 of 3 used                          ││Persistent line 09                                                      │
+│                                            ││Persistent line 10                                                      │
+│                                            ││Persistent line 11                                                      │
+╰────────────────────────────────────────────╯│Persistent line 12                                                      │
+╭ Activity · #1 · l: all ────────────────────╮│Persistent line 13                                                      │
+│• Current task attempt recorded             ││Persistent line 14                                                      │
+│• #1 created: Live log selection            ││Persistent line 15                                                      │
+│                                            ││Persistent line 16                                                      │
+│                                            ││Persistent line 17                                                      │
+│                                            ││ANCHOR fixed text for mouse copy                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [End Follow] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Sent 12 characters via OSC 52 · F7: native selection fallback
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LIVE SQLITE FOLLOWED release_over_copy=true · 120x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Live log selection
+ Supervisor preparing the next step · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Persist a real task                                               │
+│Attempt 1                                   ││Proof: Survives restart                                                 │
+│Step: Supervisor preparing the next step    │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/fixture-model / none            │╭ Log · following · attempt 1 ───────────────────────────────────────────╮
+│Active <t>                                  ││Persistent line 14                                                      │
+│Tokens none reported yet                    ││Persistent line 15                                                      │
+│none yet                                    ││Persistent line 16                                                      │
+│Budget 0 of 3 used                          ││Persistent line 17                                                      │
+│                                            ││ANCHOR fixed text for mouse copy                                        │
+│                                            ││NEW SQLITE OUTPUT 00                                                    │
+╰────────────────────────────────────────────╯│NEW SQLITE OUTPUT 01                                                    │
+╭ Activity · #1 · l: all ────────────────────╮│NEW SQLITE OUTPUT 02                                                    │
+│• Current task attempt recorded             ││NEW SQLITE OUTPUT 03                                                    │
+│• #1 created: Live log selection            ││NEW SQLITE OUTPUT 04                                                    │
+│                                            ││NEW SQLITE OUTPUT 05                                                    │
+│                                            ││NEW SQLITE OUTPUT 06                                                    │
+│                                            ││NEW SQLITE OUTPUT 07                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+
+Sent 12 characters via OSC 52 · F7: native selection fallback
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

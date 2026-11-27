@@ -1,0 +1,74 @@
+@@ READINESS APPROVAL BLOCKED · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs approval   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Approval readines╭ Execution readiness ───────────────────────────────────────────────────────╮
+ Pending revision 1 ·│Run blocked · 2 blocker(s)                                                  │
+╭ Status · Enter: det│                                                                            │────────────────────╮
+│Needs approval · AI │BLOCK · Execution state: Approve a revision before Run → v Approve / w      │                    │
+│No attempts yet     │Answer / r Run                                                              │                    │
+│Run blocked (2) · u │OK · Project checks                                                         │────────────────────╯
+│Model codex/executio│BLOCK · Approval: Current revision needs approval → v Approve               │────────────────────╮
+│Budget 0 of 3 used  │OK · Task                                                                   │ect.                │
+│                    │OK · execution model                                                        │                    │
+│                    │OK · review model                                                           │                    │
+│                    │OK · validation model                                                       │                    │
+│                    │OK · remediation model                                                      │                    │
+│                    │OK · Writable workers (execution and repair) · Agent network Off · Codex    │                    │
+│                    │OK · Codex CLI                                                              │                    │
+│                    │OK · Read-only sandbox                                                      │                    │
+│                    │OK · Commit identity: Project Author <project@example.com>                  │                    │
+╰────────────────────│OK · Supervisor ownership                                                   │                    │
+╭ Activity · #1 · l: │OK · Worker ownership                                                       │                    │
+│• #1 created: Approv│OK · Workspace baseline                                                     │                    │
+│                    │                                                                            │                    │
+│                    │After fixing setup, Refresh here or press r on Current. Inspection creates  │                    │
+│                    │no attempt.                                                                 │                    │
+│                    │Wheel / PgUp / PgDn: scroll · Esc: close                                    │                    │
+│                    │                                                                            │                    │
+│                    │[c Checks] [m Models] [v Approve] [u Refresh] [Close]                       │                    │
+│                    │                                                                            │                    │
+╰────────────────────│                                                                            │────────────────────╯
+[Copy] [v Approve] [n╰────────────────────────────────────────────────────────────────────────────╯etails] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ READINESS APPROVED · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Approval readiness
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt                                                 │
+│No attempts yet                             ││Proof: result.txt contains verified                                     │
+│Can run · u Readiness                       │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Ready. r starts an attempt in the background supervisor; this pane      │
+│                                            ││follows its log.                                                        │
+│                                            ││Defaults and checks live in Config; c pins models for this task.        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• #1 revision 1 approved by human: owner    ││                                                                        │
+│• #1 created: Approval readiness            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

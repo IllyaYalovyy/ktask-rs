@@ -1,0 +1,82 @@
+@@ PINNED EFFORT READINESS · 120x40 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Run one · s╭ Execution readiness ───────────────────────────────────────────────────────╮, high, xhigh, max,…
+ #1 Pinned settings  │Run blocked · 1 blocker(s)                                                  │
+ Paused · r Resume co│                                                                            │
+┏ ■ EXECUTION STOPPED│OK · Execution state                                                        │━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: review effor│OK · Project checks                                                         │ltraModel           ┃
+┃codex/review        │OK · Approval                                                               │                    ┃
+┃Not resolved automat│OK · Task                                                                   │                    ┃
+┃Next: Fix the cause,│OK · execution model                                                        │                    ┃
+┗━━━━━━━━━━━━━━━━━━━━│BLOCK · review model: command conflict: review effort "hight" is invalid    │━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: det│accepted values: minimal, low, medium, high, xhigh, max, ultra              │────────────────────╮
+│Paused · AI         │Model codex/review → m Models                                               │                    │
+│Attempt 1           │OK · validation model                                                       │                    │
+│Model codex/executio│OK · remediation model                                                      │────────────────────╯
+│Active <t>          │OK · Writable workers (execution and repair) · Agent network Off · Codex    │────────────────────╮
+│Tokens none reported│OK · Codex CLI                                                              │                    │
+│none yet            │OK · Read-only sandbox                                                      │                    │
+│Budget 0 of 3 used  │OK · Commit identity: Project Author <project@example.com>                  │                    │
+│Run blocked (1) · u │OK · Supervisor ownership                                                   │                    │
+│                    │OK · Worker ownership                                                       │                    │
+│                    │OK · Workspace baseline                                                     │                    │
+╰────────────────────│                                                                            │                    │
+╭ Activity · #1 · l: │Queue: stopped · command conflict: review effort "hight" is invalid         │                    │
+│• Current task attem│accepted values: minimal, low, medium, high, xhigh, max, ultra              │                    │
+│• #1 created: Pinned│Model codex/review                                                          │                    │
+│                    │                                                                            │                    │
+│                    │After fixing setup, Refresh here or press r on Current. Inspection creates  │                    │
+│                    │no attempt.                                                                 │                    │
+│                    │Wheel / PgUp / PgDn: scroll · Esc: close                                    │                    │
+│                    │                                                                            │                    │
+│                    │[c Checks] [m Models] [r Resume] [u Refresh] [Close]                        │                    │
+│                    │                                                                            │                    │
+╰────────────────────│                                                                            │────────────────────╯
+[Copy] [r Resume] [s ╰────────────────────────────────────────────────────────────────────────────╯ [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ EDITED REVISION READINESS · 120x40 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Run one · stopped · review effort "hight" is invalidaccepted values: minimal, low, medium, high, xhigh, max,…
+ #1 Pinned settings  ╭ Execution readiness ───────────────────────────────────────────────────────╮
+ Paused · r Resume co│Can run · 0 blocker(s)                                                      │
+┏ ■ EXECUTION STOPPED│                                                                            │━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: review effor│OK · Execution state                                                        │ltraModel           ┃
+┃codex/review        │OK · Project checks                                                         │                    ┃
+┃Not resolved automat│OK · Approval                                                               │                    ┃
+┃Next: Fix the cause,│OK · Task                                                                   │                    ┃
+┗━━━━━━━━━━━━━━━━━━━━│OK · execution model                                                        │━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: det│OK · review model                                                           │────────────────────╮
+│Paused · AI         │OK · validation model                                                       │                    │
+│Attempt 1           │OK · remediation model                                                      │                    │
+│Model codex/executio│OK · Writable workers (execution and repair) · Agent network Off · Codex    │────────────────────╯
+│Active <t>          │OK · Codex CLI                                                              │────────────────────╮
+│Tokens none reported│OK · Read-only sandbox                                                      │                    │
+│none yet            │OK · Commit identity: Project Author <project@example.com>                  │                    │
+│Budget 0 of 3 used  │OK · Supervisor ownership                                                   │                    │
+│Can run · u Readines│OK · Worker ownership                                                       │                    │
+│                    │OK · Workspace baseline                                                     │                    │
+│                    │                                                                            │                    │
+╰────────────────────│Queue: stopped · command conflict: review effort "hight" is invalid         │                    │
+╭ Activity · #1 · l: │accepted values: minimal, low, medium, high, xhigh, max, ultra              │                    │
+│• Current task attem│Model codex/review                                                          │                    │
+│• #1 created: Pinned│                                                                            │                    │
+│                    │After fixing setup, Refresh here or press r on Current. Inspection creates  │                    │
+│                    │no attempt.                                                                 │                    │
+│                    │Wheel / PgUp / PgDn: scroll · Esc: close                                    │                    │
+│                    │                                                                            │                    │
+│                    │[c Checks] [m Models] [r Resume] [u Refresh] [Close]                        │                    │
+│                    │                                                                            │                    │
+│                    │                                                                            │                    │
+╰────────────────────╰────────────────────────────────────────────────────────────────────────────╯────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

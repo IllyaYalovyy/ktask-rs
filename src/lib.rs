@@ -29,6 +29,7 @@ mod limits_ui;
 mod link;
 mod mock;
 mod persistent;
+pub use persistent::REFRESH_INTERVAL;
 mod presentation;
 mod profile_ui;
 mod project_view;

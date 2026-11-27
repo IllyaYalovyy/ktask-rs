@@ -57,18 +57,7 @@ fn dependency_wait_rechecks_by_keyboard_and_mouse_with_large_queue_and_history()
         let current = t.screen("dependency current", |s| {
             s.contains("Current #111 · Needs dependency") && s.contains("r Recheck")
         })?;
-        println!("DEPENDENCY CURRENT mouse={mouse}\n{current}");
-        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            let dir = PathBuf::from(dir);
-            fs::write(
-                dir.join(format!("dependency-current-mouse-{mouse}.txt")),
-                &current,
-            )?;
-            support::screen_png(
-                &current,
-                &dir.join(format!("dependency-current-mouse-{mouse}.png")),
-            )?;
-        }
+        crate::support::record("DEPENDENCY CURRENT", mouse, &current);
         if mouse {
             t.click("u Readiness")?;
         } else {
@@ -78,12 +67,7 @@ fn dependency_wait_rechecks_by_keyboard_and_mouse_with_large_queue_and_history()
             support::dialog_text(s, "Execution readiness", None)
                 .contains("rg: command not found → install/configure externally")
         })?;
-        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            fs::write(
-                PathBuf::from(dir).join(format!("dependency-readiness-mouse-{mouse}.txt")),
-                &readiness,
-            )?;
-        }
+        crate::support::record("dependency readiness", mouse, &readiness);
         t.send("\x1b")?;
         t.screen("readiness closed", |s| {
             s.contains("r Recheck") && !s.contains("╭ Execution readiness")
@@ -96,12 +80,7 @@ fn dependency_wait_rechecks_by_keyboard_and_mouse_with_large_queue_and_history()
         let configuration = t.screen("dependency configuration", |s| {
             s.contains("r Recheck current") && s.contains("Dependencies: manual external setup")
         })?;
-        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            fs::write(
-                PathBuf::from(dir).join(format!("dependency-config-mouse-{mouse}.txt")),
-                &configuration,
-            )?;
-        }
+        crate::support::record("dependency config", mouse, &configuration);
         if mouse {
             t.click("r Recheck current")?;
         } else {
@@ -122,13 +101,7 @@ fn dependency_wait_rechecks_by_keyboard_and_mouse_with_large_queue_and_history()
         let queue = t.screen("dependency queue", |s| {
             s.contains("Queue ·") && s.contains("Dependency fixture 111")
         })?;
-        println!("DEPENDENCY QUEUE mouse={mouse}\n{queue}");
-        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            fs::write(
-                PathBuf::from(dir).join(format!("dependency-queue-mouse-{mouse}.txt")),
-                &queue,
-            )?;
-        }
+        crate::support::record("DEPENDENCY QUEUE", mouse, &queue);
         if mouse {
             t.click("3 History")?;
         } else {
@@ -137,13 +110,7 @@ fn dependency_wait_rechecks_by_keyboard_and_mouse_with_large_queue_and_history()
         let history = t.screen("dependency history", |s| {
             s.contains("History ·") && s.contains("Dependency fixture 110")
         })?;
-        println!("DEPENDENCY HISTORY mouse={mouse}\n{history}");
-        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            fs::write(
-                PathBuf::from(dir).join(format!("dependency-history-mouse-{mouse}.txt")),
-                &history,
-            )?;
-        }
+        crate::support::record("DEPENDENCY HISTORY", mouse, &history);
         if mouse {
             t.click("1 Current")?;
         } else {
@@ -216,12 +183,7 @@ fn dependency_wait_stops_by_keyboard_and_mouse() -> Result {
         let stopped = t.screen("dependency after Stop", |s| {
             s.contains("Current #1 · Pending") && s.contains("r Run")
         })?;
-        if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-            fs::write(
-                PathBuf::from(dir).join(format!("dependency-stop-mouse-{mouse}.txt")),
-                &stopped,
-            )?;
-        }
+        crate::support::record("dependency stop", mouse, &stopped);
         t.send("q")?;
         t.finish()?;
     }
@@ -392,7 +354,7 @@ fn real_pty_copies_succeeded_with_mouse_and_cancelled_with_keyboard_to_queue() -
                 && s.contains("Queue 2")
                 && s.contains("History 1")
         })?;
-        println!("COPIED PTY mouse={mouse}\n{screen}");
+        crate::support::record("COPIED PTY", mouse, &screen);
         // The Queue table is the first cell of its rows; the details pane shares the lines.
         let row = |text: &str| {
             screen
@@ -408,7 +370,7 @@ fn real_pty_copies_succeeded_with_mouse_and_cancelled_with_keyboard_to_queue() -
                 && s.contains("› #1   ")
                 && rows.filter(|row| row.contains('#')).count() == 1
         })?;
-        println!("COPIED ORIGINAL mouse={mouse}\n{history}");
+        crate::support::record("COPIED ORIGINAL", mouse, &history);
         quit(&mut t)?;
         let mut reader = service(root)?;
         let snapshot = reader.snapshot()?;
@@ -608,7 +570,7 @@ fn stop_cancels_open_questions_and_later_runs_ask_new_ones_by_mouse_and_keyboard
             && screen.contains("Keep the other task question open?")
             && !screen.contains("Which behavior should the first attempt use?")
     })?;
-    println!("OTHER QUESTION STILL OPEN\n{other_screen}");
+    crate::support::record("OTHER QUESTION STILL OPEN", false, &other_screen);
     terminal.click("r Answer")?;
     terminal.screen("mouse answer form", |screen| {
         screen.contains("Answer AI question")
@@ -618,12 +580,12 @@ fn stop_cancels_open_questions_and_later_runs_ask_new_ones_by_mouse_and_keyboard
     let answered = terminal.screen("other question answered by mouse", |screen| {
         !screen.contains("Answer AI question") && screen.contains("Saved to SQLite")
     })?;
-    println!("OTHER QUESTION ANSWERED\n{answered}");
+    crate::support::record("OTHER QUESTION ANSWERED", true, &answered);
     terminal.send("2")?;
     let queue = terminal.screen("stopped task waits in the queue", |screen| {
         on_queue(screen) && row_shows(screen, "Asks the owner", "Pending")
     })?;
-    println!("STOPPED TASK PENDING\n{queue}");
+    crate::support::record("STOPPED TASK PENDING", true, &queue);
     quit(&mut terminal)?;
     assert!(writer.open_question(other_id)?.is_none());
     assert_eq!(
@@ -651,7 +613,7 @@ fn stop_cancels_open_questions_and_later_runs_ask_new_ones_by_mouse_and_keyboard
         screen.contains("Current #1 · Needs input")
             && screen.contains("Which behavior should the new attempt use?")
     })?;
-    println!("NEW QUESTION\n{question_screen}");
+    crate::support::record("NEW QUESTION", false, &question_screen);
     terminal.send("w")?;
     terminal.screen("keyboard answer form", |screen| {
         screen.contains("Answer AI question")
@@ -660,7 +622,7 @@ fn stop_cancels_open_questions_and_later_runs_ask_new_ones_by_mouse_and_keyboard
     let answered = terminal.screen("new question answered by keyboard", |screen| {
         !screen.contains("Answer AI question") && screen.contains("Saved to SQLite")
     })?;
-    println!("NEW QUESTION ANSWERED\n{answered}");
+    crate::support::record("NEW QUESTION ANSWERED", false, &answered);
     quit(&mut terminal)?;
     assert!(writer.open_question(id)?.is_none());
     assert_eq!(
@@ -719,7 +681,7 @@ fn task_details_show_each_revision_once_with_accurate_position() -> Result {
             && screen.contains("Newer draft revision 3 (needs approval)")
             && screen.contains("Unapproved newer draft")
     })?;
-    println!("REVISION POSITION DETAILS\n{details}");
+    crate::support::record("REVISION POSITION DETAILS", false, &details);
     assert_eq!(details.matches("Earlier Revision 1").count(), 1);
     assert_eq!(details.matches("Newer draft revision 3").count(), 1);
     assert!(!details.contains("Earlier Revision 3"));
@@ -779,7 +741,7 @@ fn current_activity_shows_multiple_readable_events_at_small_and_large_sizes() ->
             assert!(current.contains("Event 7"), "{current}");
             assert!(current.contains("Event 6"), "{current}");
         }
-        println!("CURRENT ACTIVITY {cols}x{rows}\n{current}");
+        crate::support::record("CURRENT ACTIVITY", false, &current);
         t.send("l")?;
         t.screen("keyboard opens all events", |screen| {
             screen.contains("Project events") && screen.contains("Event 1")
@@ -818,7 +780,7 @@ fn current_activity_shows_multiple_readable_events_at_small_and_large_sizes() ->
             && screen.contains("Activity · #1")
             && screen.contains("Stop event visible")
     })?;
-    println!("STOPPED CURRENT ACTIVITY 70x22\n{stopped}");
+    crate::support::record("STOPPED CURRENT ACTIVITY", false, &stopped);
     t.send("l")?;
     t.screen("stopped keyboard opens all events", |screen| {
         screen.contains("Project events") && screen.contains("Event 1")
@@ -902,7 +864,7 @@ fn history_rows_show_attempts_total_time_and_usage_by_keyboard_and_mouse() -> Re
         let screen = t.screen("history statistics", |s| {
             s.contains("Attempts Time Usage") && s.contains("$0.01") && s.contains("1k tkn +1 ?")
         })?;
-        println!("HISTORY STATISTICS {cols} mouse={mouse}\n{screen}");
+        crate::support::record("HISTORY STATISTICS", mouse, &screen);
         let known = screen
             .lines()
             .find(|line| line.contains(&format!("#{known_id}")))
@@ -999,7 +961,7 @@ fn codex_only_usage_reaches_current_history_stats_and_cli() -> Result {
                 && s.contains("2k new tokens")
                 && !s.contains("Cost unknown")
         })?;
-        println!("CODEX CURRENT mouse={mouse}\n{current}");
+        crate::support::record("CODEX CURRENT", mouse, &current);
         if mouse {
             t.click("Status")?;
         } else {
@@ -1010,8 +972,12 @@ fn codex_only_usage_reaches_current_history_stats_and_cli() -> Result {
                 && s.contains("Usage: 2 calls")
                 && s.contains("2k new tokens")
         })?;
-        println!("CODEX DETAILS mouse={mouse}\n{details}");
-        t.click("Close")?;
+        crate::support::record("CODEX DETAILS", mouse, &details);
+        if mouse {
+            t.click("Close")?;
+        } else {
+            t.send("\x1b")?;
+        }
         t.screen("Codex details closed", |s| {
             !s.contains("Task details / attempts")
         })?;
@@ -1025,7 +991,7 @@ fn codex_only_usage_reaches_current_history_stats_and_cli() -> Result {
                 && s.contains("2k new tokens")
                 && !s.contains("not reported by the provider")
         })?;
-        println!("CODEX STATS mouse={mouse}\n{stats}");
+        crate::support::record("CODEX STATS", mouse, &stats);
         quit(&mut t)?;
     }
 
@@ -1044,7 +1010,7 @@ fn codex_only_usage_reaches_current_history_stats_and_cli() -> Result {
         let history = t.screen("Codex history usage", |s| {
             s.contains("Attempts Time Usage") && s.contains("2k tkn")
         })?;
-        println!("CODEX HISTORY mouse={mouse}\n{history}");
+        crate::support::record("CODEX HISTORY", mouse, &history);
         quit(&mut t)?;
     }
 
@@ -1115,9 +1081,9 @@ fn recorded_usage_is_visible_in_current_details_history_and_statistics() -> Resu
     let current = t.screen("current recorded usage", |s| {
         s.contains("Tokens 10 new · 15 cached · 7 out") && s.contains("Cost $0.000100")
     })?;
-    println!("USAGE CURRENT\n{current}");
+    crate::support::record("USAGE CURRENT", false, &current);
     let details = key(&mut t, "\r", "Task details / attempts")?;
-    println!("USAGE DETAILS\n{details}");
+    crate::support::record("USAGE DETAILS", false, &details);
     assert!(details.contains("Attempt inputs: revision 1"));
     assert!(details.contains("Usage: 2 calls"));
     assert!(details.contains("$0.000100 + 1 call(s) without cost"));
@@ -1130,7 +1096,7 @@ fn recorded_usage_is_visible_in_current_details_history_and_statistics() -> Resu
             && s.contains("(+1 call(s) unreported)")
             && s.contains("cost $0.000100 + 1 call(s) without cost")
     })?;
-    println!("USAGE STATS\n{stats}");
+    crate::support::record("USAGE STATS", true, &stats);
     t.click("Close")?;
     quit(&mut t)?;
     let mut service = self::service(root)?;
@@ -1152,7 +1118,7 @@ fn recorded_usage_is_visible_in_current_details_history_and_statistics() -> Resu
             t.send("3")?;
         }
         let history = t.screen("mixed-cost History row", on_history)?;
-        println!("USAGE HISTORY {cols} mouse={mouse}\n{history}");
+        crate::support::record("USAGE HISTORY", mouse, &history);
         let row = history
             .lines()
             .filter_map(|line| line.split('│').nth(1))
@@ -1168,7 +1134,7 @@ fn recorded_usage_is_visible_in_current_details_history_and_statistics() -> Resu
         );
         t.send("\r")?;
         let detail = t.screen("history attempt usage", |s| s.contains("Usage: 2 calls"))?;
-        println!("USAGE HISTORY DETAILS {cols} mouse={mouse}\n{detail}");
+        crate::support::record("USAGE HISTORY DETAILS", mouse, &detail);
         quit(&mut t)?;
     }
     Ok(())
@@ -1229,14 +1195,14 @@ fn exact_large_tokens_expand_by_keyboard_and_mouse_at_both_sizes() -> Result {
             let current = t.screen("compact large tokens", |s| {
                 s.contains(tokens) && s.contains("Current #1")
             })?;
-            println!("LARGE USAGE CURRENT {cols}x{rows} mouse={mouse}\n{current}");
+            crate::support::record("LARGE USAGE CURRENT", mouse, &current);
             if mouse {
                 t.click("Status")?;
             } else {
                 t.send("\r")?;
             }
             let details = t.screen("attempt details", |s| s.contains("Task details / attempts"))?;
-            println!("LARGE USAGE DETAILS FIRST {cols}x{rows} mouse={mouse}\n{details}");
+            crate::support::record("LARGE USAGE DETAILS FIRST", mouse, &details);
             for needle in [
                 "246,913,578,024",
                 "197,530,864,218",
@@ -1244,7 +1210,11 @@ fn exact_large_tokens_expand_by_keyboard_and_mouse_at_both_sizes() -> Result {
                 "153,086,421,974",
             ] {
                 let exact = scroll_usage(&mut t, mouse, needle)?;
-                println!("LARGE USAGE DETAILS EXACT {needle} {cols}x{rows} mouse={mouse}\n{exact}");
+                crate::support::record(
+                    &format!("LARGE USAGE DETAILS EXACT {needle}"),
+                    mouse,
+                    &exact,
+                );
             }
             if mouse {
                 t.click("Close")?;
@@ -1269,7 +1239,7 @@ fn exact_large_tokens_expand_by_keyboard_and_mouse_at_both_sizes() -> Result {
                 "153,086,421,974",
             ] {
                 let stats = scroll_usage(&mut t, mouse, needle)?;
-                println!("LARGE USAGE STATS {needle} {cols}x{rows} mouse={mouse}\n{stats}");
+                crate::support::record(&format!("LARGE USAGE STATS {needle}"), mouse, &stats);
             }
             if mouse {
                 t.click("Close")?;
@@ -1306,14 +1276,14 @@ fn exact_large_tokens_expand_by_keyboard_and_mouse_at_both_sizes() -> Result {
             let history = t.screen("history row", |s| {
                 on_history(s) && s.contains("Failed current")
             })?;
-            println!("LARGE USAGE HISTORY {cols}x{rows} mouse={mouse}\n{history}");
+            crate::support::record("LARGE USAGE HISTORY", mouse, &history);
             if mouse {
                 t.click("Enter Details")?;
             } else {
                 t.send("\r")?;
             }
             let details = t.screen("history details", |s| s.contains("Task details / attempts"))?;
-            println!("LARGE USAGE HISTORY DETAILS FIRST {cols}x{rows} mouse={mouse}\n{details}");
+            crate::support::record("LARGE USAGE HISTORY DETAILS FIRST", mouse, &details);
             for needle in [
                 "246,913,578,024",
                 "197,530,864,218",
@@ -1321,8 +1291,10 @@ fn exact_large_tokens_expand_by_keyboard_and_mouse_at_both_sizes() -> Result {
                 "153,086,421,974",
             ] {
                 let exact = scroll_usage(&mut t, mouse, needle)?;
-                println!(
-                    "LARGE USAGE HISTORY DETAILS EXACT {needle} {cols}x{rows} mouse={mouse}\n{exact}"
+                crate::support::record(
+                    &format!("LARGE USAGE HISTORY DETAILS EXACT {needle}"),
+                    mouse,
+                    &exact,
                 );
             }
             quit(&mut t)?;
@@ -1451,16 +1423,16 @@ fn running_step_and_token_expansion_stay_visible_at_minimum_size() -> Result {
                 && s.contains("in 123G, cache 186G, out 76G")
                 && s.contains("Run")
         })?;
-        println!("RUNNING USAGE MINIMUM mouse={mouse}\n{screen}");
+        crate::support::record("RUNNING USAGE MINIMUM", mouse, &screen);
         if mouse {
             t.click("Status")?;
         } else {
             t.send("\r")?;
         }
         let details = t.screen("running details", |s| s.contains("Task details / attempts"))?;
-        println!("RUNNING USAGE DETAILS MINIMUM mouse={mouse}\n{details}");
+        crate::support::record("RUNNING USAGE DETAILS MINIMUM", mouse, &details);
         let exact = scroll_usage(&mut t, mouse, "123,456,789,012")?;
-        println!("RUNNING USAGE EXACT MINIMUM mouse={mouse}\n{exact}");
+        crate::support::record("RUNNING USAGE EXACT MINIMUM", mouse, &exact);
         quit(&mut t)?;
     }
     Ok(())
@@ -1475,7 +1447,7 @@ fn persistent_report_and_log_support_mouse_text_copy() -> Result {
     let report = t.screen("real failed report", |s| {
         s.contains("Current #1") && s.contains("Report")
     })?;
-    println!("PERSISTENT REPORT BEFORE SELECTION\n{report}");
+    crate::support::record("PERSISTENT REPORT BEFORE SELECTION", false, &report);
     let goal = location(&report, "Goal:")?;
     let selected = drag_select(
         &mut t,
@@ -1483,7 +1455,7 @@ fn persistent_report_and_log_support_mouse_text_copy() -> Result {
         (goal.0 + 11, goal.1 + 1),
         "persistent goal selected",
     )?;
-    println!("PERSISTENT GOAL SELECTED\n{selected}");
+    crate::support::record("PERSISTENT GOAL SELECTED", true, &selected);
     assert!(copy(&mut t)?.starts_with("Goal: Persist"));
     assert!(t.output_bytes().windows(7).any(|w| w == b"\x1b]52;c;"));
     clear_selection(&mut t, "Current #1")?;
@@ -1498,7 +1470,7 @@ fn persistent_report_and_log_support_mouse_text_copy() -> Result {
     clear_selection(&mut t, "Current #1")?;
     let log = key(&mut t, "o", "Log ·")?;
     assert!(log.contains("Check failed: transcript evidence"));
-    println!("PERSISTENT RAW LOG\n{log}");
+    crate::support::record("PERSISTENT RAW LOG", true, &log);
     let evidence_at = location(&log, "Check failed: transcript evidence")?;
     drag_select(
         &mut t,
@@ -1516,7 +1488,7 @@ fn persistent_report_and_log_support_mouse_text_copy() -> Result {
         |t| t.send("\x1b[6~"),
         |s| s.contains("Check failed: transcript evidence"),
     )?;
-    println!("PERSISTENT EVIDENCE DIALOG\n{details}");
+    crate::support::record("PERSISTENT EVIDENCE DIALOG", true, &details);
     let dialog_at = location(&details, "Check failed: transcript evidence")?;
     drag_select(
         &mut t,
@@ -1605,14 +1577,15 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     let before_browsing = evidence_contents(root)?;
     let mut t = terminal(root)?;
     t.screen("current attempt ready", |s| s.contains("Current #1"))?;
-    println!(
-        "CURRENT BROWSER START\n{}",
-        key(&mut t, "\r", "Task details / attempts")?
+    crate::support::record(
+        "CURRENT BROWSER START",
+        false,
+        &key(&mut t, "\r", "Task details / attempts")?,
     );
     let latest = t.screen("latest attempt", |s| s.contains("SECOND ATTEMPT ONLY"))?;
     assert!(latest.contains("Attempt 2 / 2"));
     let first_screen = key(&mut t, "[", "Attempt 1 / 2")?;
-    println!("EARLIER ATTEMPT\n{first_screen}");
+    crate::support::record("EARLIER ATTEMPT", false, &first_screen);
     assert!(!first_screen.contains("SECOND ATTEMPT ONLY"));
     t.click("Next")?;
     t.screen("mouse next attempt", |s| s.contains("Attempt 2 / 2"))?;
@@ -1622,7 +1595,7 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     let older = t.screen("keyboard output paging", |s| {
         s.contains("Output page 2 / 28")
     })?;
-    println!("KEYBOARD OLDER PAGE\n{older}");
+    crate::support::record("KEYBOARD OLDER PAGE", true, &older);
     t.click("Newer")?;
     t.screen("mouse output paging", |s| s.contains("Output page 1 / 28"))?;
     let found = find_evidence(
@@ -1631,7 +1604,7 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
         "EARLY_MARKER_COPY",
         "EARLY_MARKER_COPY request/check?",
     )?;
-    println!("OLD OUTPUT SEARCH RESULT\n{found}");
+    crate::support::record("OLD OUTPUT SEARCH RESULT", true, &found);
     assert!(found.contains("Output page 28 / 28"));
     assert!(found.contains("Match:"));
     let marker = location(&found, "EARLY_MARKER_COPY")?;
@@ -1641,7 +1614,7 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
         (marker.0 + 11, marker.1),
         "old evidence selected",
     )?;
-    println!("MOUSE EVIDENCE SELECTION\n{mouse_selected}");
+    crate::support::record("MOUSE EVIDENCE SELECTION", true, &mouse_selected);
     let mouse_payload = mouse_copy(&mut t)?;
     println!("MOUSE EVIDENCE COPY {mouse_payload:?}");
     assert!(
@@ -1650,41 +1623,45 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     );
     clear_selection(&mut t, "Task details / attempts")?;
     let selected = keyboard_select(&mut t, &found, "EARLY_MARKER_COPY", 12)?;
-    println!("KEYBOARD EVIDENCE SELECTION\n{selected}");
+    crate::support::record("KEYBOARD EVIDENCE SELECTION", true, &selected);
     assert!(copy_key(&mut t, "\r")?.starts_with("EARLY_MARKER"));
     clear_selection(&mut t, "Task details / attempts")?;
     let mouse_search = find_evidence(&mut t, "Find output", "request/check?", "request/check?")?;
-    println!("MOUSE FOCUSED SEARCH\n{mouse_search}");
+    crate::support::record("MOUSE FOCUSED SEARCH", true, &mouse_search);
     let multiline = find_evidence(&mut t, "Find output", "LATE/QUERY", "LATE/QUERY MATCH")?;
-    println!("MULTILINE SEARCH MATCH\n{multiline}");
+    crate::support::record("MULTILINE SEARCH MATCH", true, &multiline);
     let joined = find_evidence(
         &mut t,
         "Find output",
         "SAME_ROW_JOIN_TARGET",
         "SAME_ROW_JOIN_TARGET",
     )?;
-    println!("SEARCH ACROSS SAME STREAM RECORDS\n{joined}");
+    crate::support::record("SEARCH ACROSS SAME STREAM RECORDS", true, &joined);
     let interleaved = find_evidence(
         &mut t,
         "Find output",
         "INTERLEAVED_MATCH",
         "INTERLEAVED_MATCH",
     )?;
-    println!("SEARCH ACROSS INTERLEAVED SAME STREAM RECORDS\n{interleaved}");
+    crate::support::record(
+        "SEARCH ACROSS INTERLEAVED SAME STREAM RECORDS",
+        true,
+        &interleaved,
+    );
     let unrelated = find_evidence(
         &mut t,
         "Find output",
         "CROSS_STREAM_FALSE_MATCH",
         "No matching evidence recorded",
     )?;
-    println!("SEARCH KEEPS STREAMS SEPARATE\n{unrelated}");
+    crate::support::record("SEARCH KEEPS STREAMS SEPARATE", true, &unrelated);
     let boundary = find_evidence(&mut t, "Find output", "BOUNDARY_TARGET", "BOUNDARY_TARGET")?;
     assert!(boundary.contains("Match:"));
     assert!(boundary.contains("Output page 28 / 28"));
-    println!("BOUNDARY SEARCH MATCH\n{boundary}");
+    crate::support::record("BOUNDARY SEARCH MATCH", true, &boundary);
     let large = find_evidence(&mut t, "Find output", "HUGE_END", "HUGE_END")?;
     assert!(large.contains("chunk 2049 / 2049"));
-    println!("HUGE OUTPUT MATCH\n{large}");
+    crate::support::record("HUGE OUTPUT MATCH", true, &large);
     t.click("Chunk -")?;
     t.screen("mouse previous output chunk", |s| {
         s.contains("chunk 2048 / 2049") && !s.contains("qqqqqqqqqqHUGE_END")
@@ -1697,7 +1674,7 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     let results = t.screen("first attempt results", |s| {
         s.contains("review structured finding")
     })?;
-    println!("STRUCTURED RESULTS\n{results}");
+    crate::support::record("STRUCTURED RESULTS", true, &results);
     assert!(results.contains("Role steps, findings"));
     let judge = find_evidence(
         &mut t,
@@ -1705,7 +1682,7 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
         "validation structured finding",
         "validation structured finding",
     )?;
-    println!("RESULTS ONLY SEARCH\n{judge}");
+    crate::support::record("RESULTS ONLY SEARCH", true, &judge);
     assert!(judge.contains("validation structured finding"));
     t.send("\x1b[D")?;
     t.screen("keyboard previous section", |s| s.contains("HUGE_END"))?;
@@ -1715,7 +1692,7 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     })?;
     t.click("Output")?;
     let restored = t.screen("old output position restored", |s| s.contains("HUGE_END"))?;
-    println!("RESTORED OUTPUT POSITION\n{restored}");
+    crate::support::record("RESTORED OUTPUT POSITION", true, &restored);
     t.click("Results")?;
     t.screen("results position restored", |s| {
         s.contains("Role steps, findings")
@@ -1724,23 +1701,31 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     let check = t.screen("first attempt transcript", |s| {
         s.contains("FIRST ATTEMPT CHECK TRANSCRIPT")
     })?;
-    println!("SUPERVISOR CHECK\n{check}");
+    crate::support::record("SUPERVISOR CHECK", true, &check);
     t.click("Older")?;
     let unicode = t.screen("unicode across transcript chunk", |s| {
         s.contains("éCHECK_END")
     })?;
-    println!("UNICODE CHECK CHUNK\n{unicode}");
+    crate::support::record("UNICODE CHECK CHUNK", true, &unicode);
     assert!(unicode.contains("Chunk 2 / "));
     let transcript_match = find_evidence(&mut t, "", "éCHECK_END", "éCHECK_END")?;
-    println!("TRANSCRIPT ONLY SEARCH ACROSS UTF8 CHUNK\n{transcript_match}");
+    crate::support::record(
+        "TRANSCRIPT ONLY SEARCH ACROSS UTF8 CHUNK",
+        true,
+        &transcript_match,
+    );
     assert!(transcript_match.contains("éCHECK_END"));
     t.send(">")?;
     t.screen("keyboard transcript paging", |s| s.contains("Chunk 2 / "))?;
     t.click("Older")?;
     let first_deep = t.screen("first artifact deep position", |s| s.contains("Chunk 3 / "))?;
-    println!("FIRST TRANSCRIPT DEEP POSITION\n{first_deep}");
+    crate::support::record("FIRST TRANSCRIPT DEEP POSITION", true, &first_deep);
     let first_scrolled = scroll_transcript(&mut t, &first_deep, 6, false)?;
-    println!("FIRST TRANSCRIPT KEYBOARD SCROLL SIX ROWS\n{first_scrolled}");
+    crate::support::record(
+        "FIRST TRANSCRIPT KEYBOARD SCROLL SIX ROWS",
+        true,
+        &first_scrolled,
+    );
     let first_body = transcript_body(&first_scrolled)?;
     t.send(".")?;
     t.screen("second transcript", |s| {
@@ -1750,21 +1735,37 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     let second_deep = t.screen("second artifact deep position", |s| {
         s.contains("Chunk 4 / ")
     })?;
-    println!("SECOND TRANSCRIPT DEEP POSITION\n{second_deep}");
+    crate::support::record("SECOND TRANSCRIPT DEEP POSITION", true, &second_deep);
     let second_scrolled = scroll_transcript(&mut t, &second_deep, 8, true)?;
-    println!("SECOND TRANSCRIPT MOUSE SCROLL EIGHT ROWS\n{second_scrolled}");
+    crate::support::record(
+        "SECOND TRANSCRIPT MOUSE SCROLL EIGHT ROWS",
+        true,
+        &second_scrolled,
+    );
     let second_body = transcript_body(&second_scrolled)?;
     assert_ne!(first_body, second_body);
     let first_restored = restore_transcript(&mut t, &first_body, |t| t.send(","))?;
-    println!("FIRST TRANSCRIPT POSITION RESTORED\n{first_restored}");
+    crate::support::record("FIRST TRANSCRIPT POSITION RESTORED", true, &first_restored);
     let second_restored = restore_transcript(&mut t, &second_body, |t| t.click("Check +"))?;
-    println!("SECOND TRANSCRIPT POSITION RESTORED\n{second_restored}");
+    crate::support::record(
+        "SECOND TRANSCRIPT POSITION RESTORED",
+        true,
+        &second_restored,
+    );
     key(&mut t, "]", "Attempt 2 / 2")?;
     let attempt_restored = restore_transcript(&mut t, &second_body, |t| t.send("["))?;
-    println!("TRANSCRIPT SCROLL AND ARTIFACT RESTORED AFTER ATTEMPT CHANGE\n{attempt_restored}");
+    crate::support::record(
+        "TRANSCRIPT SCROLL AND ARTIFACT RESTORED AFTER ATTEMPT CHANGE",
+        true,
+        &attempt_restored,
+    );
     switch_away_and_back(&mut t)?;
     let reopened = restore_transcript(&mut t, &second_body, |t| t.send("\r"))?;
-    println!("CURRENT TRANSCRIPT SCROLL AND ARTIFACT RESTORED AFTER REOPEN\n{reopened}");
+    crate::support::record(
+        "CURRENT TRANSCRIPT SCROLL AND ARTIFACT RESTORED AFTER REOPEN",
+        true,
+        &reopened,
+    );
     restore_transcript(&mut t, &first_body, |t| t.send(","))?;
     let chunk_top = transcript_body(&first_deep)?;
     restore_transcript(&mut t, &chunk_top, |t| t.send("\x1b[H"))?;
@@ -1781,13 +1782,17 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     restore_transcript(&mut t, &second_body, |t| t.click("Check +"))?;
     t.click("Check +")?;
     let pruned = t.screen("pruned transcript marker", |s| s.contains("PRUNED:"))?;
-    println!("PRUNED EVIDENCE\n{pruned}");
+    crate::support::record("PRUNED EVIDENCE", true, &pruned);
     t.click("Check +")?;
     let missing = t.screen("missing transcript marker", |s| s.contains("MISSING:"))?;
-    println!("MISSING EVIDENCE\n{missing}");
+    crate::support::record("MISSING EVIDENCE", true, &missing);
     switch_away_and_back(&mut t)?;
     let restored_attempt = key(&mut t, "\r", "Attempt 1 / 2")?;
-    println!("CURRENT EARLIER ATTEMPT RESTORED AFTER SCREEN SWITCH\n{restored_attempt}");
+    crate::support::record(
+        "CURRENT EARLIER ATTEMPT RESTORED AFTER SCREEN SWITCH",
+        true,
+        &restored_attempt,
+    );
     assert!(restored_attempt.contains("MISSING:"));
     quit(&mut t)?;
     assert_eq!(evidence_contents(root)?, before_browsing);
@@ -1799,7 +1804,7 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     let mut history = terminal(root)?;
     open_history(&mut history, "3")?;
     let details = key(&mut history, "\r", "Task details / attempts")?;
-    println!("HISTORY BROWSER\n{details}");
+    crate::support::record("HISTORY BROWSER", false, &details);
     assert!(details.contains("Attempt 2 / 2"));
     let earlier = key(&mut history, "[", "Attempt 1 / 2")?;
     assert!(earlier.contains("Output page"));
@@ -1810,7 +1815,11 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     key(&mut history, ".", "SECOND CHECK TRANSCRIPT")?;
     let history_deep = key(&mut history, ">>>", "Chunk 4 / ")?;
     let history_scrolled = scroll_transcript(&mut history, &history_deep, 8, true)?;
-    println!("HISTORY TRANSCRIPT MOUSE SCROLL EIGHT ROWS\n{history_scrolled}");
+    crate::support::record(
+        "HISTORY TRANSCRIPT MOUSE SCROLL EIGHT ROWS",
+        true,
+        &history_scrolled,
+    );
     let history_body = transcript_body(&history_scrolled)?;
     close_details(&mut history, on_history)?;
     history.send("2")?;
@@ -1818,8 +1827,10 @@ fn attempt_browser_pages_old_output_and_links_results_and_transcripts() -> Resul
     history.send("3")?;
     history.screen("History", on_history)?;
     let restored_history = restore_transcript(&mut history, &history_body, |t| t.send("\r"))?;
-    println!(
-        "HISTORY EARLIER ATTEMPT ARTIFACT AND SCROLL RESTORED AFTER SCREEN SWITCH\n{restored_history}"
+    crate::support::record(
+        "HISTORY EARLIER ATTEMPT ARTIFACT AND SCROLL RESTORED AFTER SCREEN SWITCH",
+        true,
+        &restored_history,
     );
     quit(&mut history)?;
     assert_eq!(evidence_contents(root)?, before_history);
@@ -1866,12 +1877,12 @@ fn history_opens_each_attempt_review_and_failure_without_log_scrolling() -> Resu
 
     let mut t = terminal(root)?;
     let history = open_history(&mut t, "3")?;
-    println!("HISTORY NAVIGATION START\n{history}");
+    crate::support::record("HISTORY NAVIGATION START", false, &history);
     t.click("V Reviews")?;
     let direct = t.screen("review from History toolbar", |s| {
         s.contains("First review finding")
     })?;
-    println!("HISTORY DIRECT REVIEW\n{direct}");
+    crate::support::record("HISTORY DIRECT REVIEW", true, &direct);
     close_details(&mut t, on_history)?;
     t.click("F Failures")?;
     t.screen("failure from History toolbar", |s| {
@@ -1887,13 +1898,13 @@ fn history_opens_each_attempt_review_and_failure_without_log_scrolling() -> Resu
     let summary = t.screen("attempt step summary directly", |s| {
         s.contains("Recorded steps")
     })?;
-    println!("HISTORY ATTEMPT SUMMARY\n{summary}");
+    crate::support::record("HISTORY ATTEMPT SUMMARY", true, &summary);
     assert!(summary.contains("Attempt 2 / 2"));
     t.click("Reviews")?;
     let first = t.screen("first review directly", |s| {
         s.contains("First review finding")
     })?;
-    println!("HISTORY FIRST REVIEW\n{first}");
+    crate::support::record("HISTORY FIRST REVIEW", true, &first);
     assert!(first.contains("Reviews · 1 / 2"));
     assert!(!first.contains("Second review finding"));
     t.send("\x1b[F")?;
@@ -1904,7 +1915,7 @@ fn history_opens_each_attempt_review_and_failure_without_log_scrolling() -> Resu
     let second = t.screen("second review directly", |s| {
         s.contains("Second review finding")
     })?;
-    println!("HISTORY SECOND REVIEW\n{second}");
+    crate::support::record("HISTORY SECOND REVIEW", true, &second);
     assert!(second.contains("Reviews · 2 / 2"));
     // Only the first, long review has detail lines; scrolled, its heading is out of view.
     let first_scrolled = |s: &str| {
@@ -1922,13 +1933,13 @@ fn history_opens_each_attempt_review_and_failure_without_log_scrolling() -> Resu
     t.send("v")?;
     t.screen("review position restored after summary", first_scrolled)?;
     let failures = key(&mut t, "f", "Failures and requested fixes")?;
-    println!("HISTORY FAILURE REASON\n{failures}");
+    crate::support::record("HISTORY FAILURE REASON", true, &failures);
     assert!(failures.contains("Failure category: review"));
     assert!(failures.contains("Reason: Retry failed after review"));
     assert!(failures.contains("Failures and requested fixes · 1 / 2"));
     key(&mut t, "[", "Attempt 1 / 2")?;
     let earlier = key(&mut t, "v", "review structured finding")?;
-    println!("HISTORY EARLIER REVIEW\n{earlier}");
+    crate::support::record("HISTORY EARLIER REVIEW", true, &earlier);
     assert!(earlier.contains("Reviews · 1 / 1"));
     quit(&mut t)
 }
@@ -2099,12 +2110,24 @@ fn exercise_nul_browser(t: &mut Terminal, view: &str) -> Result {
     let first = t.screen("NUL evidence visible before suffix", |s| {
         evidence_visible(s, "BEFORE_NUL␀␀") && s.contains("chunk 1 / 17")
     })?;
-    println!("{view} NUL OUTPUT FIRST BYTE CHUNK\n{first}");
+    crate::support::record(
+        &format!("{view} NUL OUTPUT FIRST BYTE CHUNK"),
+        false,
+        &first,
+    );
     assert!(!evidence_visible(&first, "AFTER_NUL_COPY"));
     let keyboard_page = key(t, "}", "àAFTER_NUL_COPY")?;
-    println!("{view} KEYBOARD BROWSE AFTER NUL\n{keyboard_page}");
+    crate::support::record(
+        &format!("{view} KEYBOARD BROWSE AFTER NUL"),
+        false,
+        &keyboard_page,
+    );
     let selected = keyboard_select(t, &keyboard_page, "AFTER_NUL_COPY", 14)?;
-    println!("{view} KEYBOARD SELECT AFTER NUL\n{selected}");
+    crate::support::record(
+        &format!("{view} KEYBOARD SELECT AFTER NUL"),
+        false,
+        &selected,
+    );
     let copied = copy_key(t, "\r")?;
     println!("{view} KEYBOARD BROWSE COPY {copied:?}");
     assert_eq!(copied, "AFTER_NUL_COPY");
@@ -2117,16 +2140,24 @@ fn exercise_nul_browser(t: &mut Terminal, view: &str) -> Result {
     let mouse_page = t.screen("mouse browses beyond NUL", |s| {
         evidence_visible(s, "àAFTER_NUL_COPY") && s.contains("chunk 2 / 17")
     })?;
-    println!("{view} MOUSE BROWSE AFTER NUL\n{mouse_page}");
+    crate::support::record(&format!("{view} MOUSE BROWSE AFTER NUL"), true, &mouse_page);
     copy_nul_suffix_with_mouse(t, &mouse_page, view, "BROWSE")?;
     let before_keyboard_search = key(t, "{", "chunk 1 / 17")?;
     assert!(!evidence_visible(&before_keyboard_search, "AFTER_NUL_COPY"));
     let keyboard_match = find_evidence(t, "", "AFTER_NUL_COPY", "AFTER_NUL_COPY")?;
-    println!("{view} KEYBOARD SEARCH AFTER NUL\n{keyboard_match}");
+    crate::support::record(
+        &format!("{view} KEYBOARD SEARCH AFTER NUL"),
+        true,
+        &keyboard_match,
+    );
     assert!(keyboard_match.contains("chunk 2 / 17"));
     assert!(evidence_visible(&keyboard_match, "AFTER_NUL_COPY"));
     let selected = keyboard_select(t, &keyboard_match, "AFTER_NUL_COPY", 14)?;
-    println!("{view} KEYBOARD SEARCH SELECTION\n{selected}");
+    crate::support::record(
+        &format!("{view} KEYBOARD SEARCH SELECTION"),
+        true,
+        &selected,
+    );
     let copied = copy_key(t, "\r")?;
     println!("{view} KEYBOARD SEARCH COPY {copied:?}");
     assert_eq!(copied, "AFTER_NUL_COPY");
@@ -2136,22 +2167,38 @@ fn exercise_nul_browser(t: &mut Terminal, view: &str) -> Result {
         s.contains("chunk 1 / 17") && !evidence_visible(s, "AFTER_NUL_COPY")
     })?;
     let mouse_match = find_evidence(t, "Find output", "AFTER_NUL_COPY", "AFTER_NUL_COPY")?;
-    println!("{view} MOUSE SEARCH AFTER NUL\n{mouse_match}");
+    crate::support::record(
+        &format!("{view} MOUSE SEARCH AFTER NUL"),
+        true,
+        &mouse_match,
+    );
     assert!(mouse_match.contains("chunk 2 / 17"));
     assert!(evidence_visible(&mouse_match, "AFTER_NUL_COPY"));
     copy_nul_suffix_with_mouse(t, &mouse_match, view, "SEARCH")?;
     let chunk_boundary = find_evidence(t, "Find output", "éàAFTER_NUL_COPY", "éàAFTER_NUL_COPY")?;
     assert!(chunk_boundary.contains("chunk 1 / 17"));
-    println!("{view} UTF8 MATCH LANDS IN CHUNK OWNING FIRST BYTE\n{chunk_boundary}");
+    crate::support::record(
+        &format!("{view} UTF8 MATCH LANDS IN CHUNK OWNING FIRST BYTE"),
+        true,
+        &chunk_boundary,
+    );
     let scan_boundary = find_evidence(t, "Find output", "界éSCAN_END", "界éSCAN_END")?;
-    println!("{view} UTF8 SEARCH ACROSS BYTE READ BOUNDARY\n{scan_boundary}");
+    crate::support::record(
+        &format!("{view} UTF8 SEARCH ACROSS BYTE READ BOUNDARY"),
+        true,
+        &scan_boundary,
+    );
     let joined = find_evidence(
         t,
         "Find output",
         "é界CROSS_RECORD_AFTER",
         "é界CROSS_RECORD_AFTER",
     )?;
-    println!("{view} NUL AND UTF8 SEARCH ACROSS INTERLEAVED RECORDS\n{joined}");
+    crate::support::record(
+        &format!("{view} NUL AND UTF8 SEARCH ACROSS INTERLEAVED RECORDS"),
+        true,
+        &joined,
+    );
     Ok(())
 }
 
@@ -2171,7 +2218,7 @@ fn copy_nul_suffix_with_mouse(t: &mut Terminal, screen: &str, view: &str, path: 
         (start.0 + 13, start.1),
         "mouse selects NUL suffix",
     )?;
-    println!("{view} MOUSE {path} SELECTION\n{selected}");
+    crate::support::record(&format!("{view} MOUSE {path} SELECTION"), true, &selected);
     let copied = mouse_copy(t)?;
     println!("{view} MOUSE {path} COPY {copied:?}");
     assert_eq!(copied, "AFTER_NUL_COPY");
@@ -2194,7 +2241,7 @@ fn attempt_browser_keeps_output_pages_stable_until_keyboard_or_mouse_refresh() -
     key(&mut t, "\r", "Output page 1 / 3")?;
     let old_page = key(&mut t, ">", "Output page 2 / 3")?;
     assert!(old_page.contains("#81 [stdout] ORIGINAL OUTPUT 081"));
-    println!("BROWSER PAGE BEFORE 80 APPENDS\n{old_page}");
+    crate::support::record("BROWSER PAGE BEFORE 80 APPENDS", false, &old_page);
     for sequence in 162..=241 {
         writer.output(&run, "stdout", &format!("APPENDED OUTPUT {sequence:03}"))?;
     }
@@ -2207,7 +2254,7 @@ fn attempt_browser_keeps_output_pages_stable_until_keyboard_or_mouse_refresh() -
     let stable_page = t.screen("page top after appends", |s| {
         details_top(s) == page_top && s.contains("#81 [stdout] ORIGINAL OUTPUT 081")
     })?;
-    println!("BROWSER PAGE AFTER 80 APPENDS\n{stable_page}");
+    crate::support::record("BROWSER PAGE AFTER 80 APPENDS", false, &stable_page);
     assert!(stable_page.contains("Output page 2 / 3"));
     assert!(!stable_page.contains("APPENDED OUTPUT"));
     let older = key(&mut t, ">", "Output page 3 / 3")?;
@@ -2215,7 +2262,7 @@ fn attempt_browser_keeps_output_pages_stable_until_keyboard_or_mouse_refresh() -
     let newer = key(&mut t, "<", "Output page 2 / 3")?;
     assert!(newer.contains("#81 [stdout] ORIGINAL OUTPUT 081"));
     let refreshed = key(&mut t, "r", "#241 [stdout] APPENDED OUTPUT 241")?;
-    println!("KEYBOARD REFRESH ADOPTS NEW OUTPUT\n{refreshed}");
+    crate::support::record("KEYBOARD REFRESH ADOPTS NEW OUTPUT", false, &refreshed);
     assert!(refreshed.contains("Output page 1 / 4"));
     assert_eq!(evidence_contents(root)?, after_append);
     for sequence in 242..=321 {
@@ -2226,7 +2273,7 @@ fn attempt_browser_keeps_output_pages_stable_until_keyboard_or_mouse_refresh() -
     let mouse_refreshed = t.screen("mouse refresh adopts newest records", |s| {
         s.contains("#321 [stdout] MOUSE APPENDED 321")
     })?;
-    println!("MOUSE REFRESH ADOPTS NEW OUTPUT\n{mouse_refreshed}");
+    crate::support::record("MOUSE REFRESH ADOPTS NEW OUTPUT", true, &mouse_refreshed);
     assert!(mouse_refreshed.contains("Output page 1 / 5"));
     quit(&mut t)?;
     assert_eq!(evidence_contents(root)?, after_second_append);
@@ -2333,7 +2380,7 @@ fn attempt_browser_shows_pinned_inputs_after_defaults_and_new_revisions_change()
         "historical inputs page",
         |t| t.send("\x1b[6~"),
         |screen| {
-            println!("HISTORICAL INPUTS PAGE {page}\n{screen}");
+            crate::support::record(&format!("HISTORICAL INPUTS PAGE {page}"), false, screen);
             page += 1;
             observed.push_str(screen);
             expected.iter().all(|text| observed.contains(text))
@@ -2443,8 +2490,10 @@ fn live_sqlite_log_selection_survives_new_output_and_mouse_copy() -> Result {
                 && s.contains("ANCHOR fixed text")
                 && s.contains("[Copy]")
         })?;
-        println!(
-            "LIVE SQLITE BEFORE {cols}x{rows} release_over_copy={release_over_copy}\n{before}"
+        crate::support::record(
+            &format!("LIVE SQLITE BEFORE release_over_copy={release_over_copy}"),
+            false,
+            &before,
         );
         let anchor = location(&before, "ANCHOR fixed text")?;
         let endpoint = if release_over_copy {
@@ -2461,8 +2510,10 @@ fn live_sqlite_log_selection_survives_new_output_and_mouse_copy() -> Result {
         drag(&mut t, start, endpoint)?;
         // See `highlighted`: the highlight is not screen text.
         let selected = t.still("SQLite log selected", |_| t.selected_at(anchor.0, anchor.1))?;
-        println!(
-            "LIVE SQLITE SELECTED {cols}x{rows} release_over_copy={release_over_copy}\n{selected}"
+        crate::support::record(
+            &format!("LIVE SQLITE SELECTED release_over_copy={release_over_copy}"),
+            true,
+            &selected,
         );
         assert!(
             !t.output_bytes().windows(7).any(|w| w == b"\x1b]52;c;"),
@@ -2490,8 +2541,10 @@ fn live_sqlite_log_selection_survives_new_output_and_mouse_copy() -> Result {
                 .iter()
                 .any(|line| line.contains("NEW SQLITE OUTPUT 07"))
         );
-        println!(
-            "LIVE SQLITE UPDATED {cols}x{rows} release_over_copy={release_over_copy}\n{updated}"
+        crate::support::record(
+            &format!("LIVE SQLITE UPDATED release_over_copy={release_over_copy}"),
+            true,
+            &updated,
         );
         assert_eq!(
             mouse_copy(&mut t)?,
@@ -2502,8 +2555,10 @@ fn live_sqlite_log_selection_survives_new_output_and_mouse_copy() -> Result {
         let latest = t.screen("new SQLite output shown in terminal", |s| {
             s.contains("NEW SQLITE OUTPUT 07") && s.contains("Log · following")
         })?;
-        println!(
-            "LIVE SQLITE FOLLOWED {cols}x{rows} release_over_copy={release_over_copy}\n{latest}"
+        crate::support::record(
+            &format!("LIVE SQLITE FOLLOWED release_over_copy={release_over_copy}"),
+            true,
+            &latest,
         );
         t.send("\x03")?;
         t.finish()?;
@@ -2616,7 +2671,7 @@ fn scroll_until(
     scroll: impl Fn(&mut Terminal) -> Result,
     mut done: impl FnMut(&str) -> bool,
 ) -> Result<String> {
-    let mut screen = t.current_screen();
+    let mut screen = t.still(description, |_| true)?;
     for _ in 0..24 {
         if done(&screen) {
             return Ok(screen);
@@ -2889,7 +2944,7 @@ fn confirm_storage_cleanup_mouse(
             && s.contains("Enter / Ctrl-S: delete evidence")
             && s.contains(&format!("Task #{task_id} attempt #{attempt_id}"))
     })?;
-    println!("RETENTION MOUSE CONFIRMATION SCREEN\n{confirmation}");
+    crate::support::record("RETENTION MOUSE CONFIRMATION SCREEN", true, &confirmation);
     assert!(artifact.exists());
     terminal.click("Cancel")?;
     terminal.screen("mouse cleanup cancelled", |s| {
@@ -2923,7 +2978,11 @@ fn confirm_storage_cleanup_keyboard(
             && s.contains("Delete evidence")
             && s.contains("Enter / Ctrl-S: delete evidence")
     })?;
-    println!("RETENTION KEYBOARD CONFIRMATION SCREEN\n{confirmation}");
+    crate::support::record(
+        "RETENTION KEYBOARD CONFIRMATION SCREEN",
+        false,
+        &confirmation,
+    );
     assert!(!service(root)?.task(task_id)?.unwrap().attempts[0].output_pruned);
     terminal.send("\x1b")?;
     terminal.screen("keyboard cleanup cancelled", |s| {
@@ -3025,6 +3084,17 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
         );
         Ok(serde_json::from_slice(&output.stdout)?)
     };
+    // A reader can delay SQLite's checkpoint during cleanup. Show the settled file
+    // allocation when the owner opens the storage preview again after that cleanup.
+    let checkpoint_cleanup = || -> Result {
+        let db = rusqlite::Connection::open(root.join("state/ktask-dev/ktask.sqlite3"))?;
+        let checkpoint: (i64, i64, i64) =
+            db.query_row("PRAGMA main.wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?;
+        assert_eq!(checkpoint, (0, 0, 0), "cleanup WAL was not truncated");
+        Ok(())
+    };
     let before = cli(&["storage"])?;
     assert_eq!(
         before["data"]["preview"]["candidates"]
@@ -3043,28 +3113,32 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
     t.screen("mouse Config navigation", |s| s.contains("4 Config"))?;
     t.click("4 Config")?;
     let config = t.screen("Config storage button", |s| s.contains("k Storage"))?;
-    println!("RETENTION CONFIG SCREEN\n{config}");
+    crate::support::record("RETENTION CONFIG SCREEN", true, &config);
     t.click("k Storage")?;
     let modal = t.screen("Storage retention preview", |s| {
         s.contains("eligible:") && !s.contains("step")
     })?;
-    println!("RETENTION PREVIEW SCREEN\n{modal}");
+    crate::support::record("RETENTION PREVIEW SCREEN", true, &modal);
     assert!(modal.contains(&format!("Task #{closed_id} attempt #{closed_attempt}")));
     t.click("Apply")?;
     let mouse_saved = t.screen("mouse policy saved", |s| {
         s.contains("Project configuration saved")
     })?;
-    println!("RETENTION MOUSE POLICY SAVED SCREEN\n{mouse_saved}");
+    crate::support::record("RETENTION MOUSE POLICY SAVED SCREEN", true, &mouse_saved);
     assert_eq!(self::service(root)?.retention_policy()?.days, 0);
     assert!(artifact_dir.join("step-777.log").exists());
     t.click("k Storage")?;
     let mouse_cleanup = t.screen("mouse cleanup preview", |s| {
         s.contains(&format!("Task #{closed_id} attempt #{closed_attempt}"))
     })?;
-    println!("RETENTION MOUSE CLEANUP PREVIEW SCREEN\n{mouse_cleanup}");
+    crate::support::record(
+        "RETENTION MOUSE CLEANUP PREVIEW SCREEN",
+        true,
+        &mouse_cleanup,
+    );
     t.click("Save policy")?;
     let apply_choice = t.screen("Apply preview choice", |s| s.contains("Apply preview"))?;
-    println!("RETENTION MOUSE CHOICE SCREEN\n{apply_choice}");
+    crate::support::record("RETENTION MOUSE CHOICE SCREEN", true, &apply_choice);
     confirm_storage_cleanup_mouse(
         &mut t,
         root,
@@ -3073,12 +3147,13 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
         &artifact_dir.join("step-777.log"),
     )?;
     let applied = t.screen("Cleaned one attempt", |s| s.contains("Cleaned 1 attempt"))?;
-    println!("RETENTION APPLIED SCREEN\n{applied}");
+    crate::support::record("RETENTION APPLIED SCREEN", true, &applied);
+    checkpoint_cleanup()?;
     t.click("k Storage")?;
     let repeated = t.screen("Storage retention repeated preview", |s| {
         s.contains("eligible: 0 bytes")
     })?;
-    println!("RETENTION REPEAT SCREEN\n{repeated}");
+    crate::support::record("RETENTION REPEAT SCREEN", true, &repeated);
     t.click("Cancel")?;
     t.screen("mouse storage cancelled", |s| {
         !s.contains("Retain completed attempts") && s.contains("k Storage")
@@ -3130,38 +3205,47 @@ fn retention_preview_apply_and_history_are_real_in_cli_and_pty() -> Result {
             "Task #{unresolved_id} attempt #{unresolved_attempt}"
         ))
     })?;
-    println!("RETENTION KEYBOARD PREVIEW SCREEN\n{keyboard_preview}");
+    crate::support::record(
+        "RETENTION KEYBOARD PREVIEW SCREEN",
+        false,
+        &keyboard_preview,
+    );
     keyboard.send("\t ")?;
     let keyboard_choice =
         keyboard.screen("keyboard apply choice", |s| s.contains("< Apply preview >"))?;
-    println!("RETENTION KEYBOARD CHOICE SCREEN\n{keyboard_choice}");
+    crate::support::record("RETENTION KEYBOARD CHOICE SCREEN", false, &keyboard_choice);
     confirm_storage_cleanup_keyboard(&mut keyboard, root, unresolved_id, unresolved_attempt)?;
     let keyboard_applied = keyboard.screen("keyboard cleanup applied", |s| {
         s.contains("Cleaned 1 attempt")
     })?;
-    println!("RETENTION KEYBOARD APPLIED SCREEN\n{keyboard_applied}");
+    crate::support::record(
+        "RETENTION KEYBOARD APPLIED SCREEN",
+        false,
+        &keyboard_applied,
+    );
     keyboard.send("3")?;
     keyboard.screen("pruned History", on_history)?;
     keyboard.send("\r")?;
     let pruned_history = keyboard.screen("pruned output in History", |s| {
         s.contains("PRUNED: stored output")
     })?;
-    println!("RETENTION PRUNED HISTORY SCREEN\n{pruned_history}");
+    crate::support::record("RETENTION PRUNED HISTORY SCREEN", false, &pruned_history);
     keyboard.click("Close")?;
     keyboard.send("4")?;
     keyboard.screen("policy Config", |s| {
         !s.contains("Task details / attempts") && s.contains("k Storage")
     })?;
+    checkpoint_cleanup()?;
     keyboard.send("k")?;
     keyboard.screen("policy form", |s| s.contains("Retain completed attempts"))?;
     keyboard.send("\x015")?;
     let edited_policy = keyboard.screen("policy edited", |s| s.contains("5▏"))?;
-    println!("RETENTION POLICY EDIT SCREEN\n{edited_policy}");
+    crate::support::record("RETENTION POLICY EDIT SCREEN", true, &edited_policy);
     keyboard.send("\x13")?;
     let saved_policy = keyboard.screen("policy saved", |s| {
         s.contains("Project configuration saved")
     })?;
-    println!("RETENTION POLICY SAVED SCREEN\n{saved_policy}");
+    crate::support::record("RETENTION POLICY SAVED SCREEN", true, &saved_policy);
     quit(&mut keyboard)?;
     assert!(self::service(root)?.task(unresolved_id)?.unwrap().attempts[0].output_pruned);
     assert_eq!(self::service(root)?.retention_policy()?.days, 5);
@@ -3209,14 +3293,14 @@ fn storage_budget_fields_persist_and_validate_by_mouse_and_keyboard_in_real_pty(
     let opened = mouse.screen("mouse storage budget fields", |s| {
         s.contains("Maximum allocated bytes") && s.contains("Maximum files and directories")
     })?;
-    println!("MOUSE STORAGE BUDGET FORM\n{opened}");
+    crate::support::record("MOUSE STORAGE BUDGET FORM", true, &opened);
     mouse.click("Maximum allocated bytes")?;
     mouse.send("\x01bad")?;
     mouse.click("Apply")?;
     let invalid = mouse.screen("mouse invalid byte budget", |s| {
         s.contains("Bytes must be an integer")
     })?;
-    println!("MOUSE INVALID BYTE BUDGET\n{invalid}");
+    crate::support::record("MOUSE INVALID BYTE BUDGET", true, &invalid);
     mouse.click("Maximum allocated bytes")?;
     mouse.send("\x012097152")?;
     mouse.click("Maximum files and directories")?;
@@ -3236,7 +3320,7 @@ fn storage_budget_fields_persist_and_validate_by_mouse_and_keyboard_in_real_pty(
     let reopened = mouse.screen("mouse saved budgets reopened", |s| {
         s.contains("2097152") && s.contains("500")
     })?;
-    println!("MOUSE SAVED BUDGETS\n{reopened}");
+    crate::support::record("MOUSE SAVED BUDGETS", true, &reopened);
     mouse.click("Cancel")?;
     quit(&mut mouse)?;
 
@@ -3258,7 +3342,7 @@ fn storage_budget_fields_persist_and_validate_by_mouse_and_keyboard_in_real_pty(
     let saved = keyboard.screen("keyboard budget saved", |s| {
         s.contains("Project configuration saved")
     })?;
-    println!("KEYBOARD SAVED BUDGETS\n{saved}");
+    crate::support::record("KEYBOARD SAVED BUDGETS", false, &saved);
     assert_eq!(
         (
             service(root)?.retention_policy()?.max_bytes,
@@ -3270,12 +3354,12 @@ fn storage_budget_fields_persist_and_validate_by_mouse_and_keyboard_in_real_pty(
     let reopened = keyboard.screen("keyboard saved budgets reopened", |s| {
         s.contains("3145728") && s.contains("600")
     })?;
-    println!("KEYBOARD REOPENED BUDGETS\n{reopened}");
+    crate::support::record("KEYBOARD REOPENED BUDGETS", false, &reopened);
     keyboard.send("\t\t\t\x01bad\x13")?;
     let invalid = keyboard.screen("keyboard invalid file budget", |s| {
         s.contains("Files must be an integer")
     })?;
-    println!("KEYBOARD INVALID FILE BUDGET\n{invalid}");
+    crate::support::record("KEYBOARD INVALID FILE BUDGET", false, &invalid);
     keyboard.send("\x1b")?;
     fs::write(
         root.join("state/ktask-dev/runner.log"),
@@ -3285,7 +3369,7 @@ fn storage_budget_fields_persist_and_validate_by_mouse_and_keyboard_in_real_pty(
     let capacity = keyboard.screen("keyboard protected capacity status", |s| {
         s.contains("WORK PAUSED AT CAPACITY") && s.contains("RESERVE")
     })?;
-    println!("KEYBOARD CAPACITY STATUS\n{capacity}");
+    crate::support::record("KEYBOARD CAPACITY STATUS", false, &capacity);
     quit(&mut keyboard)?;
     Ok(())
 }
@@ -3597,7 +3681,7 @@ fn populated_storage_backlog_returns_to_the_terminal_between_batches() -> Result
     let first = terminal.screen("mouse batch returned to Config", |s| {
         s.contains("batch limit reached")
     })?;
-    println!("RETENTION POPULATED MOUSE BATCH\n{first}");
+    crate::support::record("RETENTION POPULATED MOUSE BATCH", true, &first);
     assert_eq!(fs::read_dir(&folder)?.count(), 16);
     terminal.send("k")?;
     terminal.screen("keyboard backlog preview", |s| s.contains("16 files"))?;
@@ -3611,7 +3695,7 @@ fn populated_storage_backlog_returns_to_the_terminal_between_batches() -> Result
             && s.contains("batch limit reached")
             && !s.contains("Delete stored evidence?")
     })?;
-    println!("RETENTION POPULATED KEYBOARD BATCH\n{second}");
+    crate::support::record("RETENTION POPULATED KEYBOARD BATCH", true, &second);
     assert_eq!(
         if folder.exists() {
             fs::read_dir(&folder)?.count()
@@ -3626,7 +3710,7 @@ fn populated_storage_backlog_returns_to_the_terminal_between_batches() -> Result
     let partial = terminal.screen("keyboard partially pruned History", |s| {
         s.contains("PARTIALLY PRUNED:")
     })?;
-    println!("RETENTION PARTIAL HISTORY SCREEN\n{partial}");
+    crate::support::record("RETENTION PARTIAL HISTORY SCREEN", true, &partial);
     terminal.click("Reviews")?;
     terminal.screen("mouse reviews tab before partial output", |s| {
         !s.contains("Output page")
@@ -3794,7 +3878,7 @@ fn reservation_release_continues_in_real_terminal() -> Result {
     let mouse = terminal.screen("mouse bounded continuation", |s| {
         s.contains("batch limit reached")
     })?;
-    println!("RESERVATION RELEASE MOUSE CONTINUATION\n{mouse}");
+    crate::support::record("RESERVATION RELEASE MOUSE CONTINUATION", true, &mouse);
     assert!(
         !first_directory.exists(),
         "recovered earlier directories remained behind the cursor"
@@ -3818,7 +3902,7 @@ fn reservation_release_continues_in_real_terminal() -> Result {
             && s.contains("batch limit reached")
             && !s.contains("Delete stored evidence?")
     })?;
-    println!("RESERVATION RELEASE KEYBOARD CONTINUATION\n{keyboard}");
+    crate::support::record("RESERVATION RELEASE KEYBOARD CONTINUATION", true, &keyboard);
     assert!(later_directory.exists());
     println!(
         "RESERVATION PTY AFTER KEYBOARD BATCH: {:?}",
@@ -3838,7 +3922,7 @@ fn reservation_release_continues_in_real_terminal() -> Result {
             && !s.contains("batch limit reached")
             && !s.contains("Delete stored evidence?")
     })?;
-    println!("RESERVATION RELEASE KEYBOARD COMPLETION\n{complete}");
+    crate::support::record("RESERVATION RELEASE KEYBOARD COMPLETION", true, &complete);
     assert!(!later_directory.exists());
     let final_footprint = evidence_footprint(&root.join("state/ktask-dev/evidence"))?;
     println!("RESERVATION PTY AFTER KEYBOARD: {final_footprint:?}");
@@ -4056,8 +4140,12 @@ fn breakdown_pty_keyboard_mouse_pending_stopped_approval_cancel() -> Result {
                     let screen = terminal.screen("Breakdown proposal", |s| {
                         s.contains("Breakdown proposal · replace task")
                     })?;
-                    println!(
-                        "BREAKDOWN mouse={mouse} stopped={stopped} approval={approval:?} cancel={cancel} PROPOSAL\n{screen}"
+                    crate::support::record(
+                        &format!(
+                            "BREAKDOWN stopped={stopped} approval={approval:?} cancel={cancel} PROPOSAL"
+                        ),
+                        mouse,
+                        &screen,
                     );
                     assert!(
                         fs::read_to_string(root.join("provider-prompt"))?
@@ -4077,9 +4165,10 @@ fn breakdown_pty_keyboard_mouse_pending_stopped_approval_cancel() -> Result {
                         } else {
                             terminal.send("\x1b")?;
                         }
-                        println!(
-                            "BREAKDOWN CANCELLED\n{}",
-                            terminal.screen("cancelled", |s| !s.contains("Breakdown proposal"))?
+                        crate::support::record(
+                            "BREAKDOWN CANCELLED",
+                            mouse,
+                            &terminal.screen("cancelled", |s| !s.contains("Breakdown proposal"))?,
                         );
                         assert_eq!(storage_contents(root)?, before);
                     } else {
@@ -4090,7 +4179,7 @@ fn breakdown_pty_keyboard_mouse_pending_stopped_approval_cancel() -> Result {
                         }
                         let screen =
                             terminal.screen("applied", |s| s.contains("Saved to SQLite"))?;
-                        println!("BREAKDOWN APPLIED\n{screen}");
+                        crate::support::record("BREAKDOWN APPLIED", mouse, &screen);
                         let snapshot = service.snapshot()?;
                         assert_eq!(snapshot.queue.len(), 2);
                         assert_eq!(
@@ -4165,10 +4254,12 @@ fn breakdown_pty_uses_approval_preference_at_apply() -> Result {
             } else {
                 terminal.send("b")?;
             }
-            println!(
-                "BREAKDOWN PREFERENCE mouse={mouse} initial={initial:?} PROPOSAL\n{}",
-                terminal.screen("proposal", |s| s
-                    .contains("Breakdown proposal · replace task"))?
+            crate::support::record(
+                &format!("BREAKDOWN PREFERENCE initial={initial:?} PROPOSAL"),
+                mouse,
+                &terminal.screen("proposal", |s| {
+                    s.contains("Breakdown proposal · replace task")
+                })?,
             );
             let previous = service.preferences(&config)?;
             service.save_preferences(
@@ -4184,9 +4275,10 @@ fn breakdown_pty_uses_approval_preference_at_apply() -> Result {
             } else {
                 terminal.send("\x13")?;
             }
-            println!(
-                "BREAKDOWN PREFERENCE mouse={mouse} updated={updated:?} APPLIED\n{}",
-                terminal.screen("applied", |s| s.contains("Saved to SQLite"))?
+            crate::support::record(
+                &format!("BREAKDOWN PREFERENCE updated={updated:?} APPLIED"),
+                mouse,
+                &terminal.screen("applied", |s| s.contains("Saved to SQLite"))?,
             );
             let snapshot = service.snapshot()?;
             assert_eq!(snapshot.queue.len(), 2);
@@ -4375,25 +4467,28 @@ fn breakdown_pending_queue_row_keeps_failed_current_in_place() -> Result {
             t.send("j")?;
         }
         let selected = t.screen("selected", |s| s.contains("› #2"))?;
-        println!("BREAKDOWN QUEUE mouse={mouse} SELECTED\n{selected}");
+        crate::support::record("BREAKDOWN QUEUE SELECTED", mouse, &selected);
         if mouse {
             t.click("b Break down")?;
         } else {
             t.send("b")?;
         }
-        println!(
-            "BREAKDOWN QUEUE PROPOSAL\n{}",
-            t.screen("proposal", |s| s
-                .contains("Breakdown proposal · replace task"))?
+        crate::support::record(
+            "BREAKDOWN QUEUE PROPOSAL",
+            mouse,
+            &t.screen("proposal", |s| {
+                s.contains("Breakdown proposal · replace task")
+            })?,
         );
         if mouse {
             t.click("Apply")?;
         } else {
             t.send("\x13")?;
         }
-        println!(
-            "BREAKDOWN QUEUE APPLIED\n{}",
-            t.screen("applied", |s| s.contains("Saved to SQLite"))?
+        crate::support::record(
+            "BREAKDOWN QUEUE APPLIED",
+            mouse,
+            &t.screen("applied", |s| s.contains("Saved to SQLite"))?,
         );
         let snapshot = service.snapshot()?;
         assert_eq!(
@@ -4595,19 +4690,21 @@ fn project_identity_and_definition_transfer_are_lossless_and_safe() -> Result {
 fn real_tui_saves_across_kill_restart_and_never_simulates_real_tasks() -> Result {
     let scratch = support::sandbox()?;
     let mut t = terminal(scratch.path())?;
-    println!(
-        "REAL EMPTY\n{}",
-        t.screen("empty", |s| s.contains("No current task."))?
+    crate::support::record(
+        "REAL EMPTY",
+        false,
+        &t.screen("empty", |s| s.contains("No current task."))?,
     );
     key(&mut t, "a", "Add task")?;
-    println!(
-        "REAL ADD\n{}",
-        submit(
+    crate::support::record(
+        "REAL ADD",
+        false,
+        &submit(
             &mut t,
             "Real durable task\tGoal\tCheck\r",
             "╭ Add task",
-            "Real durable task"
-        )?
+            "Real durable task",
+        )?,
     );
     key(&mut t, "c", "Execution provider/model")?;
     submit(
@@ -4617,18 +4714,21 @@ fn real_tui_saves_across_kill_restart_and_never_simulates_real_tasks() -> Result
         "Saved to SQLite",
     )?;
     t.send("1r")?;
-    println!(
-        "REAL RUN PREFLIGHT\n{}",
-        t.screen("non-project workspace cannot run", |s| {
+    crate::support::record(
+        "REAL RUN PREFLIGHT",
+        false,
+        &t.screen("non-project workspace cannot run", |s| {
             s.contains("Project must be the Git repository root") || s.contains("not a git")
-        })?
+        })?,
     );
     t.kill()?;
     let mut t = terminal(scratch.path())?;
-    println!(
-        "REAL RESTART\n{}",
-        t.screen("persisted", |s| s.contains("Real durable task")
-            && s.contains("Current #1 · Pending"))?
+    crate::support::record(
+        "REAL RESTART",
+        false,
+        &t.screen("persisted", |s| {
+            s.contains("Real durable task") && s.contains("Current #1 · Pending")
+        })?,
     );
     t.send("c")?;
     t.screen("stored model", |s| {
@@ -4677,7 +4777,7 @@ fn docs_kind_is_chosen_filtered_and_shown_by_keyboard_and_mouse() -> Result {
         "╭ Add task",
         "[Docs] Key docs",
     )?;
-    println!("KEYBOARD DOCS TASK SAVED\n{saved}");
+    crate::support::record("KEYBOARD DOCS TASK SAVED", false, &saved);
     assert!(row_shows(&saved, "[Docs] Key docs", "Pending"));
 
     // Mouse: each click on Kind advances the choice.
@@ -4699,7 +4799,7 @@ fn docs_kind_is_chosen_filtered_and_shown_by_keyboard_and_mouse() -> Result {
     let saved = t.screen("mouse docs saved", |s| {
         !s.contains("╭ Add task") && s.contains("[Docs] Mouse docs")
     })?;
-    println!("MOUSE DOCS TASK SAVED\n{saved}");
+    crate::support::record("MOUSE DOCS TASK SAVED", true, &saved);
 
     // The detail pane names the kind of the selected task.
     assert!(saved.contains("Docs"), "{saved}");
@@ -4711,7 +4811,7 @@ fn docs_kind_is_chosen_filtered_and_shown_by_keyboard_and_mouse() -> Result {
     let docs = t.screen("docs filter", |s| {
         s.contains("Filter: Docs") && !s.contains("Plain AI task")
     })?;
-    println!("KEYBOARD DOCS FILTER\n{docs}");
+    crate::support::record("KEYBOARD DOCS FILTER", true, &docs);
     assert!(docs.contains("[Docs] Key docs") && docs.contains("[Docs] Mouse docs"));
     key(&mut t, "f", "Filter: All")?;
     t.screen("all again", |s| s.contains("Plain AI task"))?;
@@ -4722,7 +4822,7 @@ fn docs_kind_is_chosen_filtered_and_shown_by_keyboard_and_mouse() -> Result {
         t.screen(label, |s| s.contains(&format!("Filter: {label}")))?;
     }
     let docs = t.screen("docs filter by mouse", |s| !s.contains("Plain AI task"))?;
-    println!("MOUSE DOCS FILTER\n{docs}");
+    crate::support::record("MOUSE DOCS FILTER", true, &docs);
     quit(&mut t)?;
 
     let snapshot = service(root)?.snapshot()?;
@@ -4749,20 +4849,20 @@ fn queue_add_sets_execution_model_by_keyboard_and_mouse() -> Result {
     t.screen("empty current", |s| s.contains("No current task."))?;
 
     let form = key(&mut t, "a", "Execution provider/model")?;
-    println!("KEYBOARD NEW TASK FORM\n{form}");
+    crate::support::record("KEYBOARD NEW TASK FORM", false, &form);
     let saved = submit(
         &mut t,
         "Keyboard model task\tGoal\tCriterion\t\tcodex/worker\thigh\x13",
         "╭ Add task",
         "Keyboard model task",
     )?;
-    println!("KEYBOARD MODEL SAVED\n{saved}");
+    crate::support::record("KEYBOARD MODEL SAVED", false, &saved);
     assert!(on_queue(&saved), "saving a new task shows it in Queue");
     t.click("a Add")?;
     let form = t.screen("mouse new task form", |s| {
         s.contains("Execution provider/model")
     })?;
-    println!("MOUSE NEW TASK FORM\n{form}");
+    crate::support::record("MOUSE NEW TASK FORM", true, &form);
     t.click("Title")?;
     type_field(&mut t, "Mouse model task")?;
     t.click("Goal")?;
@@ -4777,19 +4877,19 @@ fn queue_add_sets_execution_model_by_keyboard_and_mouse() -> Result {
     let saved = t.screen("mouse model saved", |s| {
         !s.contains("╭ Add task") && s.contains("Mouse model task")
     })?;
-    println!("MOUSE MODEL SAVED\n{saved}");
+    crate::support::record("MOUSE MODEL SAVED", true, &saved);
     t.send("iInserted model task\tGoal\tCriterion\t\t1\tcodex/insert\tmax\x13")?;
     let inserted = t.screen("keyboard insert committed", |s| {
         s.contains("Saved to SQLite")
             && !s.contains("╭ Insert task")
             && s.contains("Inserted model task")
     })?;
-    println!("INSERTED MODEL SAVED\n{inserted}");
+    crate::support::record("INSERTED MODEL SAVED", true, &inserted);
     t.click("i Insert")?;
     let form = t.screen("mouse insert task form", |s| {
         s.contains("Before task ID") && s.contains("Execution provider/model")
     })?;
-    println!("MOUSE INSERT TASK FORM\n{form}");
+    crate::support::record("MOUSE INSERT TASK FORM", true, &form);
     t.click("Title")?;
     type_field(&mut t, "Mouse inserted task")?;
     t.click("Goal")?;
@@ -4808,7 +4908,7 @@ fn queue_add_sets_execution_model_by_keyboard_and_mouse() -> Result {
             && s.contains("Mouse inserted task")
             && s.contains("codex/mouse-insert")
     })?;
-    println!("MOUSE INSERTED MODEL SAVED\n{inserted}");
+    crate::support::record("MOUSE INSERTED MODEL SAVED", true, &inserted);
     quit(&mut t)?;
 
     let snapshot = service(root)?.snapshot()?;
@@ -4874,19 +4974,19 @@ fn queue_add_whitespace_fields_keep_project_model_default() -> Result {
         30,
     )?;
     let form = key(&mut t, "a", "Execution provider/model")?;
-    println!("WHITESPACE DEFAULT FORM\n{form}");
+    crate::support::record("WHITESPACE DEFAULT FORM", false, &form);
     let saved = submit(
         &mut t,
         "Default whitespace task\tGoal\tCriterion\t\t  \t  \x13",
         "╭ Add task",
         "Default whitespace task",
     )?;
-    println!("WHITESPACE DEFAULT SAVED\n{saved}");
+    crate::support::record("WHITESPACE DEFAULT SAVED", false, &saved);
     t.send("c")?;
     let models = t.screen("stored default model", |s| {
         s.contains("Execution provider/model") && s.contains("codex/default")
     })?;
-    println!("WHITESPACE DEFAULT MODELS\n{models}");
+    crate::support::record("WHITESPACE DEFAULT MODELS", false, &models);
     submit(
         &mut t,
         "\x1b",
@@ -4894,14 +4994,14 @@ fn queue_add_whitespace_fields_keep_project_model_default() -> Result {
         "Default whitespace task",
     )?;
     let form = key(&mut t, "a", "Execution provider/model")?;
-    println!("WHITESPACE EFFORT FORM\n{form}");
+    crate::support::record("WHITESPACE EFFORT FORM", false, &form);
     let saved = submit(
         &mut t,
         "Trimmed effort task\tGoal\tCriterion\t\t  \t  high  \x13",
         "╭ Add task",
         "Trimmed effort task",
     )?;
-    println!("TRIMMED EFFORT SAVED\n{saved}");
+    crate::support::record("TRIMMED EFFORT SAVED", false, &saved);
     quit(&mut t)?;
 
     let snapshot = service(root)?.snapshot()?;
@@ -4973,9 +5073,10 @@ fn real_tui_mouse_approval_mark_done_cancel_copy_and_all_views() -> Result {
         ("5 About", anywhere, "relational SQLite"),
     ] {
         t.click(tab)?;
-        println!(
-            "REAL {tab}\n{}",
-            t.screen(tab, |s| view(s) && s.contains(text))?
+        crate::support::record(
+            &format!("REAL {tab}"),
+            true,
+            &t.screen(tab, |s| view(s) && s.contains(text))?,
         );
     }
     key(&mut t, "4e", "Project preferences")?;
@@ -4983,17 +5084,19 @@ fn real_tui_mouse_approval_mark_done_cancel_copy_and_all_views() -> Result {
     t.screen("disabled", |s| s.contains("< Disabled >"))?;
     submit(&mut t, "\r", "Project preferences", "Mouse: Disabled")?;
     submit(&mut t, "e \r", "Project preferences", "Mouse: Enabled")?;
-    println!(
-        "SQLITE STATS\n{}",
-        key(&mut t, "S", "Project statistics · SQLite")?
+    crate::support::record(
+        "SQLITE STATS",
+        true,
+        &key(&mut t, "S", "Project statistics · SQLite")?,
     );
     submit(&mut t, "\x1b", "Project statistics", "Mouse: Enabled")?;
-    println!("SQLITE EVENTS\n{}", key(&mut t, "l", "Project events")?);
+    crate::support::record("SQLITE EVENTS", true, &key(&mut t, "l", "Project events")?);
     submit(&mut t, "\x1b", "Project events", "Mouse: Enabled")?;
     key(&mut t, "?", "Keyboard help")?;
-    println!(
-        "SQLITE HELP\n{}",
-        key(&mut t, "\x1b[F", "Changes save immediately")?
+    crate::support::record(
+        "SQLITE HELP",
+        true,
+        &key(&mut t, "\x1b[F", "Changes save immediately")?,
     );
     quit(&mut t)?;
     for (id, lifecycle) in [(1, "succeeded"), (2, "cancelled"), (3, "ready")] {
@@ -5014,9 +5117,10 @@ fn two_real_windows_reject_stale_forms_and_refresh_external_changes() -> Result 
         key(t, "e", "Edit task")?;
     }
     submit(&mut a, "\x01First writer\r", "╭ Edit task", "First writer")?;
-    println!(
-        "CONFLICT\n{}",
-        key(&mut b, "\x01Stale writer\r", "Task changed elsewhere")?
+    crate::support::record(
+        "CONFLICT",
+        false,
+        &key(&mut b, "\x01Stale writer\r", "Task changed elsewhere")?,
     );
     submit(&mut b, "\x1b", "╭ Edit task", "First writer")?;
     quit(&mut a)?;
@@ -5057,10 +5161,12 @@ fn real_tui_disk_import_export_preview_overwrite_and_atomic_error() -> Result {
     t.click("o Import")?;
     t.screen("import", |s| s.contains("Import task definitions"))?;
     t.click("Apply")?;
-    println!(
-        "IMPORT PREVIEW\n{}",
-        t.screen("preview", |s| s.contains("Import preview")
-            && s.contains("Transfer me"))?
+    crate::support::record(
+        "IMPORT PREVIEW",
+        true,
+        &t.screen("preview", |s| {
+            s.contains("Import preview") && s.contains("Transfer me")
+        })?,
     );
     key(&mut t, "999\r", "insertion target is not in this queue")?;
     assert_eq!(service(scratch.path())?.snapshot()?.queue.len(), 1);
@@ -5139,9 +5245,10 @@ fn running_guards_and_real_failure_resolution_preserve_attempt_evidence() -> Res
     db.connection().execute("INSERT INTO attempt_output(attempt_id, sequence, stream, recorded_at_ms, content) VALUES (?1, 1, 'system', ?2, 'Original evidence retained')", rusqlite::params![attempt, now])?;
     let mut t = terminal(scratch.path())?;
     t.screen("failed", |s| s.contains("Current #1 · Failed"))?;
-    println!(
-        "STORED FAILURE\n{}",
-        key(&mut t, "\r", "Recorded fixture failure")?
+    crate::support::record(
+        "STORED FAILURE",
+        false,
+        &key(&mut t, "\r", "Recorded fixture failure")?,
     );
     submit(
         &mut t,
@@ -5152,9 +5259,10 @@ fn running_guards_and_real_failure_resolution_preserve_attempt_evidence() -> Res
     key(&mut t, "D", "Mark done #1 Stored failure")?;
     key(&mut t, "Accepted evidence\r", "History 1")?;
     key(&mut t, "3\r", "Original evidence retained")?;
-    println!(
-        "STORED RESOLUTION\n{}",
-        key(&mut t, "\x1b[F", "Accepted evidence")?
+    crate::support::record(
+        "STORED RESOLUTION",
+        false,
+        &key(&mut t, "\x1b[F", "Accepted evidence")?,
     );
     quit(&mut t)?;
     let history = s.snapshot()?.history.remove(0);
@@ -5188,9 +5296,10 @@ fn real_forms_save_drafts_all_model_roles_limits_and_reject_without_blocking() -
         s.contains("Keep ready") && !s.contains("Pending revision")
     })?;
     t.click("c Models")?;
-    println!(
-        "STORED MODEL FORM\n{}",
-        t.screen("models", |s| s.contains("Execution provider/model"))?
+    crate::support::record(
+        "STORED MODEL FORM",
+        true,
+        &t.screen("models", |s| s.contains("Execution provider/model"))?,
     );
     key(&mut t, "malformed\r", "Use provider/model (for example")?;
     key(
@@ -5199,9 +5308,10 @@ fn real_forms_save_drafts_all_model_roles_limits_and_reject_without_blocking() -
         "< 6 h >",
     )?;
     key(&mut t, "\t ", "< 30 min >")?;
-    println!(
-        "STORED MODEL LIMITS\n{}",
-        t.screen("limits", |s| s.contains("Attempt limit"))?
+    crate::support::record(
+        "STORED MODEL LIMITS",
+        true,
+        &t.screen("limits", |s| s.contains("Attempt limit"))?,
     );
     t.click("Apply")?;
     t.screen("saved", |s| {
@@ -5271,18 +5381,19 @@ fn sqlite_queue_and_history_handle_240_tasks_in_execution_order() -> Result {
     t.screen("Queue end", |s| {
         on_queue(s) && s.contains("Durable task 240")
     })?;
-    println!(
-        "LARGE SQLITE QUEUE\n{}",
-        t.screen("last page", |s| s.contains("120 / 120"))?
+    crate::support::record(
+        "LARGE SQLITE QUEUE",
+        false,
+        &t.screen("last page", |s| s.contains("120 / 120"))?,
     );
     t.send("3\x1b[H")?;
     let history = t.screen("first history row", |s| {
         s.contains("History · 1 / 120") && s.contains("#120") && s.contains("Attempts Time Usage")
     })?;
-    println!("LARGE SQLITE HISTORY\n{history}");
+    crate::support::record("LARGE SQLITE HISTORY", false, &history);
     let details = key(&mut t, "\r", "Task details / attempts")?;
     assert!(details.contains("Durable task 120"), "{details}");
-    println!("LARGE SQLITE HISTORY DETAILS\n{details}");
+    crate::support::record("LARGE SQLITE HISTORY DETAILS", false, &details);
     close_details(&mut t, |s| s.contains("History · 1 / 120"))?;
     submit(
         &mut t,
@@ -5323,9 +5434,10 @@ fn large_current_log_stays_responsive_to_mouse_motion_and_screen_switches() -> R
             cols,
             rows,
         )?;
-        println!(
-            "LARGE CURRENT {cols}x{rows}\n{}",
-            t.screen("large log loaded", |s| s.contains("LAST LOG MARKER"))?
+        crate::support::record(
+            "LARGE CURRENT",
+            false,
+            &t.screen("large log loaded", |s| s.contains("LAST LOG MARKER"))?,
         );
         // Hover changes nothing on screen, so it must not redraw; the unit test
         // redraws_reuse_wrapped_rows covers what a redraw costs.
@@ -5336,7 +5448,8 @@ fn large_current_log_stays_responsive_to_mouse_motion_and_screen_switches() -> R
             s.contains("Queue · 201 shown")
         })?;
         let redraws = t.redraw_count() - frames;
-        println!("POINTER FLOOD {cols}x{rows}: {redraws} redraws\n{queue}");
+        println!("POINTER FLOOD {cols}x{rows}: {redraws} redraws");
+        crate::support::record("POINTER FLOOD", true, &queue);
         assert!(
             redraws < POINTER_MOVES,
             "{POINTER_MOVES} pointer moves caused {redraws} redraws"
@@ -5344,33 +5457,37 @@ fn large_current_log_stays_responsive_to_mouse_motion_and_screen_switches() -> R
         t.send("1")?;
         t.screen("current revisited", |s| s.contains("LAST LOG MARKER"))?;
         t.send("2")?;
-        println!(
-            "KEYBOARD QUEUE {cols}x{rows}\n{}",
-            t.screen("keyboard queue", |s| s.contains("Queue · 201 shown"))?
+        crate::support::record(
+            "KEYBOARD QUEUE",
+            true,
+            &t.screen("keyboard queue", |s| s.contains("Queue · 201 shown"))?,
         );
         writer.output(&run, "stdout", "NEW OUTPUT INVALIDATES CACHE")?;
         t.send("1")?;
-        println!(
-            "CURRENT CACHE UPDATED {cols}x{rows}\n{}",
-            t.screen("new output visible", |s| s
-                .contains("NEW OUTPUT INVALIDATES CACHE"))?
+        crate::support::record(
+            "CURRENT CACHE UPDATED",
+            true,
+            &t.screen("new output visible", |s| {
+                s.contains("NEW OUTPUT INVALIDATES CACHE")
+            })?,
         );
         writer.output(&run, "stdout", "OUTPUT DURING CONTINUOUS HOVER")?;
         let started = Instant::now();
         let mut motion = 0;
-        let hovered = support::eventually("live refresh during continuous hover", || {
+        support::eventually("live refresh during continuous hover", || {
             t.send(&format!("\x1b[<35;{};12M", 45 + motion % 10))?;
             motion += 1;
             std::thread::sleep(Duration::from_millis(5));
-            let screen = t.current_screen();
-            Ok(screen
+            Ok(t.current_screen()
                 .contains("OUTPUT DURING CONTINUOUS HOVER")
-                .then_some(screen))
+                .then_some(()))
         })?;
-        println!(
-            "CURRENT REFRESH DURING HOVER {cols}x{rows} after {:?}\n{hovered}",
-            started.elapsed()
-        );
+        println!("current refresh during hover after {:?}", started.elapsed());
+        // Recorded once the pointer rests and the output has settled.
+        let rested = t.still("output shown after hover", |s| {
+            s.contains("OUTPUT DURING CONTINUOUS HOVER")
+        })?;
+        crate::support::record("CURRENT REFRESH DURING HOVER", true, &rested);
         let exit_started = Instant::now();
         quit(&mut t)
             .map_err(|error| format!("quit after continuous hover at {cols}x{rows}: {error}"))?;
@@ -5430,7 +5547,7 @@ fn cancel_pending_from_current_and_queue_by_keyboard_and_mouse() -> Result {
         let form = t.screen("cancel current form", |s| {
             s.contains("Cancel #1 Cancel from current") && s.contains("Reason (optional)")
         })?;
-        println!("CANCEL CURRENT FORM mouse={mouse}\n{form}");
+        crate::support::record("CANCEL CURRENT FORM", mouse, &form);
         if mouse {
             t.click("Reason (optional)")?;
         }
@@ -5455,14 +5572,14 @@ fn cancel_pending_from_current_and_queue_by_keyboard_and_mouse() -> Result {
         let screen = t.screen("queued task cancelled", |s| {
             !s.contains("Cancel #3") && s.contains("Queue 1 · History 2")
         })?;
-        println!("CANCELLED FROM QUEUE mouse={mouse}\n{screen}");
+        crate::support::record("CANCELLED FROM QUEUE", mouse, &screen);
         tab(&mut t, mouse, "3 History")?;
         let history = t.screen("both cancelled in history", |s| {
             on_history(s)
                 && row_shows(s, "Cancel from current", "Cancelled")
                 && row_shows(s, "Cancel from queue", "Cancelled")
         })?;
-        println!("CANCELLED HISTORY mouse={mouse}\n{history}");
+        crate::support::record("CANCELLED HISTORY", mouse, &history);
         quit(&mut t)?;
         let mut reader = service(root)?;
         assert_eq!(
@@ -5499,13 +5616,13 @@ fn supersede_pending_requires_known_replacing_ids_by_keyboard_and_mouse() -> Res
             s.contains("Supersede #1 Replaced work")
                 && s.contains("Replaced by task IDs (comma separated)")
         })?;
-        println!("SUPERSEDE FORM mouse={mouse}\n{form}");
+        crate::support::record("SUPERSEDE FORM", mouse, &form);
         let before = storage_contents(root)?;
         apply(&mut t, mouse)?;
         let blank = t.screen("blank IDs refused", |s| {
             s.contains("Name at least one replacing task") && s.contains("Supersede #1")
         })?;
-        println!("SUPERSEDE BLANK mouse={mouse}\n{blank}");
+        crate::support::record("SUPERSEDE BLANK", mouse, &blank);
         if mouse {
             t.click("Replaced by task IDs")?;
         }
@@ -5514,7 +5631,7 @@ fn supersede_pending_requires_known_replacing_ids_by_keyboard_and_mouse() -> Res
         let unknown = t.screen("unknown ID refused", |s| {
             s.contains("Task #99 is not in this project") && s.contains("Supersede #1")
         })?;
-        println!("SUPERSEDE UNKNOWN mouse={mouse}\n{unknown}");
+        crate::support::record("SUPERSEDE UNKNOWN", mouse, &unknown);
         assert_eq!(storage_contents(root)?, before);
         if mouse {
             t.click("Replaced by task IDs")?;
@@ -5535,7 +5652,7 @@ fn supersede_pending_requires_known_replacing_ids_by_keyboard_and_mouse() -> Res
         let history = t.screen("superseded in history", |s| {
             on_history(s) && row_shows(s, "Replaced work", "Superseded")
         })?;
-        println!("SUPERSEDED HISTORY mouse={mouse}\n{history}");
+        crate::support::record("SUPERSEDED HISTORY", mouse, &history);
         quit(&mut t)?;
         let mut reader = service(root)?;
         assert_eq!(
@@ -5607,7 +5724,7 @@ fn copy_to_queue_from_history_for_done_cancelled_and_superseded_by_keyboard_and_
                 s.contains(&format!("Copy to queue #{id} {title}"))
                     && s.contains("Before task ID (blank = end of Queue)")
             })?;
-            println!("COPY FORM {state} mouse={mouse}\n{form}");
+            crate::support::record(&format!("COPY FORM {state}"), mouse, &form);
             // The mouse copies the done task to the front, before #4.
             if mouse && id == 1 {
                 t.click("Before task ID")?;
@@ -5617,7 +5734,7 @@ fn copy_to_queue_from_history_for_done_cancelled_and_superseded_by_keyboard_and_
             let queue = t.screen("copied", |s| {
                 on_queue(s) && s.contains(&format!("Copied to the queue as #{copy}"))
             })?;
-            println!("COPIED {state} mouse={mouse}\n{queue}");
+            crate::support::record(&format!("COPIED {state}"), mouse, &queue);
         }
         quit(&mut t)?;
         let mut reader = service(root)?;
@@ -5664,7 +5781,7 @@ fn mark_done_failed_current_and_pending_queue_task_by_keyboard_and_mouse() -> Re
         let form = t.screen("mark done failed form", |s| {
             s.contains("Mark done #1 Failed current") && s.contains("Reason (optional)")
         })?;
-        println!("MARK DONE FAILED FORM mouse={mouse}\n{form}");
+        crate::support::record("MARK DONE FAILED FORM", mouse, &form);
         if mouse {
             t.click("Reason (optional)")?;
         }
@@ -5673,7 +5790,7 @@ fn mark_done_failed_current_and_pending_queue_task_by_keyboard_and_mouse() -> Re
         let done = t.screen("failed marked done", |s| {
             s.contains("#1 marked done") && s.contains("Current #2 · Pending")
         })?;
-        println!("MARKED FAILED DONE mouse={mouse}\n{done}");
+        crate::support::record("MARKED FAILED DONE", mouse, &done);
         tab(&mut t, mouse, "2 Queue")?;
         t.screen("queue", |s| on_queue(s) && s.contains("› #2"))?;
         control(&mut t, mouse, "D Mark done")?;
@@ -5690,7 +5807,7 @@ fn mark_done_failed_current_and_pending_queue_task_by_keyboard_and_mouse() -> Re
                 && row_shows(s, "Failed current", "Done")
                 && row_shows(s, "Pending done", "Done")
         })?;
-        println!("MARKED DONE HISTORY mouse={mouse}\n{history}");
+        crate::support::record("MARKED DONE HISTORY", mouse, &history);
         quit(&mut t)?;
         let mut reader = service(root)?;
         assert_eq!(
@@ -5790,7 +5907,11 @@ fn real_pty_stop_and_done_behind_paused_prerequisite_preserve_its_edits() -> Res
                 let screen = t.screen("A controlled", |s| {
                     s.contains(if done { "#1 marked done" } else { "#1 stopped" })
                 })?;
-                println!("CONTROL A WITH PAUSED B mouse={mouse} done={done}\n{screen}");
+                crate::support::record(
+                    &format!("CONTROL A WITH PAUSED B done={done}"),
+                    mouse,
+                    &screen,
+                );
                 quit(&mut t)?;
                 let after = std::process::Command::new("git")
                     .arg("-C")
@@ -5878,7 +5999,11 @@ fn pty_control_behind_unstarted_prerequisite(state: &str, mouse: bool, done: boo
     let screen = t.screen("A saved", |s| {
         s.contains(if done { "#1 marked done" } else { "#1 stopped" })
     })?;
-    println!("CONTROL A WITH UNSTARTED B state={state} mouse={mouse} done={done}\n{screen}");
+    crate::support::record(
+        &format!("CONTROL A WITH UNSTARTED B state={state} done={done}"),
+        mouse,
+        &screen,
+    );
     quit(&mut t)?;
     let b_task = writer.task(b)?.unwrap();
     assert_eq!(
@@ -6066,7 +6191,7 @@ fn reject_draft_only_task_cancels_it_by_keyboard_and_mouse() -> Result {
         let history = t.screen("cancelled in history", |s| {
             on_history(s) && row_shows(s, "Draft only", "Cancelled")
         })?;
-        println!("REJECTED DRAFT mouse={mouse}\n{history}");
+        crate::support::record("REJECTED DRAFT", mouse, &history);
         quit(&mut t)?;
         let task = service(root)?.task(1)?.unwrap();
         assert_eq!(task.status, "cancelled");
@@ -6095,7 +6220,7 @@ fn refused_keys_on_failed_current_name_the_offered_actions() -> Result {
                 "#1: {action} is not available for a failed task; it offers Retry, Edit, Stop, Restart, Mark done"
             ))
         })?;
-        println!("REFUSED {action}\n{refused}");
+        crate::support::record(&format!("REFUSED {action}"), false, &refused);
         assert!(!refused.contains(&format!("{action} #1")));
     }
     quit(&mut t)?;
@@ -6114,7 +6239,7 @@ fn running_session_pending_queue_selection_shows_every_enabled_control_at_both_s
         t.screen("running current", |s| s.contains("Current #1 · Running"))?;
         key(&mut t, "2", "Queue · ")?;
         let screen = key(&mut t, "j", "› #2 ")?;
-        println!("RUNNING PENDING QUEUE {cols}x{rows}\n{screen}");
+        crate::support::record("RUNNING PENDING QUEUE", false, &screen);
         assert!(screen.contains("Pending"), "{screen}");
         assert!(screen.lines().count() <= usize::from(rows), "{screen}");
         for label in [
@@ -6196,7 +6321,7 @@ fn cli_and_tui_search_match_the_state_label_a_row_prints() -> Result {
         let screen = t.screen(query, |s| {
             s.contains(&format!("Search: {query}▏")) && !s.contains(hidden)
         })?;
-        println!("TUI SEARCH {query}\n{screen}");
+        crate::support::record(&format!("TUI SEARCH {query}"), false, &screen);
         assert!(screen.contains(shown), "{screen}");
         t.send("\x1b")?;
         t.screen("search cleared", |s| {

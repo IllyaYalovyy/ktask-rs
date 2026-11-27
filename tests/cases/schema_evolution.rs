@@ -147,7 +147,7 @@ fn previous_v1_opens_in_real_binary_with_history_and_tui_screen() -> Result {
     let screen = terminal.screen("retained current task", |screen| {
         screen.contains("Retained task") && screen.contains("Current #1 · Failed")
     })?;
-    println!("RECONCILED CURRENT SCREEN\n{screen}");
+    crate::support::record("RECONCILED CURRENT SCREEN", false, &screen);
     terminal.send("q")?;
     terminal.finish()?;
     Ok(())

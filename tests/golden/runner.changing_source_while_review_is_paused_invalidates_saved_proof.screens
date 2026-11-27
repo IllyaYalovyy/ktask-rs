@@ -1,0 +1,62 @@
+@@ PROVEN SOURCE BEFORE PAUSE · 120x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 1 · History 0
+ Session: Queue · running · Workflow · Review · repair round 0/10 · Run requested
+ #1 Recheck source edited while paused
+ Workflow · Review · repair round 0/10 · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Step: Review                                │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/review / none                   │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
+│Active <t>                                  ││Execution started; results require checks, review and validation        │
+│Tokens 60 new · 40 cached · 10 out          ││execution: codex/execution · new session                                │
+│70 new tokens + 1 call(s) unreported        ││Worker claim (unverified) · complete: Verified result                   │
+│Budget 0 of 3 used                          ││Worker criterion claim (unverified) #1 · claimed pass: Inspected        │
+│Execution   ✓ succeeded                     ││result.txt                                                              │
+│Checks      ✓ succeeded                     ││Check build: test "$(cat result.txt)" = verified (timeout 600000 ms)    │
+╰────────────────────────────────────────────╯│review: codex/review · new session                                      │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• Workflow · Review · repair round 0/10     ││                                                                        │
+│• Workflow · Check · repair round 0/10      ││                                                                        │
+│• Workflow · Implement · repair round 0/10  ││                                                                        │
+│• Supervisor started                        ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [o Report] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CHANGED SOURCE RECHECKED · 120x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                       │
+│Inspect results in History, or add more work.                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

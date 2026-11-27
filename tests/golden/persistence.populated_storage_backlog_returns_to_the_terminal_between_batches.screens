@@ -1,0 +1,129 @@
+@@ RETENTION POPULATED MOUSE BATCH · 110x42 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                            │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
+│limits.                                                                                                     │
+│Preferences: saved per project and instance.                                                                │
+│                                                                                                            │
+│Mouse: Enabled                                                                                              │
+│Run mode: Continue queue                                                                                    │
+│Planner approval: Automatic                                                                                 │
+│Delivery: local via origin/main                                                                             │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is  │
+│missing. CLI require declares prerequisites before a task starts.                                           │
+│                                                                                                            │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                │
+│u User defaults: what new projects start with; preview and apply them here.                                 │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                      │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code,        │
+│documents or art; override per project.                                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's│
+│default selection.                                                                                          │
+│Checks: list, add, edit, enable or disable.                                                                 │
+│Keyboard remains available with mouse disabled.                                                             │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.  │
+│E Export settings and o Import settings move this project's settings to another computer.                   │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Cleaned 1 attempt(s), 896 bytes · batch limit reached; reopen Storage for more
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RETENTION POPULATED KEYBOARD BATCH · 110x42 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                            │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
+│limits.                                                                                                     │
+│Preferences: saved per project and instance.                                                                │
+│                                                                                                            │
+│Mouse: Enabled                                                                                              │
+│Run mode: Continue queue                                                                                    │
+│Planner approval: Automatic                                                                                 │
+│Delivery: local via origin/main                                                                             │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is  │
+│missing. CLI require declares prerequisites before a task starts.                                           │
+│                                                                                                            │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                │
+│u User defaults: what new projects start with; preview and apply them here.                                 │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                      │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code,        │
+│documents or art; override per project.                                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's│
+│default selection.                                                                                          │
+│Checks: list, add, edit, enable or disable.                                                                 │
+│Keyboard remains available with mouse disabled.                                                             │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.  │
+│E Export settings and o Import settings move this project's settings to another computer.                   │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Cleaned 1 attempt(s), 398 bytes · batch limit reached; reopen Storage for more
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RETENTION PARTIAL HISTORY SCREEN · 110x42 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 ╭ Task details / attempts ───────────────────────────────────────────────────╮
+ No current task│Attempt 1 / 1 · #1 · revision 1 · failed                                    │
+ Queue preferenc│Outcome: Failed check with review finding                                   │
+ History · 1 sho│Output page 1 / 1 · chunk 1 / 1 · 33 records · newest first · snapshot #81  │
+ Filter: All  | │PARTIALLY PRUNED: 174 stored output bytes were removed by retention;        │
+╭ History · 1 / │remaining records are shown.                                                │full ──────────╮
+│› #1   Done    │                                                                            │               │
+│               │#81 [stdout] row                                                            │shed <date>    │
+│               │#80 [stdout] row                                                            │               │
+│               │#79 [stdout] row                                                            │               │
+│               │#78 [stdout] row                                                            │task           │
+│               │#77 [stdout] row                                                            │               │
+│               │#76 [stdout] row                                                            │rt             │
+│               │#75 [stdout] row                                                            │               │
+│               │#74 [stdout] row                                                            │okens          │
+│               │#73 [stdout] row                                                            │               │
+│               │#72 [stdout] row                                                            │               │
+│               │#71 [stdout] row                                                            │ure-model /    │
+│               │#70 [stdout] row                                                            │               │
+│               │#69 [stdout] row                                                            │-judge-1 / high│
+│               │#68 [stdout] row                                                            │ture-judge-2 / │
+│               │#67 [stdout] row                                                            │               │
+│               │#66 [stdout] row                                                            │xture-judge-3 /│
+│               │#65 [stdout] row                                                            │               │
+│               │#64 [stdout] row                                                            │Active <t>     │
+│               │#63 [stdout] row                                                            │known · cache  │
+│               │#62 [stdout] row                                                            │write unknown ·│
+│               │#61 [stdout] row                                                            │w tokens       │
+│               │#60 [stdout] row                                                            │               │
+│               │#59 [stdout] row                                                            │               │
+│               │#58 [stdout] row                                                            │               │
+│               │#57 [stdout] row                                                            │               │
+│               │#56 [stdout] row                                                            │               │
+│               │Find output                                                                 │               │
+│               │▏                                                                           │               │
+╰───────────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │───────────────╯
+[Copy] [C Copy t│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]             │lear] [E Export]
+[S Stats] [? Hel│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +] [Find]    │
+                │[Refresh] [Up] [Down] [Close] [Copy]                                        │
+Cleaned 1 attemp╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

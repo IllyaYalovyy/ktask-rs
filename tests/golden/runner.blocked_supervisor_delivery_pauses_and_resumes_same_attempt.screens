@@ -1,0 +1,74 @@
+@@ BLOCKED SUPERVISOR PTY paused · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 2 · History 0
+ Session: Run one · paused · Next #2 · Paused: Resource limit: managed scratch exceeded; worker stopped and its scratch…
+ #1 Keep blocked outcome
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
+│Tokens none reported yet                    ││Execution started; results require checks, review and validation        │
+│? new tokens                                ││execution: codex/execution · new session                                │
+│Budget 0 of 3 used                          ││                                                                        │
+│Can run · u Readiness                       ││                                                                        │
+│Execution   ! interrupted                   ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• Supervisor yielded this attempt for resume││                                                                        │
+│• Resource limit: managed scratch exceeded; ││                                                                        │
+│  worker stopped and its scratch deleted,…  ││                                                                        │
+│• Workflow · Implement · repair round 0/10  ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #1 created: Keep blocked outcome          ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ BLOCKED SUPERVISOR PTY recovered · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Session: Run one · stopped · Run one completed the current task
+ History · 1 shown / 1 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 1 · Finished Attempts Time Usage ────────────────────────────╮╭ Details · click for full ──────────────╮
+│› #1   Done     Keep blocked outcome <date> 1 <t> 210 tkn +1 ?              ││Keep blocked outcome                    │
+│                                                                            ││#1 · Done · AI · finished <date>        │
+│                                                                            ││                                        │
+│                                                                            ││Goal: Create result.txt containing      │
+│                                                                            ││verified                                │
+│                                                                            ││                                        │
+│                                                                            ││Check: result.txt contains verified     │
+│                                                                            ││                                        │
+│                                                                            ││Attempts: 1 · 210 new tokens + 1 call(s)│
+│                                                                            ││unreported                              │
+│                                                                            ││                                        │
+│                                                                            ││Models:                                 │
+│                                                                            ││Execution: codex/execution / none       │
+│                                                                            ││Review: codex/review / none             │
+│                                                                            ││Validation: codex/validation / none     │
+│                                                                            ││Remediation: codex/remediation / none   │
+│                                                                            ││Attempt 1 · Done · Active <t> · waited <t>│
+│                                                                            ││4 calls · uncached 180 · cache read 120 │
+│                                                                            ││· cache write 0 · output 30 (+1 call(s) │
+│                                                                            ││unreported) · 210 new tokens + 1 call(s)│
+│                                                                            ││unreported                              │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+╰────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats]
+[? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

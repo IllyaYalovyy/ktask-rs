@@ -1,0 +1,36 @@
+@@ ATTRIBUTE CHECKPOINT PTY · 120x35 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ History · 1 shown / 1 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 1 · Finished Attempts Time Usage ────────────────────────────╮╭ Details · click for full ──────────────╮
+│› #1   Done     Checkpoint attribute change <date> 1 <t> 210 tkn            ││Checkpoint attribute change             │
+│                                                                            ││#1 · Done · AI · finished <date>        │
+│                                                                            ││                                        │
+│                                                                            ││Goal: Create result.txt containing      │
+│                                                                            ││verified                                │
+│                                                                            ││                                        │
+│                                                                            ││Check: result.txt contains verified     │
+│                                                                            ││                                        │
+│                                                                            ││Attempts: 1 · 210 new tokens            │
+│                                                                            ││                                        │
+│                                                                            ││Models:                                 │
+│                                                                            ││Execution: codex/execution / none       │
+│                                                                            ││Review: codex/review / none             │
+│                                                                            ││Validation: codex/validation / none     │
+│                                                                            ││Remediation: codex/remediation / none   │
+│                                                                            ││Attempt 1 · Done · Active <t>           │
+│                                                                            ││3 calls · uncached 180 · cache read 120 │
+│                                                                            ││· cache write 0 · output 30 · 210 new   │
+│                                                                            ││tokens                                  │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+╰────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats]
+[? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

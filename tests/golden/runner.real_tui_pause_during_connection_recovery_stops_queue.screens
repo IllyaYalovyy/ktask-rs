@@ -1,0 +1,46 @@
+@@ RETRY BEFORE PAUSE · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 2 · History
+ Session: Queue · running · Workflow · Implement · repair round 0/10 …
+ #1 Pause connection recovery
+ Workflow · Implement · repair round 0/10 · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Create result.txt containing ve…│
+│Attempt 1                   ││Proof: result.txt contains verified   │
+│Step: Workflow · Implement …│╰──────────────────────────────────────╯
+│Tokens none reported yet    │╭ Log · following · attempt 1 · o: repo╮
+│Model codex/execution / none││session                               │
+╰────────────────────────────╯│{"error":{"message":"transport        │
+╭ Activity · #1 · l: all ────╮│lost"},"type":"turn.failed"}          │
+│• Workflow · Implement ·    ││Provider turn failed · automatic      │
+│  repair round 0/10         ││retry 1/2 after 1s · same attempt,    │
+│• Supervisor started        ││work retained; Pause cancels          │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [o Report] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+Supervisor started · close TUI safely · Pause stops execution
+@@ RETRY PAUSED · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 2 · History 0
+ Session: Queue · paused · Next #2 · Paused; worker stopped, Resume c…
+ #1 Pause connection recovery
+ Paused · r Resume continues this attempt · s Stop returns it to Pendi
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Paused · AI                 ││Goal: Create result.txt containing ve…│
+│Attempt 1                   ││Proof: result.txt contains verified   │
+│Tokens none reported yet    │╰──────────────────────────────────────╯
+│Model codex/execution / none│╭ Log · following · attempt 1 · o: repo╮
+│Active <t> · waited <t>     ││session                               │
+╰────────────────────────────╯│{"error":{"message":"transport        │
+╭ Activity · #1 · l: all ────╮│lost"},"type":"turn.failed"}          │
+│• Supervisor yielded this   ││Provider turn failed · automatic      │
+│  attempt for resume        ││retry 1/2 after 1s · same attempt,    │
+│• Paused; useful work and   ││work retained; Pause cancels          │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models]
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [o Report] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Pause requested · waiting for worker shutdown and cleanup

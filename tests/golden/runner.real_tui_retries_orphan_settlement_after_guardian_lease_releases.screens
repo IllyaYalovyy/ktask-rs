@@ -1,0 +1,66 @@
+@@ WAITING FOR GUARDIAN LEASE · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · supervisor absent · Workflow · Implement · repair round 0/10 · Supervisor absent; the next …
+ #1 Settle after guardian cleanup
+ Workflow · Implement · repair round 0/10 · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified                   │
+│Attempt 1                                   ││Proof: result.txt contains verified                           │
+│Step: Execution                             │╰──────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following · attempt 1 · o: report ─────────────────────╮
+│Active <t>                                  ││Execution started; results require checks, review and         │
+│Tokens none reported yet                    ││validation                                                    │
+│? new tokens                                ││execution: codex/execution · new session                      │
+│Budget 0 of 3 used                          ││                                                              │
+│Execution   … running                       ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯│                                                              │
+╭ Activity · #1 · l: all ────────────────────╮│                                                              │
+│• Workflow · Implement · repair round 0/10  ││                                                              │
+│• Current task attempt recorded             ││                                                              │
+│• #1 created: Settle after guardian cleanup ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [o Report]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ SETTLED AFTER GUARDIAN LEASE · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · The supervisor stopped unexpectedly; Resume continues this attempt
+ #1 Settle after guardian cleanup
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                   │
+│Attempt 1                                   ││Proof: result.txt contains verified                           │
+│Model codex/execution / none                │╰──────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ─────────────────────╮
+│Tokens none reported yet                    ││Execution started; results require checks, review and         │
+│? new tokens                                ││validation                                                    │
+│Budget 0 of 3 used                          ││execution: codex/execution · new session                      │
+│Can run · u Readiness                       ││                                                              │
+│Execution   ! interrupted                   ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯│                                                              │
+╭ Activity · #1 · l: all ────────────────────╮│                                                              │
+│• The supervisor stopped unexpectedly;      ││                                                              │
+│  Resume continues this attempt             ││                                                              │
+│• The supervisor stopped unexpectedly;      ││                                                              │
+│  Resume continues this attempt             ││                                                              │
+│• Workflow · Implement · repair round 0/10  ││                                                              │
+│• Current task attempt recorded             ││                                                              │
+│• #1 created: Settle after guardian cleanup ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

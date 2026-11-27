@@ -1,0 +1,155 @@
+@@ WHITESPACE DEFAULT FORM · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects╭ Add task ──────────────────────────────────────────────────────────────────╮
+ No current│Save creates a task in SQLite. Blank execution fields use project defaults; │
+ Queue pref│with a new model, blank effort means none.                                  │
+ Current Ta│Title                                                                       │
+           │▏                                                                           │
+╭ Ready ───│Goal                                                                        │──────────╮
+│No current│                                                                            │          │
+│Set up thi│Acceptance check                                                            │          │
+│          │                                                                            │          │
+│          │Kind                                                                        │          │
+│          │< AI >   click / Space to change                                            │          │
+│          │Execution provider/model (blank = default)                                  │          │
+│          │                                                                            │          │
+│          │Execution effort (optional)                                                 │          │
+│          │                                                                            │          │
+│          │Approval                                                                    │          │
+│          │< Ready >   click / Space to change                                         │          │
+│          │Work category                                                               │          │
+│          │< Default >   click / Space to change                                       │          │
+│          │Review lens 1                                                               │          │
+│          │< Project default >   click / Space to change                               │          │
+│          │Review lens 2                                                               │          │
+│          │< - >   click / Space to change                                             │          │
+╰──────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────╯
+[Copy] [u R│                                                                            │uit]
+           │[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]                   │
+           │                                                                            │
+Runs happen╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ WHITESPACE DEFAULT SAVED · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Queue · 1 shown / 1 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 1 · Model ───────────────────────────────────╮╭ Details · click for full ────────────╮
+│› #1   Pending  Default whitespace t… codex/default medium││Default whitespace task               │
+│                                                          ││#1 · Pending · AI                     │
+│                                                          ││                                      │
+│                                                          ││Goal: Goal                            │
+│                                                          ││                                      │
+│                                                          ││Check: Criterion                      │
+│                                                          ││                                      │
+│                                                          ││Attempts: 0 · none yet                │
+│                                                          ││                                      │
+│                                                          ││Models:                               │
+│                                                          ││Execution: codex/default / medium     │
+│                                                          ││Review: unconfigured / none           │
+│                                                          ││Validation: unconfigured / none       │
+│                                                          ││Remediation: unconfigured / none      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done]
+[x Cancel] [R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear]
+[S Stats] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ WHITESPACE DEFAULT MODELS · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects╭ Task models and limits ────────────────────────────────────────────────────╮
+ Current #1│Use provider/model: codex/…, claude/sonnet, opencode/vendor/model; blank    │
+ Queue pref│means unconfigured.                                                         │
+ Queue · 1 │Apply current project defaults replaces all four role settings on Save.     │
+ Filter: Al│Effective defaults preview:                                                 │
+╭ Queue · 1│Execution: codex/default / medium                                           │──────────╮
+│› #1   Pen│Review: unconfigured                                                        │          │
+│          │Validation: unconfigured                                                    │          │
+│          │Remediation: unconfigured                                                   │          │
+│          │Execution provider/model                                                    │          │
+│          │codex/default▏                                                              │          │
+│          │Execution effort (blank = none)                                             │          │
+│          │medium                                                                      │          │
+│          │Review provider/model                                                       │          │
+│          │                                                                            │          │
+│          │Review effort (blank = none)                                                │          │
+│          │                                                                            │edium     │
+│          │Validation provider/model                                                   │          │
+│          │                                                                            │one       │
+│          │Validation effort (blank = none)                                            │none      │
+│          │                                                                            │          │
+│          │Remediation provider/model                                                  │          │
+│          │                                                                            │          │
+╰──────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────╯
+[Copy] [r R│                                                                            │rk done]
+[x Cancel] │[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]                   │ Clear]
+[S Stats] [│                                                                            │
+Saved to SQ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ WHITESPACE EFFORT FORM · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects╭ Add task ──────────────────────────────────────────────────────────────────╮
+ Current #1│Save creates a task in SQLite. Blank execution fields use project defaults; │
+ Queue pref│with a new model, blank effort means none.                                  │
+ Queue · 1 │Title                                                                       │
+ Filter: Al│▏                                                                           │
+╭ Queue · 1│Goal                                                                        │──────────╮
+│› #1   Pen│                                                                            │          │
+│          │Acceptance check                                                            │          │
+│          │                                                                            │          │
+│          │Kind                                                                        │          │
+│          │< AI >   click / Space to change                                            │          │
+│          │Execution provider/model (blank = default)                                  │          │
+│          │                                                                            │          │
+│          │Execution effort (optional)                                                 │          │
+│          │                                                                            │          │
+│          │Approval                                                                    │          │
+│          │< Ready >   click / Space to change                                         │edium     │
+│          │Work category                                                               │          │
+│          │< Default >   click / Space to change                                       │one       │
+│          │Review lens 1                                                               │none      │
+│          │< Project default >   click / Space to change                               │          │
+│          │Review lens 2                                                               │          │
+│          │< - >   click / Space to change                                             │          │
+╰──────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────╯
+[Copy] [r R│                                                                            │rk done]
+[x Cancel] │[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]                   │ Clear]
+[S Stats] [│                                                                            │
+Saved to SQ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ TRIMMED EFFORT SAVED · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Queue preference · Next #2: Trimmed effort task · m: run mode in Current
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 2 · Model ───────────────────────────────────╮╭ Details · click for full ────────────╮
+│  #1   Pending  Default whitespace t… codex/default medium││Trimmed effort task                   │
+│› #2   Pending  Trimmed effort task   codex/default high  ││#2 · Pending · AI                     │
+│                                                          ││                                      │
+│                                                          ││Goal: Goal                            │
+│                                                          ││                                      │
+│                                                          ││Check: Criterion                      │
+│                                                          ││                                      │
+│                                                          ││Attempts: 0 · none yet                │
+│                                                          ││                                      │
+│                                                          ││Models:                               │
+│                                                          ││Execution: codex/default / high       │
+│                                                          ││Review: unconfigured / none           │
+│                                                          ││Validation: unconfigured / none       │
+│                                                          ││Remediation: unconfigured / none      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done]
+[x Cancel] [R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear]
+[S Stats] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

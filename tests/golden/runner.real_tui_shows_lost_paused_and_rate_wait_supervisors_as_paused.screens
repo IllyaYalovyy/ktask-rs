@@ -1,0 +1,429 @@
+@@ LOST paused · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused; worker stopped, Resume continues the same attempt
+ #1 Lost supervisor
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                   │
+│Attempt 1                                   ││Proof: result.txt contains verified                           │
+│Model codex/execution / none                │╰──────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ─────────────────────╮
+│Tokens none reported yet                    ││Execution started; results require checks, review and         │
+│? new tokens                                ││validation                                                    │
+│Budget 0 of 3 used                          ││execution: codex/execution · new session                      │
+│Can run · u Readiness                       ││                                                              │
+│Execution   ! interrupted                   ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯│                                                              │
+╭ Activity · #1 · l: all ────────────────────╮│                                                              │
+│• Paused; useful work and session retained  ││                                                              │
+│• Pause requested; stopping worker          ││                                                              │
+│• Workflow · Implement · repair round 0/10  ││                                                              │
+│• Current task attempt recorded             ││                                                              │
+│• #1 created: Lost supervisor               ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ paused Queue · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused; worker stopped, Resume continues the same attempt
+ Queue · 1 shown / 1 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 1 · Model ─────────────────────────────────────────╮╭ Details · click for full ────────────────╮
+│› #1   Paused   Lost supervisor                  codex/execution││Lost supervisor                           │
+│                                                                ││#1 · Paused · AI                          │
+│                                                                ││                                          │
+│                                                                ││Goal: Create result.txt containing        │
+│                                                                ││verified                                  │
+│                                                                ││                                          │
+│                                                                ││Check: result.txt contains verified       │
+│                                                                ││                                          │
+│                                                                ││Attempts: 1 · ? new tokens                │
+│                                                                ││                                          │
+│                                                                ││Models:                                   │
+│                                                                ││Execution: codex/execution / none         │
+│                                                                ││Review: codex/review / none               │
+│                                                                ││Validation: codex/validation / none       │
+│                                                                ││Remediation: codex/remediation / none     │
+│                                                                ││Attempt 1 · Paused · Active <t> · waited <t>│
+│                                                                ││1 calls · uncached unknown · cache read   │
+│                                                                ││unknown · cache write unknown · output    │
+│                                                                ││unknown · ? new tokens                    │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [r Resume] [a Add] [i Insert] [e Edit] [c Models] [s Stop] [T Restart] [D Mark done] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ paused History · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused; worker stopped, Resume continues the same attempt
+ History · 0 shown / 0 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 0 / 0 · Finished Attempts Time Usage ──────────────────────╮╭ Details · click for full ──────────╮
+│No tasks here.                                                        ││Nothing selected.                   │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+╰──────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────╯
+[Copy] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ paused Config · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused; worker stopped, Resume continues the same attempt
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                            │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
+│limits.                                                                                                     │
+│Preferences: saved per project and instance.                                                                │
+│                                                                                                            │
+│Mouse: Enabled                                                                                              │
+│Run mode: Continue queue                                                                                    │
+│Planner approval: Automatic                                                                                 │
+│Delivery: local via origin/main                                                                             │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is  │
+│missing. CLI require declares prerequisites before a task starts.                                           │
+│                                                                                                            │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                │
+│u User defaults: what new projects start with; preview and apply them here.                                 │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                      │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code,        │
+│documents or art; override per project.                                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's│
+│default selection.                                                                                          │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ paused About · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused; worker stopped, Resume continues the same attempt
+ About
+
+╭ About ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ktask RS · <ver> · ktask-dev                                                                                │
+│A visual workspace for supervising AI coding tasks.                                                         │
+│                                                                                                            │
+│Tasks, revisions, approvals, history and events:                                                            │
+│relational SQLite. Import/export uses real files.                                                           │
+│Execution, checks, review, validation, remediation and task breakdown are real,                             │
+│run by Codex, Claude Code or OpenCode per role.                                                             │
+│                                                                                                            │
+│Production and development use separate data roots.                                                         │
+│--demo never opens SQLite. --paths shows data locations.                                                    │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [Esc Back] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RESUMED paused · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                             │
+│Inspect results in History, or add more work.                                                               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LIVE WAIT · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 1 · History 0
+ Session: Queue · running · Supervisor preparing the next step · Run requested
+ #1 Lost supervisor
+ Provider limit until <date> · resumes by itself · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified                   │
+│Attempt 1                                   ││Proof: result.txt contains verified                           │
+│Step: Supervisor preparing the next step    │╰──────────────────────────────────────────────────────────────╯
+│Resumes in <t>                              │╭ Log · following · attempt 1 · o: report ─────────────────────╮
+│Model codex/execution / none                ││Execution started; results require checks, review and         │
+│Active <t> · waited <t>                     ││validation                                                    │
+│Tokens none reported yet                    ││execution: codex/execution · new session                      │
+│? new tokens                                ││{"error":{"message":"rate_limit                               │
+│Budget 0 of 3 used                          ││reached"},"type":"turn.failed"}                               │
+│Execution   ! waiting                       ││Automatic rate-limit backoff; Pause stops the scheduler       │
+╰────────────────────────────────────────────╯│without discarding the wait or session                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                              │
+│• Provider rate limited; retrying <date>    ││                                                              │
+│ <date> with the same attempt and session   ││                                                              │
+│• Workflow · Implement · repair round 0/10  ││                                                              │
+│• Current task attempt recorded             ││                                                              │
+│• #1 created: Lost supervisor               ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [o Report]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LOST waiting · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · The supervisor stopped unexpectedly; Resume continues this attempt
+ #1 Lost supervisor
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                   │
+│Attempt 1                                   ││Proof: result.txt contains verified                           │
+│Model codex/execution / none                │╰──────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ─────────────────────╮
+│Tokens none reported yet                    ││Execution started; results require checks, review and         │
+│? new tokens                                ││validation                                                    │
+│Budget 0 of 3 used                          ││execution: codex/execution · new session                      │
+│Can run · u Readiness                       ││{"error":{"message":"rate_limit                               │
+│Execution   ! interrupted                   ││reached"},"type":"turn.failed"}                               │
+│                                            ││Automatic rate-limit backoff; Pause stops the scheduler       │
+╰────────────────────────────────────────────╯│without discarding the wait or session                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                              │
+│• The supervisor stopped unexpectedly;      ││                                                              │
+│  Resume continues this attempt             ││                                                              │
+│• The supervisor stopped unexpectedly;      ││                                                              │
+│  Resume continues this attempt             ││                                                              │
+│• Provider rate limited; retrying <date>    ││                                                              │
+│ <date> with the same attempt and session   ││                                                              │
+│• Workflow · Implement · repair round 0/10  ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ waiting Queue · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · The supervisor stopped unexpectedly; Resume continues this attempt
+ Queue · 1 shown / 1 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 1 · Model ─────────────────────────────────────────╮╭ Details · click for full ────────────────╮
+│› #1   Paused   Lost supervisor                  codex/execution││Lost supervisor                           │
+│                                                                ││#1 · Paused · AI                          │
+│                                                                ││                                          │
+│                                                                ││Goal: Create result.txt containing        │
+│                                                                ││verified                                  │
+│                                                                ││                                          │
+│                                                                ││Check: result.txt contains verified       │
+│                                                                ││                                          │
+│                                                                ││Attempts: 1 · ? new tokens                │
+│                                                                ││                                          │
+│                                                                ││Models:                                   │
+│                                                                ││Execution: codex/execution / none         │
+│                                                                ││Review: codex/review / none               │
+│                                                                ││Validation: codex/validation / none       │
+│                                                                ││Remediation: codex/remediation / none     │
+│                                                                ││Attempt 1 · Paused · Active <t> · waited <t>│
+│                                                                ││1 calls · uncached unknown · cache read   │
+│                                                                ││unknown · cache write unknown · output    │
+│                                                                ││unknown · ? new tokens                    │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [r Resume] [a Add] [i Insert] [e Edit] [c Models] [s Stop] [T Restart] [D Mark done] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ waiting History · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · The supervisor stopped unexpectedly; Resume continues this attempt
+ History · 0 shown / 0 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 0 / 0 · Finished Attempts Time Usage ──────────────────────╮╭ Details · click for full ──────────╮
+│No tasks here.                                                        ││Nothing selected.                   │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+│                                                                      ││                                    │
+╰──────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────╯
+[Copy] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ waiting Config · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · The supervisor stopped unexpectedly; Resume continues this attempt
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                            │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
+│limits.                                                                                                     │
+│Preferences: saved per project and instance.                                                                │
+│                                                                                                            │
+│Mouse: Enabled                                                                                              │
+│Run mode: Continue queue                                                                                    │
+│Planner approval: Automatic                                                                                 │
+│Delivery: local via origin/main                                                                             │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is  │
+│missing. CLI require declares prerequisites before a task starts.                                           │
+│                                                                                                            │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                │
+│u User defaults: what new projects start with; preview and apply them here.                                 │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                      │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code,        │
+│documents or art; override per project.                                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's│
+│default selection.                                                                                          │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ waiting About · 110x32 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · The supervisor stopped unexpectedly; Resume continues this attempt
+ About
+
+╭ About ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ktask RS · <ver> · ktask-dev                                                                                │
+│A visual workspace for supervising AI coding tasks.                                                         │
+│                                                                                                            │
+│Tasks, revisions, approvals, history and events:                                                            │
+│relational SQLite. Import/export uses real files.                                                           │
+│Execution, checks, review, validation, remediation and task breakdown are real,                             │
+│run by Codex, Claude Code or OpenCode per role.                                                             │
+│                                                                                                            │
+│Production and development use separate data roots.                                                         │
+│--demo never opens SQLite. --paths shows data locations.                                                    │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [Esc Back] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ RESUMED waiting · 110x32 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                             │
+│Inspect results in History, or add more work.                                                               │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

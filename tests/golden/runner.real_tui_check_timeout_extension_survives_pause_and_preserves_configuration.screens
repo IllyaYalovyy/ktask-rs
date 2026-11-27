@@ -1,0 +1,105 @@
+@@ CHECK TIMEOUT REMEDIATION PAUSED · 120x34 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused; worker stopped, Resume continues the same attempt
+ #1 Finish a progressing verification
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Model codex/remediation / none              │╰────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
+│Tokens none reported yet                    ││Execution started; results require checks, review and validation        │
+│? new tokens                                ││Check build: if test -f result.txt; then exit 0; fi; /usr/bin/printf    │
+│Budget 0 of 3 used                          ││'suite started\nstage 1 complete\n'; sleep 1.3; printf 'suite           │
+│Can run · u Readiness                       ││completed\n' (timeout 1000 ms)                                          │
+│Starting checks✗ failed                     ││suite started                                                           │
+│Remediation ! interrupted                   ││stage 1 complete                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│Check build timed out after 1000 ms.                                    │
+│• Supervisor yielded this attempt for resume││Command: if test -f result.txt; then exit 0; fi; /usr/bin/printf 'suite │
+│• Paused; useful work and session retained  ││started\nstage 1 complete\n'; sleep 1.3; printf 'suite completed\n'     │
+│• Pause requested; stopping worker          ││Partial output:                                                         │
+│• Workflow · Starting checks · repair round ││suite started                                                           │
+│  0/10                                      ││stage 1 complete                                                        │
+│• Supervisor started                        ││Full log:                                                               │
+│• Current task attempt recorded             ││/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/│
+│• #1 created: Finish a progressing          ││state/ktask-dev/evidence/attempt-1/step-1.log                           │
+│  verification                              ││Diagnosing check timeout: codex/remediation · read-only                 │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Pause requested · waiting for worker shutdown and cleanup
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CHECK TIMEOUT EXTENSION PASSED · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                       │
+│Inspect results in History, or add more work.                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CHECK TIMEOUT REMEDIATION PAUSED · 120x34 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused; worker stopped, Resume continues the same attempt
+ #1 Finish a progressing verification
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Model codex/remediation / none              │╰────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
+│Tokens 60 new · 40 cached · 10 out          ││Worker criterion claim (unverified) #1 · claimed pass: Inspected        │
+│70 new tokens + 1 call(s) unreported        ││result.txt                                                              │
+│Budget 0 of 3 used                          ││Check build: /usr/bin/printf 'suite started\nstage 1 complete\n'; sleep │
+│Can run · u Readiness                       ││1.3; printf 'suite completed\n' (timeout 1000 ms)                       │
+│Execution   ✓ succeeded                     ││suite started                                                           │
+│Checks      ✗ failed                        ││stage 1 complete                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│Check build timed out after 1000 ms.                                    │
+│• Supervisor yielded this attempt for resume││Command: /usr/bin/printf 'suite started\nstage 1 complete\n'; sleep     │
+│• Paused; useful work and session retained  ││1.3; printf 'suite completed\n'                                         │
+│• Pause requested; stopping worker          ││Partial output:                                                         │
+│• Workflow · Check · repair round 0/10      ││suite started                                                           │
+│• Workflow · Implement · repair round 0/10  ││stage 1 complete                                                        │
+│• Supervisor started                        ││Full log:                                                               │
+│• Current task attempt recorded             ││/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/│
+│• #1 created: Finish a progressing          ││state/ktask-dev/evidence/attempt-1/step-2.log                           │
+│  verification                              ││Diagnosing check timeout: codex/remediation · read-only                 │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details]
+[o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Pause requested · waiting for worker shutdown and cleanup
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

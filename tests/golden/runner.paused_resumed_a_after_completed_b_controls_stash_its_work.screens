@@ -1,0 +1,164 @@
+@@ PAUSED RESUMED A CONTROL action=stop issuer=keyboard · 140x40 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 1
+ Session: Run one · stopped · Stopped: Paused resumed A verdict
+ #1 Original A
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────────────────────────╮
+│Tokens none reported yet                    ││Outcome: Stopped: Paused resumed A verdict                                                  │
+│? new tokens                                ││                                                                                            │
+│Budget 0 of 3 used                          ││Execution · interrupted · codex/execution verdict: Paused; useful work and session retained │
+│Can run · u Readiness                       ││                                                                                            │
+│Execution   ! interrupted                   ││Repair · interrupted · codex/execution verdict: Paused; useful work and session retained    │
+│Repair      ! interrupted                   ││                                                                                            │
+│                                            ││Supervisor outcome: Stopped: Paused resumed A verdict                                       │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯│                                                                                            │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                            │
+│• Back to Pending; the next Run starts fresh││                                                                                            │
+│• Stopped: Paused resumed A verdict         ││                                                                                            │
+│• Uncommitted changes saved as git stash    ││                                                                                            │
+│  "ktask: task #1 attempt #1"               ││                                                                                            │
+│• Supervisor yielded this attempt for resume││                                                                                            │
+│• Paused; useful work and session retained  ││                                                                                            │
+│• Pause requested; stopping worker          ││                                                                                            │
+│• Workflow · Implement · repair round 0/10  ││                                                                                            │
+│• Supervisor started                        ││                                                                                            │
+│• Existing attempt resumed                  ││                                                                                            │
+│• Supervisor yielded this attempt for resume││                                                                                            │
+│• Paused; useful work and session retained  ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+#1 stopped · back to Pending · changes stashed as "ktask: task #1 attempt #1" (git stash list)
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PAUSED RESUMED A CONTROL action=stop issuer=mouse · 140x40 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 1
+ Session: Run one · stopped · Stopped: Paused resumed A verdict
+ #1 Original A
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                                                 │
+│Attempt 1                                   ││Proof: result.txt contains verified                                                         │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ───────────────────────────────────────────────────────────╮
+│Tokens none reported yet                    ││Outcome: Stopped: Paused resumed A verdict                                                  │
+│? new tokens                                ││                                                                                            │
+│Budget 0 of 3 used                          ││Execution · interrupted · codex/execution verdict: Paused; useful work and session retained │
+│Can run · u Readiness                       ││                                                                                            │
+│Execution   ! interrupted                   ││Repair · interrupted · codex/execution verdict: Paused; useful work and session retained    │
+│Repair      ! interrupted                   ││                                                                                            │
+│                                            ││Supervisor outcome: Stopped: Paused resumed A verdict                                       │
+│                                            ││                                                                                            │
+│                                            ││                                                                                            │
+╰────────────────────────────────────────────╯│                                                                                            │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                            │
+│• Back to Pending; the next Run starts fresh││                                                                                            │
+│• Stopped: Paused resumed A verdict         ││                                                                                            │
+│• Uncommitted changes saved as git stash    ││                                                                                            │
+│  "ktask: task #1 attempt #1"               ││                                                                                            │
+│• Supervisor yielded this attempt for resume││                                                                                            │
+│• Paused; useful work and session retained  ││                                                                                            │
+│• Pause requested; stopping worker          ││                                                                                            │
+│• Workflow · Implement · repair round 0/10  ││                                                                                            │
+│• Supervisor started                        ││                                                                                            │
+│• Existing attempt resumed                  ││                                                                                            │
+│• Supervisor yielded this attempt for resume││                                                                                            │
+│• Paused; useful work and session retained  ││                                                                                            │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+#1 stopped · back to Pending · changes stashed as "ktask: task #1 attempt #1" (git stash list)
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PAUSED RESUMED A CONTROL action=done issuer=keyboard · 140x40 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 2
+ Session: Run one · complete · no queued work · Paused resumed A verdict
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                                           │
+│Inspect results in History, or add more work.                                                                                             │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+#1 marked done · changes stashed as "ktask: task #1 attempt #1" (git stash list)
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PAUSED RESUMED A CONTROL action=done issuer=mouse · 140x40 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 2
+ Session: Run one · complete · no queued work · Paused resumed A verdict
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                                           │
+│Inspect results in History, or add more work.                                                                                             │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+│                                                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+#1 marked done · changes stashed as "ktask: task #1 attempt #1" (git stash list)
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

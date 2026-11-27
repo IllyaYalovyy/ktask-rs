@@ -1,0 +1,66 @@
+@@ TOOL REGISTRY KEYBOARD SCREEN · 110x32 · keyboard
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 ╭ Project tools ─────────────────────────────────────────────────────────────╮
+ Current #1 · Pe│#1 v1 · rg 14.1 · linux x86_64 ·                                            │
+ Queue preferenc│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/exte│
+ Config         │rnal-rg · external · ready · bound v1 · components:                         │
+                │                                                                            │
+╭ Config ───────│Tool action                                                                 │───────────────╮
+│Project: run-00│< Register >   click / Space to change                                      │               │
+│Storage: SQLite│Tool name                                                                   │ R: resource   │
+│limits.        │                                                                            │               │
+│Preferences: sa│Tool version                                                                │               │
+│               │                                                                            │               │
+│Mouse: Enabled │Platform                                                                    │               │
+│Run mode: Conti│linux                                                                       │               │
+│Planner approva│Architecture                                                                │               │
+│Delivery: local│x86_64                                                                      │               │
+│Dependencies: m│Installation path                                                           │erequisite is  │
+│missing. CLI re│                                                                            │               │
+│               │Components (; in one component, comma between components)                   │               │
+│Defaults apply │                                                                            │               │
+│u User defaults│Ownership                                                                   │               │
+│f Profiles: nam│< External >   click / Space to change                                      │               │
+│w Work categori│Generation ID                                                               │e code,        │
+│documents or ar│                                                                            │               │
+│L Review lenses│Expected version (binding or generation)                                    │d the project's│
+│default selecti│0                                                                           │               │
+╰───────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │───────────────╯
+[Copy] [m Defaul│                                                                            │ecks]
+[g Git delivery]│[Copy] [Apply] [Cancel] [Up] [Down]                                         │settings]
+[o Import settin│                                                                            │
+Bound rg to #1 v╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ TOOL REGISTRY MOUSE SCREEN · 110x32 · mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 ╭ Project tools ─────────────────────────────────────────────────────────────╮
+ Current #1 · Pe│#1 v1 · rg 14.1 · linux x86_64 ·                                            │
+ Queue preferenc│/tmp/ktask-screens-----------------------/ktask-test-scratch/run-000000/exte│
+ Config         │rnal-rg · external · ready · bound v1 · components:                         │
+                │                                                                            │
+╭ Config ───────│Tool action                                                                 │───────────────╮
+│Project: run-00│< Register >   click / Space to change                                      │               │
+│Storage: SQLite│Tool name                                                                   │ R: resource   │
+│limits.        │                                                                            │               │
+│Preferences: sa│Tool version                                                                │               │
+│               │                                                                            │               │
+│Mouse: Enabled │Platform                                                                    │               │
+│Run mode: Conti│linux                                                                       │               │
+│Planner approva│Architecture                                                                │               │
+│Delivery: local│x86_64                                                                      │               │
+│Dependencies: m│Installation path                                                           │erequisite is  │
+│missing. CLI re│                                                                            │               │
+│               │Components (; in one component, comma between components)                   │               │
+│Defaults apply │                                                                            │               │
+│u User defaults│Ownership                                                                   │               │
+│f Profiles: nam│< External >   click / Space to change                                      │               │
+│w Work categori│Generation ID                                                               │e code,        │
+│documents or ar│                                                                            │               │
+│L Review lenses│Expected version (binding or generation)                                    │d the project's│
+│default selecti│0                                                                           │               │
+╰───────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │───────────────╯
+[Copy] [m Defaul│                                                                            │ecks]
+[g Git delivery]│[Copy] [Apply] [Cancel] [Up] [Down]                                         │settings]
+[o Import settin│                                                                            │
+Bound rg to #1 v╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

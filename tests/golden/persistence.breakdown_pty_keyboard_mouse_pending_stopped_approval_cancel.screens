@@ -1,0 +1,368 @@
+@@ BREAKDOWN stopped=false approval=Automatic cancel=false PROPOSAL · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Breakdown proposal · replace task ─────────────────────────────────╮
+│2 subtask(s) before original:                                       │
+│• Plan the implementation                                           │
+│  Implement the first part                                          │
+│  Criteria: First part works                                        │
+│• Verify the result                                                 │
+│  Verify the second part                                            │
+│  Criteria: All checks pass                                         │
+│Reason: Work is easier to verify in two steps.                      │
+│                                                                    │
+│Apply supersedes the original; attempts stay in History. Approval   │
+│follows planner preference. Cancel changes nothing.                 │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ BREAKDOWN APPLIED · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 2 · History 1
+ Queue preference · Next #3: Verify the result · m: run mode in Curre…
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 2 ─────────────────────────╮╭ Details · click for full ╮
+│› #2   Pending  Plan the implementation ││Plan the implementation   │
+│  #3   Pending  Verify the result       ││#2 · Pending · AI         │
+│                                        ││                          │
+│                                        ││Goal: Implement the first │
+│                                        ││part                      │
+│                                        ││                          │
+│                                        ││Check: First part works   │
+│                                        ││                          │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move]
+[b Break down] [c Models] [D Mark done] [x Cancel] [R Supersede]
+[o Import] [E Export] [Enter Details] [f Filter] [/ Search]
+[Esc Clear] [S Stats] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ BREAKDOWN stopped=false approval=Automatic cancel=true PROPOSAL · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Breakdown proposal · replace task ─────────────────────────────────╮
+│2 subtask(s) before original:                                       │
+│• Plan the implementation                                           │
+│  Implement the first part                                          │
+│  Criteria: First part works                                        │
+│• Verify the result                                                 │
+│  Verify the second part                                            │
+│  Criteria: All checks pass                                         │
+│Reason: Work is easier to verify in two steps.                      │
+│                                                                    │
+│Apply supersedes the original; attempts stay in History. Approval   │
+│follows planner preference. Cancel changes nothing.                 │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ BREAKDOWN CANCELLED · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Pending original
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · AI                ││Goal: Persist a real task             │
+│No attempts yet             ││Proof: Survives restart               │
+│Run blocked (9) · u Readines│╰──────────────────────────────────────╯
+│Model unconfigured / none   │╭ Log · following ─────────────────────╮
+│Budget 0 of 3 used          ││Run is blocked. Press u Readiness for │
+╰────────────────────────────╯│each cause and a direct action.       │
+╭ Activity · #1 · l: all ────╮│Refresh after setup; Run retries from │
+│• #1 created: Pending       ││Current.                              │
+│  original                  ││                                      │
+│                            ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models]
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ BREAKDOWN stopped=false approval=ReviewRequired cancel=false PROPOSAL · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Breakdown proposal · replace task ─────────────────────────────────╮
+│2 subtask(s) before original:                                       │
+│• Plan the implementation                                           │
+│  Implement the first part                                          │
+│  Criteria: First part works                                        │
+│• Verify the result                                                 │
+│  Verify the second part                                            │
+│  Criteria: All checks pass                                         │
+│Reason: Work is easier to verify in two steps.                      │
+│                                                                    │
+│Apply supersedes the original; attempts stay in History. Approval   │
+│follows planner preference. Cancel changes nothing.                 │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ BREAKDOWN APPLIED #2 · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Needs approval   |   Queue 2 · History 1
+ Run one preference · Next #3: Verify the result · m: run mode in Cur…
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 2 ─────────────────────────╮╭ Details · click for full ╮
+│› #2   Needs approval Plan the implemen…││Plan the implementation   │
+│  #3   Needs approval Verify the result ││#2 · Needs approval · AI  │
+│                                        ││                          │
+│                                        ││Goal: Implement the first │
+│                                        ││part                      │
+│                                        ││                          │
+│                                        ││Check: First part works   │
+│                                        ││                          │
+│                                        ││Attempts: 0 · none yet    │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [a Add] [i Insert] [e Edit] [m Move] [v Approve] [n Reject]
+[c Models] [D Mark done] [o Import] [E Export] [Enter Details]
+[f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ BREAKDOWN stopped=false approval=ReviewRequired cancel=true PROPOSAL · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Breakdown proposal · replace task ─────────────────────────────────╮
+│2 subtask(s) before original:                                       │
+│• Plan the implementation                                           │
+│  Implement the first part                                          │
+│  Criteria: First part works                                        │
+│• Verify the result                                                 │
+│  Verify the second part                                            │
+│  Criteria: All checks pass                                         │
+│Reason: Work is easier to verify in two steps.                      │
+│                                                                    │
+│Apply supersedes the original; attempts stay in History. Approval   │
+│follows planner preference. Cancel changes nothing.                 │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ BREAKDOWN CANCELLED #2 · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Run one preference · last task · m: run mode in Current
+ #1 Pending original
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · AI                ││Goal: Persist a real task             │
+│No attempts yet             ││Proof: Survives restart               │
+│Run blocked (9) · u Readines│╰──────────────────────────────────────╯
+│Model unconfigured / none   │╭ Log · following ─────────────────────╮
+│Budget 0 of 3 used          ││Run is blocked. Press u Readiness for │
+╰────────────────────────────╯│each cause and a direct action.       │
+╭ Activity · #1 · l: all ────╮│Refresh after setup; Run retries from │
+│• #1 created: Pending       ││Current.                              │
+│  original                  ││                                      │
+│                            ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run one] [D Mark done] [x Cancel] [R Supersede] [c Models]
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ BREAKDOWN stopped=true approval=Automatic cancel=false PROPOSAL · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Breakdown proposal · replace task ─────────────────────────────────╮
+│2 subtask(s) before original:                                       │
+│• Plan the implementation                                           │
+│  Implement the first part                                          │
+│  Criteria: First part works                                        │
+│• Verify the result                                                 │
+│  Verify the second part                                            │
+│  Criteria: All checks pass                                         │
+│Reason: Work is easier to verify in two steps.                      │
+│                                                                    │
+│Apply supersedes the original; attempts stay in History. Approval   │
+│follows planner preference. Cancel changes nothing.                 │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ BREAKDOWN APPLIED #3 · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 2 · History 1
+ Queue preference · Next #3: Verify the result · m: run mode in Curre…
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 2 ─────────────────────────╮╭ Details · click for full ╮
+│› #2   Pending  Plan the implementation ││Plan the implementation   │
+│  #3   Pending  Verify the result       ││#2 · Pending · AI         │
+│                                        ││                          │
+│                                        ││Goal: Implement the first │
+│                                        ││part                      │
+│                                        ││                          │
+│                                        ││Check: First part works   │
+│                                        ││                          │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move]
+[b Break down] [c Models] [D Mark done] [x Cancel] [R Supersede]
+[o Import] [E Export] [Enter Details] [f Filter] [/ Search]
+[Esc Clear] [S Stats] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ BREAKDOWN stopped=true approval=Automatic cancel=true PROPOSAL · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Breakdown proposal · replace task ─────────────────────────────────╮
+│2 subtask(s) before original:                                       │
+│• Plan the implementation                                           │
+│  Implement the first part                                          │
+│  Criteria: First part works                                        │
+│• Verify the result                                                 │
+│  Verify the second part                                            │
+│  Criteria: All checks pass                                         │
+│Reason: Work is easier to verify in two steps.                      │
+│                                                                    │
+│Apply supersedes the original; attempts stay in History. Approval   │
+│follows planner preference. Cancel changes nothing.                 │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ BREAKDOWN CANCELLED #3 · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Failed current
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · AI                ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+│Tokens none reported yet    │╰──────────────────────────────────────╯
+│Model codex/fixture-judge-2…│╭ Report · attempt 1 · o: raw log ─────╮
+│Active <t>                  ││Outcome: Failed check with review     │
+╰────────────────────────────╯│finding                               │
+╭ Activity · #1 · l: all ────╮│                                      │
+│• Back to Pending; the next ││Review · failed · codex/fixture-model │
+│  Run starts fresh          ││verdict: review structured finding    │
+│• Failed check with review  ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models]
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ BREAKDOWN stopped=true approval=ReviewRequired cancel=false PROPOSAL · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Breakdown proposal · replace task ─────────────────────────────────╮
+│2 subtask(s) before original:                                       │
+│• Plan the implementation                                           │
+│  Implement the first part                                          │
+│  Criteria: First part works                                        │
+│• Verify the result                                                 │
+│  Verify the second part                                            │
+│  Criteria: All checks pass                                         │
+│Reason: Work is easier to verify in two steps.                      │
+│                                                                    │
+│Apply supersedes the original; attempts stay in History. Approval   │
+│follows planner preference. Cancel changes nothing.                 │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ BREAKDOWN APPLIED #4 · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Needs approval   |   Queue 2 · History 1
+ Run one preference · Next #3: Verify the result · m: run mode in Cur…
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 2 ─────────────────────────╮╭ Details · click for full ╮
+│› #2   Needs approval Plan the implemen…││Plan the implementation   │
+│  #3   Needs approval Verify the result ││#2 · Needs approval · AI  │
+│                                        ││                          │
+│                                        ││Goal: Implement the first │
+│                                        ││part                      │
+│                                        ││                          │
+│                                        ││Check: First part works   │
+│                                        ││                          │
+│                                        ││Attempts: 0 · none yet    │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [a Add] [i Insert] [e Edit] [m Move] [v Approve] [n Reject]
+[c Models] [D Mark done] [o Import] [E Export] [Enter Details]
+[f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ BREAKDOWN stopped=true approval=ReviewRequired cancel=true PROPOSAL · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Breakdown proposal · replace task ─────────────────────────────────╮
+│2 subtask(s) before original:                                       │
+│• Plan the implementation                                           │
+│  Implement the first part                                          │
+│  Criteria: First part works                                        │
+│• Verify the result                                                 │
+│  Verify the second part                                            │
+│  Criteria: All checks pass                                         │
+│Reason: Work is easier to verify in two steps.                      │
+│                                                                    │
+│Apply supersedes the original; attempts stay in History. Approval   │
+│follows planner preference. Cancel changes nothing.                 │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ BREAKDOWN CANCELLED #4 · 70x22 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Run one preference · last task · m: run mode in Current
+ #1 Failed current
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · AI                ││Goal: Persist a real task             │
+│Attempt 1                   ││Proof: Survives restart               │
+│Tokens none reported yet    │╰──────────────────────────────────────╯
+│Model codex/fixture-judge-2…│╭ Report · attempt 1 · o: raw log ─────╮
+│Active <t>                  ││Outcome: Failed check with review     │
+╰────────────────────────────╯│finding                               │
+╭ Activity · #1 · l: all ────╮│                                      │
+│• Back to Pending; the next ││Review · failed · codex/fixture-model │
+│  Run starts fresh          ││verdict: review structured finding    │
+│• Failed check with review  ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run one] [D Mark done] [x Cancel] [R Supersede] [c Models]
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…

@@ -12,6 +12,8 @@ mod cleanup;
 mod cli;
 #[path = "cases/configuration.rs"]
 mod configuration;
+#[path = "cases/golden_set.rs"]
+mod golden_set;
 #[path = "cases/isolation.rs"]
 mod isolation;
 #[path = "cases/lifecycle.rs"]
@@ -34,6 +36,8 @@ mod provision;
 mod remote_tui;
 #[path = "cases/runner.rs"]
 mod runner;
+#[path = "cases/screen_settle.rs"]
+mod screen_settle;
 #[path = "cases/storage.rs"]
 mod storage;
 #[path = "cases/storage_docs.rs"]

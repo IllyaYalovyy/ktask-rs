@@ -1,0 +1,58 @@
+@@ FORM VALIDATION · 100x28 · keyboard
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue pref╭ Add task ──────────────────────────────────────────────────────────────────╮
+ Queue · 12│Title, goal, and acceptance check are required.                             │
+ Filter: Al│Blank execution fields use defaults; with a new model, blank effort means   │
+╭ Queue · 1│none.                                                                       │──────────╮
+│› #1   Fai│Title                                                                       │          │
+│  #2   Pen│▏                                                                           │          │
+│  #3   Pen│Goal                                                                        │          │
+│  #4   Pen│                                                                            │the final │
+│  #5   Pen│Acceptance check                                                            │          │
+│  #6   Pen│                                                                            │          │
+│  #7   Pen│Kind                                                                        │chable.   │
+│  #8   Pen│< AI >   click / Space to change                                            │          │
+│  #9   Pen│Execution provider/model (blank = default)                                  │          │
+│  #10  Pen│                                                                            │          │
+│  #11  Pen│Execution effort (optional)                                                 │          │
+│  #12  Pen│                                                                            │          │
+│  #13  Pen│Title, goal, and acceptance check are required                              │          │
+│  #14  Pen│                                                                            │          │
+│  #15  Pen│[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+╰──────────│                                                                            │──────────╯
+[Copy] [r R╰────────────────────────────────────────────────────────────────────────────╯]
+[o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ POSITION PREVIEW · 100x28 · keyboard
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 121 · History 121
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ Queue · 121 shown / 121 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 121 / 121 · Model ───────────────────────────────╮╭ Details · click for full ────────────╮
+│  #107 Pending  Workspace cleanup · case 1… economy medium││Renamed task                          │
+│  #108 Pen╭ Move pending task ─────────────────────────────────────────────────────────╮          │
+│  #109 Pen│Position: after #1 / before #2                                              │          │
+│  #110 Pen│Choose a position in the full execution order.                              │          │
+│  #111 Pen│Blank means end of Queue.                                                   │          │
+│  #112 Pen│                                                                            │          │
+│  #113 Pen│Before task ID                                                              │          │
+│  #114 Pen│2▏                                                                          │          │
+│  #115 Pen│Alt-Up/Down: position · Ctrl-S: apply · Esc: cancel                         │          │
+│  #116 Pen│                                                                            │          │
+│  #117 Pen│[Copy] [Apply] [Cancel] [Up] [Down] [Earlier] [Later]                       │          │
+│  #118 Pen│                                                                            │          │
+│  #119 Pen╰────────────────────────────────────────────────────────────────────────────╯          │
+│  #120 Pending  Instance isolation · case … economy medium││Remediation: capable / high           │
+│› #242 Pending  Renamed task                economy medium││                                      │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Retry] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done]
+[x Cancel] [R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear]
+[S Stats] [? Help] [q Quit]
+#241 copied to the queue as #242
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

@@ -29,21 +29,43 @@ pub(crate) struct ProjectData {
 /// One read. `recover` first settles what a dead supervisor left behind, which changes the
 /// project, so a read-only link may not ask for it.
 pub(crate) fn read(service: &mut Service, recover: bool) -> Result<ProjectData, String> {
-    // Recover an orphan to Paused or its committed dependency wait before rendering.
-    if recover && !crate::runner::supervisor_alive(service).map_err(|e| e.to_string())? {
-        crate::runner::control::settle(service).map_err(|e| e.to_string())?;
-        crate::runner::control::finish_pending(service).map_err(|e| e.to_string())?;
-    }
-    let session = service.execution_session().map_err(|e| e.to_string())?;
-    let snapshot = service.snapshot_brief().map_err(|e| e.to_string())?;
-    let supervisor_alive = crate::runner::supervisor_alive(service).map_err(|e| e.to_string())?;
-    Ok(ProjectData {
-        session,
-        queue: snapshot.queue,
-        history: snapshot.history,
-        events: snapshot.events,
-        supervisor_alive,
+    let service = std::cell::RefCell::new(service);
+    let alive = || crate::runner::supervisor_alive(&service.borrow()).map_err(|e| e.to_string());
+    while_unchanged(alive, |supervisor_alive| {
+        let service = &mut **service.borrow_mut();
+        // Recover an orphan to Paused or its committed dependency wait before rendering.
+        if recover && !supervisor_alive {
+            crate::runner::control::settle(service).map_err(|e| e.to_string())?;
+            crate::runner::control::finish_pending(service).map_err(|e| e.to_string())?;
+        }
+        let session = service.execution_session().map_err(|e| e.to_string())?;
+        let snapshot = service.snapshot_brief().map_err(|e| e.to_string())?;
+        Ok(ProjectData {
+            session,
+            queue: snapshot.queue,
+            history: snapshot.history,
+            events: snapshot.events,
+            supervisor_alive,
+        })
     })
+}
+
+/// Reads again until the supervisor's liveness is the same before and after. A supervisor
+/// commits its final state before it releases its lease, so a state read apart from its
+/// liveness would show one that has just finished as running and absent.
+fn while_unchanged<T>(
+    mut alive: impl FnMut() -> Result<bool, String>,
+    mut read: impl FnMut(bool) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut before = alive()?;
+    loop {
+        let value = read(before)?;
+        let after = alive()?;
+        if after == before {
+            return Ok(value);
+        }
+        before = after;
+    }
 }
 
 /// Why the current task's latest launch failed, when it did.
@@ -476,4 +498,25 @@ pub(crate) fn running(screen: &Screen) -> Option<usize> {
         .current()
         .filter(|task| screen.supervisor_alive == Some(true) && task.status() == Status::Running)
         .map(|task| task.id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::while_unchanged;
+
+    #[test]
+    fn a_supervisor_that_finishes_during_a_read_is_read_again() {
+        // Alive before the first read, gone after it: that read mixes two moments.
+        let mut liveness = [true, false, false].into_iter();
+        let mut reads = Vec::new();
+        let result = while_unchanged(
+            || Ok(liveness.next().expect("liveness check")),
+            |alive| {
+                reads.push(alive);
+                Ok((reads.len(), alive))
+            },
+        );
+        assert_eq!(result, Ok((2, false)));
+        assert_eq!(reads, [true, false]);
+    }
 }

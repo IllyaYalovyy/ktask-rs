@@ -1,0 +1,111 @@
+@@ USAGE LIMIT CURRENT · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 1 · History 0
+ Session: Run one · running · Supervisor preparing the next step · Run requested
+ #1 Quota wait
+ Provider limit until <date>99 <date> · resumes by itself · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Create result.txt containing verified                             │
+│Attempt 1                                   ││Proof: result.txt contains verified                                     │
+│Step: Supervisor preparing the next step    │╰────────────────────────────────────────────────────────────────────────╯
+│Resumes in <t>                              │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
+│Model codex/execution / none                ││Execution started; results require checks, review and validation        │
+│Active <t> · waited <t>                     ││execution: codex/execution · new session                                │
+│Tokens none reported yet                    ││{"message":"You’ve hit your usage limit. Visit                          │
+│? new tokens                                ││https://chatgpt.com/settings/usage to purchase more credits or try      │
+│Budget 0 of 3 used                          ││again at <date>th, 2099 <date> PM.","type":"error"}                     │
+│Execution   ! waiting                       ││{"error":{"message":"You’ve hit your usage limit. Visit                 │
+│                                            ││https://chatgpt.com/settings/usage to purchase more credits or try      │
+│                                            ││again at <date>th, 2099 <date> PM."},"type":"turn.failed"}              │
+│                                            ││Automatic rate-limit backoff; Pause stops the scheduler without         │
+╰────────────────────────────────────────────╯│discarding the wait or session                                          │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• Provider usage limit; resumes <date>99    ││                                                                        │
+│ <date> with the same attempt and session   ││                                                                        │
+│• Workflow · Implement · repair round 0/10  ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #1 created: Quota wait                    ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [o Report] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ USAGE LIMIT READINESS · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Run one · p╭ Execution readiness ───────────────────────────────────────────────────────╮
+ #1 Quota wait       │Can run · 0 blocker(s)                                                      │
+ Paused · r Resume co│                                                                            │
+╭ Status · Enter: det│OK · Execution state                                                        │────────────────────╮
+│Paused · AI         │OK · Project checks                                                         │                    │
+│Attempt 1           │OK · Approval                                                               │                    │
+│Model codex/executio│OK · Task                                                                   │────────────────────╯
+│Active <t> · waited 0│OK · execution model                                                        │────────────────────╮
+│Tokens none reported│OK · review model                                                           │d validation        │
+│? new tokens        │OK · validation model                                                       │                    │
+│Budget 0 of 3 used  │OK · remediation model                                                      │                    │
+│Can run · u Readines│OK · Writable workers (execution and repair) · Agent network Off · Codex    │credits or try      │
+│Execution   ! interr│OK · Codex CLI                                                              │                    │
+│                    │OK · Read-only sandbox                                                      │sit                 │
+│                    │OK · Commit identity: Project Author <project@example.com>                  │credits or try      │
+│                    │OK · Supervisor ownership                                                   │led"}               │
+│                    │OK · Worker ownership                                                       │ler without         │
+╰────────────────────│OK · Workspace baseline                                                     │                    │
+╭ Activity · #1 · l: │                                                                            │s retained          │
+│• Supervisor yielded│Queue: paused · Paused; worker stopped, Resume continues the same attempt   │                    │
+│• Paused during a pr│                                                                            │                    │
+│  Resume tries again│After fixing setup, Refresh here or press r on Current. Inspection creates  │                    │
+│• Pause requested; s│no attempt.                                                                 │                    │
+│• Provider usage lim│Wheel / PgUp / PgDn: scroll · Esc: close                                    │                    │
+│ <date> with the sam│                                                                            │                    │
+│• Workflow · Impleme│[c Checks] [m Models] [r Resume] [u Refresh] [Close]                        │                    │
+│• Current task attem│                                                                            │                    │
+╰────────────────────│                                                                            │────────────────────╯
+[Copy] [r Resume] [s ╰────────────────────────────────────────────────────────────────────────────╯ [Enter Details]
+[o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Pause requested · waiting for worker shutdown and cleanup
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ USAGE LIMIT RESUMED NOW · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Run one · complete · no queued work · Checks, independent review and validation passed after 0 repair rounds
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                       │
+│Inspect results in History, or add more work.                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

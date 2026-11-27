@@ -1,0 +1,41 @@
+@@ STAGE LIMIT OFF · 120x40 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Curre╭ Task models and limits ────────────────────────────────────────────────────╮
+ Current #1 · Pending│Use provider/model: codex/…, claude/sonnet, opencode/vendor/model; blank    │
+ Queue preference · l│means unconfigured.                                                         │
+ #1 Limit me         │Apply current project defaults replaces all four role settings on Save.     │
+ Ready · r Run queue;│Effective defaults preview:                                                 │
+╭ Status · Enter: det│Execution: codex/execution / none                                           │────────────────────╮
+│Pending · AI        │Review: codex/review / none                                                 │                    │
+│No attempts yet     │Validation: codex/validation / none                                         │                    │
+│Can run · u Readines│Remediation: codex/remediation / none                                       │────────────────────╯
+│Model codex/executio│Save approves a new revision.                                               │────────────────────╮
+│Budget 0 of 3 used  │                                                                            │sor; this pane      │
+│                    │                                                                            │                    │
+│                    │                                                                            │r this task.        │
+│                    │                                                                            │                    │
+│                    │                                                                            │                    │
+│                    │                                                                            │                    │
+│                    │                                                                            │                    │
+│                    │                                                                            │                    │
+│                    │                                                                            │                    │
+╰────────────────────│Validation provider/model                                                   │                    │
+╭ Activity · #1 · l: │codex/validation                                                            │                    │
+│• #1 created: Limit │Validation effort (blank = none)                                            │                    │
+│                    │                                                                            │                    │
+│                    │Remediation provider/model                                                  │                    │
+│                    │codex/remediation                                                           │                    │
+│                    │Remediation effort (blank = none)                                           │                    │
+│                    │                                                                            │                    │
+│                    │Attempt limit (blank = unlimited)                                           │                    │
+│                    │3                                                                           │                    │
+│                    │Task time limit (all attempts)                                              │                    │
+│                    │< Off >   click / Space to change                                           │                    │
+│                    │Stage time limit (one agent turn)                                           │                    │
+│                    │< Off >   click / Space to change                                           │                    │
+╰────────────────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]                   │
+                     │                                                                            │
+Runs happen in a back╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

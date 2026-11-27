@@ -1,0 +1,140 @@
+@@ CONTROL A WITH UNSTARTED B state=failed done=false · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 2 · History 0
+ Queue preference · Next #1: Failed current · m: run mode in Current
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 2 · Model ───────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│  #2   Pending  Unstarted prerequisite        codex/fixture-model     ││Failed current                                │
+│› #1   Pending  Failed current                codex/fixture-model high││#1 · Pending · AI                             │
+│                                                                      ││                                              │
+│                                                                      ││Goal: Persist a real task                     │
+│                                                                      ││                                              │
+│                                                                      ││Check: Survives restart                       │
+│                                                                      ││                                              │
+│                                                                      ││Attempts: 1 · ? new tokens                    │
+│                                                                      ││                                              │
+│                                                                      ││Models:                                       │
+│                                                                      ││Execution: codex/fixture-model / high         │
+│                                                                      ││Review: codex/fixture-judge-1 / high          │
+│                                                                      ││Validation: codex/fixture-judge-2 / high      │
+│                                                                      ││Remediation: codex/fixture-judge-3 / high     │
+│                                                                      ││Attempt 1 · Failed · Active <t>               │
+│                                                                      ││2 calls · uncached unknown · cache read       │
+│                                                                      ││unknown · cache write unknown · output unknown│
+│                                                                      ││· ? new tokens                                │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel]
+[R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+#1 stopped · back to Pending · changes stashed as "ktask: task #1 attempt #1" (git stash list)
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CONTROL A WITH UNSTARTED B state=failed done=true · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ Queue · 1 shown / 1 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 1 · Model ───────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│› #2   Pending  Unstarted prerequisite             codex/fixture-model││Unstarted prerequisite                        │
+│                                                                      ││#2 · Pending · AI                             │
+│                                                                      ││                                              │
+│                                                                      ││Goal: Persist a real task                     │
+│                                                                      ││                                              │
+│                                                                      ││Check: Survives restart                       │
+│                                                                      ││                                              │
+│                                                                      ││Attempts: 0 · none yet                        │
+│                                                                      ││                                              │
+│                                                                      ││Models:                                       │
+│                                                                      ││Execution: codex/fixture-model / none         │
+│                                                                      ││Review: codex/fixture-judge-1 / none          │
+│                                                                      ││Validation: codex/fixture-judge-2 / none      │
+│                                                                      ││Remediation: codex/fixture-judge-3 / none     │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel]
+[R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+#1 marked done · changes stashed as "ktask: task #1 attempt #1" (git stash list)
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CONTROL A WITH UNSTARTED B state=paused done=false · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 2 · History 0
+ Queue preference · Next #1: Failed current · m: run mode in Current
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 2 · Model ───────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│  #2   Pending  Unstarted prerequisite        codex/fixture-model     ││Failed current                                │
+│› #1   Pending  Failed current                codex/fixture-model high││#1 · Pending · AI                             │
+│                                                                      ││                                              │
+│                                                                      ││Goal: Persist a real task                     │
+│                                                                      ││                                              │
+│                                                                      ││Check: Survives restart                       │
+│                                                                      ││                                              │
+│                                                                      ││Attempts: 1 · ? new tokens                    │
+│                                                                      ││                                              │
+│                                                                      ││Models:                                       │
+│                                                                      ││Execution: codex/fixture-model / high         │
+│                                                                      ││Review: codex/fixture-judge-1 / high          │
+│                                                                      ││Validation: codex/fixture-judge-2 / high      │
+│                                                                      ││Remediation: codex/fixture-judge-3 / high     │
+│                                                                      ││Attempt 1 · Cancelled · Active <t>            │
+│                                                                      ││2 calls · uncached unknown · cache read       │
+│                                                                      ││unknown · cache write unknown · output unknown│
+│                                                                      ││· ? new tokens                                │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel]
+[R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+#1 stopped · back to Pending · changes stashed as "ktask: task #1 attempt #1" (git stash list)
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CONTROL A WITH UNSTARTED B state=paused done=true · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ Queue · 1 shown / 1 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 1 · Model ───────────────────────────────────────────────╮╭ Details · click for full ────────────────────╮
+│› #2   Pending  Unstarted prerequisite             codex/fixture-model││Unstarted prerequisite                        │
+│                                                                      ││#2 · Pending · AI                             │
+│                                                                      ││                                              │
+│                                                                      ││Goal: Persist a real task                     │
+│                                                                      ││                                              │
+│                                                                      ││Check: Survives restart                       │
+│                                                                      ││                                              │
+│                                                                      ││Attempts: 0 · none yet                        │
+│                                                                      ││                                              │
+│                                                                      ││Models:                                       │
+│                                                                      ││Execution: codex/fixture-model / none         │
+│                                                                      ││Review: codex/fixture-judge-1 / none          │
+│                                                                      ││Validation: codex/fixture-judge-2 / none      │
+│                                                                      ││Remediation: codex/fixture-judge-3 / none     │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel]
+[R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+#1 marked done · changes stashed as "ktask: task #1 attempt #1" (git stash list)
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

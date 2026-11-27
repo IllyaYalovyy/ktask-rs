@@ -1,0 +1,105 @@
+@@ STARTUP RESOURCE PTY first · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused: Resource limit: attempt output exceeds 1 bytes or 100000 rows; captured output retai…
+ #1 Inspect startup output pressure
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Limit output_bytes                          ││Proof: result.txt contains verified                                     │
+│Now 1 · needed 64                           │╰────────────────────────────────────────────────────────────────────────╯
+│Cannot raise · + explains                   │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
+│Attempt 1                                   ││                                                                        │
+│Model codex/execution / none                ││                                                                        │
+│Active <t> · waited <t>                     ││                                                                        │
+│Tokens none reported yet                    ││                                                                        │
+│none yet                                    ││                                                                        │
+│Budget 0 of 3 used                          ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                        │
+│• Supervisor yielded this attempt for resume││                                                                        │
+│• Resource limit: attempt output exceeds 1  ││                                                                        │
+│  bytes or 100000 rows; captured output…    ││                                                                        │
+│• Supervisor started                        ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #1 created: Inspect startup output        ││                                                                        │
+│  pressure                                  ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [+ Raise and resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STARTUP RESOURCE PTY refused · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused: Resource limit: attempt output exceeds 1 bytes or 100000 rows; captured output retai…
+ #1 Inspect startup output pressure
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                             │
+│Limit output_bytes                          ││Proof: result.txt contains verified                                     │
+│Now 1 · needed 64                           │╰────────────────────────────────────────────────────────────────────────╯
+│Cannot raise · + exp╭ Raise and resume ──────────────────────────────────────────────────────────╮────────────────────╮
+│Attempt 1           │Resume refused: output_bytes is 1 bytes, needed 64 bytes and nothing that   │                    │
+│Model codex/executio│caused the pause has changed, so the same work would pause again.           │                    │
+│Active <t> · waited 0│KTASK_OUTPUT_BYTES overrides the stored output_bytes; change or unset that  │                    │
+│Tokens none reported│variable                                                                    │                    │
+│none yet            │KTASK_OUTPUT_BYTES overrides the stored output_bytes; change or unset that  │                    │
+│Budget 0 of 3 used  │variable                                                                    │                    │
+╰────────────────────│New value                                                                   │                    │
+╭ Activity · #1 · l: │▏                                                                           │                    │
+│• command conflict: │Enter / Ctrl-S: raise and resume · Esc: cancel                              │                    │
+│  output_bytes is 1 │                                                                            │                    │
+│• Supervisor yielded│[Copy] [Raise and resume] [Cancel] [Up] [Down]                              │                    │
+│• Resource limit: at│                                                                            │                    │
+│  bytes or 100000 ro╰────────────────────────────────────────────────────────────────────────────╯                    │
+│• Supervisor started                        ││                                                                        │
+│• Current task attempt recorded             ││                                                                        │
+│• #1 created: Inspect startup output        ││                                                                        │
+│  pressure                                  ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [+ Raise and resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+command conflict: Resume refused: output_bytes is 1 bytes, needed 64 bytes and nothing that caused the pause has change…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STARTUP RESOURCE PTY recovered · 120x34 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Queue · complete · no queued work
+ History · 1 shown / 1 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 1 · Finished Attempts Time Usage ────────────────────────────╮╭ Details · click for full ──────────────╮
+│› #1   Done     Inspect startup output pressure <date> 1 <t> 210 tkn        ││Inspect startup output pressure         │
+│                                                                            ││#1 · Done · AI · finished <date>        │
+│                                                                            ││                                        │
+│                                                                            ││Goal: Create result.txt containing      │
+│                                                                            ││verified                                │
+│                                                                            ││                                        │
+│                                                                            ││Check: result.txt contains verified     │
+│                                                                            ││                                        │
+│                                                                            ││Attempts: 1 · 210 new tokens            │
+│                                                                            ││                                        │
+│                                                                            ││Models:                                 │
+│                                                                            ││Execution: codex/execution / none       │
+│                                                                            ││Review: codex/review / none             │
+│                                                                            ││Validation: codex/validation / none     │
+│                                                                            ││Remediation: codex/remediation / none   │
+│                                                                            ││Attempt 1 · Done · Active <t> · waited <t>│
+│                                                                            ││3 calls · uncached 180 · cache read 120 │
+│                                                                            ││· cache write 0 · output 30 · 210 new   │
+│                                                                            ││tokens                                  │
+│                                                                            ││                                        │
+│                                                                            ││                                        │
+╰────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats]
+[? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

@@ -1,0 +1,540 @@
+@@ STARTUP · 110x30 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ #2 Waiting task
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Pending · AI                                ││Goal: Show this project among the others                      │
+│No attempts yet                             ││Proof: Listed on Projects                                     │
+│Run blocked (9) · u Readiness               │╰──────────────────────────────────────────────────────────────╯
+│Model unconfigured / none                   │╭ Log · following ─────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Run is blocked. Press u Readiness for each cause and a direct │
+│                                            ││action. Refresh after setup; Run retries from Current.        │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯│                                                              │
+╭ Activity · #2 · l: all ────────────────────╮│                                                              │
+│• #2 created: Waiting task                  ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ 0 Projects · 110x30 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 1 / 2 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│› * alpha-app Ready   1 queued · #2 Waiting task                ││alpha-app · open                          │
+│    beta-lib  Idle    0 queued · No unfinished task             ││/tmp/ktask-screens-----------------------/│
+│                                                                ││ktask-test-scratch/run-000000/alpha-app   │
+│                                                                ││                                          │
+│                                                                ││State: Ready                              │
+│                                                                ││Runner: not running                       │
+│                                                                ││Current: #2 Waiting task · Pending        │
+│                                                                ││Queue: 1 unfinished · History: 1 finished │
+│                                                                ││                                          │
+│                                                                ││This project is open · Enter returns to   │
+│                                                                ││it.                                       │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ 1 Current · 110x30 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ #2 Waiting task
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Pending · AI                                ││Goal: Show this project among the others                      │
+│No attempts yet                             ││Proof: Listed on Projects                                     │
+│Run blocked (9) · u Readiness               │╰──────────────────────────────────────────────────────────────╯
+│Model unconfigured / none                   │╭ Log · following ─────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Run is blocked. Press u Readiness for each cause and a direct │
+│                                            ││action. Refresh after setup; Run retries from Current.        │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯│                                                              │
+╭ Activity · #2 · l: all ────────────────────╮│                                                              │
+│• #2 created: Waiting task                  ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ 2 Queue · 110x30 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ Queue · 1 shown / 1 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 1 · Model ─────────────────────────────────────────╮╭ Details · click for full ────────────────╮
+│› #2   Pending  Waiting task                        unconfigured││Waiting task                              │
+│                                                                ││#2 · Pending · AI                         │
+│                                                                ││                                          │
+│                                                                ││Goal: Show this project among the others  │
+│                                                                ││                                          │
+│                                                                ││Check: Listed on Projects                 │
+│                                                                ││                                          │
+│                                                                ││Attempts: 0 · none yet                    │
+│                                                                ││                                          │
+│                                                                ││Models:                                   │
+│                                                                ││Execution: unconfigured / none            │
+│                                                                ││Review: unconfigured / none               │
+│                                                                ││Validation: unconfigured / none           │
+│                                                                ││Remediation: unconfigured / none          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done] [x Cancel]
+[R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help]
+[q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ 3 History · 110x30 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ History · 1 shown / 1 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 1 · Finished Attempts Time Usage ──────────────────────╮╭ Details · click for full ──────────╮
+│› #1   Done     Finished task <date> 0 <t> -                          ││Finished task                       │
+│                                                                      ││#1 · Done · AI · finished <date>    │
+│                                                                      ││<date>                              │
+│                                                                      ││                                    │
+│                                                                      ││Goal: Show this project among the   │
+│                                                                      ││others                              │
+│                                                                      ││                                    │
+│                                                                      ││Check: Listed on Projects           │
+│                                                                      ││                                    │
+│                                                                      ││Attempts: 0 · none yet              │
+│                                                                      ││                                    │
+│                                                                      ││Models:                             │
+│                                                                      ││Execution: unconfigured / none      │
+│                                                                      ││Review: unconfigured / none         │
+│                                                                      ││Validation: unconfigured / none     │
+│                                                                      ││Remediation: unconfigured / none    │
+│                                                                      ││                                    │
+╰──────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export]
+[S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ 4 Config · 110x30 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: alpha-app                                                                                          │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
+│limits.                                                                                                     │
+│Preferences: saved per project and instance.                                                                │
+│                                                                                                            │
+│Mouse: Enabled                                                                                              │
+│Run mode: Continue queue                                                                                    │
+│Planner approval: Automatic                                                                                 │
+│Delivery: local via origin/main                                                                             │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is  │
+│missing. CLI require declares prerequisites before a task starts.                                           │
+│                                                                                                            │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                │
+│u User defaults: what new projects start with; preview and apply them here.                                 │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                      │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code,        │
+│documents or art; override per project.                                                                     │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ 5 About · 110x30 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ About
+
+╭ About ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ktask RS · <ver> · ktask-dev                                                                                │
+│A visual workspace for supervising AI coding tasks.                                                         │
+│                                                                                                            │
+│Tasks, revisions, approvals, history and events:                                                            │
+│relational SQLite. Import/export uses real files.                                                           │
+│Execution, checks, review, validation, remediation and task breakdown are real,                             │
+│run by Codex, Claude Code or OpenCode per role.                                                             │
+│                                                                                                            │
+│Production and development use separate data roots.                                                         │
+│--demo never opens SQLite. --paths shows data locations.                                                    │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [Esc Back] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ 0 Projects #2 · 110x30 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 1 / 2 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│› * alpha-app Ready   1 queued · #2 Waiting task                ││alpha-app · open                          │
+│    beta-lib  Idle    0 queued · No unfinished task             ││/tmp/ktask-screens-----------------------/│
+│                                                                ││ktask-test-scratch/run-000000/alpha-app   │
+│                                                                ││                                          │
+│                                                                ││State: Ready                              │
+│                                                                ││Runner: not running                       │
+│                                                                ││Current: #2 Waiting task · Pending        │
+│                                                                ││Queue: 1 unfinished · History: 1 finished │
+│                                                                ││                                          │
+│                                                                ││This project is open · Enter returns to   │
+│                                                                ││it.                                       │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ AFTER KEY 6 · 110x30 · keyboard
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 1 / 2 · * open ─────────────────────────────────────╮╭ Project · click to open ─────────────────╮
+│› * alpha-app Ready   1 queued · #2 Waiting task                ││alpha-app · open                          │
+│    beta-lib  Idle    0 queued · No unfinished task             ││/tmp/ktask-screens-----------------------/│
+│                                                                ││ktask-test-scratch/run-000000/alpha-app   │
+│                                                                ││                                          │
+│                                                                ││State: Ready                              │
+│                                                                ││Runner: not running                       │
+│                                                                ││Current: #2 Waiting task · Pending        │
+│                                                                ││Queue: 1 unfinished · History: 1 finished │
+│                                                                ││                                          │
+│                                                                ││This project is open · Enter returns to   │
+│                                                                ││it.                                       │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+│                                                                ││                                          │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HELP · 110x30 · keyboard
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you · 0 running
+ 0 Projects   1 ╭ Keyboard help ─────────────────────────────────────────────────────────────╮
+ Current #2 · Pe│0 Projects  1 Current  2 Queue  3 History  4 Config  5 About                │
+ Queue preferenc│Tab / Shift-Tab: next / previous screen                                     │
+ Projects · 2 re│Click tabs, rows, buttons, and fields; wheel scrolls.                       │
+ Each project ke│Drag body text to select; click Copy or press F6 for OSC 52.                │
+╭ Projects · 1 /│Ctrl-Shift-C copies selection when terminal reports modifiers.              │───────────────╮
+│› * alpha-app R│F2 selects a text pane; F2 again moves to the next pane.                    │               │
+│    beta-lib  I│Shift-arrows extend selection; Enter copies; Esc clears.                    │--------------/│
+│               │F7 releases mouse capture for native terminal selection.                    │f4/alpha-app   │
+│               │Current: r Run / Resume / Retry / Answer, p pause, s stop (back to Pending) │               │
+│               │Current: D mark done, x cancel pending, R supersede pending                 │               │
+│               │Current: c models/limits, e edit, b break down; v approve, n reject         │               │
+│               │Current: w answer, o report / raw log, u readiness, m run mode              │Pending        │
+│               │Queue: a add, i insert, e edit, m move, b break down, r run current         │ry: 1 finished │
+│               │Queue: s stop, D mark done, x cancel, R supersede, o import, E export       │               │
+│               │Queue: c models/limits; v approve; n reject                                 │r returns to   │
+│               │Queue/History: / search, f filter, Esc clear                                │               │
+│               │History: C copy to queue, V reviews, F failures                             │               │
+│               │j/k or arrows: move/scroll; PgUp/PgDn: page                                 │               │
+│               │Home/End: first/last; End follows current output                            │               │
+│               │Enter: inspect selected task; [ / ]: inspect attempts                       │               │
+│               │Details: s summary, v reviews, f failures, g results, o output, t           │               │
+│               │transcripts                                                                 │               │
+╰───────────────│Wheel / PgUp / PgDn: scroll · Esc: close                                    │───────────────╯
+[Copy] [Enter Op│                                                                            │
+                │[Copy] [Close] [Up] [Down]                                                  │
+                │                                                                            │
+Runs happen in a╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STARTUP · 70x22 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you ·
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ #2 Waiting task
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · AI                ││Goal: Show this project among the oth…│
+│No attempts yet             ││Proof: Listed on Projects             │
+│Run blocked (9) · u Readines│╰──────────────────────────────────────╯
+│Model unconfigured / none   │╭ Log · following ─────────────────────╮
+│Budget 0 of 3 used          ││Run is blocked. Press u Readiness for │
+╰────────────────────────────╯│each cause and a direct action.       │
+╭ Activity · #2 · l: all ────╮│Refresh after setup; Run retries from │
+│• #2 created: Waiting task  ││Current.                              │
+│                            ││                                      │
+│                            ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models]
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ 0 Projects · 70x22 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you ·
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 1 / 2 · * open ─────────────╮╭ Project · click to open ─╮
+│› * alpha-app Ready   1 queued · #2 Wai…││alpha-app · open          │
+│    beta-lib  Idle    0 queued · No unf…││/tmp/ktask-screens--------│
+│                                        ││---------------/ktask-test│
+│                                        ││-scratch/run-000000/alpha-│
+│                                        ││app                       │
+│                                        ││                          │
+│                                        ││State: Ready              │
+│                                        ││Runner: not running       │
+│                                        ││Current: #2 Waiting task ·│
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix]
+[? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ 1 Current · 70x22 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you ·
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ #2 Waiting task
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · AI                ││Goal: Show this project among the oth…│
+│No attempts yet             ││Proof: Listed on Projects             │
+│Run blocked (9) · u Readines│╰──────────────────────────────────────╯
+│Model unconfigured / none   │╭ Log · following ─────────────────────╮
+│Budget 0 of 3 used          ││Run is blocked. Press u Readiness for │
+╰────────────────────────────╯│each cause and a direct action.       │
+╭ Activity · #2 · l: all ────╮│Refresh after setup; Run retries from │
+│• #2 created: Waiting task  ││Current.                              │
+│                            ││                                      │
+│                            ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models]
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+@@ 2 Queue · 70x22 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you ·
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ Queue · 1 shown / 1 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 1 ─────────────────────────╮╭ Details · click for full ╮
+│› #2   Pending  Waiting task            ││Waiting task              │
+│                                        ││#2 · Pending · AI         │
+│                                        ││                          │
+│                                        ││Goal: Show this project   │
+│                                        ││among the others          │
+│                                        ││                          │
+│                                        ││Check: Listed on Projects │
+│                                        ││                          │
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move]
+[b Break down] [c Models] [D Mark done] [x Cancel] [R Supersede]
+[o Import] [E Export] [Enter Details] [f Filter] [/ Search]
+[Esc Clear] [S Stats] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ 3 History · 70x22 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you ·
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ History · 1 shown / 1 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 1 · Finished Attempts Time Usage ────────────────────╮
+│› #1   Done     Finished task <date> 0 <t> -                        │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures]
+[f Filter] [/ Search] [Esc Clear] [E Export] [S Stats] [? Help]
+[q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ 4 Config · 70x22 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you ·
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ Config
+
+╭ Config ────────────────────────────────────────────────────────────╮
+│Project: alpha-app                                                  │
+│Storage: SQLite output and instance check artifacts. k: usage and   │
+│cleanup · b: build caches · R: resource limits.                     │
+│Preferences: saved per project and instance.                        │
+│                                                                    │
+│Mouse: Enabled                                                      │
+│Run mode: Continue queue                                            │
+│Planner approval: Automatic                                         │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ 5 About · 70x22 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you ·
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ About
+
+╭ About ─────────────────────────────────────────────────────────────╮
+│ktask RS · <ver> · ktask-dev                                        │
+│A visual workspace for supervising AI coding tasks.                 │
+│                                                                    │
+│Tasks, revisions, approvals, history and events:                    │
+│relational SQLite. Import/export uses real files.                   │
+│Execution, checks, review, validation, remediation and task         │
+│breakdown are real,                                                 │
+│run by Codex, Claude Code or OpenCode per role.                     │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [Esc Back] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ 0 Projects #2 · 70x22 · keyboard+mouse
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you ·
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 1 / 2 · * open ─────────────╮╭ Project · click to open ─╮
+│› * alpha-app Ready   1 queued · #2 Wai…││alpha-app · open          │
+│    beta-lib  Idle    0 queued · No unf…││/tmp/ktask-screens--------│
+│                                        ││---------------/ktask-test│
+│                                        ││-scratch/run-000000/alpha-│
+│                                        ││app                       │
+│                                        ││                          │
+│                                        ││State: Ready              │
+│                                        ││Runner: not running       │
+│                                        ││Current: #2 Waiting task ·│
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix]
+[? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ AFTER KEY 6 · 70x22 · keyboard
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you ·
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Queue preference · last task · m: run mode in Current
+ Projects · 2 registered · 0 running · 0 need you
+ Each project keeps its own queue and background runner
+╭ Projects · 1 / 2 · * open ─────────────╮╭ Project · click to open ─╮
+│› * alpha-app Ready   1 queued · #2 Wai…││alpha-app · open          │
+│    beta-lib  Idle    0 queued · No unf…││/tmp/ktask-screens--------│
+│                                        ││---------------/ktask-test│
+│                                        ││-scratch/run-000000/alpha-│
+│                                        ││app                       │
+│                                        ││                          │
+│                                        ││State: Ready              │
+│                                        ││Runner: not running       │
+│                                        ││Current: #2 Waiting task ·│
+╰────────────────────────────────────────╯╰──────────────────────────╯
+[Copy] [Enter Open] [m Move] [D Delete] [i Investigate] [f Fix]
+[? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not…
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HELP · 70x22 · keyboard
+ ktask-dev  / alpha-app   SQLite · real tasks   Projects: 0 need you ·
+╭ Keyboard help ─────────────────────────────────────────────────────╮
+│0 Projects  1 Current  2 Queue  3 History  4 Config  5 About        │
+│Tab / Shift-Tab: next / previous screen                             │
+│Click tabs, rows, buttons, and fields; wheel scrolls.               │
+│Drag body text to select; click Copy or press F6 for OSC 52.        │
+│Ctrl-Shift-C copies selection when terminal reports modifiers.      │
+│F2 selects a text pane; F2 again moves to the next pane.            │
+│Shift-arrows extend selection; Enter copies; Esc clears.            │
+│F7 releases mouse capture for native terminal selection.            │
+│Current: r Run / Resume / Retry / Answer, p pause, s stop (back to  │
+│Pending)                                                            │
+│Current: D mark done, x cancel pending, R supersede pending         │
+│Current: c models/limits, e edit, b break down; v approve, n reject │
+│Current: w answer, o report / raw log, u readiness, m run mode      │
+│Queue: a add, i insert, e edit, m move, b break down, r run current │
+│Wheel / PgUp / PgDn: scroll · Esc: close                            │
+│                                                                    │
+│[Copy] [Close] [Up] [Down]                                          │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

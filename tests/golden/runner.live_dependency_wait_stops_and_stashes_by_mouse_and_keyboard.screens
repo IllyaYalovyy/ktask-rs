@@ -1,0 +1,29 @@
+@@ dependency live stop · 100x28 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Session: Run one · stopped · Stopped by owner
+ #1 Stop live dependency wait
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ───────────────────╮
+│Tokens none reported yet                    ││Outcome: Stopped by owner                           │
+│? new tokens                                ││                                                    │
+╰────────────────────────────────────────────╯│Execution · failed · codex/execution verdict:       │
+╭ Activity · #1 · l: all ────────────────────╮│executable missing-runtime-tool 1.2.3: fixture      │
+│• Back to Pending; the next Run starts fresh││tool: command not found                             │
+│• Stopped by owner                          ││                                                    │
+│• Uncommitted changes saved as git stash    ││Supervisor outcome: Stopped by owner                │
+│  "ktask: task #1 attempt #1"               ││                                                    │
+│• Supervisor yielded this attempt for resume││                                                    │
+│• executable missing-runtime-tool 1.2.3:    ││                                                    │
+│  fixture tool: command not found           ││                                                    │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down]
+[u Readiness] [m Run mode] [Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+#1 stopped · back to Pending · changes stashed as "ktask: task #1 attempt #1" (git stash list)
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

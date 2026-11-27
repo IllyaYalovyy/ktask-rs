@@ -1,0 +1,46 @@
+@@ CONFIG FIRST PAGE · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Configuration ─────────────────────────────────────────────────────╮
+│Mouse and keyboard are supported equally.                           │
+│Changing Demo dataset resets this mock workspace only.              │
+│Mouse                                                               │
+│< Enabled >   click / Space to change                               │
+│Step delay (ms)                                                     │
+│400                                                                 │
+│Demo dataset                                                        │
+│< Keep >   click / Space to change                                  │
+│Planner approval                                                    │
+│< Automatic >   click / Space to change                             │
+│Cleanup simulation                                                  │
+│< Success >   click / Space to change                               │
+│Same-task retry                                                     │
+│< Keep useful work >   click / Space to change                      │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ CONFIG SECOND PAGE · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Configuration ─────────────────────────────────────────────────────╮
+│Mouse and keyboard are supported equally.                           │
+│Changing Demo dataset resets this mock workspace only.              │
+│Step delay (ms)                                                     │
+│400                                                                 │
+│Demo dataset                                                        │
+│< Keep >   click / Space to change                                  │
+│Planner approval                                                    │
+│< Automatic >   click / Space to change                             │
+│Cleanup simulation                                                  │
+│< Success >   click / Space to change                               │
+│Same-task retry                                                     │
+│< Clean after checkpoint >   click / Space to change                │
+│Continue queue                                                      │
+│< Enabled >   click / Space to change                               │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

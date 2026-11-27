@@ -1,0 +1,111 @@
+@@ retargeted queue before run · 130x36 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Session: Run one · stopped · Next #2 · Stopped: Change delivery settings
+ #1 Retain verified checkpoint
+ Ready · r Run queue; checks and repair run automatically
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                                       │
+│Attempt 1                                   ││Proof: result.txt contains verified                                               │
+│Model codex/validation / none               │╰──────────────────────────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ─────────────────────────────────────────────────╮
+│Tokens 180 new · 120 cached · 30 out        ││Outcome: Stopped: Change delivery settings                                        │
+│210 new tokens                              ││                                                                                  │
+│Budget 0 of 3 used                          ││Worker claim (unverified):                                                        │
+│Can run · u Readiness                       ││Verified result                                                                   │
+│Execution   ✓ succeeded                     ││                                                                                  │
+│Checks      ✓ succeeded                     ││Supervisor check build · succeeded                                                │
+│Review      ✓ succeeded                     ││Check build: test counts unavailable                                              │
+│Validation  ✓ succeeded                     ││Check exited 0                                                                    │
+│                                            ││                                                                                  │
+╰────────────────────────────────────────────╯│Review · succeeded · codex/review verdict: Verified result                        │
+╭ Activity · #1 · l: all ────────────────────╮│                                                                                  │
+│• Back to Pending; the next Run starts fresh││Validation · succeeded · codex/validation verdict: Verified result                │
+│• Stopped: Change delivery settings         ││                                                                                  │
+│• Supervisor yielded this attempt for resume││Supervisor outcome: Stopped: Change delivery settings                             │
+│• Paused; useful work and session retained  ││                                                                                  │
+│• Pause requested; stopping worker          ││                                                                                  │
+│• Workflow · Complete · repair round 0/10   ││                                                                                  │
+│• Workflow · Validate · repair round 0/10   ││                                                                                  │
+│• Workflow · Review · repair round 0/10     ││                                                                                  │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ retargeted queue after run · 130x36 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 2
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                                 │
+│Inspect results in History, or add more work.                                                                                   │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ retargeted queue history · 130x36 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 2
+ Session: Queue · complete · no queued work
+ History · 2 shown / 2 total · closed tasks
+ Filter: All  |  Search: / to search
+╭ History · 1 / 2 · Finished Attempts Time Usage ───────────────────────────────────╮╭ Details · click for full ─────────────────╮
+│› #2   Done     Second queued task uses alternate <date> 1 <t> 210 tkn             ││Second queued task uses alternate          │
+│  #1   Done     Retain verified checkpoint <date> 2 <t> 350 tkn                    ││#2 · Done · AI · finished <date>           │
+│                                                                                   ││                                           │
+│                                                                                   ││Goal: Create result.txt containing verified│
+│                                                                                   ││                                           │
+│                                                                                   ││Check: result.txt contains verified        │
+│                                                                                   ││                                           │
+│                                                                                   ││Attempts: 1 · 210 new tokens               │
+│                                                                                   ││                                           │
+│                                                                                   ││Models:                                    │
+│                                                                                   ││Execution: codex/execution / none          │
+│                                                                                   ││Review: codex/review / none                │
+│                                                                                   ││Validation: codex/validation / none        │
+│                                                                                   ││Remediation: codex/remediation / none      │
+│                                                                                   ││Attempt 1 · Done · Active <t>              │
+│                                                                                   ││3 calls · uncached 180 · cache read 120 ·  │
+│                                                                                   ││cache write 0 · output 30 · 210 new tokens │
+│                                                                                   ││                                           │
+│                                                                                   ││                                           │
+│                                                                                   ││                                           │
+│                                                                                   ││                                           │
+│                                                                                   ││                                           │
+│                                                                                   ││                                           │
+╰───────────────────────────────────────────────────────────────────────────────────╯╰───────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures] [f Filter] [/ Search] [Esc Clear] [E Export] [S Stats] [? Help]
+[q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

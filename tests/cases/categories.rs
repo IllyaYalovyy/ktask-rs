@@ -777,9 +777,9 @@ fn tsv_export_keeps_the_category_and_lenses_and_older_exports_still_import() -> 
     Ok(())
 }
 
-fn screen(t: &Terminal, label: &str) -> Result<String> {
+fn screen(t: &Terminal, mouse: bool, label: &str) -> Result<String> {
     let rendered = t.screen(label, |s| s.contains(label))?;
-    println!("{label}\n{rendered}");
+    crate::support::record(label, mouse, &rendered);
     Ok(rendered)
 }
 
@@ -865,7 +865,7 @@ impl Flow {
     /// Scrolls the dialog body, by key or by its Down button, until `needle` is on screen.
     fn scroll_to(&mut self, needle: &str) -> Result<String> {
         let mouse = self.mouse;
-        let mut screen = self.t.current_screen();
+        let mut screen = self.t.still("preview", |_| true)?;
         for _ in 0..24 {
             if screen.contains(needle) {
                 return Ok(screen);
@@ -883,7 +883,7 @@ impl Flow {
 
     fn open_list(&mut self) -> Result<String> {
         self.press("w", "w Work categories")?;
-        screen(&self.t, "A work category tells AI turns")
+        screen(&self.t, self.mouse, "A work category tells AI turns")
     }
 
     fn choose(&mut self, entries: &[&str], from: usize, times: usize) -> Result {
@@ -903,7 +903,7 @@ impl Flow {
             assert!(list.contains(line), "{line}\n{list}");
         }
         self.apply()?;
-        let form = screen(&self.t, "A new category starts as a copy")?;
+        let form = screen(&self.t, self.mouse, "A new category starts as a copy")?;
         assert!(
             form.contains("task #1") && form.contains("The supervisor's rules"),
             "{form}"
@@ -921,7 +921,7 @@ impl Flow {
         let error = self.t.screen("invalid placeholder reported", |s| {
             s.contains("Unknown placeholder {{nope}}")
         })?;
-        println!("INVALID PLACEHOLDER mouse={}\n{error}", self.mouse);
+        crate::support::record("INVALID PLACEHOLDER", self.mouse, &error);
         assert!(error.contains("The execution template"), "{error}");
         assert!(
             self.service
@@ -949,6 +949,7 @@ impl Flow {
         self.apply()?;
         let preview = screen(
             &self.t,
+            self.mouse,
             "Preview of the review prompt for task #1. Nothing is saved.",
         )?;
         // The owner's template comes first. Its heading is on the first screen; scrolling
@@ -968,11 +969,11 @@ impl Flow {
                     "{shown}"
                 );
             }
-            println!("PREVIEW {line} mouse={}\n{shown}", self.mouse);
+            crate::support::record(&format!("PREVIEW {line}"), self.mouse, &shown);
         }
         let rules =
             self.scroll_to("== Supervisor rules: fixed, not editable by the category ==")?;
-        println!("PREVIEW RULES mouse={}\n{rules}", self.mouse);
+        crate::support::record("PREVIEW RULES", self.mouse, &rules);
         assert!(
             self.service
                 .category_in(Scope::User, "Poster art")?
@@ -981,7 +982,7 @@ impl Flow {
         // Back to Save through the remaining choices, then save.
         cycle(&mut self.t, self.mouse, "Action", &ACTIONS[..5], 2, 3)?;
         self.apply()?;
-        screen(&self.t, "Saved user category Poster art")?;
+        screen(&self.t, self.mouse, "Saved user category Poster art")?;
         let saved = self
             .service
             .category_in(Scope::User, "Poster art")?
@@ -1016,13 +1017,13 @@ impl Flow {
             "5. Poster art (user, no checks)",
         ];
         self.choose(&entries, 0, 5)?;
-        screen(&self.t, "Category Poster art (user)")?;
+        screen(&self.t, self.mouse, "Category Poster art (user)")?;
         self.replace("Category name", "", "Banner")?;
         self.apply()?;
         let refused = self.t.screen("rename refused", |s| {
             s.contains("Category Banner already exists in the user scope")
         })?;
-        println!("RENAME REFUSED mouse={}\n{refused}", self.mouse);
+        crate::support::record("RENAME REFUSED", self.mouse, &refused);
         let after = self.service.category_in(Scope::User, "Banner")?.unwrap();
         assert_eq!(after, before, "the other category must not change");
         assert!(
@@ -1052,7 +1053,7 @@ impl Flow {
             "4. Poster art (project, checks apply)",
         ];
         self.choose(&entries, 0, 4)?;
-        screen(&self.t, "Category Poster art (project)")?;
+        screen(&self.t, self.mouse, "Category Poster art (project)")?;
         self.tab("\t\t")?;
         cycle(
             &mut self.t,
@@ -1066,7 +1067,7 @@ impl Flow {
         let refused = self.t.screen("scope switch refused", |s| {
             s.contains("Category Poster art already exists in the user scope")
         })?;
-        println!("SCOPE SWITCH REFUSED mouse={}\n{refused}", self.mouse);
+        crate::support::record("SCOPE SWITCH REFUSED", self.mouse, &refused);
         assert_eq!(
             self.service
                 .category_in(Scope::User, "Poster art")?
@@ -1094,7 +1095,7 @@ impl Flow {
             "4. Poster art (user, no checks)",
         ];
         self.choose(&entries, 0, 4)?;
-        let form = screen(&self.t, "Category Poster art (user)")?;
+        let form = screen(&self.t, self.mouse, "Category Poster art (user)")?;
         assert!(
             form.contains("< Delete (inherit again) >") || form.contains("Action"),
             "{form}"
@@ -1118,7 +1119,7 @@ impl Flow {
             1,
         )?;
         self.apply()?;
-        screen(&self.t, "Saved project category Poster art")?;
+        screen(&self.t, self.mouse, "Saved project category Poster art")?;
         let project = self
             .service
             .category_in(Scope::Project, "Poster art")?
@@ -1145,7 +1146,7 @@ impl Flow {
             s.contains("Existing") && !s.contains("A work category")
         })?;
         self.press("a", "a Add")?;
-        screen(&self.t, "Work category")?;
+        screen(&self.t, self.mouse, "Work category")?;
         for (label, text) in [
             ("Title", "Poster task"),
             ("Goal", "Print it"),
@@ -1180,7 +1181,7 @@ impl Flow {
 
     fn delete_the_override(&mut self) -> Result {
         self.press("4", "4 Config")?;
-        screen(&self.t, "Storage: SQLite")?;
+        screen(&self.t, self.mouse, "Storage: SQLite")?;
         self.open_list()?;
         let entries = [
             "New category",
@@ -1190,11 +1191,11 @@ impl Flow {
             "4. Poster art (project, checks apply)",
         ];
         self.choose(&entries, 0, 4)?;
-        screen(&self.t, "Category Poster art (project)")?;
+        screen(&self.t, self.mouse, "Category Poster art (project)")?;
         self.tab("\t")?;
         cycle(&mut self.t, self.mouse, "Action", &ACTIONS, 0, 5)?;
         self.apply()?;
-        screen(&self.t, "Deleted project category Poster art")?;
+        screen(&self.t, self.mouse, "Deleted project category Poster art")?;
         assert!(
             self.service
                 .category_in(Scope::Project, "Poster art")?
@@ -1228,13 +1229,13 @@ fn real_category_flows_create_preview_override_select_and_delete_with_keyboard_a
         let mut service = seeded(root, root)?;
         service.create(&[definition("Existing", Kind::Ai, None)], None, true)?;
         let mut t = Terminal::open_real(BIN, root, 100, 70)?;
-        screen(&t, "Existing")?;
+        screen(&t, mouse, "Existing")?;
         if mouse {
             t.click("4 Config")?;
         } else {
             t.send("4")?;
         }
-        let config = screen(&t, "Storage: SQLite")?;
+        let config = screen(&t, mouse, "Storage: SQLite")?;
         assert!(config.contains("w Work categories"), "{config}");
         let mut flow = Flow { t, mouse, service };
         flow.create_poster_art()?;

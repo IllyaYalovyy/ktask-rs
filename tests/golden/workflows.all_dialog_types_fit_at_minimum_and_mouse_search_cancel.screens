@@ -1,0 +1,391 @@
+@@ MINIMUM DIALOG Stop #1 Recover a failed check · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ #1 Recover a failed check
+╭ Stop #1 Recover a failed check ────────────────────────────────────╮
+│The worker stops and this attempt ends. Its uncommitted changes are │
+│saved as a git stash (git stash pop restores them).                 │
+│The task returns to Pending; Run starts it fresh with full limits.  │
+│                                                                    │
+│Reason (optional)                                                   │
+│▏                                                                   │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models]
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Mock workspace · changes last only for this session
+@@ MINIMUM DIALOG Mark done #1 Recover a failed check · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ #1 Recover a failed check
+╭ Mark done #1 Recover a failed check ───────────────────────────────╮
+│Records the task as done by your decision and moves it to History.  │
+│A live attempt stops first and its uncommitted changes are stashed; │
+│commit them first to keep them in the tree.                         │
+│                                                                    │
+│Reason (optional)                                                   │
+│▏                                                                   │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models]
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Mock workspace · changes last only for this session
+@@ MINIMUM DIALOG Edit task · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Edit task ─────────────────────────────────────────────────────────╮
+│Title, goal, and acceptance check are required.                     │
+│Blank execution fields use defaults; with a new model, blank effort │
+│means none.                                                         │
+│Title                                                               │
+│Recover a failed check▏                                             │
+│Goal                                                                │
+│Include every task on the final queue page.                         │
+│Acceptance check                                                    │
+│All 240 tasks are reachable.                                        │
+│Kind                                                                │
+│< AI >   click / Space to change                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Mock workspace · changes last only for this session
+@@ MINIMUM DIALOG Add task · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Add task ──────────────────────────────────────────────────────────╮
+│Title, goal, and acceptance check are required.                     │
+│Blank execution fields use defaults; with a new model, blank effort │
+│Title                                                               │
+│▏                                                                   │
+│Goal                                                                │
+│                                                                    │
+│Acceptance check                                                    │
+│                                                                    │
+│Kind                                                                │
+│< AI >   click / Space to change                                    │
+│Execution provider/model (blank = default)                          │
+│                                                                    │
+│Execution effort (optional)                                         │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Mock workspace · changes last only for this session
+@@ MINIMUM DIALOG Project statistics · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+╭ Project statistics · simulated ────────────────────────────────────╮
+│Tasks: 240                                                          │
+│Queue: 120                                                          │
+│History: 120                                                        │
+│Completed: 120                                                      │
+│Failed attempts: 1                                                  │
+│Execution steps: 726                                                │
+│Elapsed execution: <t> (simulated)                                  │
+│Total cost: $3.68 (simulated)                                       │
+│Cancelled: 0 · Superseded: 0                                        │
+│Wheel / PgUp / PgDn: scroll · Esc: close                            │
+│                                                                    │
+│[Copy] [Close] [Up] [Down]                                          │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [r Retry] [s Stop] [T Restart] [D Mark done] [c Models]
+[e Edit] [u Readiness] [m Run mode] [Enter Details] [a Add]
+[i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+Mock workspace · changes last only for this session
+@@ MINIMUM DIALOG Keyboard help · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Keyboard help ─────────────────────────────────────────────────────╮
+│0 Projects  1 Current  2 Queue  3 History  4 Config  5 About        │
+│Tab / Shift-Tab: next / previous screen                             │
+│Click tabs, rows, buttons, and fields; wheel scrolls.               │
+│Drag body text to select; click Copy or press F6 for OSC 52.        │
+│Ctrl-Shift-C copies selection when terminal reports modifiers.      │
+│F2 selects a text pane; F2 again moves to the next pane.            │
+│Shift-arrows extend selection; Enter copies; Esc clears.            │
+│F7 releases mouse capture for native terminal selection.            │
+│Current: r Run / Resume / Retry / Answer, p pause, s stop (back to  │
+│Pending)                                                            │
+│Current: D mark done, x cancel pending, R supersede pending         │
+│Current: c models/limits, e edit, b break down; v approve, n reject │
+│Current: w answer, o report / raw log, u readiness, m run mode      │
+│Queue: a add, i insert, e edit, m move, b break down, r run current │
+│Wheel / PgUp / PgDn: scroll · Esc: close                            │
+│                                                                    │
+│[Copy] [Close] [Up] [Down]                                          │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Mock workspace · changes last only for this session
+@@ MINIMUM DIALOG Task details / attempts · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Task details / attempts ───────────────────────────────────────────╮
+│#1 Recover a failed check                                           │
+│Failed · AI                                                         │
+│                                                                    │
+│Goal: Include every task on the final queue page.                   │
+│Acceptance check: All 240 tasks are reachable.                      │
+│Total cost: $0.08 (simulated)                                       │
+│Answer: None                                                        │
+│                                                                    │
+│Attempt 1 / 1                                                       │
+│Failed: final row omitted                                           │
+│PASS  queue fixture 01                                              │
+│PASS  queue fixture 02                                              │
+│PASS  queue fixture 03                                              │
+│PASS  queue fixture 04                                              │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Mock workspace · changes last only for this session
+@@ MINIMUM DIALOG Cancel #2 Approve the queue interaction · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Queue · 120 shown / 120 total · execution order
+╭ Cancel #2 Approve the queue interaction ───────────────────────────╮
+│The task moves to History as cancelled. Copy to queue brings it     │
+│back as a new task.                                                 │
+│                                                                    │
+│                                                                    │
+│Reason (optional)                                                   │
+│▏                                                                   │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[c Models] [D Mark done] [x Cancel] [R Supersede] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats]
+[? Help] [q Quit]
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MINIMUM DIALOG Supersede #2 Approve the queue interaction · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Queue · 120 shown / 120 total · execution order
+╭ Supersede #2 Approve the queue interaction ────────────────────────╮
+│Name the tasks that replace this one. It moves to History as        │
+│superseded.                                                         │
+│Replaced by task IDs (comma separated)                              │
+│▏                                                                   │
+│Reason (optional)                                                   │
+│                                                                    │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[c Models] [D Mark done] [x Cancel] [R Supersede] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats]
+[? Help] [q Quit]
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MINIMUM DIALOG Mark done #2 Approve the queue interaction · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Queue · 120 shown / 120 total · execution order
+╭ Mark done #2 Approve the queue interaction ────────────────────────╮
+│Records the task as done by your decision and moves it to History.  │
+│A live attempt stops first and its uncommitted changes are stashed; │
+│commit them first to keep them in the tree.                         │
+│                                                                    │
+│Reason (optional)                                                   │
+│▏                                                                   │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[c Models] [D Mark done] [x Cancel] [R Supersede] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats]
+[? Help] [q Quit]
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MINIMUM DIALOG Break down task · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Queue · 120 shown / 120 total · execution order
+╭ Break down task · capable model (mock) ────────────────────────────╮
+│Replace #2 in place with the edited subtasks below.                 │
+│Original and attempts move to History. Cancel changes nothing.      │
+│Step 1 title                                                        │
+│Implement the focused change▏                                       │
+│Step 2 title                                                        │
+│Verify the acceptance checks                                        │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[c Models] [D Mark done] [x Cancel] [R Supersede] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats]
+[? Help] [q Quit]
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MINIMUM DIALOG Move pending task · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Queue · 120 shown / 120 total · execution order
+╭ Move pending task ─────────────────────────────────────────────────╮
+│Position: after #120 / before end                                   │
+│Choose a position in the full execution order.                      │
+│Blank means end of Queue.                                           │
+│                                                                    │
+│Before task ID                                                      │
+│▏                                                                   │
+│Alt-Up/Down: position · Ctrl-S: apply · Esc: cancel                 │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Earlier] [Later]               │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[c Models] [D Mark done] [x Cancel] [R Supersede] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats]
+[? Help] [q Quit]
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MINIMUM DIALOG Insert task · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Insert task ───────────────────────────────────────────────────────╮
+│Position: after #120 / before end                                   │
+│Title, goal, and acceptance check are required.                     │
+│Title                                                               │
+│▏                                                                   │
+│Goal                                                                │
+│                                                                    │
+│Acceptance check                                                    │
+│                                                                    │
+│Kind                                                                │
+│< AI >   click / Space to change                                    │
+│Before task ID                                                      │
+│                                                                    │
+│Execution provider/model (blank = default)                          │
+│                                                                    │
+│Alt-Up/Down: position · Ctrl-S: apply · Esc: cancel                 │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +] [Earlier] │
+│[Later]                                                             │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MINIMUM DIALOG Import · in-memory · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Queue · 120 shown / 120 total · execution order
+╭ Import · in-memory demo files ─────────────────────────────────────╮
+│Available: /demo/import.tsv (valid), /demo/invalid.tsv              │
+│Only simulated files are read; no disk access.                      │
+│                                                                    │
+│                                                                    │
+│Source                                                              │
+│/demo/import.tsv▏                                                   │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[c Models] [D Mark done] [x Cancel] [R Supersede] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats]
+[? Help] [q Quit]
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MINIMUM DIALOG Export · in-memory · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ Queue · 120 shown / 120 total · execution order
+╭ Export · in-memory demo files ─────────────────────────────────────╮
+│Writes to the session's virtual file shelf, NOT disk.               │
+│Use the destination in Import to read it back.                      │
+│Destination                                                         │
+│/demo/export.tsv▏                                                   │
+│Scope                                                               │
+│< Queue >   click / Space to change                                 │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[c Models] [D Mark done] [x Cancel] [R Supersede] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats]
+[? Help] [q Quit]
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MINIMUM DIALOG Copy to queue · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Failed   |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ History · 120 shown / 120 total · read-only
+╭ Copy to queue #121 Queue pagination · case 121 ────────────────────╮
+│Adds a new pending task with the same definition. The original      │
+│stays in History unchanged.                                         │
+│                                                                    │
+│                                                                    │
+│Before task ID (blank = end of Queue)                               │
+│▏                                                                   │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+[Copy] [C Copy to queue] [Enter Details] [V Reviews] [F Failures]
+[f Filter] [/ Search] [Esc Clear] [E Export] [S Stats] [? Help]
+[q Quit]
+Mock workspace · changes last only for this session
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MINIMUM RESET · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+╭ Reset mock workspace? ─────────────────────────────────────────────╮
+│Apply resets all session tasks to the chosen demo dataset.          │
+│No production data is touched. Cancel keeps the workspace.          │
+│Mouse                                                               │
+│< Enabled >   click / Space to change                               │
+│Step delay (ms)                                                     │
+│400                                                                 │
+│Demo dataset                                                        │
+│< Empty >   click / Space to change                                 │
+│Planner approval                                                    │
+│< Automatic >   click / Space to change                             │
+│Cleanup simulation                                                  │
+│< Success >   click / Space to change                               │
+│Same-task retry                                                     │
+│< Keep useful work >   click / Space to change                      │
+│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply          │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]           │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

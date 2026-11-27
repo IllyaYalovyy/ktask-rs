@@ -1,0 +1,217 @@
+@@ KEYBOARD NEW TASK FORM · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects╭ Add task ──────────────────────────────────────────────────────────────────╮
+ No current│Save creates a task in SQLite. Blank execution fields use project defaults; │
+ Queue pref│with a new model, blank effort means none.                                  │
+ Current Ta│Title                                                                       │
+           │▏                                                                           │
+╭ Ready ───│Goal                                                                        │──────────╮
+│No current│                                                                            │          │
+│Set up thi│Acceptance check                                                            │          │
+│          │                                                                            │          │
+│          │Kind                                                                        │          │
+│          │< AI >   click / Space to change                                            │          │
+│          │Execution provider/model (blank = default)                                  │          │
+│          │                                                                            │          │
+│          │Execution effort (optional)                                                 │          │
+│          │                                                                            │          │
+│          │Approval                                                                    │          │
+│          │< Ready >   click / Space to change                                         │          │
+│          │Work category                                                               │          │
+│          │< Default >   click / Space to change                                       │          │
+│          │Review lens 1                                                               │          │
+│          │< Project default >   click / Space to change                               │          │
+│          │Review lens 2                                                               │          │
+│          │< - >   click / Space to change                                             │          │
+╰──────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────╯
+[Copy] [u R│                                                                            │uit]
+           │[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]                   │
+           │                                                                            │
+Runs happen╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ KEYBOARD MODEL SAVED · 100x30 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ Queue · 1 shown / 1 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 1 · Model ───────────────────────────────────╮╭ Details · click for full ────────────╮
+│› #1   Pending  Keyboard model task      codex/worker high││Keyboard model task                   │
+│                                                          ││#1 · Pending · AI                     │
+│                                                          ││                                      │
+│                                                          ││Goal: Goal                            │
+│                                                          ││                                      │
+│                                                          ││Check: Criterion                      │
+│                                                          ││                                      │
+│                                                          ││Attempts: 0 · none yet                │
+│                                                          ││                                      │
+│                                                          ││Models:                               │
+│                                                          ││Execution: codex/worker / high        │
+│                                                          ││Review: unconfigured / none           │
+│                                                          ││Validation: unconfigured / none       │
+│                                                          ││Remediation: unconfigured / none      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done]
+[x Cancel] [R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear]
+[S Stats] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MOUSE NEW TASK FORM · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects╭ Add task ──────────────────────────────────────────────────────────────────╮
+ Current #1│Save creates a task in SQLite. Blank execution fields use project defaults; │
+ Queue pref│with a new model, blank effort means none.                                  │
+ Queue · 1 │Title                                                                       │
+ Filter: Al│▏                                                                           │
+╭ Queue · 1│Goal                                                                        │──────────╮
+│› #1   Pen│                                                                            │          │
+│          │Acceptance check                                                            │          │
+│          │                                                                            │          │
+│          │Kind                                                                        │          │
+│          │< AI >   click / Space to change                                            │          │
+│          │Execution provider/model (blank = default)                                  │          │
+│          │                                                                            │          │
+│          │Execution effort (optional)                                                 │          │
+│          │                                                                            │          │
+│          │Approval                                                                    │          │
+│          │< Ready >   click / Space to change                                         │gh        │
+│          │Work category                                                               │          │
+│          │< Default >   click / Space to change                                       │one       │
+│          │Review lens 1                                                               │none      │
+│          │< Project default >   click / Space to change                               │          │
+│          │Review lens 2                                                               │          │
+│          │< - >   click / Space to change                                             │          │
+╰──────────│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │──────────╯
+[Copy] [r R│                                                                            │rk done]
+[x Cancel] │[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +]                   │ Clear]
+[S Stats] [│                                                                            │
+Saved to SQ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MOUSE MODEL SAVED · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 2 · History 0
+ Queue preference · Next #2: Mouse model task · m: run mode in Current
+ Queue · 2 shown / 2 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 2 / 2 · Model ───────────────────────────────────╮╭ Details · click for full ────────────╮
+│  #1   Pending  Keyboard model task      codex/worker high││Mouse model task                      │
+│› #2   Pending  Mouse model task         codex/mouse low  ││#2 · Pending · AI                     │
+│                                                          ││                                      │
+│                                                          ││Goal: Goal                            │
+│                                                          ││                                      │
+│                                                          ││Check: Criterion                      │
+│                                                          ││                                      │
+│                                                          ││Attempts: 0 · none yet                │
+│                                                          ││                                      │
+│                                                          ││Models:                               │
+│                                                          ││Execution: codex/mouse / low          │
+│                                                          ││Review: unconfigured / none           │
+│                                                          ││Validation: unconfigured / none       │
+│                                                          ││Remediation: unconfigured / none      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done]
+[x Cancel] [R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear]
+[S Stats] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ INSERTED MODEL SAVED · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #3 · Pending   |   Queue 3 · History 0
+ Queue preference · Next #1: Keyboard model task · m: run mode in Current
+ Queue · 3 shown / 3 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 3 · Model ───────────────────────────────────╮╭ Details · click for full ────────────╮
+│› #3   Pending  Inserted model task      codex/insert max ││Inserted model task                   │
+│  #1   Pending  Keyboard model task      codex/worker high││#3 · Pending · AI                     │
+│  #2   Pending  Mouse model task         codex/mouse low  ││                                      │
+│                                                          ││Goal: Goal                            │
+│                                                          ││                                      │
+│                                                          ││Check: Criterion                      │
+│                                                          ││                                      │
+│                                                          ││Attempts: 0 · none yet                │
+│                                                          ││                                      │
+│                                                          ││Models:                               │
+│                                                          ││Execution: codex/insert / max         │
+│                                                          ││Review: unconfigured / none           │
+│                                                          ││Validation: unconfigured / none       │
+│                                                          ││Remediation: unconfigured / none      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done]
+[x Cancel] [R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear]
+[S Stats] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MOUSE INSERT TASK FORM · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects╭ Insert task ───────────────────────────────────────────────────────────────╮
+ Current #3│Position: after #2 / before end                                             │
+ Queue pref│Save creates a task in SQLite. Blank execution fields use project defaults; │
+ Queue · 3 │Title                                                                       │
+ Filter: Al│▏                                                                           │
+╭ Queue · 1│Goal                                                                        │──────────╮
+│› #3   Pen│                                                                            │          │
+│  #1   Pen│Acceptance check                                                            │          │
+│  #2   Pen│                                                                            │          │
+│          │Kind                                                                        │          │
+│          │< AI >   click / Space to change                                            │          │
+│          │Before task ID                                                              │          │
+│          │                                                                            │          │
+│          │Execution provider/model (blank = default)                                  │          │
+│          │                                                                            │          │
+│          │Execution effort (optional)                                                 │          │
+│          │                                                                            │x         │
+│          │Approval                                                                    │          │
+│          │< Ready >   click / Space to change                                         │one       │
+│          │Work category                                                               │none      │
+│          │< Default >   click / Space to change                                       │          │
+│          │Review lens 1                                                               │          │
+│          │< Project default >   click / Space to change                               │          │
+╰──────────│Alt-Up/Down: position · Ctrl-S: apply · Esc: cancel                         │──────────╯
+[Copy] [r R│                                                                            │rk done]
+[x Cancel] │[Copy] [Apply] [Cancel] [Up] [Down] [Fields -] [Fields +] [Earlier] [Later] │ Clear]
+[S Stats] [│                                                                            │
+Saved to SQ╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ MOUSE INSERTED MODEL SAVED · 100x30 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #3 · Pending   |   Queue 4 · History 0
+ Queue preference · Next #1: Keyboard model task · m: run mode in Current
+ Queue · 4 shown / 4 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 3 / 4 · Model ───────────────────────────────────╮╭ Details · click for full ────────────╮
+│  #3   Pending  Inserted model … codex/insert max         ││Mouse inserted task                   │
+│  #1   Pending  Keyboard model … codex/worker high        ││#4 · Pending · AI                     │
+│› #4   Pending  Mouse inserted … codex/mouse-insert medium││                                      │
+│  #2   Pending  Mouse model task codex/mouse low          ││Goal: Goal                            │
+│                                                          ││                                      │
+│                                                          ││Check: Criterion                      │
+│                                                          ││                                      │
+│                                                          ││Attempts: 0 · none yet                │
+│                                                          ││                                      │
+│                                                          ││Models:                               │
+│                                                          ││Execution: codex/mouse-insert / medium│
+│                                                          ││Review: unconfigured / none           │
+│                                                          ││Validation: unconfigured / none       │
+│                                                          ││Remediation: unconfigured / none      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+│                                                          ││                                      │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [a Add] [i Insert] [e Edit] [m Move] [b Break down] [c Models] [D Mark done]
+[x Cancel] [R Supersede] [o Import] [E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear]
+[S Stats] [? Help] [q Quit]
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

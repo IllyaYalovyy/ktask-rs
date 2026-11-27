@@ -106,12 +106,10 @@ fn ctrl_shift_c_copies_selected_add_task_text_without_closing_form() -> Result {
     let plain_code = copy_key(&mut t, "\x03")?;
     assert_eq!(plain_code, copied);
     // The copy proves plain Ctrl+C was handled, and handled as a copy rather than a quit.
-    let still_open = t.current_screen();
-    assert!(
-        still_open.contains("Add task") && still_open.contains("Copy this title"),
-        "Add task closed after plain Ctrl+C:\n{still_open}"
-    );
-    println!("ADD TASK AFTER PLAIN CTRL-C\n{still_open}");
+    let still_open = t.still("Add task kept open after plain Ctrl+C", |s| {
+        s.contains("Add task") && s.contains("Copy this title")
+    })?;
+    crate::support::record("ADD TASK AFTER PLAIN CTRL-C", true, &still_open);
     let cleared = select(&mut t, |t| t.send("\x1b"), |h| h.is_empty())?;
     assert!(
         cleared.contains("Add task"),
@@ -134,7 +132,7 @@ fn text_selection_copy_and_native_fallback_in_real_terminals() -> Result {
         let end = (goal.0 + 8, goal.1 + 1);
         let selected = select(&mut t, |t| drag(t, goal, end), |h| h.contains(&goal))?;
         assert!(t.selected_at(goal.0, goal.1), "drag did not highlight goal");
-        println!("SELECTED QUEUE {cols}x{rows}\n{selected}");
+        crate::support::record("SELECTED QUEUE", true, &selected);
         assert!(selected.contains("[Copy]"));
         let text = mouse_copy(&mut t)?;
         assert!(text.contains("Goal:"), "copied {text:?}");
@@ -153,7 +151,7 @@ fn text_selection_copy_and_native_fallback_in_real_terminals() -> Result {
             |t| t.send("\x1b[12~\x1b[1;2F"),
             |h| h.contains(&row_one) && h.len() > 1,
         )?;
-        println!("KEYBOARD AFTER MOUSE {cols}x{rows}\n{keyboard_after_mouse}");
+        crate::support::record("KEYBOARD AFTER MOUSE", true, &keyboard_after_mouse);
         let f6_copy = copy(&mut t)?;
         assert!(
             f6_copy.contains("Recover a failed check") && !f6_copy.contains("Goal:"),
@@ -207,20 +205,20 @@ fn text_selection_copy_and_native_fallback_in_real_terminals() -> Result {
             |h| h.contains(&row_one) && h.len() > 1,
         )?;
         assert!(keyboard.contains("Queue · 120 shown"), "{keyboard}");
-        println!("KEYBOARD SELECTION {cols}x{rows}\n{keyboard}");
+        crate::support::record("KEYBOARD SELECTION", true, &keyboard);
         let keyboard_copy = copy(&mut t)?;
         assert!(!keyboard_copy.is_empty());
         println!("KEYBOARD COPIED {cols}x{rows}: {keyboard_copy:?}");
         let history = key(&mut t, "3", "History · 120 shown")?;
         assert!(history.contains("History · 120 shown"));
-        println!("F2 NORMAL KEY REACHES HISTORY {cols}x{rows}\n{history}");
+        crate::support::record("F2 NORMAL KEY REACHES HISTORY", true, &history);
         key(&mut t, "2", "Queue · 120 shown")?;
         let native = key(&mut t, "\x1b[18~", "native text selection")?;
         assert!(
             !t.mouse_capture(),
             "F7 did not release terminal mouse capture"
         );
-        println!("NATIVE FALLBACK {cols}x{rows}\n{native}");
+        crate::support::record("NATIVE FALLBACK", true, &native);
         key(&mut t, "\x1b[18~", "Mouse capture on")?;
         assert!(t.mouse_capture(), "F7 did not restore mouse capture");
         t.send("\x1b")?;
@@ -237,6 +235,10 @@ fn text_selection_copy_and_native_fallback_in_real_terminals() -> Result {
 fn live_log_selection_stays_put_as_output_arrives() -> Result {
     let mut t = Terminal::open(120, 30)?;
     ready(&t)?;
+    // The first simulated step lands well after the selection below is made.
+    key(&mut t, "4e", "Step delay (ms)")?;
+    key(&mut t, "\t\x015000\x13", "Configuration applied")?;
+    key(&mut t, "1", "Log · following")?;
     t.send("r")?;
     let running = t.screen("running log", |s| {
         s.contains("Running") && s.contains("Executor:")
@@ -247,7 +249,7 @@ fn live_log_selection_stays_put_as_output_arrives() -> Result {
         |t| drag(t, start, (start.0 + 10, start.1 + 1)),
         |h| h.contains(&start),
     )?;
-    println!("LIVE LOG SELECTED\n{marked}");
+    crate::support::record("LIVE LOG SELECTED", true, &marked);
     let selected_step = step(&marked).ok_or("no step in selected log")?;
     let after = t.screen("new output while selected", |s| {
         step(s).is_some_and(|n| n > selected_step) && s.contains("Checks: running")
@@ -256,7 +258,7 @@ fn live_log_selection_stays_put_as_output_arrives() -> Result {
         t.selected_at(start.0, start.1),
         "new output removed the selection"
     );
-    println!("LIVE LOG UPDATED\n{after}");
+    crate::support::record("LIVE LOG UPDATED", true, &after);
     let text = copy(&mut t)?;
     assert!(text.contains("Executor:"), "log copy: {text:?}");
     assert!(!text.contains('│'));
@@ -278,21 +280,21 @@ fn plain_log_click_keeps_following_as_output_arrives() -> Result {
             s.contains("step 3/6") && s.contains("Log · following")
         })?;
         assert!(before.contains("Checks: running"), "{before}");
-        println!("LOG BEFORE PLAIN CLICK {cols}x{rows}\n{before}");
+        crate::support::record("LOG BEFORE PLAIN CLICK", false, &before);
         t.click("Executor:")?;
         let clicked = fence(&mut t)?;
         assert!(
             clicked.contains("Log · following"),
             "plain click stopped following:\n{clicked}"
         );
-        println!("LOG AFTER PLAIN CLICK {cols}x{rows}\n{clicked}");
+        crate::support::record("LOG AFTER PLAIN CLICK", true, &clicked);
         let clicked_step = step(&clicked).ok_or("no step after click")?;
         let updated = t.screen("following receives new output", |s| {
             step(s).is_some_and(|n| n > clicked_step)
                 && s.contains("Log · following")
                 && s.contains("Review: checking the result")
         })?;
-        println!("LOG FOLLOWING AFTER OUTPUT {cols}x{rows}\n{updated}");
+        crate::support::record("LOG FOLLOWING AFTER OUTPUT", true, &updated);
         quit(&mut t)?;
     }
     Ok(())
@@ -304,7 +306,8 @@ fn selecting_modal_text_does_not_stop_the_underlying_log() -> Result {
         let mut t = Terminal::open(cols, rows)?;
         ready(&t)?;
         key(&mut t, "4e", "Step delay (ms)")?;
-        key(&mut t, "\t\x012000\x13", "Configuration applied")?;
+        // Longer than the interactions below, so no simulated step lands among them.
+        key(&mut t, "\t\x0110000\x13", "Configuration applied")?;
         t.send("1r")?;
         let running = t.screen("running log", |s| {
             s.contains("Running") && s.contains("Log · following")
@@ -323,13 +326,13 @@ fn selecting_modal_text_does_not_stop_the_underlying_log() -> Result {
             |t| drag(t, phrase, (phrase.0 + 8, phrase.1)),
             |h| h.contains(&phrase),
         )?;
-        println!("MODAL MOUSE SELECTED {cols}x{rows}\n{selected}");
+        crate::support::record("MODAL MOUSE SELECTED", true, &selected);
         assert!(mouse_copy(&mut t)?.contains("run mode"));
         t.click("Close")?;
         let after_mouse = t.screen("log still follows after modal mouse selection", |s| {
             s.contains("Log · following") && !s.contains("Keyboard help")
         })?;
-        println!("MODAL MOUSE CLOSED {cols}x{rows}\n{after_mouse}");
+        crate::support::record("MODAL MOUSE CLOSED", true, &after_mouse);
 
         key(&mut t, "?", "Keyboard help")?;
         for keys in ["\x1b[12~", "\x1b[6~", "\x1b[4~"] {
@@ -343,7 +346,7 @@ fn selecting_modal_text_does_not_stop_the_underlying_log() -> Result {
         );
         t.send("\x1b")?;
         let after_keyboard = closed(&t, "Keyboard help", "Log · following")?;
-        println!("MODAL KEYBOARD CLOSED {cols}x{rows}\n{after_keyboard}");
+        crate::support::record("MODAL KEYBOARD CLOSED", true, &after_keyboard);
         assert!(!after_keyboard.contains("Keyboard help"));
         quit(&mut t)?;
     }
@@ -373,11 +376,11 @@ fn full_following_log_freezes_on_mouse_down_before_drag() -> Result {
         Some('╰'),
         "log has an empty row below review output:\n{full}"
     );
-    println!("FULL LOG BEFORE MOUSE DOWN\n{full}");
+    crate::support::record("FULL LOG BEFORE MOUSE DOWN", true, &full);
     t.send(&format!("\x1b[<0;{};{}M", start.0 + 1, start.1 + 1))?;
     let frozen = t.screen("mouse down freezes log", |s| s.contains("Log · scrolled"))?;
     assert_eq!(location(&frozen, "Executor:")?, start);
-    println!("FULL LOG FROZEN ON MOUSE DOWN\n{frozen}");
+    crate::support::record("FULL LOG FROZEN ON MOUSE DOWN", true, &frozen);
     let frozen_step = step(&frozen).ok_or("no step in frozen log")?;
     let updated = t.screen("new output before drag", |s| {
         step(s).is_some_and(|n| n > frozen_step) && s.contains("Log · scrolled")
@@ -388,7 +391,7 @@ fn full_following_log_freezes_on_mouse_down_before_drag() -> Result {
         !updated.contains("Validation: checking the goal"),
         "{updated}"
     );
-    println!("FULL LOG UPDATED BEFORE DRAG\n{updated}");
+    crate::support::record("FULL LOG UPDATED BEFORE DRAG", true, &updated);
     let release = format!(
         "\x1b[<32;{};{}M\x1b[<0;{};{}m",
         start.0 + 10,
@@ -397,7 +400,7 @@ fn full_following_log_freezes_on_mouse_down_before_drag() -> Result {
         start.1 + 1
     );
     let selected = select(&mut t, |t| t.send(&release), |h| h.contains(&start))?;
-    println!("FULL LOG SELECTED AFTER UPDATE\n{selected}");
+    crate::support::record("FULL LOG SELECTED AFTER UPDATE", true, &selected);
     let copied = copy(&mut t)?;
     assert!(copied.starts_with("Executor:"), "copied {copied:?}");
     assert!(!copied.contains('│'));
@@ -419,13 +422,21 @@ fn guided(t: &mut Terminal) -> Result {
 #[test]
 fn all_screens_mouse_navigation_minimum_size_and_help() -> Result {
     let mut t = Terminal::open(120, 30)?;
-    println!("CURRENT\n{}", ready(&t)?);
-    println!("QUEUE\n{}", click(&mut t, "2 Queue", "Queue · 120 shown")?);
+    crate::support::record("CURRENT", false, &ready(&t)?);
+    crate::support::record(
+        "QUEUE",
+        true,
+        &click(&mut t, "2 Queue", "Queue · 120 shown")?,
+    );
     let history = click(&mut t, "3 History", "History · 120 shown")?;
     assert!(!history.contains("› #1 "));
-    println!("HISTORY\n{history}");
-    println!("CONFIG\n{}", click(&mut t, "4 Config", "Mouse: Enabled")?);
-    println!("ABOUT\n{}", click(&mut t, "5 About", "ktask RS ·")?);
+    crate::support::record("HISTORY", true, &history);
+    crate::support::record(
+        "CONFIG",
+        true,
+        &click(&mut t, "4 Config", "Mouse: Enabled")?,
+    );
+    crate::support::record("ABOUT", true, &click(&mut t, "5 About", "ktask RS ·")?);
     click(&mut t, "Esc Back", "Mouse: Enabled")?;
     key(&mut t, "\t", "ktask RS ·")?;
     key(&mut t, "\x1b[Z", "Mouse: Enabled")?;
@@ -442,12 +453,12 @@ fn all_screens_mouse_navigation_minimum_size_and_help() -> Result {
             // Wait for the application redraw, not the parser's cropped old frame.
             s.contains(marker) && s.lines().count() <= 22 && s.contains("q Quit")
         })?;
-        println!("MINIMUM {tab}\n{screen}");
+        crate::support::record(&format!("MINIMUM {tab}"), true, &screen);
         t.resize(120, 30)?;
         t.screen("restored", |s| s.contains(marker))?;
     }
     let help = click(&mut t, "? Help", "Keyboard help")?;
-    println!("HELP\n{help}");
+    crate::support::record("HELP", true, &help);
     click(&mut t, "Down", "All tasks, models")?;
     click(&mut t, "Up", "1 Current  2 Queue")?;
     t.click("Close")?;
@@ -522,13 +533,7 @@ fn queue_search_filter_navigation_history_and_selection_are_independent() -> Res
         "#240: Edit is not available for a done task; it offers Copy to queue",
     )?;
     let details = key(&mut t, "\r", "Task details / attempts")?;
-    println!("HISTORY DETAILS\n{details}");
-    if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
-        support::screen_png(
-            &details,
-            &std::path::PathBuf::from(directory).join("provision-240-task-regression.png"),
-        )?;
-    }
+    crate::support::record("HISTORY DETAILS", true, &details);
     t.send("\x1b[F")?;
     t.screen("details scrolled to the end", |s| {
         s.contains("Review: approved") && !s.contains("Acceptance check:")
@@ -546,7 +551,7 @@ fn keyboard_crud_reorder_insert_validation_cancel_and_copy() -> Result {
     t.send("\x13")?;
     // The form's guidance already says the fields are required; the error repeats it.
     let invalid = t.screen("are required", |s| s.matches("are required").count() == 2)?;
-    println!("FORM VALIDATION\n{invalid}");
+    crate::support::record("FORM VALIDATION", false, &invalid);
     key(
         &mut t,
         "Keyboard task\tConcrete goal\tCheck passes",
@@ -574,7 +579,7 @@ fn keyboard_crud_reorder_insert_validation_cancel_and_copy() -> Result {
         s.contains("Before task ID") && s.contains("after start / before #1")
     })?;
     let position = key(&mut t, "\x012", "after #1 / before #2")?;
-    println!("POSITION PREVIEW\n{position}");
+    crate::support::record("POSITION PREVIEW", false, &position);
     key(&mut t, "\r", "#242 moved")?;
     key(&mut t, "g", "› #1 ")?;
     key(&mut t, "j", "› #242 ")?;
@@ -681,7 +686,7 @@ fn keyboard_execution_retry_pause_resume_stop_human_question_and_completion() ->
     key(&mut t, "r", "Current #1 · Running")?;
     key(&mut t, "p", "Current #1 · Paused")?;
     let stop = key(&mut t, "s", "Stop #1 Recover a failed check")?;
-    println!("STOP\n{stop}");
+    crate::support::record("STOP", false, &stop);
     t.send("\x1b")?;
     closed(&t, "Stop #1", "Current #1 · Paused")?;
     key(&mut t, "s\r", "Current #1 · Pending")?;
@@ -694,13 +699,13 @@ fn keyboard_execution_retry_pause_resume_stop_human_question_and_completion() ->
     key(&mut t, "r", "Current #3 · Running")?;
     t.screen("AI asks", |s| s.contains("Current #3 · Needs input"))?;
     let question = key(&mut t, "w", "Answer AI question")?;
-    println!("QUESTION\n{question}");
+    crate::support::record("QUESTION", false, &question);
     key(&mut t, "\r", "An answer is required")?;
     key(&mut t, "TSV\r", "Answer recorded")?;
     let done = t.screen("all work done", |s| {
         s.contains("Queue complete.") && s.contains("History 3")
     })?;
-    println!("QUEUE COMPLETE\n{done}");
+    crate::support::record("QUEUE COMPLETE", false, &done);
     key(&mut t, "3", "History · 3 shown")?;
     key(&mut t, "/#1\r\r", "Attempt 4 / 4")?;
     key(&mut t, "[", "Attempt 3 / 4")?;
@@ -720,13 +725,15 @@ fn mouse_execution_logs_attempts_and_statistics() -> Result {
     key(&mut t, "\x1b[6~", "PASS  queue fixture 10")?;
     key(&mut t, "\x1b[5~", "PASS  queue fixture 01")?;
     click(&mut t, "End Follow", "Log · following")?;
-    println!(
-        "MINIMUM RUNNING\n{}",
-        click(&mut t, "r Retry", "Current #1 · Running")?
+    crate::support::record(
+        "MINIMUM RUNNING",
+        true,
+        &click(&mut t, "r Retry", "Current #1 · Running")?,
     );
-    println!(
-        "MINIMUM PAUSED\n{}",
-        click(&mut t, "p Pause", "Current #1 · Paused")?
+    crate::support::record(
+        "MINIMUM PAUSED",
+        true,
+        &click(&mut t, "p Pause", "Current #1 · Paused")?,
     );
     click(&mut t, "r Resume", "Current #1 · Running")?;
     click(&mut t, "p Pause", "Current #1 · Paused")?;
@@ -740,8 +747,8 @@ fn mouse_execution_logs_attempts_and_statistics() -> Result {
         s.contains("Current #1 · Failed") && s.contains("Attempt 3")
     })?;
     click(&mut t, "D Mark done", "Mark done #1 Recover a failed check")?;
-    click(&mut t, "Apply", "Current #2 · Pending")?;
-    println!("MINIMUM HUMAN\n{}", t.current_screen());
+    let marked = click(&mut t, "Apply", "Current #2 · Pending")?;
+    crate::support::record("MINIMUM HUMAN", true, &marked);
     click(
         &mut t,
         "D Mark done",
@@ -758,13 +765,14 @@ fn mouse_execution_logs_attempts_and_statistics() -> Result {
         |t| drag(t, question_at, (question_at.0 + 18, question_at.1)),
         |h| h.contains(&question_at),
     )?;
-    println!("MINIMUM QUESTION SELECTED\n{selected_question}");
+    crate::support::record("MINIMUM QUESTION SELECTED", true, &selected_question);
     assert!(copy(&mut t)?.starts_with("Which export format"));
     let cleared = select(&mut t, |t| t.send("\x1b"), |h| h.is_empty())?;
     assert!(cleared.contains("Current #3 · Needs input"), "{cleared}");
-    println!(
-        "MINIMUM QUESTION\n{}",
-        click(&mut t, "r Answer", "Answer AI question")?
+    crate::support::record(
+        "MINIMUM QUESTION",
+        true,
+        &click(&mut t, "r Answer", "Answer AI question")?,
     );
     key(&mut t, "JSON", "JSON")?;
     click(&mut t, "Apply", "Answer recorded")?;
@@ -778,7 +786,7 @@ fn mouse_execution_logs_attempts_and_statistics() -> Result {
     ] {
         assert!(stats.contains(text), "{stats}");
     }
-    println!("STATISTICS\n{stats}");
+    crate::support::record("STATISTICS", true, &stats);
     t.click("Close")?;
     closed(&t, "Project statistics", "Queue complete.")?;
     click(&mut t, "3 History", "History · 3 shown")?;
@@ -805,7 +813,7 @@ fn import_export_preview_validation_overwrite_and_roundtrip() -> Result {
         !preview.contains("Cannot insert before"),
         "stale validation error:\n{preview}"
     );
-    println!("IMPORT PREVIEW\n{preview}");
+    crate::support::record("IMPORT PREVIEW", false, &preview);
     t.send("\x1b")?;
     closed(&t, "Import preview", "Queue · 120 shown")?;
     click(&mut t, "o Import", "Import · in-memory")?;
@@ -814,9 +822,10 @@ fn import_export_preview_validation_overwrite_and_roundtrip() -> Result {
     click(&mut t, "Apply", "Imported 2 tasks")?;
     key(&mut t, "E", "Export · in-memory")?;
     key(&mut t, "\x01/not-real\r", "Use a virtual path")?;
-    println!(
-        "OVERWRITE CONFIRMATION\n{}",
-        key(&mut t, "\x01/demo/existing.tsv\r", "Overwrite mock file?")?
+    crate::support::record(
+        "OVERWRITE CONFIRMATION",
+        true,
+        &key(&mut t, "\x01/demo/existing.tsv\r", "Overwrite mock file?")?,
     );
     t.send("\x1b")?;
     closed(&t, "Overwrite mock file?", "Queue · 122 shown")?;
@@ -847,7 +856,7 @@ fn breakdown_review_edit_accept_cancel_and_history() -> Result {
     )?;
     key(&mut t, "s\r", "Current #1 · Pending")?;
     let proposal = key(&mut t, "b", "Break down task")?;
-    println!("BREAKDOWN\n{proposal}");
+    crate::support::record("BREAKDOWN", false, &proposal);
     key(&mut t, "\x01\r", "Both subtask titles are required")?;
     t.send("\x1b")?;
     closed(&t, "Break down task", "Current #1 · Pending")?;
@@ -871,7 +880,7 @@ fn configuration_validation_cancel_mouse_toggle_and_empty_state() -> Result {
     ready(&t)?;
     click(&mut t, "4 Config", "Mouse: Enabled")?;
     let config = click(&mut t, "e Configure", "Step delay (ms)")?;
-    println!("CONFIGURATION FORM\n{config}");
+    crate::support::record("CONFIGURATION FORM", true, &config);
     focus(&mut t, "Step delay (ms)")?;
     key(&mut t, "\x01oops", "oops")?;
     click(&mut t, "Apply", "Step delay must be")?;
@@ -896,7 +905,7 @@ fn configuration_validation_cancel_mouse_toggle_and_empty_state() -> Result {
         s.contains("Configuration applied") && s.contains("Queue 0 · History 0")
     })?;
     let empty = key(&mut t, "1", "No current task.")?;
-    println!("EMPTY WORKSPACE\n{empty}");
+    crate::support::record("EMPTY WORKSPACE", true, &empty);
     click(&mut t, "a Add", "Add task")?;
     key(&mut t, "First task\tGoal\tCheck\r", "saved")?;
     current(&mut t, "1", "Current #241 · Pending")?;
@@ -912,12 +921,13 @@ fn resize_modal_unicode_editing_and_quit_paths() -> Result {
         form.contains("Before task ID") && form.contains("Cancel"),
         "{form}"
     );
-    println!("MINIMUM INSERT FORM\n{form}");
+    crate::support::record("MINIMUM INSERT FORM", false, &form);
     key(&mut t, "界🙂 task\x1b[D\x7fX\x1b[H!\x1b[F", "!界🙂 taXk")?;
     t.resize(40, 10)?;
-    println!(
-        "TINY RESIZE\n{}",
-        t.screen("tiny", |s| s.contains("Please resize"))?
+    crate::support::record(
+        "TINY RESIZE",
+        false,
+        &t.screen("tiny", |s| s.contains("Please resize"))?,
     );
     let frames = t.redraw_count();
     t.send("?j2")?;
@@ -927,11 +937,12 @@ fn resize_modal_unicode_editing_and_quit_paths() -> Result {
         s.contains("Please resize") && t.redraw_count() >= frames + 3
     })?;
     t.resize(70, 22)?;
-    println!(
-        "RESTORED FORM\n{}",
-        t.screen("restored form", |s| {
+    crate::support::record(
+        "RESTORED FORM",
+        false,
+        &t.screen("restored form", |s| {
             s.contains("!界🙂 taXk") && s.contains("Cancel")
-        })?
+        })?,
     );
     t.send("\x1b")?;
     closed(&t, "Insert task", "Queue · 120 shown")?;
@@ -1059,7 +1070,7 @@ fn all_dialog_types_fit_at_minimum_and_mouse_search_cancel() -> Result {
             screen.contains("Close") || screen.contains("Cancel"),
             "{screen}"
         );
-        println!("MINIMUM DIALOG {title}\n{screen}");
+        crate::support::record(&format!("MINIMUM DIALOG {title}"), true, &screen);
         key(&mut t, "\x1b", "Log · following")?;
     }
     key(&mut t, "2j", "› #2 ")?;
@@ -1078,7 +1089,7 @@ fn all_dialog_types_fit_at_minimum_and_mouse_search_cancel() -> Result {
             screen.contains("Apply") && screen.contains("Cancel"),
             "{screen}"
         );
-        println!("MINIMUM DIALOG {title}\n{screen}");
+        crate::support::record(&format!("MINIMUM DIALOG {title}"), true, &screen);
         key(&mut t, "\x1b", "› #2 ")?;
     }
     click(&mut t, "/ Search", "Apply search")?;
@@ -1097,7 +1108,7 @@ fn all_dialog_types_fit_at_minimum_and_mouse_search_cancel() -> Result {
         screen.contains("Apply") && screen.contains("Cancel"),
         "{screen}"
     );
-    println!("MINIMUM DIALOG Copy to queue\n{screen}");
+    crate::support::record("MINIMUM DIALOG Copy to queue", true, &screen);
     t.send("\x1b")?;
     closed(&t, &title, "History · 120 shown")?;
     key(&mut t, "4e", "Step delay (ms)")?;
@@ -1105,7 +1116,7 @@ fn all_dialog_types_fit_at_minimum_and_mouse_search_cancel() -> Result {
     let reset = t.screen("reset confirmation", |s| {
         s.contains("Apply resets all session tasks")
     })?;
-    println!("MINIMUM RESET\n{reset}");
+    crate::support::record("MINIMUM RESET", true, &reset);
     key(&mut t, "\r1", "No current task.")?;
     key(&mut t, "3", "No tasks here.")?;
     key(&mut t, "2E\r", "Exported to /demo/export.tsv")?;
@@ -1134,7 +1145,7 @@ fn pending_queue_selection_shows_every_enabled_control_at_both_sizes_and_quit_cl
         ready(&t)?;
         key(&mut t, "2", "Queue · 120 shown")?;
         let screen = key(&mut t, "j", "› #2 ")?;
-        println!("PENDING QUEUE {cols}x{rows}\n{screen}");
+        crate::support::record("PENDING QUEUE", false, &screen);
         assert!(screen.contains("Pending"), "{screen}");
         assert!(screen.lines().count() <= usize::from(rows), "{screen}");
         for label in PENDING_QUEUE_CONTROLS {

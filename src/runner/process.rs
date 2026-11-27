@@ -92,6 +92,9 @@ pub struct ArtifactTarget {
     pub attempt: i64,
     pub token: String,
     pub relative_prefix: String,
+    /// Record the collection even when the worker kept nothing, so that a reader can tell
+    /// that from evidence that was never collected.
+    pub record_empty: bool,
 }
 
 /// Use the isolated guardian so descendants cannot retain pipes or outlive cancellation.
@@ -832,8 +835,10 @@ fn archive_artifacts(
             "Evidence could not be archived: the artifact directory was replaced or removed".into(),
         );
     }
-    // A readable directory with nothing in it needs no record.
-    if std::fs::read_dir(source).is_ok_and(|mut entries| entries.next().is_none()) {
+    // A readable directory with nothing in it needs no record unless one was asked for.
+    if !target.record_empty
+        && std::fs::read_dir(source).is_ok_and(|mut entries| entries.next().is_none())
+    {
         return None;
     }
     let kept = root.join(format!(

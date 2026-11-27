@@ -1,0 +1,759 @@
+@@ CURRENT BROWSER START · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 2 / 2 · #2 · revision 1 · failed                            │
+│Outcome: Second failure                                             │
+│Output page 1 / 1 · chunk 1 / 1 · 1 records · newest first ·        │
+│snapshot #1                                                         │
+│                                                                    │
+│#1 [stdout] SECOND ATTEMPT ONLY                                     │
+│                                                                    │
+│Attempt inputs: revision 1 · session not recorded                   │
+│Revision 1 · Failed current                                         │
+│Approval: ready · human: owner · Category: code (built-in, checks   │
+│apply)                                                              │
+│Goal: Persist a real task                                           │
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…
+@@ EARLIER ATTEMPT · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 2 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Output page 1 / 28 · chunk 1 / 1 · 2205 records · newest first ·    │
+│snapshot #2205                                                      │
+│                                                                    │
+│#2205 [stdout] line 2205                                            │
+│#2204 [stdout] line 2204                                            │
+│#2203 [stdout] line 2203                                            │
+│#2202 [stdout] line 2202                                            │
+│#2201 [stdout] line 2201                                            │
+│#2200 [stdout] line 2200                                            │
+│#2199 [stdout] line 2199                                            │
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…
+@@ KEYBOARD OLDER PAGE · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 2 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Output page 2 / 28 · chunk 1 / 1 · 2205 records · newest first ·    │
+│snapshot #2205                                                      │
+│                                                                    │
+│#2125 [stdout] line 2125                                            │
+│#2124 [stdout] line 2124                                            │
+│#2123 [stdout] line 2123                                            │
+│#2122 [stdout] line 2122                                            │
+│#2121 [stdout] line 2121                                            │
+│#2120 [stdout] line 2120                                            │
+│#2119 [stdout] line 2119                                            │
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…
+@@ OLD OUTPUT SEARCH RESULT · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Match: LATE/QUERY MATCHEARLY_MARKER_COPY request/check?             │
+│Output page 28 / 28 · chunk 1 / 2049 · 2205 records · newest first  │
+│· snapshot #2205                                                    │
+│                                                                    │
+│#45 [stdout] line 45                                                │
+│#44 [stdout] line 44                                                │
+│#43 [stdout] line 43                                                │
+│#42 [stdout] line 42                                                │
+│#41 [stdout] line 41                                                │
+│#40 [stdout] line 40                                                │
+│#39 [stdout] line 39                                                │
+│#38 [stdout] line 38                                                │
+│Find output                                                         │
+│EARLY_MARKER_COPY▏                                                  │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…
+@@ MOUSE EVIDENCE SELECTION · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Match: LATE/QUERY MATCHEARLY_MARKER_COPY request/check?             │
+│Output page 28 / 28 · chunk 1 / 2049 · 2205 records · newest first  │
+│· snapshot #2205                                                    │
+│                                                                    │
+│#45 [stdout] line 45                                                │
+│#44 [stdout] line 44                                                │
+│#43 [stdout] line 43                                                │
+│#42 [stdout] line 42                                                │
+│#41 [stdout] line 41                                                │
+│#40 [stdout] line 40                                                │
+│#39 [stdout] line 39                                                │
+│#38 [stdout] line 38                                                │
+│Find output                                                         │
+│EARLY_MARKER_COPY▏                                                  │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Runs happen in a background supervisor; quitting this screen does not…
+@@ KEYBOARD EVIDENCE SELECTION · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Match: LATE/QUERY MATCHEARLY_MARKER_COPY request/check?             │
+│Output page 28 / 28 · chunk 1 / 2049 · 2205 records · newest first  │
+│· snapshot #2205                                                    │
+│                                                                    │
+│#45 [stdout] line 45                                                │
+│#44 [stdout] line 44                                                │
+│#43 [stdout] line 43                                                │
+│#42 [stdout] line 42                                                │
+│#41 [stdout] line 41                                                │
+│#40 [stdout] line 40                                                │
+│#39 [stdout] line 39                                                │
+│#38 [stdout] line 38                                                │
+│Find output                                                         │
+│EARLY_MARKER_COPY▏                                                  │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ MOUSE FOCUSED SEARCH · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Match: E/QUERY MATCHEARLY_MARKER_COPY request/check?                │
+│Output page 28 / 28 · chunk 1 / 2049 · 2205 records · newest first  │
+│· snapshot #2205                                                    │
+│                                                                    │
+│#45 [stdout] line 45                                                │
+│#44 [stdout] line 44                                                │
+│#43 [stdout] line 43                                                │
+│#42 [stdout] line 42                                                │
+│#41 [stdout] line 41                                                │
+│#40 [stdout] line 40                                                │
+│#39 [stdout] line 39                                                │
+│#38 [stdout] line 38                                                │
+│Find output                                                         │
+│request/check?▏                                                     │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ MULTILINE SEARCH MATCH · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│LATE/QUERY MATCH                                                    │
+│Output page 28 / 28 · chunk 1 / 2049 · 2205 records · newest first  │
+│· snapshot #2205                                                    │
+│                                                                    │
+│#45 [stdout] line 45                                                │
+│#44 [stdout] line 44                                                │
+│#43 [stdout] line 43                                                │
+│#42 [stdout] line 42                                                │
+│#41 [stdout] line 41                                                │
+│#40 [stdout] line 40                                                │
+│#39 [stdout] line 39                                                │
+│#38 [stdout] line 38                                                │
+│Find output                                                         │
+│LATE/QUERY▏                                                         │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ SEARCH ACROSS SAME STREAM RECORDS · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Match: AVED_MATCHSAME_ROW_JOIN_TARGET                               │
+│Output page 28 / 28 · chunk 1 / 2049 · 2205 records · newest first  │
+│· snapshot #2205                                                    │
+│                                                                    │
+│#45 [stdout] line 45                                                │
+│#44 [stdout] line 44                                                │
+│#43 [stdout] line 43                                                │
+│#42 [stdout] line 42                                                │
+│#41 [stdout] line 41                                                │
+│#40 [stdout] line 40                                                │
+│#39 [stdout] line 39                                                │
+│#38 [stdout] line 38                                                │
+│Find output                                                         │
+│SAME_ROW_JOIN_TARGET▏                                               │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ SEARCH ACROSS INTERLEAVED SAME STREAM RECORDS · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Match: e 19INTERLEAVED_MATCH                                        │
+│Output page 28 / 28 · chunk 1 / 2049 · 2205 records · newest first  │
+│· snapshot #2205                                                    │
+│                                                                    │
+│#45 [stdout] line 45                                                │
+│#44 [stdout] line 44                                                │
+│#43 [stdout] line 43                                                │
+│#42 [stdout] line 42                                                │
+│#41 [stdout] line 41                                                │
+│#40 [stdout] line 40                                                │
+│#39 [stdout] line 39                                                │
+│#38 [stdout] line 38                                                │
+│Find output                                                         │
+│INTERLEAVED_MATCH▏                                                  │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ SEARCH KEEPS STREAMS SEPARATE · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 2 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Output page 28 / 28 · chunk 1 / 2049 · 2205 records · newest first  │
+│· snapshot #2205                                                    │
+│                                                                    │
+│#45 [stdout] line 45                                                │
+│#44 [stdout] line 44                                                │
+│#43 [stdout] line 43                                                │
+│#42 [stdout] line 42                                                │
+│#41 [stdout] line 41                                                │
+│#40 [stdout] line 40                                                │
+│Find output                                                         │
+│CROSS_STREAM_FALSE_MATCH▏                                           │
+│No matching evidence recorded · Find restarts                       │
+│                                                                    │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ BOUNDARY SEARCH MATCH · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Match: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxBOUNDARY_TARGET              │
+│Output page 28 / 28 · chunk 1 / 2049 · 2205 records · newest first  │
+│· snapshot #2205                                                    │
+│                                                                    │
+│Match in #27: BOUNDARY_TARGET                                       │
+│                                                                    │
+│#45 [stdout] line 45                                                │
+│#44 [stdout] line 44                                                │
+│#43 [stdout] line 43                                                │
+│#42 [stdout] line 42                                                │
+│#41 [stdout] line 41                                                │
+│#40 [stdout] line 40                                                │
+│Find output                                                         │
+│BOUNDARY_TARGET▏                                                    │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ HUGE OUTPUT MATCH · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Match: qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqHUGE_END                     │
+│Output page 28 / 28 · chunk 2049 / 2049 · 2205 records · newest     │
+│first · snapshot #2205                                              │
+│                                                                    │
+│#28 [stdout] [continued] qqqqqqqqqqHUGE_END                         │
+│                                                                    │
+│Attempt inputs: revision 1 · session not recorded                   │
+│Revision 1 · Failed current                                         │
+│Approval: ready · human: owner · Category: code (built-in, checks   │
+│apply)                                                              │
+│Goal: Persist a real task                                           │
+│Acceptance: 1: Survives restart                                     │
+│Find output                                                         │
+│HUGE_END▏                                                           │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ STRUCTURED RESULTS · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 2 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Role steps, findings and acceptance results                         │
+│                                                                    │
+│Step 1 · review · codex/fixture-model · failed                      │
+│Review verdict: review structured finding                           │
+│Criterion 1 · needs_work: review criterion evidence                 │
+│                                                                    │
+│Step 2 · validation · codex/fixture-model · failed                  │
+│Validation verdict: validation structured finding                   │
+│Criterion 1 · needs_work: validation criterion evidence             │
+│                                                                    │
+│Find results                                                        │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Find] [Up] [Down] [Close] [Copy]     │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ RESULTS ONLY SEARCH · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Validation verdict: validation structured finding                   │
+│Criterion 1 · needs_work: valid                                     │
+│Role steps, findings and acceptance results                         │
+│                                                                    │
+│Step 1 · review · codex/fixture-model · failed                      │
+│Review verdict: review structured finding                           │
+│Criterion 1 · needs_work: review criterion evidence                 │
+│                                                                    │
+│Step 2 · validation · codex/fixture-model · failed                  │
+│Validation verdict: validation structured finding                   │
+│Criterion 1 · needs_work: validation criterion evidence             │
+│                                                                    │
+│Find results                                                        │
+│validation structured finding▏                                      │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Find] [Up] [Down] [Close] [Copy]     │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ RESTORED OUTPUT POSITION · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 2 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Output page 28 / 28 · chunk 2049 / 2049 · 2205 records · newest     │
+│first · snapshot #2205                                              │
+│                                                                    │
+│#28 [stdout] [continued] qqqqqqqqqqHUGE_END                         │
+│                                                                    │
+│Attempt inputs: revision 1 · session not recorded                   │
+│Revision 1 · Failed current                                         │
+│Approval: ready · human: owner · Category: code (built-in, checks   │
+│apply)                                                              │
+│Goal: Persist a real task                                           │
+│Find output                                                         │
+│HUGE_END▏                                                           │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ SUPERVISOR CHECK · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 2 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Supervisor check transcripts · 4 artifact(s)                        │
+│Artifact 1 / 4 · first check · 1056820 bytes                        │
+│Chunk 1 / 130                                                       │
+│FIRST ATTEMPT CHECK TRANSCRIPT                                      │
+│xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx│
+│xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx│
+│xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx│
+│xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx│
+│xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx│
+│xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx│
+│Find transcript                                                     │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer]   │
+│[Find] [Up] [Down] [Close] [Copy]                                   │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ UNICODE CHECK CHUNK · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 2 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Supervisor check transcripts · 4 artifact(s)                        │
+│Artifact 1 / 4 · first check · 1056820 bytes                        │
+│Chunk 2 / 130                                                       │
+│éCHECK_END                                                          │
+│FIRST TRANSCRIPT LINE 000000 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000001 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000002 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000003 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000004 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000005 retained evidence                      │
+│Find transcript                                                     │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer]   │
+│[Find] [Up] [Down] [Close] [Copy]                                   │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ TRANSCRIPT ONLY SEARCH ACROSS UTF8 CHUNK · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Match: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxéCHECK_END                   │
+│FIRST TRANSCRIPT LINE 000000 re                                     │
+│Supervisor check transcripts · 4 artifact(s)                        │
+│Artifact 1 / 4 · first check · 1056820 bytes                        │
+│Chunk 1 / 130                                                       │
+│FIRST ATTEMPT CHECK TRANSCRIPT                                      │
+│xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx│
+│xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx│
+│xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx│
+│xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx│
+│xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx│
+│xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx│
+│Find transcript                                                     │
+│éCHECK_END▏                                                         │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer]   │
+│[Find] [Up] [Down] [Close] [Copy]                                   │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ FIRST TRANSCRIPT DEEP POSITION · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 2 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Supervisor check transcripts · 4 artifact(s)                        │
+│Artifact 1 / 4 · first check · 1056820 bytes                        │
+│Chunk 3 / 130                                                       │
+│ST TRANSCRIPT LINE 000174 retained evidence                         │
+│FIRST TRANSCRIPT LINE 000175 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000176 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000177 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000178 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000179 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000180 retained evidence                      │
+│Find transcript                                                     │
+│éCHECK_END▏                                                         │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer]   │
+│[Find] [Up] [Down] [Close] [Copy]                                   │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ FIRST TRANSCRIPT KEYBOARD SCROLL SIX ROWS · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│FIRST TRANSCRIPT LINE 000175 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000176 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000177 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000178 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000179 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000180 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000181 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000182 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000183 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000184 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000185 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000186 retained evidence                      │
+│Find transcript                                                     │
+│éCHECK_END▏                                                         │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer]   │
+│[Find] [Up] [Down] [Close] [Copy]                                   │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ SECOND TRANSCRIPT DEEP POSITION · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 2 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Supervisor check transcripts · 4 artifact(s)                        │
+│Artifact 2 / 4 · second check · 41037 bytes                         │
+│Chunk 4 / 6                                                         │
+│yyyyyyyyyyyyyyyyyyyyyyyySECOND_DEEP_POSITION                        │
+│SECOND TRANSCRIPT LINE 000000 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000001 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000002 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000003 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000004 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000005 retained evidence                     │
+│Find transcript                                                     │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer]   │
+│[Find] [Up] [Down] [Close] [Copy]                                   │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ SECOND TRANSCRIPT MOUSE SCROLL EIGHT ROWS · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│SECOND TRANSCRIPT LINE 000002 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000003 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000004 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000005 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000006 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000007 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000008 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000009 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000010 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000011 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000012 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000013 retained evidence                     │
+│Find transcript                                                     │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer]   │
+│[Find] [Up] [Down] [Close] [Copy]                                   │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ FIRST TRANSCRIPT POSITION RESTORED · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│FIRST TRANSCRIPT LINE 000175 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000176 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000177 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000178 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000179 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000180 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000181 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000182 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000183 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000184 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000185 retained evidence                      │
+│FIRST TRANSCRIPT LINE 000186 retained evidence                      │
+│Find transcript                                                     │
+│éCHECK_END▏                                                         │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer]   │
+│[Find] [Up] [Down] [Close] [Copy]                                   │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ SECOND TRANSCRIPT POSITION RESTORED · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│SECOND TRANSCRIPT LINE 000002 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000003 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000004 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000005 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000006 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000007 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000008 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000009 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000010 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000011 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000012 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000013 retained evidence                     │
+│Find transcript                                                     │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer]   │
+│[Find] [Up] [Down] [Close] [Copy]                                   │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ TRANSCRIPT SCROLL AND ARTIFACT RESTORED AFTER ATTEMPT CHANGE · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│SECOND TRANSCRIPT LINE 000002 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000003 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000004 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000005 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000006 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000007 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000008 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000009 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000010 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000011 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000012 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000013 retained evidence                     │
+│Find transcript                                                     │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer]   │
+│[Find] [Up] [Down] [Close] [Copy]                                   │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ CURRENT TRANSCRIPT SCROLL AND ARTIFACT RESTORED AFTER REOPEN · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│SECOND TRANSCRIPT LINE 000002 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000003 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000004 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000005 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000006 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000007 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000008 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000009 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000010 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000011 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000012 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000013 retained evidence                     │
+│Find transcript                                                     │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer]   │
+│[Find] [Up] [Down] [Close] [Copy]                                   │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ PRUNED EVIDENCE · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 2 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Supervisor check transcripts · 4 artifact(s)                        │
+│Artifact 3 / 4 · old pruned check · 10 bytes                        │
+│PRUNED: transcript content is no longer retained.                   │
+│                                                                    │
+│                                                                    │
+│Attempt inputs: revision 1 · session not recorded                   │
+│Revision 1 · Failed current                                         │
+│Approval: ready · human: owner · Category: code (built-in, checks   │
+│apply)                                                              │
+│Goal: Persist a real task                                           │
+│Find transcript                                                     │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer]   │
+│[Find] [Up] [Down] [Close] [Copy]                                   │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ MISSING EVIDENCE · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 2 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Supervisor check transcripts · 4 artifact(s)                        │
+│Artifact 4 / 4 · missing check · 10 bytes                           │
+│MISSING: transcript file or safe path is absent.                    │
+│                                                                    │
+│                                                                    │
+│Attempt inputs: revision 1 · session not recorded                   │
+│Revision 1 · Failed current                                         │
+│Approval: ready · human: owner · Category: code (built-in, checks   │
+│apply)                                                              │
+│Goal: Persist a real task                                           │
+│Find transcript                                                     │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer]   │
+│[Find] [Up] [Down] [Close] [Copy]                                   │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ CURRENT EARLIER ATTEMPT RESTORED AFTER SCREEN SWITCH · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 1 / 2 · #1 · revision 1 · failed                            │
+│Outcome: Failed check with review finding                           │
+│Supervisor check transcripts · 4 artifact(s)                        │
+│Artifact 4 / 4 · missing check · 10 bytes                           │
+│MISSING: transcript file or safe path is absent.                    │
+│                                                                    │
+│                                                                    │
+│Attempt inputs: revision 1 · session not recorded                   │
+│Revision 1 · Failed current                                         │
+│Approval: ready · human: owner · Category: code (built-in, checks   │
+│apply)                                                              │
+│Goal: Persist a real task                                           │
+│Find transcript                                                     │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer]   │
+│[Find] [Up] [Down] [Close] [Copy]                                   │
+╰────────────────────────────────────────────────────────────────────╯
+Sent 12 characters via OSC 52 · F7: native selection fallback
+@@ HISTORY BROWSER · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│Attempt 2 / 2 · #2 · revision 1 · failed                            │
+│Outcome: Second failure                                             │
+│Output page 1 / 1 · chunk 1 / 1 · 1 records · newest first ·        │
+│snapshot #1                                                         │
+│                                                                    │
+│#1 [stdout] SECOND ATTEMPT ONLY                                     │
+│                                                                    │
+│Attempt inputs: revision 1 · session not recorded                   │
+│Revision 1 · Failed current                                         │
+│Approval: ready · human: owner · Category: code (built-in, checks   │
+│apply)                                                              │
+│Goal: Persist a real task                                           │
+│Find output                                                         │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Older] [Newer] [Chunk -] [Chunk +]   │
+│[Find] [Refresh] [Up] [Down] [Close] [Copy]                         │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY TRANSCRIPT MOUSE SCROLL EIGHT ROWS · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│SECOND TRANSCRIPT LINE 000002 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000003 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000004 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000005 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000006 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000007 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000008 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000009 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000010 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000011 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000012 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000013 retained evidence                     │
+│Find transcript                                                     │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer]   │
+│[Find] [Up] [Down] [Close] [Copy]                                   │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ HISTORY EARLIER ATTEMPT ARTIFACT AND SCROLL RESTORED AFTER SCREEN SWITCH · 70x22 · mouse
+ ktask-dev  / project   SQLite · real tasks
+╭ Task details / attempts ───────────────────────────────────────────╮
+│SECOND TRANSCRIPT LINE 000002 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000003 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000004 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000005 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000006 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000007 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000008 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000009 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000010 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000011 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000012 retained evidence                     │
+│SECOND TRANSCRIPT LINE 000013 retained evidence                     │
+│Find transcript                                                     │
+│▏                                                                   │
+│[ ] attempt · s summary · v reviews · f failures · n/p step · o     │
+│[Summary] [Reviews] [Failures] [Results] [Output] [Transcripts]     │
+│[Prev attempt] [Next attempt] [Check -] [Check +] [Older] [Newer]   │
+│[Find] [Up] [Down] [Close] [Copy]                                   │
+╰────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

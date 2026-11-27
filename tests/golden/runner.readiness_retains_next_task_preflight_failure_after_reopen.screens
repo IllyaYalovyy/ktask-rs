@@ -1,0 +1,148 @@
+@@ READINESS NEXT TASK STOPPED · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Session: Queue · stopped · Configure all four task roles in Models (codex, claude or opencode); defaults only apply to…
+ #2 Second task needs review model
+ Run blocked · u Readiness shows causes and actions
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: Configure all four task roles in Models (codex, claude or opencode); defaults only apply to new tasks         ┃
+┃Not resolved automatically: The supervisor could not start or continue this task.                                     ┃
+┃Next: Fix the cause, then r Run (u Readiness lists each blocker)                                                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                             │
+│No attempts yet                             ││Proof: result.txt contains verified                                     │
+│Run blocked (1) · u Readiness               │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Run is blocked. Press u Readiness for each cause and a direct action.   │
+│                                            ││Refresh after setup; Run retries from Current.                          │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #2 · l: all ────────────────────╮│                                                                        │
+│• #2 revision 2 saved                       ││                                                                        │
+│• #2 created: Second task needs review model││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ READINESS NEXT TASK REOPENED · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Session: Queue · sto╭ Execution readiness ───────────────────────────────────────────────────────╮faults only apply to…
+ #2 Second task needs│Run blocked · 1 blocker(s)                                                  │
+ Run blocked · u Read│                                                                            │
+┏ ■ EXECUTION STOPPED│OK · Execution state                                                        │━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: Configure al│OK · Project checks                                                         │o new tasks         ┃
+┃Not resolved automat│OK · Approval                                                               │                    ┃
+┃Next: Fix the cause,│OK · Task                                                                   │                    ┃
+┗━━━━━━━━━━━━━━━━━━━━│OK · execution model                                                        │━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: det│BLOCK · review model: No model selected → m Models                          │────────────────────╮
+│Pending · AI        │OK · validation model                                                       │                    │
+│No attempts yet     │OK · remediation model                                                      │                    │
+│Run blocked (1) · u │OK · Writable workers (execution and repair) · Agent network Off · Codex    │────────────────────╯
+│Model codex/executio│OK · Codex CLI                                                              │────────────────────╮
+│Budget 0 of 3 used  │OK · Read-only sandbox                                                      │ a direct action.   │
+│                    │OK · Commit identity: Project Author <project@example.com>                  │                    │
+│                    │OK · Supervisor ownership                                                   │                    │
+│                    │OK · Worker ownership                                                       │                    │
+│                    │OK · Workspace baseline                                                     │                    │
+│                    │                                                                            │                    │
+╰────────────────────│Queue: stopped · command conflict: Configure all four task roles in Models  │                    │
+╭ Activity · #2 · l: │(codex, claude or opencode); defaults only apply to new tasks               │                    │
+│• #2 revision 2 save│                                                                            │                    │
+│• #2 created: Second│After fixing setup, Refresh here or press r on Current. Inspection creates  │                    │
+│                    │no attempt.                                                                 │                    │
+│                    │Wheel / PgUp / PgDn: scroll · Esc: close                                    │                    │
+│                    │                                                                            │                    │
+│                    │[c Checks] [m Models] [r Run queue] [u Refresh] [Close]                     │                    │
+╰────────────────────│                                                                            │────────────────────╯
+[Copy] [r Run queue] │                                                                            │eadiness]
+[m Run mode] [Enter D╰────────────────────────────────────────────────────────────────────────────╯
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ READINESS NEXT TASK REPAIRED · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Session: Queue · stopped · Configure all four task roles in Models (codex, claude or opencode); defaults only apply to…
+ #2 Second task needs review model
+ Ready · r Run queue; checks and repair run automatically
+┏ ■ EXECUTION STOPPED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Reason: Configure all four task roles in Models (codex, claude or opencode); defaults only apply to new tasks         ┃
+┃Not resolved automatically: The supervisor could not start or continue this task.                                     ┃
+┃Next: Fix the cause, then r Run (u Readiness lists each blocker)                                                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Pending · AI                                ││Goal: Create result.txt containing verified                             │
+│No attempts yet                             ││Proof: result.txt contains verified                                     │
+│Can run · u Readiness                       │╰────────────────────────────────────────────────────────────────────────╯
+│Model codex/execution / none                │╭ Log · following ───────────────────────────────────────────────────────╮
+│Budget 0 of 3 used                          ││Ready. r starts an attempt in the background supervisor; this pane      │
+│                                            ││follows its log.                                                        │
+│                                            ││Defaults and checks live in Config; c pins models for this task.        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · #2 · l: all ────────────────────╮│                                                                        │
+│• #2 revision 3 saved                       ││                                                                        │
+│• #2 revision 2 saved                       ││                                                                        │
+│• #2 created: Second task needs review model││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models] [e Edit] [b Break down] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Saved to SQLite
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ READINESS NEXT TASK COMPLETE · 120x36 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 2
+ Session: Queue · complete · no queued work
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Queue complete.                                                                                                       │
+│Inspect results in History, or add more work.                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

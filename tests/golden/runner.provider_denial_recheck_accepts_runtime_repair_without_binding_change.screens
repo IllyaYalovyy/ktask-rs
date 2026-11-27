@@ -1,0 +1,66 @@
+@@ provider runtime wait · 110x32 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs dependency   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Repair bound adb runtime
+ Dependency setup needed · r Recheck after setup · u Readiness · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Needs dependency · AI                       ││Goal: Create result.txt containing verified                   │
+│Attempt 1                                   ││Proof: result.txt contains verified                           │
+│Model codex/execution / none                │╰──────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ─────────────────────────────╮
+│Tokens none reported yet                    ││Outcome: Waiting                                              │
+│none yet                                    ││                                                              │
+│Budget 0 of 3 used                          ││Supervisor outcome: Prerequisite probe did not pass:          │
+│Run blocked (1) · u Readiness               ││executable adb: FAILED: found, but --version exited 1, so     │
+│                                            ││version 1.0 cannot be verified; declare it without a version: │
+│                                            ││. Fix it externally, then Recheck                             │
+╰────────────────────────────────────────────╯│                                                              │
+╭ Activity · #1 · l: all ────────────────────╮│                                                              │
+│• Prerequisite probe did not pass:          ││                                                              │
+│  executable adb: FAILED: found, but…       ││                                                              │
+│• provider denied adb runtime               ││                                                              │
+│• executable adb required for execution:    ││                                                              │
+│  adb needs runtime setup                   ││                                                              │
+│• Current task attempt recorded             ││                                                              │
+│• #1 created: Repair bound adb runtime      ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Recheck] [t Tools and install plan] [s Stop] [D Mark done] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Dependency not verified · u Readiness shows the observed result
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ provider runtime repaired · 110x32 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Repair bound adb runtime
+ Paused · r Resume continues this attempt · s Stop returns it to Pending
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ────────────────────────────╮
+│Paused · AI                                 ││Goal: Create result.txt containing verified                   │
+│Attempt 1                                   ││Proof: result.txt contains verified                           │
+│Model codex/execution / none                │╰──────────────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Log · following · attempt 1 · o: report ─────────────────────╮
+│Tokens none reported yet                    ││                                                              │
+│none yet                                    ││                                                              │
+│Budget 0 of 3 used                          ││                                                              │
+│Can run · u Readiness                       ││                                                              │
+│                                            ││                                                              │
+│                                            ││                                                              │
+╰────────────────────────────────────────────╯│                                                              │
+╭ Activity · #1 · l: all ────────────────────╮│                                                              │
+│• All prerequisites verified; Run resumes   ││                                                              │
+│  the task                                  ││                                                              │
+│• Prerequisite probe did not pass:          ││                                                              │
+│  executable adb: FAILED: found, but…       ││                                                              │
+│• provider denied adb runtime               ││                                                              │
+│• executable adb required for execution:    ││                                                              │
+│  adb needs runtime setup                   ││                                                              │
+╰────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+[Copy] [r Resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
+[Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Dependencies verified · r Resume continues the task
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

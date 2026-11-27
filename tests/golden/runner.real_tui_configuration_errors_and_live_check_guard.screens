@@ -1,0 +1,69 @@
+@@ MISSING CHECKS · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Configuration preflight
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · AI                ││Goal: Create result.txt containing ve…│
+│No attempts yet             ││Proof: result.txt contains verified   │
+│Run blocked (2) · u Readines│╰──────────────────────────────────────╯
+│Model unconfigured / none   │╭ Log · following ─────────────────────╮
+│Budget 0 of 3 used          ││Run is blocked. Press u Readiness for │
+╰────────────────────────────╯│each cause and a direct action.       │
+╭ Activity · #1 · l: all ────╮│Refresh after setup; Run retries from │
+│• command conflict:         ││Current.                              │
+│  Configure an enabled…     ││                                      │
+│• #1 revision 2 saved       ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models]
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+command conflict: Configure an enabled check in Configuration > Check…
+@@ MISSING MODELS · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Pending   |   Queue 1 · History 0
+ Queue preference · last task · m: run mode in Current
+ #1 Configuration preflight
+ Run blocked · u Readiness shows causes and actions
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Pending · AI                ││Goal: Create result.txt containing ve…│
+│No attempts yet             ││Proof: result.txt contains verified   │
+│Run blocked (1) · u Readines│╰──────────────────────────────────────╯
+│Model unconfigured / none   │╭ Log · following ─────────────────────╮
+│Budget 0 of 3 used          ││Run is blocked. Press u Readiness for │
+╰────────────────────────────╯│each cause and a direct action.       │
+╭ Activity · #1 · l: all ────╮│Refresh after setup; Run retries from │
+│• command conflict:         ││Current.                              │
+│  Configure all four task…  ││                                      │
+│• command conflict:         ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [r Run queue] [D Mark done] [x Cancel] [R Supersede] [c Models]
+[e Edit] [b Break down] [u Readiness] [m Run mode] [Enter Details]
+[a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+command conflict: Configure all four task roles in Models (codex, cla…
+@@ LIVE CHECK GUARD · 70x22 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+╭ Edit project check ────────────────────────────────────────────────╮
+│Save validates all fields together. Cancel changes nothing.         │
+│Checks cannot change during running, paused or waiting attempts.    │
+│Name                                                                │
+│build                                                               │
+│Command                                                             │
+│false▏                                                              │
+│Working directory (relative)                                        │
+│.                                                                   │
+│Timeout (ms)                                                        │
+│600000                                                              │
+│State                                                               │
+│< Enabled >   click / Space to change                               │
+│command conflict: Cannot change checks during a live attempt        │
+│                                                                    │
+│[Copy] [Apply] [Cancel] [Up] [Down]                                 │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

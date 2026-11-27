@@ -77,6 +77,7 @@ pub(super) fn diagnose(
         packet.path(),
         &tree,
         inquiry.context,
+        false,
     )?;
     let evidence = format!(
         "{}\n{evidence}\nResolved project tools: {}. Environment fingerprint: {}.\nRead/search with '{}' evidence FILE --offset 0 --limit 4096 [--search TEXT]; follow next_offset.",

@@ -1,0 +1,66 @@
+@@ QUEUE WHILE RUNNING · 110x32 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · supervisor alive · <t> |   Queue 1 · History 0
+ Session: Queue · running · Workflow · Implement · repair round 0/10 · Run requested
+ Queue · 1 shown / 1 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 1 · Model ─────────────────────────────────────────╮╭ Details · click for full ────────────────╮
+│› #1   Running  Pause from Queue                 codex/execution││Pause from Queue                          │
+│                                                                ││#1 · Running · AI                         │
+│                                                                ││                                          │
+│                                                                ││Goal: Create result.txt containing        │
+│                                                                ││verified                                  │
+│                                                                ││                                          │
+│                                                                ││Check: result.txt contains verified       │
+│                                                                ││                                          │
+│                                                                ││Attempts: 1 · ? new tokens                │
+│                                                                ││                                          │
+│                                                                ││Models:                                   │
+│                                                                ││Execution: codex/execution / none         │
+│                                                                ││Review: codex/review / none               │
+│                                                                ││Validation: codex/validation / none       │
+│                                                                ││Remediation: codex/remediation / none     │
+│                                                                ││Attempt 1 · Running · Active <t>          │
+│                                                                ││1 calls · uncached unknown · cache read   │
+│                                                                ││unknown · cache write unknown · output    │
+│                                                                ││unknown · ? new tokens                    │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [p Pause] [a Add] [i Insert] [s Stop] [T Restart] [D Mark done] [o Import] [E Export] [Enter Details]
+[f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Supervisor started · close TUI safely · Pause stops execution
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ PAUSED FROM QUEUE · 110x32 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
+ Session: Queue · paused · Paused; worker stopped, Resume continues the same attempt
+ Queue · 1 shown / 1 total · execution order
+ Filter: All  |  Search: / to search
+╭ Queue · 1 / 1 · Model ─────────────────────────────────────────╮╭ Details · click for full ────────────────╮
+│› #1   Paused   Pause from Queue                 codex/execution││Pause from Queue                          │
+│                                                                ││#1 · Paused · AI                          │
+│                                                                ││                                          │
+│                                                                ││Goal: Create result.txt containing        │
+│                                                                ││verified                                  │
+│                                                                ││                                          │
+│                                                                ││Check: result.txt contains verified       │
+│                                                                ││                                          │
+│                                                                ││Attempts: 1 · ? new tokens                │
+│                                                                ││                                          │
+│                                                                ││Models:                                   │
+│                                                                ││Execution: codex/execution / none         │
+│                                                                ││Review: codex/review / none               │
+│                                                                ││Validation: codex/validation / none       │
+│                                                                ││Remediation: codex/remediation / none     │
+│                                                                ││Attempt 1 · Paused · Active <t> · waited <t>│
+│                                                                ││1 calls · uncached unknown · cache read   │
+│                                                                ││unknown · cache write unknown · output    │
+│                                                                ││unknown · ? new tokens                    │
+╰────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+[Copy] [r Resume] [a Add] [i Insert] [e Edit] [c Models] [s Stop] [T Restart] [D Mark done] [o Import]
+[E Export] [Enter Details] [f Filter] [/ Search] [Esc Clear] [S Stats] [? Help] [q Quit]
+
+Pause requested · waiting for worker shutdown and cleanup
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

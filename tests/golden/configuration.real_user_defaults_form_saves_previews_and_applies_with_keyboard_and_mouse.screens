@@ -1,0 +1,923 @@
+@@ No current task · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Current Task
+
+╭ Ready ───────────────────────────────────────────────────────────────────────────────────────────╮
+│No current task.                                                                                  │
+│Set up this project first: u Readiness lists what is missing.                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [u Readiness] [m Run mode] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Storage: SQLite · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: list, add, edit, enable or disable.                                                       │
+│Keyboard remains available with mouse disabled.                                                   │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m  │
+│Defaults.                                                                                         │
+│E Export settings and o Import settings move this project's settings to another computer.         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ User defaults for new projects · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: S╭ User defaults for new projects ────────────────────────────────────────────╮hes · R:  │
+│resource l│Saved once for this user and instance. A project registered later starts    │          │
+│Preference│with them and selects the default profile; existing projects, tasks and     │          │
+│          │attempts keep their own settings.                                           │          │
+│Mouse: Ena│Blank model clears a role. A profile or project override takes precedence   │          │
+│Run mode: │over these models. Never inherited: the check command, directories, remote  │          │
+│Planner ap│and base branch.                                                            │          │
+│Delivery: │Choose "Preview applying to this project" to see this project's values      │          │
+│Dependenci│beside these before anything changes.                                       │ a        │
+│prerequisi│planning provider/model                                                     │          │
+│          │▏                                                                           │          │
+│Defaults a│planning effort (optional)                                                  │          │
+│u User def│                                                                            │          │
+│f Profiles│execution provider/model                                                    │          │
+│w Work cat│                                                                            │ediate    │
+│code, docu│execution effort (optional)                                                 │          │
+│L Review l│                                                                            │n) and the│
+│project's │review provider/model                                                       │          │
+│Checks: li│                                                                            │          │
+│Keyboard r│review effort (optional)                                                    │          │
+│i Report l│                                                                            │ole in m  │
+│Defaults. │validation provider/model                                                   │          │
+│E Export s│                                                                            │.         │
+│          │validation effort (optional)                                                │          │
+│          │                                                                            │          │
+│          │remediation provider/model                                                  │          │
+│          │                                                                            │          │
+│          │remediation effort (optional)                                               │          │
+│          │                                                                            │          │
+│          │operator provider/model                                                     │          │
+│          │                                                                            │          │
+│          │operator effort (optional)                                                  │          │
+│          │                                                                            │          │
+│          │Agent network                                                               │          │
+│          │< Off >   click / Space to change                                           │          │
+│          │Baseline checks                                                             │          │
+│          │< On >   click / Space to change                                            │          │
+│          │Timeout (ms)                                                                │          │
+│          │600000                                                                      │          │
+│          │Run mode                                                                    │          │
+│          │< Continue queue >   click / Space to change                                │          │
+│          │Planner approval                                                            │          │
+│          │< Automatic >   click / Space to change                                     │          │
+│          │Mode                                                                        │          │
+│          │< Local >   click / Space to change                                         │          │
+│          │After saving                                                                │          │
+│          │< Only save >   click / Space to change                                     │          │
+│          │Default profile                                                             │          │
+│          │< None >   click / Space to change                                          │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ USER DEFAULTS FORM · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: S╭ User defaults for new projects ────────────────────────────────────────────╮hes · R:  │
+│resource l│Saved once for this user and instance. A project registered later starts    │          │
+│Preference│with them and selects the default profile; existing projects, tasks and     │          │
+│          │attempts keep their own settings.                                           │          │
+│Mouse: Ena│Blank model clears a role. A profile or project override takes precedence   │          │
+│Run mode: │over these models. Never inherited: the check command, directories, remote  │          │
+│Planner ap│and base branch.                                                            │          │
+│Delivery: │Choose "Preview applying to this project" to see this project's values      │          │
+│Dependenci│beside these before anything changes.                                       │ a        │
+│prerequisi│planning provider/model                                                     │          │
+│          │claude/opus                                                                 │          │
+│Defaults a│planning effort (optional)                                                  │          │
+│u User def│high                                                                        │          │
+│f Profiles│execution provider/model                                                    │          │
+│w Work cat│claude/opus                                                                 │ediate    │
+│code, docu│execution effort (optional)                                                 │          │
+│L Review l│high                                                                        │n) and the│
+│project's │review provider/model                                                       │          │
+│Checks: li│claude/opus                                                                 │          │
+│Keyboard r│review effort (optional)                                                    │          │
+│i Report l│high                                                                        │ole in m  │
+│Defaults. │validation provider/model                                                   │          │
+│E Export s│claude/opus                                                                 │.         │
+│          │validation effort (optional)                                                │          │
+│          │high                                                                        │          │
+│          │remediation provider/model                                                  │          │
+│          │claude/opus                                                                 │          │
+│          │remediation effort (optional)                                               │          │
+│          │high                                                                        │          │
+│          │operator provider/model                                                     │          │
+│          │claude/opus                                                                 │          │
+│          │operator effort (optional)                                                  │          │
+│          │high                                                                        │          │
+│          │Agent network                                                               │          │
+│          │< On >   click / Space to change                                            │          │
+│          │Baseline checks                                                             │          │
+│          │< Off >   click / Space to change                                           │          │
+│          │Timeout (ms)                                                                │          │
+│          │45000                                                                       │          │
+│          │Run mode                                                                    │          │
+│          │< Run one >   click / Space to change                                       │          │
+│          │Planner approval                                                            │          │
+│          │< Review required >   click / Space to change                               │          │
+│          │Mode                                                                        │          │
+│          │< Direct push >   click / Space to change                                   │          │
+│          │After saving                                                                │          │
+│          │< Preview applying to this project >   click / Space to change              │          │
+│          │Default profile                                                             │          │
+│          │< None >   click / Space to change                                          │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Apply user defaults to this project? · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work cat╭ Apply user defaults to this project? ──────────────────────────────────────╮ediate    │
+│code, docu│Defaults saved for new projects. This project keeps its settings unless you │          │
+│L Review l│apply them.                                                                 │n) and the│
+│project's │Applying keeps check commands, remote and base branch, and changes no       │          │
+│Checks: li│existing task or attempt.                                                   │          │
+│Keyboard r│                                                                            │          │
+│i Report l│profile: none (unchanged)                                                   │ole in m  │
+│Defaults. │planning model: claude/opus / high (unchanged)                              │          │
+│E Export s│execution model: claude/opus / high (unchanged)                             │.         │
+│          │review model: claude/opus / high (unchanged)                                │          │
+│          │validation model: claude/opus / high (unchanged)                            │          │
+│          │remediation model: claude/opus / high (unchanged)                           │          │
+│          │operator model: claude/opus / high (unchanged)                              │          │
+│          │agent network: off -> on                                                    │          │
+│          │baseline checks: on -> off                                                  │          │
+│          │check timeout: no checks (unchanged)                                        │          │
+│          │run mode: queue -> single                                                   │          │
+│          │planner approval: automatic -> review_required                              │          │
+│          │delivery mode: local -> direct                                              │          │
+│          │Project settings                                                            │          │
+│          │< Keep project settings >   click / Space to change                         │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+User defaults saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ USER DEFAULTS PREVIEW · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Queue preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Continue queue                                                                          │
+│Planner approval: Automatic                                                                       │
+│Delivery: local via origin/main                                                                   │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work cat╭ Apply user defaults to this project? ──────────────────────────────────────╮ediate    │
+│code, docu│Defaults saved for new projects. This project keeps its settings unless you │          │
+│L Review l│apply them.                                                                 │n) and the│
+│project's │Applying keeps check commands, remote and base branch, and changes no       │          │
+│Checks: li│existing task or attempt.                                                   │          │
+│Keyboard r│                                                                            │          │
+│i Report l│profile: none (unchanged)                                                   │ole in m  │
+│Defaults. │planning model: claude/opus / high (unchanged)                              │          │
+│E Export s│execution model: claude/opus / high (unchanged)                             │.         │
+│          │review model: claude/opus / high (unchanged)                                │          │
+│          │validation model: claude/opus / high (unchanged)                            │          │
+│          │remediation model: claude/opus / high (unchanged)                           │          │
+│          │operator model: claude/opus / high (unchanged)                              │          │
+│          │agent network: off -> on                                                    │          │
+│          │baseline checks: on -> off                                                  │          │
+│          │check timeout: no checks (unchanged)                                        │          │
+│          │run mode: queue -> single                                                   │          │
+│          │planner approval: automatic -> review_required                              │          │
+│          │delivery mode: local -> direct                                              │          │
+│          │Project settings                                                            │          │
+│          │< Keep project settings >   click / Space to change                         │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+User defaults saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ User defaults applied to this project · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Run one preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Run one                                                                                 │
+│Planner approval: Review required                                                                 │
+│Delivery: direct via origin/main                                                                  │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: list, add, edit, enable or disable.                                                       │
+│Keyboard remains available with mouse disabled.                                                   │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m  │
+│Defaults.                                                                                         │
+│E Export settings and o Import settings move this project's settings to another computer.         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+User defaults applied to this project
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Run mode: Run one · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Run one preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Run one                                                                                 │
+│Planner approval: Review required                                                                 │
+│Delivery: direct via origin/main                                                                  │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: list, add, edit, enable or disable.                                                       │
+│Keyboard remains available with mouse disabled.                                                   │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m  │
+│Defaults.                                                                                         │
+│E Export settings and o Import settings move this project's settings to another computer.         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+User defaults applied to this project
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ User defaults for new projects #2 · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Run one preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: S╭ User defaults for new projects ────────────────────────────────────────────╮hes · R:  │
+│resource l│Saved once for this user and instance. A project registered later starts    │          │
+│Preference│with them and selects the default profile; existing projects, tasks and     │          │
+│          │attempts keep their own settings.                                           │          │
+│Mouse: Ena│Blank model clears a role. A profile or project override takes precedence   │          │
+│Run mode: │over these models. Never inherited: the check command, directories, remote  │          │
+│Planner ap│and base branch.                                                            │          │
+│Delivery: │Choose "Preview applying to this project" to see this project's values      │          │
+│Dependenci│beside these before anything changes.                                       │ a        │
+│prerequisi│planning provider/model                                                     │          │
+│          │claude/opus▏                                                                │          │
+│Defaults a│planning effort (optional)                                                  │          │
+│u User def│high                                                                        │          │
+│f Profiles│execution provider/model                                                    │          │
+│w Work cat│claude/opus                                                                 │ediate    │
+│code, docu│execution effort (optional)                                                 │          │
+│L Review l│high                                                                        │n) and the│
+│project's │review provider/model                                                       │          │
+│Checks: li│claude/opus                                                                 │          │
+│Keyboard r│review effort (optional)                                                    │          │
+│i Report l│high                                                                        │ole in m  │
+│Defaults. │validation provider/model                                                   │          │
+│E Export s│claude/opus                                                                 │.         │
+│          │validation effort (optional)                                                │          │
+│          │high                                                                        │          │
+│          │remediation provider/model                                                  │          │
+│          │claude/opus                                                                 │          │
+│          │remediation effort (optional)                                               │          │
+│          │high                                                                        │          │
+│          │operator provider/model                                                     │          │
+│          │claude/opus                                                                 │          │
+│          │operator effort (optional)                                                  │          │
+│          │high                                                                        │          │
+│          │Agent network                                                               │          │
+│          │< On >   click / Space to change                                            │          │
+│          │Baseline checks                                                             │          │
+│          │< Off >   click / Space to change                                           │          │
+│          │Timeout (ms)                                                                │          │
+│          │45000                                                                       │          │
+│          │Run mode                                                                    │          │
+│          │< Run one >   click / Space to change                                       │          │
+│          │Planner approval                                                            │          │
+│          │< Review required >   click / Space to change                               │          │
+│          │Mode                                                                        │          │
+│          │< Direct push >   click / Space to change                                   │          │
+│          │After saving                                                                │          │
+│          │< Only save >   click / Space to change                                     │          │
+│          │Default profile                                                             │          │
+│          │< None >   click / Space to change                                          │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+User defaults applied to this project
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ No checks configured · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Run one preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Run one                                                                                 │
+│Planner approval: Review required                                                                 │
+│Delivery: direct via origin/main                                                                  │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: list, add, edit, enable or disable.                                                       │
+│Keyboard remains available with mouse disabled.                                                   │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m  │
+│Defaults. ╭ Project checks ────────────────────────────────────────────────────────────╮          │
+│E Export s│Select a check, then Apply to edit or enable/disable.                       │.         │
+│          │No checks configured.                                                       │          │
+│          │                                                                            │          │
+│          │                                                                            │          │
+│          │Check to open                                                               │          │
+│          │< Add new check >   click / Space to change                                 │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+User defaults applied to this project
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Edit project check · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Run one preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Run one                                                                                 │
+│Planner approval: Review required                                                                 │
+│Delivery: direct via origin/main                                                                  │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: li╭ Edit project check ────────────────────────────────────────────────────────╮          │
+│Keyboard r│Save validates all fields together. Cancel changes nothing.                 │          │
+│i Report l│Checks cannot change during running, paused or waiting attempts.            │ole in m  │
+│Defaults. │Name                                                                        │          │
+│E Export s│▏                                                                           │.         │
+│          │Command                                                                     │          │
+│          │                                                                            │          │
+│          │Working directory (relative)                                                │          │
+│          │.                                                                           │          │
+│          │Timeout (ms)                                                                │          │
+│          │45000                                                                       │          │
+│          │State                                                                       │          │
+│          │< Enabled >   click / Space to change                                       │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+User defaults applied to this project
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ FIRST CHECK FORM · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Run one preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Run one                                                                                 │
+│Planner approval: Review required                                                                 │
+│Delivery: direct via origin/main                                                                  │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: li╭ Edit project check ────────────────────────────────────────────────────────╮          │
+│Keyboard r│Save validates all fields together. Cancel changes nothing.                 │          │
+│i Report l│Checks cannot change during running, paused or waiting attempts.            │ole in m  │
+│Defaults. │Name                                                                        │          │
+│E Export s│▏                                                                           │.         │
+│          │Command                                                                     │          │
+│          │                                                                            │          │
+│          │Working directory (relative)                                                │          │
+│          │.                                                                           │          │
+│          │Timeout (ms)                                                                │          │
+│          │45000                                                                       │          │
+│          │State                                                                       │          │
+│          │< Enabled >   click / Space to change                                       │          │
+│          │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│          │                                                                            │          │
+│          │[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│          │                                                                            │          │
+│          ╰────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+User defaults applied to this project
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ Project configuration saved · 100x70 · keyboard+mouse
+ ktask-dev  / run-000000   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 0
+ Run one preference · no queued work · m: run mode in Current
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: run-000000                                                                               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R:  │
+│resource limits.                                                                                  │
+│Preferences: saved per project and instance.                                                      │
+│                                                                                                  │
+│Mouse: Enabled                                                                                    │
+│Run mode: Run one                                                                                 │
+│Planner approval: Review required                                                                 │
+│Delivery: direct via origin/main                                                                  │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a        │
+│prerequisite is missing. CLI require declares prerequisites before a task starts.                 │
+│                                                                                                  │
+│Defaults apply to new tasks; existing revisions stay pinned.                                      │
+│u User defaults: what new projects start with; preview and apply them here.                       │
+│f Profiles: named role models to reuse; select one here or as the new-project default.            │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate    │
+│code, documents or art; override per project.                                                     │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the│
+│project's default selection.                                                                      │
+│Checks: list, add, edit, enable or disable.                                                       │
+│Keyboard remains available with mouse disabled.                                                   │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m  │
+│Defaults.                                                                                         │
+│E Export settings and o Import settings move this project's settings to another computer.         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Project configuration saved
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

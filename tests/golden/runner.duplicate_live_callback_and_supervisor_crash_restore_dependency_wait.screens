@@ -1,0 +1,29 @@
+@@ dependency crash restored · 100x28 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Needs dependency   |   Queue 2 · History 0
+ Session: Run one · waiting · Next #2 · executable rg 14.1.1: fixture tool: command not found
+ #1 Recover committed prerequisite request
+ Dependency setup needed · r Recheck after setup · u Readiness · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────╮
+│Needs dependency · AI                       ││Goal: Create result.txt containing verified         │
+│Attempt 1                                   ││Proof: result.txt contains verified                 │
+│Model codex/execution / none                │╰────────────────────────────────────────────────────╯
+│Active <t> · waited <t>                     │╭ Report · attempt 1 · o: raw log ───────────────────╮
+│Tokens none reported yet                    ││Outcome: Waiting                                    │
+│? new tokens                                ││                                                    │
+╰────────────────────────────────────────────╯│Supervisor check build · failed                     │
+╭ Activity · #1 · l: all ────────────────────╮│Check build: test counts unavailable                │
+│• executable rg 14.1.1: fixture tool:       ││Check build failed (exit 127)                       │
+│  command not found                         ││                                                    │
+│• Dependency discovery returned the         ││Execution · waiting · codex/execution verdict:      │
+│  provisional baseline repair round; repair…││executable rg 14.1.1: fixture tool: command not     │
+│• executable rg required for baseline:      ││found                                               │
+│  fixture tool: command not found           ││                                                    │
+│• Workflow · Fix · repair round 1/10        ││Supervisor outcome: executable rg 14.1.1: fixture   │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+[Copy] [r Recheck] [t Tools and install plan] [s Stop] [D Mark done] [u Readiness] [m Run mode]
+[Enter Details] [o Log] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
+
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

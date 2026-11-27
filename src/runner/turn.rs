@@ -14,6 +14,7 @@ use crate::{
     application::{
         ModelConfig, ROLES, Service,
         execution::{Run, Step},
+        has_golden_screens,
         lenses::Lens,
     },
     instance::Paths,
@@ -225,12 +226,17 @@ fn answered_turn(
     let configured = turn.role;
     let packet = crate::scratch::Scratch::new(&ctx.paths.state.join("review-packets"))?;
     let tree = ctx.workspace.fingerprint(&ctx.scratch_root())?;
+    // Only review and validation follow a passed check, whose screen comparison they rely on.
+    let golden_screens = matches!(role, "review" | "validation")
+        && run.runs_checks()
+        && has_golden_screens(&ctx.workspace.root);
     let packet_context = service.review_bundle(
         run.attempt,
         &ctx.paths.state,
         packet.path(),
         &tree,
         evidence,
+        golden_screens,
     )?;
     let packet_context = format!(
         "{packet_context}\nResolved project tools: {}. Environment fingerprint: {}.\nRead/search without opening the database: '{}' evidence FILE --offset 0 --limit 4096 [--search TEXT]. Use next_offset until eof. This command works in the read-only sandbox.\n",

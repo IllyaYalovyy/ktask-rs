@@ -1,0 +1,162 @@
+@@ LOG BEFORE PLAIN CLICK · 70x22 · keyboard
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · <t> |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ #1 Recover a failed check
+ Running (simulated) · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Include every task on the final…│
+│Attempt 2 · step <n>/6      ││Proof: All 240 tasks are reachable.   │
+│Budget 1 of 3 used          │╰──────────────────────────────────────╯
+│Model economy / medium      │╭ Log · following · attempt 2 ─────────╮
+│Cost <cost> (mock)          ││Executor: economy / medium · revision │
+╰────────────────────────────╯│1 · session 1 (mock)                  │
+╭ Activity · l: all ─────────╮│Executor: inspected the task          │
+│• Current running ·         ││Executor: implementing                │
+│  simulation only           ││Checks: running                       │
+│• Workspace #1: retained    ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+Current running · simulation only
+@@ LOG AFTER PLAIN CLICK · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · <t> |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ #1 Recover a failed check
+ Running (simulated) · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Include every task on the final…│
+│Attempt 2 · step <n>/6      ││Proof: All 240 tasks are reachable.   │
+│Budget 1 of 3 used          │╰──────────────────────────────────────╯
+│Model economy / medium      │╭ Log · following · attempt 2 ─────────╮
+│Cost <cost> (mock)          ││Executor: economy / medium · revision │
+╰────────────────────────────╯│1 · session 1 (mock)                  │
+╭ Activity · l: all ─────────╮│Executor: inspected the task          │
+│• Current running ·         ││Executor: implementing                │
+│  simulation only           ││Checks: running                       │
+│• Workspace #1: retained    ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+Current running · simulation only
+@@ LOG FOLLOWING AFTER OUTPUT · 70x22 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · <t> |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run m…
+ #1 Recover a failed check
+ Running (simulated) · p Pause · s Stop
+╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ────╮
+│Running · AI                ││Goal: Include every task on the final…│
+│Attempt 2 · step <n>/6      ││Proof: All 240 tasks are reachable.   │
+│Budget 1 of 3 used          │╰──────────────────────────────────────╯
+│Model economy / medium      │╭ Log · following · attempt 2 ─────────╮
+│Cost <cost> (mock)          ││Executor: economy / medium · revision │
+╰────────────────────────────╯│1 · session 1 (mock)                  │
+╭ Activity · l: all ─────────╮│Executor: inspected the task          │
+│• Current running ·         ││Executor: implementing                │
+│  simulation only           ││Checks: running                       │
+│• Workspace #1: retained    ││Review: checking the result           │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness]
+[m Run mode] [Enter Details] [a Add] [i Investigate] [f Fix] [S Stats]
+[? Help] [q Quit]
+Current running · simulation only
+@@ LOG BEFORE PLAIN CLICK · 120x30 · keyboard
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · <t> |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ #1 Recover a failed check
+ Running (simulated) · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Include every task on the final queue page.                       │
+│Attempt 2 · step <n>/6                      ││Proof: All 240 tasks are reachable.                                     │
+│Budget 1 of 3 used                          │╰────────────────────────────────────────────────────────────────────────╯
+│Model economy / medium                      │╭ Log · following · attempt 2 ───────────────────────────────────────────╮
+│Cost <cost> (mock)                          ││Executor: economy / medium · revision 1 · session 1 (mock)              │
+│                                            ││Executor: inspected the task                                            │
+│                                            ││Executor: implementing                                                  │
+│                                            ││Checks: running                                                         │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · l: all ─────────────────────────╮│                                                                        │
+│• Current running · simulation only         ││                                                                        │
+│• Workspace #1: retained for same-task      ││                                                                        │
+│  retry/resume (mock)                       ││                                                                        │
+│• Configuration applied · session only      ││                                                                        │
+│• Check failed · #1                         ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+
+Current running · simulation only
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LOG AFTER PLAIN CLICK · 120x30 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · <t> |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ #1 Recover a failed check
+ Running (simulated) · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Include every task on the final queue page.                       │
+│Attempt 2 · step <n>/6                      ││Proof: All 240 tasks are reachable.                                     │
+│Budget 1 of 3 used                          │╰────────────────────────────────────────────────────────────────────────╯
+│Model economy / medium                      │╭ Log · following · attempt 2 ───────────────────────────────────────────╮
+│Cost <cost> (mock)                          ││Executor: economy / medium · revision 1 · session 1 (mock)              │
+│                                            ││Executor: inspected the task                                            │
+│                                            ││Executor: implementing                                                  │
+│                                            ││Checks: running                                                         │
+│                                            ││                                                                        │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · l: all ─────────────────────────╮│                                                                        │
+│• Current running · simulation only         ││                                                                        │
+│• Workspace #1: retained for same-task      ││                                                                        │
+│  retry/resume (mock)                       ││                                                                        │
+│• Configuration applied · session only      ││                                                                        │
+│• Check failed · #1                         ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+
+Current running · simulation only
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ LOG FOLLOWING AFTER OUTPUT · 120x30 · mouse
+ ktask-dev  / demo workspace   MOCK DATA · session only
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #1 · Running · <t> |   Queue 120 · History 120
+ Queue preference · Next #2: Approve the queue interaction · m: run mode in Current
+ #1 Recover a failed check
+ Running (simulated) · p Pause · s Stop
+╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
+│Running · AI                                ││Goal: Include every task on the final queue page.                       │
+│Attempt 2 · step <n>/6                      ││Proof: All 240 tasks are reachable.                                     │
+│Budget 1 of 3 used                          │╰────────────────────────────────────────────────────────────────────────╯
+│Model economy / medium                      │╭ Log · following · attempt 2 ───────────────────────────────────────────╮
+│Cost <cost> (mock)                          ││Executor: economy / medium · revision 1 · session 1 (mock)              │
+│                                            ││Executor: inspected the task                                            │
+│                                            ││Executor: implementing                                                  │
+│                                            ││Checks: running                                                         │
+│                                            ││Review: checking the result                                             │
+│                                            ││                                                                        │
+╰────────────────────────────────────────────╯│                                                                        │
+╭ Activity · l: all ─────────────────────────╮│                                                                        │
+│• Current running · simulation only         ││                                                                        │
+│• Workspace #1: retained for same-task      ││                                                                        │
+│  retry/resume (mock)                       ││                                                                        │
+│• Configuration applied · session only      ││                                                                        │
+│• Check failed · #1                         ││                                                                        │
+╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+[Copy] [p Pause] [s Stop] [T Restart] [D Mark done] [u Readiness] [m Run mode] [Enter Details] [a Add] [i Investigate]
+[f Fix] [S Stats] [? Help] [q Quit]
+
+Current running · simulation only
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

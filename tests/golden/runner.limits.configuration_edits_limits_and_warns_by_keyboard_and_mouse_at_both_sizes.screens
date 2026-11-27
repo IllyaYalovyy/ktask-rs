@@ -1,0 +1,372 @@
+@@ limits-overview · 120x36 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Run one · complete · no queued work · Checks, independent review and validation passed after 0 repair rounds
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                      │
+│Storage: SQLite outp╭ Resource limits ───────────────────────────────────────────────────────────╮esource limits.     │
+│Preferences: saved p│Project values override instance defaults. A change applies to the next     │                    │
+│                    │step of a paused attempt. Value / ceiling · source · most a successful task │                    │
+│Mouse: Enabled      │used:                                                                       │                    │
+│Run mode: Continue q│scratch_bytes: 4294967296 / 17179869184 · default · used 12288              │                    │
+│Planner approval: Au│scratch_entries: 200000 / 800000 · default · used 7                         │                    │
+│Delivery: local via │artifact_file_bytes: 134217728 / 536870912 · default · used 1               │                    │
+│Dependencies: manual│artifact_attempt_bytes: 1073741824 / 4294967296 · default · used 3          │isite is missing.   │
+│CLI require declares│artifact_attempt_files: 4096 / 16384 · default · used 4                     │                    │
+│                    │output_bytes: 67108864 / 268435456 · default · used 663                     │                    │
+│Defaults apply to ne│output_rows: 100000 / 400000 · default · used 8                             │                    │
+│u User defaults: wha│runner_log_bytes: 8388608 / 33554432 · default                              │                    │
+│f Profiles: named ro│                                                                            │                    │
+│w Work categories: t│Limit to edit                                                               │e, documents or art;│
+│override per project│< scratch_bytes >   click / Space to change                                 │                    │
+│L Review lenses: opt│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │ project's default  │
+│selection.          │                                                                            │                    │
+│Checks: list, add, e│[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│Keyboard remains ava│                                                                            │                    │
+│i Report limits: tim╰────────────────────────────────────────────────────────────────────────────╯efaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ limits-form · 120x36 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Run one · complete · no queued work · Checks, independent review and validation passed after 0 repair rounds
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                      │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved p╭ Resource limit · artifact_attempt_files ───────────────────────────────────╮                    │
+│                    │In force: 4096 (default) · ceiling 16384 · built-in 4096 · used 4           │                    │
+│Mouse: Enabled      │Values are bytes or counts.                                                 │                    │
+│Run mode: Continue q│The ceiling bounds automatic extensions and Raise and resume.               │                    │
+│Planner approval: Au│Project value (blank = inherit)                                             │                    │
+│Delivery: local via │▏                                                                           │                    │
+│Dependencies: manual│Project ceiling (blank = inherit)                                           │isite is missing.   │
+│CLI require declares│                                                                            │                    │
+│                    │Instance default value (blank = built-in)                                   │                    │
+│Defaults apply to ne│                                                                            │                    │
+│u User defaults: wha│Instance default ceiling (blank = built-in)                                 │                    │
+│f Profiles: named ro│                                                                            │                    │
+│w Work categories: t│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │e, documents or art;│
+│override per project│                                                                            │                    │
+│L Review lenses: opt│[Copy] [Apply] [Cancel] [Up] [Down]                                         │ project's default  │
+│selection.          │                                                                            │                    │
+│Checks: list, add, e╰────────────────────────────────────────────────────────────────────────────╯                    │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ limits-saved · 120x36 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Run one · complete · no queued work · Checks, independent review and validation passed after 0 repair rounds
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                      │
+│Limit warning: artifact_attempt_files is 6 files, less than twice the 4 files a successful task needed.               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                                                                                                                      │
+│Mouse: Enabled                                                                                                        │
+│Run mode: Continue queue                                                                                              │
+│Planner approval: Automatic                                                                                           │
+│Delivery: local via origin/main                                                                                       │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing.   │
+│CLI require declares prerequisites before a task starts.                                                              │
+│                                                                                                                      │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                          │
+│u User defaults: what new projects start with; preview and apply them here.                                           │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                                │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art;│
+│override per project.                                                                                                 │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default  │
+│selection.                                                                                                            │
+│Checks: list, add, edit, enable or disable.                                                                           │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Saved artifact_attempt_files: 6 in force (project)
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ limits-overview · 120x36 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Run one · complete · no queued work · Checks, independent review and validation passed after 0 repair rounds
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project    ╭ Resource limits ───────────────────────────────────────────────────────────╮                    │
+│Limit warning: artif│Project values override instance defaults. A change applies to the next     │eded.               │
+│Storage: SQLite outp│step of a paused attempt. Value / ceiling · source · most a successful task │esource limits.     │
+│Preferences: saved p│used:                                                                       │                    │
+│                    │scratch_bytes: 4294967296 / 17179869184 · default · used 12288              │                    │
+│Mouse: Enabled      │scratch_entries: 200000 / 800000 · default · used 7                         │                    │
+│Run mode: Continue q│artifact_file_bytes: 134217728 / 536870912 · default · used 1               │                    │
+│Planner approval: Au│artifact_attempt_bytes: 1073741824 / 4294967296 · default · used 3          │                    │
+│Delivery: local via │artifact_attempt_files: 6 / 24 · project · used 4                           │                    │
+│Dependencies: manual│output_bytes: 67108864 / 268435456 · default · used 663                     │isite is missing.   │
+│CLI require declares│output_rows: 100000 / 400000 · default · used 8                             │                    │
+│                    │runner_log_bytes: 8388608 / 33554432 · default                              │                    │
+│Defaults apply to ne│Warning: artifact_attempt_files is 6 files, less than twice the 4 files a   │                    │
+│u User defaults: wha│successful task needed                                                      │                    │
+│f Profiles: named ro│                                                                            │                    │
+│w Work categories: t│Limit to edit                                                               │e, documents or art;│
+│override per project│< scratch_bytes >   click / Space to change                                 │                    │
+│L Review lenses: opt│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │ project's default  │
+│selection.          │                                                                            │                    │
+│Checks: list, add, e│[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│Keyboard remains ava│                                                                            │                    │
+│i Report limits: tim╰────────────────────────────────────────────────────────────────────────────╯efaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ limits-form · 120x36 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Run one · complete · no queued work · Checks, independent review and validation passed after 0 repair rounds
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                      │
+│Limit warning: artifact_attempt_files is 6 files, less than twice the 4 files a successful task needed.               │
+│Storage: SQLite outp╭ Resource limit · artifact_attempt_files ───────────────────────────────────╮esource limits.     │
+│Preferences: saved p│In force: 6 (project) · ceiling 24 · built-in 4096 · used 4                 │                    │
+│                    │Values are bytes or counts.                                                 │                    │
+│Mouse: Enabled      │The ceiling bounds automatic extensions and Raise and resume.               │                    │
+│Run mode: Continue q│Project value (blank = inherit)                                             │                    │
+│Planner approval: Au│6▏                                                                          │                    │
+│Delivery: local via │Project ceiling (blank = inherit)                                           │                    │
+│Dependencies: manual│                                                                            │isite is missing.   │
+│CLI require declares│Instance default value (blank = built-in)                                   │                    │
+│                    │                                                                            │                    │
+│Defaults apply to ne│Instance default ceiling (blank = built-in)                                 │                    │
+│u User defaults: wha│                                                                            │                    │
+│f Profiles: named ro│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                    │
+│w Work categories: t│                                                                            │e, documents or art;│
+│override per project│[Copy] [Apply] [Cancel] [Up] [Down]                                         │                    │
+│L Review lenses: opt│                                                                            │ project's default  │
+│selection.          ╰────────────────────────────────────────────────────────────────────────────╯                    │
+│Checks: list, add, edit, enable or disable.                                                                           │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ limits-saved · 120x36 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Run one · complete · no queued work · Checks, independent review and validation passed after 0 repair rounds
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Project: project                                                                                                      │
+│Limit warning: artifact_attempt_files is 7 files, less than twice the 4 files a successful task needed.               │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
+│Preferences: saved per project and instance.                                                                          │
+│                                                                                                                      │
+│Mouse: Enabled                                                                                                        │
+│Run mode: Continue queue                                                                                              │
+│Planner approval: Automatic                                                                                           │
+│Delivery: local via origin/main                                                                                       │
+│Dependencies: manual external setup; Current Task and Configuration offer r Recheck when a prerequisite is missing.   │
+│CLI require declares prerequisites before a task starts.                                                              │
+│                                                                                                                      │
+│Defaults apply to new tasks; existing revisions stay pinned.                                                          │
+│u User defaults: what new projects start with; preview and apply them here.                                           │
+│f Profiles: named role models to reuse; select one here or as the new-project default.                                │
+│w Work categories: templates that tell AI turns how to execute, review, validate and remediate code, documents or art;│
+│override per project.                                                                                                 │
+│L Review lenses: opt-in specialist reviews (concurrency, security, simplicity or your own) and the project's default  │
+│selection.                                                                                                            │
+│Checks: list, add, edit, enable or disable.                                                                           │
+│Keyboard remains available with mouse disabled.                                                                       │
+│i Report limits: time and cost of agent reports and fixes; their model is the operator role in m Defaults.            │
+│E Export settings and o Import settings move this project's settings to another computer.                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery]
+[k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings]
+[e Preferences] [Esc Back] [? Help] [q Quit]
+Saved artifact_attempt_files: 7 in force (project)
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ limits-overview · 80x24 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ ╭ Resource limits ───────────────────────────────────────────────────────────╮
+ │Project values override instance defaults. A change applies to the next     │
+ │step of a paused attempt. Value / ceiling · source · most a successful task │…
+ │used:                                                                       │
+ │scratch_bytes: 4294967296 / 17179869184 · default · used 12288              │
+╭│scratch_entries: 200000 / 800000 · default · used 7                         │╮
+││artifact_file_bytes: 134217728 / 536870912 · default · used 1               ││
+││artifact_attempt_bytes: 1073741824 / 4294967296 · default · used 3          ││
+││artifact_attempt_files: 7 / 28 · project · used 4                           ││
+││output_bytes: 67108864 / 268435456 · default · used 663                     ││
+││output_rows: 100000 / 400000 · default · used 8                             ││
+││runner_log_bytes: 8388608 / 33554432 · default                              ││
+││Warning: artifact_attempt_files is 7 files, less than twice the 4 files a   ││
+││successful task needed                                                      ││
+││                                                                            ││
+││Limit to edit                                                               ││
+╰│< scratch_bytes >   click / Space to change                                 │╯
+[│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │
+[│                                                                            │
+[│[Copy] [Apply] [Cancel] [Up] [Down]                                         │
+[│                                                                            │
+R╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ limits-form · 80x24 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ ╭ Resource limit · artifact_attempt_files ───────────────────────────────────╮…
+ │In force: 7 (project) · ceiling 28 · built-in 4096 · used 4                 │
+ │Values are bytes or counts.                                                 │
+╭│The ceiling bounds automatic extensions and Raise and resume.               │╮
+││Project value (blank = inherit)                                             ││
+││7▏                                                                          ││
+││Project ceiling (blank = inherit)                                           ││
+││                                                                            ││
+││Instance default value (blank = built-in)                                   ││
+││                                                                            ││
+││Instance default ceiling (blank = built-in)                                 ││
+││                                                                            ││
+││Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  ││
+││                                                                            ││
+╰│[Copy] [Apply] [Cancel] [Up] [Down]                                         │╯
+[│                                                                            │
+[╰────────────────────────────────────────────────────────────────────────────╯
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ limits-saved · 80x24 · keyboard
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Run one · complete · no queued work · Checks, independent review and …
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────╮
+│Project: project                                                              │
+│Limit warning: artifact_attempt_files is 4 files, less than twice the 4 files │
+│a successful task needed.                                                     │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b:│
+│build caches · R: resource limits.                                            │
+│Preferences: saved per project and instance.                                  │
+│                                                                              │
+│Mouse: Enabled                                                                │
+│Run mode: Continue queue                                                      │
+│Planner approval: Automatic                                                   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved artifact_attempt_files: 4 in force (project)
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ limits-overview · 80x24 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ ╭ Resource limits ───────────────────────────────────────────────────────────╮
+ │Project values override instance defaults. A change applies to the next     │
+ │step of a paused attempt. Value / ceiling · source · most a successful task │…
+ │used:                                                                       │
+ │scratch_bytes: 4294967296 / 17179869184 · default · used 12288              │
+╭│scratch_entries: 200000 / 800000 · default · used 7                         │╮
+││artifact_file_bytes: 134217728 / 536870912 · default · used 1               ││
+││artifact_attempt_bytes: 1073741824 / 4294967296 · default · used 3          ││
+││artifact_attempt_files: 4 / 16 · project · used 4                           ││
+││output_bytes: 67108864 / 268435456 · default · used 663                     ││
+││output_rows: 100000 / 400000 · default · used 8                             ││
+││runner_log_bytes: 8388608 / 33554432 · default                              ││
+││Warning: artifact_attempt_files is 4 files, less than twice the 4 files a   ││
+││successful task needed                                                      ││
+││                                                                            ││
+││Limit to edit                                                               ││
+╰│< scratch_bytes >   click / Space to change                                 │╯
+[│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │
+[│                                                                            │
+[│[Copy] [Apply] [Cancel] [Up] [Down]                                         │
+[│                                                                            │
+R╰────────────────────────────────────────────────────────────────────────────╯
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ limits-form · 80x24 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ ╭ Resource limit · artifact_attempt_files ───────────────────────────────────╮…
+ │In force: 4 (project) · ceiling 16 · built-in 4096 · used 4                 │
+ │Values are bytes or counts.                                                 │
+╭│The ceiling bounds automatic extensions and Raise and resume.               │╮
+││Project value (blank = inherit)                                             ││
+││4▏                                                                          ││
+││Project ceiling (blank = inherit)                                           ││
+││                                                                            ││
+││Instance default value (blank = built-in)                                   ││
+││                                                                            ││
+││Instance default ceiling (blank = built-in)                                 ││
+││                                                                            ││
+││Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  ││
+││                                                                            ││
+╰│[Copy] [Apply] [Cancel] [Up] [Down]                                         │╯
+[│                                                                            │
+[╰────────────────────────────────────────────────────────────────────────────╯
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ limits-saved · 80x24 · mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ No current task   |   Queue 0 · History 1
+ Session: Run one · complete · no queued work · Checks, independent review and …
+ Config
+
+╭ Config ──────────────────────────────────────────────────────────────────────╮
+│Project: project                                                              │
+│Limit warning: artifact_attempt_files is 5 files, less than twice the 4 files │
+│a successful task needed.                                                     │
+│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b:│
+│build caches · R: resource limits.                                            │
+│Preferences: saved per project and instance.                                  │
+│                                                                              │
+│Mouse: Enabled                                                                │
+│Run mode: Continue queue                                                      │
+│Planner approval: Automatic                                                   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories]
+[L Review lenses] [c Checks] [g Git delivery] [k Storage] [R Limits]
+[b Build cache] [t Tools] [i Report limits] [E Export settings]
+[o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
+Saved artifact_attempt_files: 5 in force (project)
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

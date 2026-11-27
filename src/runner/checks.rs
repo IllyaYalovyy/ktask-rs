@@ -14,12 +14,16 @@ use crate::{
 };
 use std::{io::Write, path::PathBuf};
 
+/// Tells a check the commit the change under verification starts from.
+const BASE_COMMIT: &str = "KTASK_BASE_COMMIT";
+
 pub(super) fn run(
     service: &mut Service,
     run: &Run,
     ctx: &mut Context<'_>,
     checks: &[Check],
-    tree: &str,
+    // The source being verified and the commit its change starts from.
+    (tree, base): (&str, &str),
 ) -> Result<Outcome> {
     let mut evidence = String::new();
     for (index, check) in checks.iter().enumerate() {
@@ -99,7 +103,7 @@ pub(super) fn run(
                 retained: "transcript retained",
             },
             |outcome| matches!(outcome, Outcome::Failed("environment", _)),
-            |service, ctx| run_recorded(service, run, ctx, &check, tree),
+            |service, ctx| run_recorded(service, run, ctx, &check, (tree, base)),
         )? {
             Outcome::Passed(recorded) => evidence.push_str(&recorded),
             other => return Ok(other),
@@ -171,9 +175,9 @@ fn run_recorded(
     run: &Run,
     ctx: &mut Context<'_>,
     check: &Check,
-    tree: &str,
+    source: (&str, &str),
 ) -> Result<Outcome> {
-    let (outcome, path, counts) = run_one(service, run, ctx, check, tree)?;
+    let (outcome, path, counts) = run_one(service, run, ctx, check, source)?;
     Ok(match outcome {
         Outcome::Passed(_) => Outcome::Passed(format!(
             "\nSupervisor check evidence: {}",
@@ -201,7 +205,7 @@ fn run_one(
     run: &Run,
     ctx: &mut Context<'_>,
     check: &Check,
-    tree: &str,
+    (tree, base): (&str, &str),
 ) -> Result<(Outcome, PathBuf, Option<CheckCounts>)> {
     let step = service.start_check(run, check, &ctx.tools.fingerprint)?;
     let cwd = ctx.workspace.root.join(&check.directory).canonicalize()?;
@@ -222,6 +226,9 @@ fn run_one(
         vec!["-c".into(), check.command.clone()],
         cwd,
     );
+    // A check that compares against what the change started from, such as approved screens,
+    // needs it also once the work is committed.
+    invocation.env.push((BASE_COMMIT.into(), base.to_owned()));
     if !ctx.tools.installations.is_empty() {
         invocation.sandbox = Some(super::sandbox::Sandbox::for_installations(
             &ctx.tools.installations,
