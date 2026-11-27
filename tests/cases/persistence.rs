@@ -108,7 +108,7 @@ fn dependency_wait_rechecks_by_keyboard_and_mouse_with_large_queue_and_history()
             t.send("r")?;
         }
         t.screen("configuration recheck still missing", |s| {
-            s.contains("Dependency still missing")
+            s.contains("Dependency not verified")
         })?;
         t.send("\x1b")?;
         t.screen("return from configuration", |s| {

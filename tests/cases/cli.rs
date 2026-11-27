@@ -1037,6 +1037,76 @@ fn dependency_recheck_requires_observed_version_and_stop_restores_pending() -> R
     Ok(())
 }
 
+/// An installed tool must clear its wait however it reports a version: Cargo plugins
+/// reject a bare `--version`, and other tools do not answer it at all.
+#[test]
+fn dependency_recheck_accepts_installed_tools_that_reject_bare_version() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    support::empty_repository(root)?;
+    add(root, "Installed tools")?;
+    let plugin = root.join("cargo-fixture-cov");
+    let plain = root.join("no-version-tool");
+    let wrapper = root.join("wrapper-tool");
+    let require = |item: &Path, version: Option<&str>| -> Result<Value> {
+        let item = item.to_string_lossy();
+        let mut args = vec![
+            "require",
+            "1",
+            "--kind",
+            "executable",
+            "--item",
+            &item,
+            "--scope",
+            "host",
+            "--stage",
+            "check",
+            "--reproduction",
+            "which finds nothing",
+        ];
+        if let Some(version) = version {
+            args.extend(["--version", version]);
+        }
+        json(root, &args, 0)
+    };
+    require(&plugin, Some("0.9.2"))?;
+    require(&plain, None)?;
+    require(&wrapper, None)?;
+    let missing = json(root, &["dependency-recheck", "1"], 0)?;
+    assert_eq!(missing["data"]["passed"], false, "{missing}");
+
+    support::write_executable(
+        &plugin,
+        b"#!/bin/sh\nif [ \"$1\" = fixture-cov ] && [ \"$2\" = --version ]; then echo 'cargo-fixture-cov 0.9.2'; exit 0; fi\necho \"error: expected subcommand 'fixture-cov', found argument '$1'\" >&2\nexit 1\n",
+    )?;
+    support::write_executable(&plain, b"#!/bin/sh\necho 'unknown option' >&2\nexit 2\n")?;
+    // A wrapper around an absent tool is still not installed.
+    support::write_executable(&wrapper, b"#!/bin/sh\nexec /nonexistent/real-tool \"$@\"\n")?;
+    let output = process(DEV, root)
+        .args(["dependency-recheck", "1"])
+        .output()?;
+    let text = String::from_utf8(output.stdout)?;
+    assert!(text.contains("dependency recheck: not verified"), "{text}");
+    assert!(text.contains("wrapper-tool: FAILED:"), "{text}");
+    assert!(!text.contains("cargo-fixture-cov"), "{text}");
+    let current = json(root, &["current"], 0)?;
+    let observed = |index: usize| {
+        current["data"]["dependencies"][index]["observed"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    assert!(observed(0).contains("cargo-fixture-cov 0.9.2"), "{current}");
+    assert!(observed(1).starts_with("OK: found"), "{current}");
+    let events = json(root, &["events"], 0)?.to_string();
+    assert!(events.contains("wrapper-tool: FAILED:"), "{events}");
+
+    support::write_executable(&wrapper, b"#!/bin/sh\necho 'wrapper 1'\n")?;
+    let ready = json(root, &["dependency-recheck", "1"], 0)?;
+    assert_eq!(ready["data"]["passed"], true, "{ready}");
+    Ok(())
+}
+
 #[test]
 fn dependency_recheck_uses_project_cwd_relative_path_and_symlink_invocation_name() -> Result {
     use std::os::unix::fs::symlink;

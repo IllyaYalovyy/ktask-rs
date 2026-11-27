@@ -413,6 +413,7 @@ impl Service {
         let worker_network = self.agent_network()?;
         let mut all_pass = true;
         let mut results = Vec::new();
+        let mut unmet = Vec::new();
         for dependency in dependencies {
             let result: String = if dependency.requirement.kind == "registered_tool" {
                 resolved.as_ref().map_or_else(
@@ -461,8 +462,21 @@ impl Service {
             let result: String = result.chars().take(1024).collect();
             let passed = result.starts_with("OK:");
             all_pass &= passed;
+            if !passed {
+                unmet.push(format!(
+                    "{} {}: {result}",
+                    dependency.requirement.kind, dependency.requirement.item
+                ));
+            }
             results.push((dependency.id, result, passed));
         }
+        let unmet_report: String = format!(
+            "Prerequisite probe did not pass: {}. Fix it externally, then Recheck",
+            unmet.join("; ")
+        )
+        .chars()
+        .take(2048)
+        .collect();
         let tx = self
             .db
             .connection_mut()
@@ -484,10 +498,12 @@ impl Service {
             tx.execute("UPDATE attempts SET state='paused',wait_reason=NULL,waiting_since_ms=NULL,report='Dependencies verified; Resume continues this attempt' WHERE task_id=?1 AND state='waiting' AND wait_reason='dependency'",[target.id])?;
         } else {
             if !all_pass {
-                tx.execute("UPDATE attempts SET state='waiting',wait_reason='dependency',waiting_since_ms=?2,resume_at_ms=NULL,report='Dependency probe failed; recheck after external setup' WHERE task_id=?1 AND (state='paused' OR (state='waiting' AND wait_reason<>'dependency'))",params![target.id,now])?;
+                tx.execute("UPDATE attempts SET state='waiting',wait_reason='dependency',waiting_since_ms=?2,resume_at_ms=NULL WHERE task_id=?1 AND (state='paused' OR (state='waiting' AND wait_reason<>'dependency'))",params![target.id,now])?;
+                // The latest probe replaces the earlier claim, which may no longer be true.
+                tx.execute("UPDATE attempts SET report=?2 WHERE task_id=?1 AND state='waiting' AND wait_reason='dependency'",params![target.id,unmet_report])?;
             }
         }
-        tx.execute("INSERT INTO events(project_id,task_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,'dependency.rechecked',?4,?5)",params![self.project_id,target.id,now,if all_pass {"info"} else {"warning"},if all_pass {"All prerequisites verified; Run resumes the task"} else {"Prerequisites still missing; inspect Current readiness"}])?;
+        tx.execute("INSERT INTO events(project_id,task_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,'dependency.rechecked',?4,?5)",params![self.project_id,target.id,now,if all_pass {"info"} else {"warning"},if all_pass {"All prerequisites verified; Run resumes the task"} else {unmet_report.as_str()}])?;
         tx.commit()?;
         Ok(all_pass)
     }
@@ -525,8 +541,7 @@ fn preserve_provider_denial(
     match (denied_environment, environment) {
         (Some(_), Some(_)) if result.starts_with("OK:") => result,
         (Some(_), Some(current)) => format!(
-            "PROVIDER_DENIED|{current}|{}",
-            "Worker access is still denied; repair the tool or its permitted runtime directory, then Recheck"
+            "PROVIDER_DENIED|{current}|Worker access is still denied; repair the tool or its permitted runtime directory, then Recheck. Observed: {result}"
         ),
         (Some(previous), None) => format!(
             "PROVIDER_DENIED|{previous}|Tool environment is unavailable; repair or rebind it, then Recheck"
@@ -615,6 +630,8 @@ pub(super) fn probe(
         scratch.join("worker.lock"),
     );
     spec.env.extend(env.iter().cloned());
+    // Inside the worker's own restrictions a failing start is the denial being probed.
+    let must_run = matches!(policy, Some(ProbePolicy::Restricted { .. }));
     let sandbox = match policy {
         None => None,
         Some(ProbePolicy::Protected(installations)) => Some(
@@ -672,7 +689,7 @@ pub(super) fn probe(
         String::from_utf8_lossy(&stdout),
         String::from_utf8_lossy(&stderr)
     );
-    classify_version(code, &output, req.version.as_deref())
+    classify_version(code, &output, req.version.as_deref(), must_run)
 }
 
 /// Runs inside the guardian deadline. The selected path remains a symlink so a tool
@@ -695,6 +712,21 @@ pub fn probe_executable(item: &str) -> ExitCode {
             return ExitCode::from(125);
         }
     };
+    // Cargo starts a plugin as `cargo-NAME NAME ARGS`; many reject a bare `--version`.
+    let plugin = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix("cargo-"))
+        .map(str::to_owned);
+    if let Some(plugin) = plugin
+        && Command::new(&path)
+            .args([plugin.as_str(), "--version"])
+            .stdin(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    {
+        return ExitCode::SUCCESS;
+    }
     match Command::new(path).arg("--version").status() {
         Ok(status) => ExitCode::from(status.code().unwrap_or(1) as u8),
         Err(error) => {
@@ -713,11 +745,22 @@ pub fn probe_executable(item: &str) -> ExitCode {
     }
 }
 
-fn classify_version(code: i32, output: &str, expected: Option<&str>) -> String {
+fn classify_version(code: i32, output: &str, expected: Option<&str>, must_run: bool) -> String {
     let output = output.trim();
     let brief: String = output.chars().take(256).collect();
-    if code != 0 {
+    // 126/127 are the shell's "cannot execute"/"not found": a wrapper around an absent tool.
+    if code != 0 && (must_run || matches!(code, 126 | 127)) {
         return format!("FAILED: --version exited {code}: {brief}");
+    }
+    if code != 0 {
+        // The tool was found and started. Without a required version there is nothing
+        // left to prove, and not every tool answers `--version`.
+        return match expected {
+            None => format!("OK: found; --version is unsupported (exit {code})"),
+            Some(version) => format!(
+                "FAILED: found, but --version exited {code}, so version {version} cannot be verified; declare it without a version: {brief}"
+            ),
+        };
     }
     if let Some(version) = expected
         && !output
@@ -957,7 +1000,12 @@ mod tests {
                 .starts_with("DENIED:")
         );
         fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(classify_version(3, "rg: command not found", None).starts_with("FAILED:"));
-        assert!(classify_version(0, "tool 2.0", Some("1.0")).starts_with("WRONG_VERSION:"));
+        assert!(classify_version(127, "rg: command not found", None, false).starts_with("FAILED:"));
+        // A found tool that rejects `--version` is present; only a required version blocks.
+        assert!(classify_version(1, "unknown option --version", None, false).starts_with("OK:"));
+        assert!(classify_version(1, "Permission denied", None, true).starts_with("FAILED:"));
+        assert!(classify_version(0, "tool 1.0", Some("1.0"), true).starts_with("OK:"));
+        assert!(classify_version(1, "unknown option", Some("1.0"), false).starts_with("FAILED:"));
+        assert!(classify_version(0, "tool 2.0", Some("1.0"), false).starts_with("WRONG_VERSION:"));
     }
 }

@@ -657,16 +657,24 @@ pub(super) fn command(
             let scratch = cache.join("workers");
             let passed =
                 service.recheck_dependencies(target, &scratch, &std::env::current_exe()?, paths)?;
+            let dependencies = service.dependencies(target.id)?;
+            let text = if passed {
+                "dependency recheck: ready to resume\n".to_owned()
+            } else {
+                let mut text = String::from("dependency recheck: not verified\n");
+                for dependency in dependencies.iter().filter(|d| d.state != "satisfied") {
+                    text.push_str(&format!(
+                        "{} {}: {}\n",
+                        dependency.requirement.kind,
+                        dependency.requirement.item,
+                        dependency.observed.as_deref().unwrap_or("not checked")
+                    ));
+                }
+                text
+            };
             Ok(Reply {
-                data: json!({"action":"dependency_rechecked","passed":passed,"dependencies":service.dependencies(target.id)?}),
-                text: format!(
-                    "dependency recheck: {}\n",
-                    if passed {
-                        "ready to resume"
-                    } else {
-                        "still missing"
-                    }
-                ),
+                data: json!({"action":"dependency_rechecked","passed":passed,"dependencies":dependencies}),
+                text,
             })
         }
         Command::CheckSet {

@@ -104,7 +104,7 @@ fn bound_tool_probes_protect_installations_on_admission_and_recheck() -> Result 
                 terminal.send("r")?;
             }
             let screen = terminal.screen("bound tool recheck denied", |screen| {
-                screen.contains("Dependency still missing")
+                screen.contains("Dependency not verified")
                     && screen.contains("Current #1 · Needs dependency")
             })?;
             if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
@@ -275,7 +275,7 @@ fn bound_adb_provider_denial_waits_until_a_replacement_is_accessible() -> Result
             terminal.send("r")?;
         }
         let waiting = terminal.screen("provider denial retained after recheck", |s| {
-            s.contains("Dependency still missing") && s.contains("Current #1 · Needs dependency")
+            s.contains("Dependency not verified") && s.contains("Current #1 · Needs dependency")
         })?;
         if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
             support::screen_png(
@@ -407,7 +407,7 @@ fn provider_denial_recheck_accepts_runtime_repair_without_binding_change() -> Re
             terminal.send("r")?;
         }
         let waiting = terminal.screen("runtime still missing", |s| {
-            s.contains("Dependency still missing") && s.contains("Current #1 · Needs dependency")
+            s.contains("Dependency not verified") && s.contains("Current #1 · Needs dependency")
         })?;
         if let Some(directory) = std::env::var_os("KTASK_ARTIFACT_DIR") {
             support::screen_png(
@@ -1424,7 +1424,8 @@ fn duplicate_live_callback_and_supervisor_crash_restore_dependency_wait() -> Res
         &f.scratch.path().join("bin/rg"),
         b"#!/bin/sh\necho 'ripgrep 14.1.1'\n",
     )?;
-    assert_eq!(f.ok(&["dependency-recheck", "1"])?["passed"], true);
+    let rechecked = f.ok(&["dependency-recheck", "1"])?;
+    assert_eq!(rechecked["passed"], true, "{rechecked}");
     let resumed = f.process().args(["run", "--one"]).output()?;
     assert!(
         resumed.status.success(),
@@ -1489,7 +1490,7 @@ fn dependency_wait_rechecks_and_resumes_same_attempt_in_real_terminal() -> Resul
         let admission_wait = t.screen("dependency changed before Resume", |s| {
             s.contains("Current #1 · Needs dependency") && s.contains("[r Recheck]")
         })?;
-        assert!(admission_wait.contains("Dependency still missing"));
+        assert!(admission_wait.contains("Dependency not verified"));
         assert!(!admission_wait.contains("Runner exited before startup"));
         if let Some(dir) = std::env::var_os("KTASK_ARTIFACT_DIR") {
             let dir = PathBuf::from(dir);

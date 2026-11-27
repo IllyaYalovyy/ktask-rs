@@ -399,7 +399,7 @@ impl StoredWorkspace {
                 ),
                 Ok(false) => self.committed(
                     screen,
-                    "Dependency still missing · u Readiness shows the observed result",
+                    "Dependency not verified · u Readiness shows the observed result",
                 ),
                 Err(error) => screen.message(error),
             }
@@ -445,7 +445,7 @@ impl StoredWorkspace {
                 {
                     self.committed(
                         screen,
-                        "Dependency still missing · u Readiness shows the observed result",
+                        "Dependency not verified · u Readiness shows the observed result",
                     );
                     return;
                 }
