@@ -40,6 +40,9 @@ reply() {
 case "$prompt" in *"You are the failure judge"*)
  reply '{"judgment":{"action":"repair","plan":"Write verified to result.txt","reason":"The boundary was missing"}}';;
 esac
+if [ "$mode" = question ] && [ "$model" = remediation ]; then
+ reply '{"judgment":{"action":"escalate","reason":"Only the owner knows which content to use"}}'
+fi
 if [ "$mode" = question ]; then
  case "$prompt" in *"Human answer"*) :;; *) reply '{"outcome":"blocked","summary":"Need direction","question":"Which content?","criteria":[]}';; esac
 fi
@@ -286,7 +289,8 @@ fn claude_question_pause_and_resume_keep_one_attempt_and_its_session() -> Result
     // Asked, nudged once in the same session, then resumed after the answer.
     let session = &calls[1].1;
     assert!(session.starts_with("claude-execution-"), "{calls:?}");
-    assert_eq!(&calls[2].1, session, "{calls:?}");
+    assert_eq!(calls[2].0, "remediation");
+    assert_eq!(&calls[3].1, session, "{calls:?}");
 
     let f = Fixture::new()?;
     f.agent("claude", CLAUDE, "slow")?;
@@ -353,7 +357,16 @@ fn claude_limits_wait_for_the_reset_and_failures_spend_no_budget() -> Result {
     );
     // Two in-turn retries per attempt; three failed attempts in a row stop the task.
     assert_eq!(task["attempts"].as_array().unwrap().len(), 3);
-    assert_eq!(f.calls("claude")?.len(), 9);
+    let calls = f.calls("claude")?;
+    assert_eq!(calls.len(), 12);
+    assert!(calls[9..].iter().all(|(role, ..)| role == "remediation"));
+    assert!(
+        task["attempts"][2]["report"]
+            .as_str()
+            .unwrap()
+            .contains("Supervisor diagnosis unavailable")
+    );
+
     f.no_scratch()?;
     Ok(())
 }

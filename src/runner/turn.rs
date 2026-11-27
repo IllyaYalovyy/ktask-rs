@@ -285,7 +285,7 @@ fn answered_turn(
                 format!("{role} asked instead of deciding from the evidence: {question}"),
             ));
         }
-        return Ok(Outcome::Question(question));
+        return Ok(Outcome::WorkerQuestion(question));
     }
     let Some(lens) = lens else {
         return record_assessment(service, run, step, role, assessment, None);

@@ -666,6 +666,14 @@ impl Service {
             other => other,
         }
     }
+    /// Completed supervisor repairs survive pause/resume so an unchanged plan is not replayed.
+    pub(crate) fn tried_recovery(&self, run: &Run, key: &str) -> Result<bool> {
+        Ok(self.db.connection().query_row("SELECT EXISTS(SELECT 1 FROM events WHERE project_id=?1 AND attempt_id=?2 AND kind='recovery.tried' AND message=?3)", params![self.project_id,run.attempt,key], |row| row.get(0))?)
+    }
+    pub(crate) fn record_tried_recovery(&self, run: &Run, key: &str) -> Result<()> {
+        self.db.connection().execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES(?1,?2,?3,?4,'recovery.tried','info',?5)", params![self.project_id,run.task,run.attempt,now_ms(),key])?;
+        Ok(())
+    }
     pub fn output(&self, run: &Run, stream: &str, text: &str) -> Result<()> {
         let tx = Transaction::new_unchecked(self.db.connection(), TransactionBehavior::Immediate)?;
         if let Err(error) = reserve_output(&tx, run.attempt, text.len() as u64, 1) {

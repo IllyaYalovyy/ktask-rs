@@ -28,6 +28,10 @@ if [ "$mode" = hold ]; then
  printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"REMOTE-AGENT-WORKING"}}'
  touch "$HOME/holding"; sleep 60
 fi
+if [ "$mode" = ask ] && [ "$model" = remediation ]; then
+ printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"{\"judgment\":{\"action\":\"escalate\",\"reason\":\"Only the owner knows which content to use\"}}"}}' '{"type":"turn.completed","usage":{}}'
+ exit 0
+fi
 if [ "$mode" = ask ] && [ "$model" = execution ]; then
  printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"{\"outcome\":\"blocked\",\"summary\":\"Need direction\",\"question\":\"Which content?\",\"criteria\":[]}"}}' '{"type":"turn.completed","usage":{}}'
  exit 0

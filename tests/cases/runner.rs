@@ -5715,7 +5715,7 @@ exit 1
         fs::read_to_string(f.scratch.path().join("provider-invocations"))?
             .lines()
             .count(),
-        1
+        2 // one execution request, then the required remediation decision
     );
     let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
     let screen = terminal.screen("provider model failure on Current", |s| {
@@ -5822,7 +5822,11 @@ exit 2
         fs::read_to_string(f.scratch.path().join("provider-invocations"))?
             .lines()
             .count(),
-        1
+        2
+    );
+    assert!(
+        outcome.contains("Supervisor diagnosis unavailable"),
+        "{outcome}"
     );
 
     let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 90, 28)?;
@@ -6514,6 +6518,17 @@ case "$prompt" in *"Fix what Context reports"*) repair=yes; cp "$HOME/packet-$mo
 [ -n "$session" ] || session="session-$model-$$"
 printf '{{"type":"thread.started","thread_id":"%s"}}\n' "$session"
 printf '%s\n' "$model" >> "$HOME/provider-invocations"
+case "$prompt" in *"Can the supervisor reasonably resolve this issue and resume?"*)
+ if [ -f "$HOME/repair-delivery-fixture" ] && ! printf '%s' "$prompt" | grep -q "Rejected plan:"; then
+  reply='{{\"action\":\"repair\",\"reason\":\"The checked release manifest is missing\",\"plan\":\"Write the approved release manifest\"}}'
+ else
+  reply='{{\"action\":\"escalate\",\"reason\":\"Owner action is required before delivery can continue\"}}'
+ fi
+ printf '%s%s%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":' "$reply" '}}"}}}}'
+ printf '%s\n' '{{"type":"turn.completed","usage":{{}}}}'
+ exit 0;;
+esac
+case "$prompt" in *"Write the approved release manifest"*) printf 'ready\n' > release-manifest;; esac
 case "$prompt" in *"Diagnose the storage limit breach"*)
  [ -f "$HOME/breach-judge-prompt" ] || printf '%s' "$prompt" > "$HOME/breach-judge-prompt"
  printf '%s\n' "$model" >> "$HOME/breach-judge-calls"
@@ -7495,7 +7510,7 @@ fn review_rounds_repair_only_critical_findings_in_real_tui() -> Result {
                     [],
                     |r| r.get::<_, i64>(0)
                 )?,
-                if critical { 10 } else { 0 }
+                if critical { 11 } else { 0 }
             );
             let steps = task["attempts"][0]["steps"].as_array().unwrap();
             if critical {
@@ -7693,7 +7708,7 @@ fn pause_at_tenth_review_resumes_the_phase_without_an_eleventh_repair() -> Resul
                 [],
                 |r| r.get::<_, i64>(0)
             )?,
-            10
+            11 // ten repair plans and the final escalation
         );
         assert_eq!(
             db.connection()
@@ -8121,10 +8136,10 @@ fn automatic_revisions_cannot_reset_the_ten_round_budget() -> Result {
         count("SELECT count(*) FROM attempt_steps WHERE role='execution'")?,
         11
     );
-    // The judge decides only after those rounds: eleven revisions, none of them a worker.
+    // Eleven proposed revisions and the final stop assessment, all read-only.
     assert_eq!(
         count("SELECT count(*) FROM attempt_steps WHERE role='remediation'")?,
-        11
+        12
     );
     assert_eq!(
         count("SELECT count(*) FROM attempts WHERE state='failed'")?,
@@ -8361,11 +8376,18 @@ fn failing_supervisor_check_keeps_worker_claim_separate_in_cli_and_real_terminal
         } else {
             terminal.send("o")?;
         }
-        let log = terminal.screen("worker claim labelled in Current raw log", |screen| {
-            screen.contains("Log ·")
-                && screen.contains("Worker claim (unverified)")
-                && screen.contains("all checks pass")
+        let mut log = terminal.screen("latest remediation in raw log", |screen| {
+            screen.contains("Log ·") && screen.contains("Remediator cannot resolve")
         })?;
+        // The final recovery decision follows the worker output. Scroll back to its claim.
+        while !log.contains("Worker claim (unverified)") || !log.contains("all checks pass") {
+            if mouse {
+                terminal.wheel(false, 80, 23)?;
+            } else {
+                terminal.send("\x1b[5~")?;
+            }
+            log = terminal.screen("scroll toward the worker claim", |s| s != log)?;
+        }
         println!("CLAIM RAW LOG mouse={mouse}\n{log}");
         if mouse {
             terminal.click("Enter Details")?;
@@ -8583,7 +8605,7 @@ fn failed_check_transcript_is_retained_for_remediation() -> Result {
     f.add("Preserve failure evidence")?;
     let result = f.process().args(["run", "--json"]).output()?;
     assert_eq!(result.status.code(), Some(4));
-    let prompt = fs::read_to_string(f.scratch.path().join("prompt-remediation"))?;
+    let prompt = fs::read_to_string(f.scratch.path().join("prompt-judge"))?;
     let db = f.db()?;
     let relative: String = db.connection().query_row(
         "SELECT relative_path FROM artifacts ORDER BY id DESC LIMIT 1 OFFSET 1",
@@ -8593,6 +8615,14 @@ fn failed_check_transcript_is_retained_for_remediation() -> Result {
     let artifact = f.scratch.path().join("state/ktask-dev").join(relative);
     assert!(prompt.contains(artifact.to_str().unwrap()));
     assert_eq!(fs::read_to_string(artifact)?, "concrete failure evidence\n");
+    let packet = fs::read_to_string(f.scratch.path().join("packet-remediation"))?;
+    let manifest = fs::read_to_string(Path::new(packet.trim()).join("artifacts.jsonl"))?;
+    let latest: String = db.connection().query_row(
+        "SELECT relative_path FROM artifacts ORDER BY id DESC LIMIT 1",
+        [],
+        |r| r.get(0),
+    )?;
+    assert!(manifest.contains(&latest), "{manifest}");
     assert!(!f.scratch.path().join("prompt-review").exists());
     f.no_scratch()?;
     Ok(())
@@ -9151,14 +9181,10 @@ fn check_failure_is_real_and_remediation_stays_with_current() -> Result {
         count("SELECT count(*) FROM attempt_steps WHERE attempt_id=1 AND role='execution'")?,
         4
     );
+    // The same attempt records the repair plan and the final escalation.
     assert_eq!(
         count("SELECT count(*) FROM attempt_steps WHERE attempt_id=1 AND role='remediation'")?,
-        1
-    );
-    // A stalled repair does not start another attempt and invoke the judge again.
-    assert_eq!(
-        count("SELECT count(*) FROM attempt_steps WHERE role='remediation'")?,
-        1
+        2
     );
     assert!(
         f.ok(&["show", "1"])?["attempts"][0]["outcome"]
@@ -9653,7 +9679,7 @@ fn reviewer_that_keeps_asking_stops_the_task_without_a_question_or_budget() -> R
     assert_eq!(
         fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
         format!(
-            "execution\n{reviews}remediation\nexecution\n{reviews}remediation\nexecution\n{reviews}"
+            "execution\n{reviews}remediation\nexecution\n{reviews}remediation\nexecution\n{reviews}remediation\n"
         )
     );
     let stopped = String::from_utf8_lossy(&output.stderr);
@@ -10617,8 +10643,8 @@ fn real_tui_question_answer_mouse_and_keyboard_automatically_resume() -> Result 
         let attempt_id = attempts[0]["id"].clone();
         let invocations = f.scratch.path().join("provider-invocations");
         let calls_before = fs::read_to_string(&invocations)?;
-        // The first blocked answer is nudged once before the owner is asked.
-        assert_eq!(calls_before, "execution\nexecution\n");
+        // The worker is nudged once and the remediator confirms that owner input is necessary.
+        assert_eq!(calls_before, "execution\nexecution\nremediation\n");
         let log = f.scratch.path().join("state/ktask-dev/runner-1.log");
         let log_before = fs::read(&log)?;
         // The forward key asks for the answer; closing the form runs nothing.
@@ -10690,7 +10716,7 @@ fn real_tui_question_answer_mouse_and_keyboard_automatically_resume() -> Result 
         assert_eq!(completed["attempts"].as_array().unwrap().len(), 1);
         assert_eq!(
             fs::read_to_string(&invocations)?,
-            "execution\nexecution\nexecution\nreview\nvalidation\n"
+            "execution\nexecution\nremediation\nexecution\nreview\nvalidation\n"
         );
         for role in ["execution", "review", "validation"] {
             let prompt = fs::read_to_string(f.scratch.path().join(format!("prompt-{role}")))?;
@@ -14461,6 +14487,29 @@ fn red_start_is_repaired_and_the_original_task_is_verified() -> Result {
 }
 
 #[test]
+fn terminal_check_failure_resumes_when_the_remediator_finds_a_repair() -> Result {
+    let f = Fixture::new()?;
+    fs::write(f.scratch.path().join("repair-delivery-fixture"), "")?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        "test -f release-manifest || { echo missing-manifest; exit 1; }",
+    ])?;
+    f.add("Recover a missing release manifest after ordinary repairs fail")?;
+    f.ok(&["run", "--one"])?;
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "succeeded", "{task}");
+    assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+    assert!(
+        task.to_string()
+            .contains("Automatic check repair made no progress")
+    );
+    assert_eq!(f.git(&["show", "HEAD:release-manifest"])?, "ready\n");
+    Ok(())
+}
+
+#[test]
 fn unchanged_check_failure_gets_one_judged_repair_then_stops() -> Result {
     let f = Fixture::new()?;
     f.ok(&[
@@ -14484,7 +14533,7 @@ fn unchanged_check_failure_gets_one_judged_repair_then_stops() -> Result {
     let invocations = fs::read_to_string(f.scratch.path().join("provider-invocations"))?;
     assert_eq!(
         invocations,
-        "execution\nexecution\nexecution\nremediation\nexecution\n"
+        "execution\nexecution\nexecution\nremediation\nexecution\nremediation\n"
     );
     assert_eq!(f.ok(&["show", "2"])?["status"], "ready");
     assert_eq!(f.git(&["log", "-1", "--format=%s"])?.trim(), "baseline");
@@ -14557,7 +14606,7 @@ fn unchanged_failure_budget_survives_pause_during_post_judge_check() -> Result {
     );
     assert_eq!(
         fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-        "execution\nexecution\nexecution\nremediation\nexecution\n"
+        "execution\nexecution\nexecution\nremediation\nexecution\nremediation\n"
     );
     f.no_scratch()?;
     Ok(())

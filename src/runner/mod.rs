@@ -26,6 +26,7 @@ mod output;
 pub(crate) mod process;
 pub(crate) mod provider;
 mod queue;
+mod recovery;
 pub(crate) mod registration;
 pub mod remediation;
 mod reset;
@@ -75,9 +76,11 @@ enum Outcome {
     /// The judgment could not run: what was being diagnosed, why, and the failure message.
     DiagnosisUnavailable(&'static str, &'static str, String),
     Paused,
+    DeliveryFailure(String),
     DeliveryBlocked(String),
     /// The shared storage budget refused work: the attempt pauses on it.
     StorageBlocked(Box<StorageRefusal>),
+    WorkerQuestion(String),
     Question(String),
     Dependency(String),
     /// Provider rate or usage limit, with its own reset time when it names one.

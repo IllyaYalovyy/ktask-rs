@@ -120,7 +120,7 @@ fn require_own_work(
 }
 
 /// Pins where the attempt delivers: a handed-over delivery, else the current settings.
-fn pin_delivery(service: &mut Service, workspace: &Workspace, run: &Run) -> Result<()> {
+pub(super) fn pin_delivery(service: &mut Service, workspace: &Workspace, run: &Run) -> Result<()> {
     if service.attempt_delivery(run).is_ok() {
         return Ok(());
     }
@@ -243,7 +243,7 @@ pub(super) fn run(service: &mut Service, launch: &Launch<'_>, begun: Begun) -> R
         earlier_task_ms: service.earlier_task_active_ms(&run)?,
         tools,
     };
-    let result = drive(service, &run, &mut context, opening, delivery);
+    let result = super::recovery::run(service, &run, &mut context, opening, delivery);
     // A breach outside the workflow, such as no room for the opening notice, pauses too.
     if let Err(Error::Breach(breach)) = &result {
         record_pause(
@@ -302,7 +302,7 @@ fn settle_result(result: Result<Outcome>, had_rate_wait: bool) -> Outcome {
 
 /// The attempt's work: its workflow until verified, then checkpoint and delivery, repeated
 /// while delivery sends the work back for new proof.
-fn drive(
+pub(super) fn drive(
     service: &mut Service,
     run: &Run,
     ctx: &mut Context<'_>,
@@ -311,7 +311,7 @@ fn drive(
 ) -> Result<Outcome> {
     service.output(run, "system", opening_notice(opening, run))?;
     if let Err(error) = delivery {
-        return Ok(Outcome::DeliveryBlocked(error.to_string()));
+        return Ok(Outcome::DeliveryFailure(error.to_string()));
     }
     let mut delivery_retries = 0_u32;
     loop {
@@ -328,7 +328,7 @@ fn drive(
             }
         }
         if let Err(error) = delivery::reconcile_resume(service, run, ctx) {
-            return Ok(Outcome::DeliveryBlocked(error.to_string()));
+            return Ok(Outcome::DeliveryFailure(error.to_string()));
         }
         let summary = match verify(service, run, ctx, opening)? {
             Outcome::Passed(summary) => summary,
@@ -383,14 +383,14 @@ fn verify(
         Ok(Outcome::Failed("transport" | "environment" | "protocol", message))
             if service.attempt_delivery(run)?.stage != Stage::Work =>
         {
-            Ok(Outcome::DeliveryBlocked(message))
+            Ok(Outcome::DeliveryFailure(message))
         }
         // A storage refusal keeps its data: it pauses with its budget at any stage.
         Err(error)
             if !matches!(error, Error::Capacity(_))
                 && service.attempt_delivery(run)?.stage != Stage::Work =>
         {
-            Ok(Outcome::DeliveryBlocked(error.to_string()))
+            Ok(Outcome::DeliveryFailure(error.to_string()))
         }
         other => other,
     }
@@ -453,9 +453,9 @@ fn checkpoint(service: &mut Service, run: &Run, ctx: &Context<'_>) -> Result<Che
         }
         Ok(workspace::Checkpoint::Diverged { head, reason }) => {
             service.delivery_stage(run, Stage::Checkpointed, Some(&head), None, None)?;
-            Ok(Checkpointed::Blocked(Outcome::DeliveryBlocked(reason)))
+            Ok(Checkpointed::Blocked(Outcome::DeliveryFailure(reason)))
         }
-        Err(error) => Ok(Checkpointed::Blocked(Outcome::DeliveryBlocked(
+        Err(error) => Ok(Checkpointed::Blocked(Outcome::DeliveryFailure(
             error.to_string(),
         ))),
     }
@@ -488,7 +488,9 @@ fn deliver(
             Ok(None)
         }
         Ok(delivery::DeliveryOutcome::Paused) => Ok(Some(Outcome::Paused)),
-        Ok(delivery::DeliveryOutcome::Exhausted(reason)) => Ok(Some(cycle::unresolved(&reason))),
+        Ok(delivery::DeliveryOutcome::Exhausted(reason)) => {
+            Ok(Some(Outcome::DeliveryFailure(reason)))
+        }
         Err(error) => delivery::retry(service, run, ctx, &error, retries),
     }
 }
@@ -524,7 +526,7 @@ fn settle(
             service.record_storage_pause(run.attempt, &refusal)?;
             Ok(Then::Return(format!("Paused: {}", refusal.reason)))
         }
-        Outcome::Question(question) => {
+        Outcome::Question(question) | Outcome::WorkerQuestion(question) => {
             release(service, run, "waiting", &question)?;
             Ok(Then::Return(format!("Waiting for answer: {question}")))
         }
@@ -536,6 +538,7 @@ fn settle(
         Outcome::Replanned(judgment) => replan(service, launch, run, judgment),
         Outcome::Failed(category, message) => fail(service, launch, run, category, &message),
         Outcome::Passed(_)
+        | Outcome::DeliveryFailure(_)
         | Outcome::Changes { .. }
         | Outcome::CheckTimedOut
         | Outcome::Diagnosis(_)
@@ -589,13 +592,6 @@ fn replan(
     judgment: super::agent::Judgment,
 ) -> Result<Then> {
     let message = judge::describe(&judgment);
-    if service.automatic_replans(run.task)? >= 10 {
-        let reason = format!(
-            "Automatic recovery exhausted after 10 judge replans; latest judgment: {message}. Work and evidence retained. Edit current or apply manual remediation to continue."
-        );
-        service.finish_run(run, "failed", Some("protocol"), &reason, None)?;
-        return Err(Error::Conflict(reason));
-    }
     service.finish_run(run, "interrupted", Some("interrupted"), &message, None)?;
     service.record_automatic_replan(run.task)?;
     judge::apply_judgment(service, run, launch.paths, launch.workspace, judgment)?;

@@ -1006,9 +1006,9 @@ fn gh(f: &Fixture, lose_creation_ack: bool) -> Result {
             r#"#!/bin/sh
 printf '%s\n' "$*" >> "$HOME/gh-calls"
 case "$*" in
- repo\ view*) printf '{{"nameWithOwner":"owner/repo","url":"https://github.com/owner/repo"}}\n';;
- pr\ list*) if [ -f "$HOME/pr-created" ]; then printf '[{{"url":"https://github.com/owner/repo/pull/1","headRefOid":"%s"}}]\n' "$(git rev-parse HEAD)"; else printf '[]\n'; fi;;
- pr\ create*) touch "$HOME/pr-created"; if [ '{lose_creation_ack}' = true ]; then echo 'response lost' >&2; exit 1; fi; printf 'https://github.com/owner/repo/pull/1\n';;
+ repo\ view*) printf '{{"nameWithOwner":"owner/repo","url":"https://github.com/Owner/Repo"}}\n';;
+ pr\ list*) if [ -f "$HOME/pr-created" ]; then printf '[{{"url":"https://github.com/Owner/Repo/pull/1","headRefOid":"%s"}}]\n' "$(git rev-parse HEAD)"; else printf '[]\n'; fi;;
+ pr\ create*) touch "$HOME/pr-created"; if [ '{lose_creation_ack}' = true ]; then echo 'response lost' >&2; exit 1; fi; printf 'https://github.com/Owner/Repo/pull/1\n';;
  pr\ edit*) :;;
  *) exit 9;;
 esac
@@ -1040,7 +1040,7 @@ fn pr_creation_ack_loss_is_reconciled_without_duplicate_and_url_is_visible() -> 
     assert_eq!(task["status"], "succeeded");
     assert!(
         task.to_string()
-            .contains("https://github.com/owner/repo/pull/1")
+            .contains("https://github.com/Owner/Repo/pull/1")
     );
     one_attempt(&f)?;
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 140, 36)?;
@@ -1050,7 +1050,7 @@ fn pr_creation_ack_loss_is_reconciled_without_duplicate_and_url_is_visible() -> 
     t.send("\r")?;
     println!(
         "PULL REQUEST HISTORY\n{}",
-        t.screen("PR URL", |s| s.contains("github.com/owner/repo/pull/1"))?
+        t.screen("PR URL", |s| s.contains("github.com/Owner/Repo/pull/1"))?
     );
     t.send("\x1b\x03")?;
     t.finish()?;
@@ -1370,7 +1370,10 @@ fn changed_delivery_policy_never_publishes_a_failed_local_tasks_unreviewed_basel
             f.git(&["ls-remote", "origin", "refs/heads/main"])?
                 .starts_with(remote_base.trim())
         );
-        assert!(!f.scratch.path().join("provider-invocations").exists());
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+            "remediation\n"
+        );
     }
     Ok(())
 }
@@ -1413,7 +1416,7 @@ fi"#,
     assert_eq!(f.git(&["rev-parse", "HEAD"])?, head);
     assert_eq!(
         fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
-        calls
+        format!("{calls}remediation\n")
     );
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 130, 36)?;
     println!(
@@ -1676,6 +1679,10 @@ fn assert_hook_rejection_then_retry(f: &Fixture, bare: &Path, reference: &str) -
         "pre-push hook never ran"
     );
     assert_eq!(remote_ref(bare, reference)?, before, "remote changed");
+    assert!(
+        task.to_string()
+            .contains("Owner action is required before delivery can continue")
+    );
     let checkpoint = f.git(&["rev-parse", "HEAD"])?;
     assert_ne!(Some(checkpoint.trim().to_owned()), before);
     assert!(f.root.join("result.txt").exists());
@@ -1727,4 +1734,63 @@ fn pr_push_honors_rejecting_pre_push_hook_and_resumes_after_fix() -> Result {
     );
     assert!(f.scratch.path().join("pr-created").exists());
     one_attempt(&f)
+}
+
+#[test]
+fn delivery_repair_rechecks_and_pushes_without_owner_resume() -> Result {
+    let f = Fixture::new()?;
+    let bare = remote(&f)?;
+    fs::write(f.scratch.path().join("repair-delivery-fixture"), "")?;
+    let hooks = f.scratch.path().join("hooks");
+    fs::create_dir_all(&hooks)?;
+    support::write_executable(
+        &hooks.join("pre-push"),
+        "#!/bin/sh\ngit cat-file -e HEAD:release-manifest || { echo 'release manifest missing' >&2; exit 1; }\n",
+    )?;
+    f.git(&["config", "core.hooksPath", hooks.to_str().unwrap()])?;
+    f.ok(&["delivery", "--mode", "direct"])?;
+    f.add("Deliver the approved release")?;
+    f.ok(&["run", "--one"])?;
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "succeeded", "{task}");
+    assert_eq!(
+        remote_ref(&bare, "refs/heads/main")?,
+        Some(f.git(&["rev-parse", "HEAD"])?.trim().into())
+    );
+    assert_eq!(
+        fs::read_to_string(f.root.join("release-manifest"))?,
+        "ready\n"
+    );
+    for role in ["review", "validation"] {
+        assert_eq!(step_states(&f, role)?, ["succeeded", "succeeded"]);
+    }
+    let checked: String = f.db()?.connection().query_row(
+        "SELECT source_tree FROM attempt_steps WHERE role='check' AND state='succeeded' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))?;
+    assert_eq!(checked, f.git(&["rev-parse", "HEAD^{tree}"])?.trim());
+    one_attempt(&f)
+}
+
+#[test]
+fn repeated_delivery_plan_on_unchanged_evidence_is_rejected() -> Result {
+    let f = Fixture::new()?;
+    // The proposed repair is already present, and cannot unblock this push.
+    fs::write(f.root.join("release-manifest"), "ready\n")?;
+    f.git(&["add", "release-manifest"])?;
+    f.git(&["commit", "-m", "Existing approved manifest"])?;
+    let bare = remote(&f)?;
+    rejecting_pre_push_hook(&f)?;
+    fs::write(f.scratch.path().join("repair-delivery-fixture"), "")?;
+    let initial = remote_ref(&bare, "refs/heads/main")?;
+    f.ok(&["delivery", "--mode", "direct"])?;
+    f.add("Keep the protected remote unchanged")?;
+    f.ok(&["run", "--one"])?;
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "paused", "{task}");
+    assert!(
+        task.to_string()
+            .contains("Owner action is required before delivery can continue")
+    );
+    assert_eq!(step_states(&f, "execution")?.len(), 2);
+    assert_eq!(remote_ref(&bare, "refs/heads/main")?, initial);
+    Ok(())
 }

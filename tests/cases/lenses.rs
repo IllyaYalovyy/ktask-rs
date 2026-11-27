@@ -693,7 +693,7 @@ fn several_critical_lenses_share_the_ten_repair_rounds_without_asking_the_owner(
             &f,
             "SELECT count(*) FROM attempt_steps WHERE role='remediation'"
         )?,
-        10
+        11 // ten plans and one final escalation
     );
     assert_eq!(query::<i64>(&f, "SELECT count(*) FROM lens_reviews")?, 22);
     assert_eq!(

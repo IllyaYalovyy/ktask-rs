@@ -63,7 +63,7 @@ pub(super) fn retry(
         *retries += 1;
         Ok(outcome)
     } else {
-        Ok(Some(Outcome::DeliveryBlocked(error.to_string())))
+        Ok(Some(Outcome::DeliveryFailure(error.to_string())))
     }
 }
 
@@ -952,6 +952,18 @@ fn repository_identity(destination: &str) -> Result<String> {
     }
     Ok(normalized.to_ascii_lowercase())
 }
+/// GitHub preserves repository casing in PR URLs. Match the entire repository
+/// and require a numeric PR identifier before passing the URL back to gh.
+fn matches_pr(url: &str, repo: &str) -> bool {
+    let Some((prefix, number)) = url.rsplit_once("/pull/") else {
+        return false;
+    };
+    prefix
+        .strip_prefix("https://")
+        .is_some_and(|identity| identity.eq_ignore_ascii_case(repo))
+        && !number.is_empty()
+        && number.bytes().all(|byte| byte.is_ascii_digit())
+}
 fn ensure_pr(
     service: &mut Service,
     run: &Run,
@@ -1044,7 +1056,7 @@ fn ensure_pr(
             let url = pr["url"]
                 .as_str()
                 .ok_or_else(|| Error::Conflict("PR URL missing".into()))?;
-            if !url.starts_with(&format!("https://{repo}/pull/")) {
+            if !matches_pr(url, &repo) {
                 return Err(
                     Error::Conflict("PR URL differs from the pinned repository".into()).into(),
                 );
