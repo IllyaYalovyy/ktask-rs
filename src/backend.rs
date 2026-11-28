@@ -42,9 +42,6 @@ pub(crate) trait Backend {
     fn busy(&self) -> bool {
         false
     }
-    /// The owner is back at this workspace after another project was on screen.
-    fn resumed(&mut self) {}
-
     // Task details: the body of an Inspect dialog and the evidence it pages through. The
     // defaults describe a workspace without stored evidence pages.
 
@@ -91,7 +88,7 @@ pub(crate) trait Backend {
     }
 
     // Wording that differs between a simulated and a stored workspace. The defaults describe
-    // stored tasks, local or linked; the simulator replaces them.
+    // stored tasks; the simulator replaces them.
 
     /// The stored task behind a row, which usage and budgets are read from.
     fn stored_task(&self, _id: usize) -> Option<&crate::application::Task> {

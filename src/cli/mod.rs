@@ -4,14 +4,11 @@ mod category;
 mod evidence;
 mod execute;
 mod lens;
-mod link;
 mod mcp;
 mod output;
 mod pause_all;
 mod profile;
-mod remote;
 pub(crate) mod repair;
-mod screen;
 
 use crate::{
     application::{self, Service},
@@ -20,7 +17,6 @@ use crate::{
 };
 use args::{Cli, Command};
 use clap::{CommandFactory, FromArgMatches};
-use link::projects;
 use serde_json::json;
 use std::{
     io::{self, IsTerminal, Write},
@@ -113,7 +109,7 @@ pub fn launch(instance: Instance) -> ExitCode {
         .name(crate::PRODUCT)
         .bin_name(instance.name())
         .version(instance.version());
-    let matches = match command.try_get_matches_from(arguments.clone()) {
+    let matches = match command.try_get_matches_from(arguments) {
         Ok(matches) => matches,
         Err(error) if !error.use_stderr() => {
             return match error.print() {
@@ -130,7 +126,7 @@ pub fn launch(instance: Instance) -> ExitCode {
         Ok(cli) => cli,
         Err(error) => return report(Failure::usage(error.to_string()), requested_json),
     };
-    match run(instance, &cli, &arguments) {
+    match run(instance, &cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => report(error, cli.json),
     }
@@ -173,6 +169,56 @@ fn emit(reply: output::Reply, json_output: bool) -> Result<()> {
     written.map_err(|error| match error.kind() {
         io::ErrorKind::BrokenPipe => Failure::closed_output(),
         _ => error.into(),
+    })
+}
+
+/// Lists every registered project without creating a database or selecting a project.
+fn projects(paths: &crate::instance::Paths) -> Result<output::Reply> {
+    let listed = match Database::open_existing(paths)? {
+        Some(db) => crate::runner::registration::listed(paths, &db)?,
+        None => Vec::new(),
+    };
+    let mut text = String::new();
+    let mut data = Vec::new();
+    for (project, alive) in &listed {
+        let attention = project.attention(*alive).name();
+        let current = project.current.as_ref();
+        text.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\n",
+            project.id,
+            attention,
+            project.queued,
+            output::safe(&project.name),
+            output::safe(&project.root.to_string_lossy()),
+            current.map_or("-".into(), |task| format!(
+                "#{} {} · {}",
+                task.id,
+                task.state.label(),
+                output::safe(&task.title)
+            )),
+        ));
+        data.push(json!({
+            "id": project.id,
+            "name": project.name,
+            "root": project.root.to_string_lossy(),
+            "state": attention,
+            "runner_alive": alive,
+            "queued": project.queued,
+            "finished": project.finished,
+            "current": current.map(|task| json!({
+                "id": task.id,
+                "title": task.title,
+                "kind": task.kind.as_str(),
+                "state": task.state,
+            })),
+        }));
+    }
+    if listed.is_empty() {
+        text.push_str("No projects.\n");
+    }
+    Ok(output::Reply {
+        data: json!({"projects": data, "count": listed.len()}),
+        text,
     })
 }
 
@@ -262,18 +308,7 @@ fn actor(cli: &Cli) -> application::Actor {
     }
 }
 
-fn run(instance: Instance, cli: &Cli, arguments: &[std::ffi::OsString]) -> Result<()> {
-    // A command from a parent is admitted before anything it names is touched; the host it
-    // was addressed to is this one.
-    let admitted = match &cli.from_parent {
-        Some(parent) => Some(remote::admit(instance, cli, parent)?),
-        None => None,
-    };
-    if admitted.is_none()
-        && let Some(host) = &cli.host
-    {
-        return remote::send(instance, cli, host, arguments);
-    }
+fn run(instance: Instance, cli: &Cli) -> Result<()> {
     if let Some(Command::Evidence {
         file,
         offset,
@@ -328,7 +363,6 @@ fn run(instance: Instance, cli: &Cli, arguments: &[std::ffi::OsString]) -> Resul
         Some(Command::Pause { all: true }) => return emit(pause_all::run(false)?, cli.json),
         Some(Command::Shutdown) => return emit(pause_all::run(true)?, cli.json),
         Some(Command::Projects) => return emit(projects(&instance.paths()?)?, cli.json),
-        Some(Command::Link { ref action }) => return link::run(instance, action, cli.json),
         Some(Command::ProjectMove { id, ref folder }) => {
             return emit(project_move(instance, id, folder)?, cli.json);
         }
@@ -338,10 +372,7 @@ fn run(instance: Instance, cli: &Cli, arguments: &[std::ffi::OsString]) -> Resul
         Some(Command::Mcp) => return mcp::serve(mcp_host(instance, cli)?).map_err(Into::into),
         _ => {}
     }
-    let root = match &admitted {
-        Some(admitted) => admitted.root.clone(),
-        None => cli.project.clone().map_or_else(std::env::current_dir, Ok)?,
-    };
+    let root = cli.project.clone().map_or_else(std::env::current_dir, Ok)?;
     let Some(command) = &cli.command else {
         if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
             return Err(Failure::usage(
@@ -449,23 +480,21 @@ fn run(instance: Instance, cli: &Cli, arguments: &[std::ffi::OsString]) -> Resul
         );
     }
     let paths = instance.paths()?;
-    // A parent's command never registers a project here.
-    let creates_project = admitted.is_none()
-        && matches!(
-            command,
-            Command::Add(_)
-                | Command::Import { preview: false, .. }
-                | Command::CheckSet { .. }
-                | Command::ModelDefault { .. }
-                | Command::Defaults { .. }
-                | Command::Profile { .. }
-                | Command::Category { .. }
-                | Command::Lens { .. }
-                | Command::Init { .. }
-                | Command::Tool {
-                    action: args::ToolAction::Register { .. }
-                }
-        );
+    let creates_project = matches!(
+        command,
+        Command::Add(_)
+            | Command::Import { preview: false, .. }
+            | Command::CheckSet { .. }
+            | Command::ModelDefault { .. }
+            | Command::Defaults { .. }
+            | Command::Profile { .. }
+            | Command::Category { .. }
+            | Command::Lens { .. }
+            | Command::Init { .. }
+            | Command::Tool {
+                action: args::ToolAction::Register { .. }
+            }
+    );
     let mut service = if creates_project {
         // Validate the source before registering a project for an import that cannot succeed.
         if let Command::Import { file, .. } = command {
@@ -490,34 +519,17 @@ fn run(instance: Instance, cli: &Cli, arguments: &[std::ffi::OsString]) -> Resul
         }
         service
     };
-    let mut actor = actor(cli);
-    if let Some(admitted) = &admitted {
-        admitted.attribute(&mut actor);
-    }
+    let actor = actor(cli);
     service.set_actor(actor.clone())?;
-    if let Some(admitted) = &admitted
-        && admitted.request.change
-    {
-        service.record_remote_request(&admitted.summary(), admitted.request.task)?;
-    }
     if let Command::Agent { action } = command {
         return emit(agent::run(&mut service, &paths, actor, action)?, cli.json);
     }
     if let Command::Tool { action } = command {
         return emit(execute::tool(&mut service, &paths, action)?, cli.json);
     }
-    if let Command::Screen { query } = command {
-        let control = admitted.as_ref().is_none_or(|admitted| admitted.control);
-        return emit(
-            screen::answer(&mut service, &paths, query, control)?,
-            cli.json,
-        );
-    }
-    // Recovering an interrupted control changes the project, which a read-only link may not.
-    if admitted.as_ref().is_none_or(|admitted| admitted.control)
-        && service
-            .pending_control()?
-            .is_some_and(|control| !control.completed)
+    if service
+        .pending_control()?
+        .is_some_and(|control| !control.completed)
         && !crate::runner::supervisor_alive(&service)?
     {
         crate::runner::control::finish_pending(&mut service)?;
@@ -868,14 +880,13 @@ fn validate(cli: &Cli) -> Result<()> {
         Some(
             Command::Shutdown
                 | Command::Projects
-                | Command::Link { .. }
                 | Command::ProjectMove { .. }
                 | Command::ProjectDelete { .. }
         )
     ) && (cli.project.is_some() || cli.project_name.is_some())
     {
         return Err(Failure::usage(
-            "shutdown, projects, link, project-move and project-delete take no --project; name the project by ID",
+            "shutdown, projects, project-move and project-delete take no --project; name the project by ID",
         ));
     }
     if (cli.paths || cli.demo) && cli.command.is_some() {

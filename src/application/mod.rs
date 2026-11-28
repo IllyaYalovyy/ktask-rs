@@ -99,7 +99,7 @@ pub mod transfer;
 
 use crate::storage::{Database, Error, Result};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
@@ -107,7 +107,7 @@ use std::{
 
 pub const ROLES: [&str; 4] = ["execution", "review", "validation", "remediation"];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     Ai,
@@ -224,7 +224,7 @@ impl ModelConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Definition {
     pub title: String,
     pub goal: String,
@@ -269,7 +269,7 @@ impl Definition {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Revision {
     pub number: i64,
     pub lifecycle: String,
@@ -287,7 +287,7 @@ impl Revision {
         self.category.as_ref().is_some_and(|c| c.checks)
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Attempt {
     pub id: i64,
     pub revision: i64,
@@ -326,7 +326,7 @@ pub struct Attempt {
     #[serde(default)]
     pub truncated_evidence: Option<collection::Truncated>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Artifact {
     pub id: i64,
     pub name: String,
@@ -337,7 +337,7 @@ pub struct Artifact {
     pub pruned: bool,
 }
 /// One supervisor step of an attempt (execution, check, review, validation, remediation).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Step {
     pub role: String,
     pub state: String,
@@ -351,13 +351,13 @@ pub struct Step {
     pub check_name: Option<String>,
     pub counts: Option<CheckCounts>,
 }
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 pub struct CheckCounts {
     pub passed: i64,
     pub failed: i64,
     pub ignored: i64,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Task {
     pub id: i64,
     pub version: i64,
@@ -378,7 +378,7 @@ pub struct Task {
     /// When the task completed, failed-skipped, was cancelled or superseded; None while open.
     pub closed_at_ms: Option<i64>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct LifecycleEvent {
     pub action: String,
     pub outcome: Option<String>,

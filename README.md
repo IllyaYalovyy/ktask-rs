@@ -13,7 +13,6 @@ agent CLI: Codex (tested with 0.163.0), Claude Code (`claude`, tested with 2.1.3
 (`opencode`, tested with 1.19.3). Each role may use a different provider. Start with `cargo run --locked`; run checks with `make check`.
 To configure ktask, see [Configure ktask](#configure-ktask).
 To connect an interactive agent, see [MCP for Codex and Claude Code](#mcp-for-codex-and-claude-code).
-To oversee several computers from one, see [Link hosts](#link-hosts).
 
 | Instance | Start | App directory under each XDG root |
 | --- | --- | --- |
@@ -928,161 +927,6 @@ stashes changed, the verification outcome with before and after, and what remain
 timed out or over-budget fix keeps the steps already applied and leaves the runner paused.
 `ktask shutdown` stops running fixes.
 
-## Link hosts
-
-One computer, the **parent**, can list the projects of other computers, its **children**,
-[open them in its TUI](#open-a-childs-project-in-the-tui) and
-[control their tasks](#control-a-childs-tasks) from its CLI. A child dials out over SSH
-(`ssh PARENT ktask link accept`), keeps that one connection and reconnects by itself, so it
-needs no address the parent can reach. Authentication and encryption are your SSH keys and
-`known_hosts`; ktask adds no cryptography and opens no TCP port. Nothing is linked until you
-set it up, and every computer must run the same ktask version.
-
-**Control is on after `ktask link parent`**: from then on the parent can change and run the
-child's tasks. Run `ktask link control off` on the child to make the link read-only.
-
-**1. A key that can only link.** On each child create a key without a passphrase (the
-service cannot type one), and give the parent an alias in `~/.ssh/config`:
-
-```sh
-ssh-keygen -t ed25519 -N '' -f ~/.ssh/ktask_link
-cat >> ~/.ssh/config <<'END'
-Host ktask-parent
-    HostName parent.example.net
-    User me
-    IdentityFile ~/.ssh/ktask_link
-    IdentitiesOnly yes
-END
-```
-
-**2. Restrict it on the parent.** Add the child's `~/.ssh/ktask_link.pub` to the parent's
-`~/.ssh/authorized_keys` as one line, with the full path of the parent's `ktask`:
-
-```
-command="/home/me/.cargo/bin/ktask link accept",restrict ssh-ed25519 AAAA... ktask-link@devbox
-```
-
-`command=` makes sshd run `ktask link accept` whatever the child asks for, and `restrict`
-refuses a terminal and any port, agent or X11 forwarding. That key therefore gets no shell and
-nothing but `link accept`, which only pipes the connection into the parent's hub. Without the
-restriction the key is an ordinary login key. Connect once by hand (`ssh ktask-parent`) to
-verify and record the parent's host key; the link never accepts an unknown one by itself.
-
-**3. Name the parent and run the link.** On each child:
-
-```sh
-ktask link parent ktask-parent        # --name NAME lists it under another name
-```
-
-Then run `ktask link run` on the parent and on every child. It stays in the foreground; use
-the shipped [systemd user unit](scripts/ktask-link.service) to keep it running:
-
-```sh
-cp scripts/ktask-link.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now ktask-link
-loginctl enable-linger                # keep it running while you are logged out
-journalctl --user -u ktask-link       # what it connected to, or why not
-```
-
-The unit sets `KillMode=process`, so stopping or restarting the link leaves runs its parent
-started alone. A user service has a short `PATH`; add the folders of your agent CLIs with
-`systemctl --user edit ktask-link` (`[Service]`, `Environment=PATH=...`) or runs started from
-the parent will not find them. Copy the unit again if you installed an earlier one.
-
-With a parent configured `link run` dials it; without one it serves children, and that is the
-parent. It retries after any failure, waiting from 1 up to 30 seconds. Changes reach the
-parent within two seconds; both sides send a heartbeat every 5 seconds and drop a connection
-that is silent for 20.
-
-**What you see.** The parent's **Projects** screen and `ktask projects` show one list sorted
-by name then host: local projects marked `local`, the others with their host name, with state,
-queue size and current task. The header counts include connected hosts. A disconnected host's
-projects stay listed as **Offline** with the time of last contact until
-`ktask link forget HOST`. Project and task IDs are per host:
-`ktask --json projects` adds `host` (null for local) and `online` to every project, remote
-offline ones also `last_contact_ms`, and `hosts` lists the linked computers.
-
-**Check and undo.** `ktask link status` (`--json`) reports the role, peer, whether it is
-connected, the last contact and the last error. `ktask link parent --clear` unlinks a child
-and ends its `link run`. A host of another ktask version or link protocol is listed as
-**Incompatible**, with both versions named on both sides, until they match. `ktask shutdown`
-also stops `link run`; start the service again after an upgrade.
-
-The command the child asks for is `ktask link accept` (`ktask-dev link accept` from the
-development instance), so without the `command=` line `ktask` must be on the `PATH` of the
-parent's non-interactive SSH shell. `link accept` finds the hub below `XDG_RUNTIME_DIR`, which
-SSH logins and user services share on a standard systemd system.
-
-### Open a child's project in the TUI
-
-On the parent's Projects screen, press Enter on a remote project (or click **Enter Open**). It
-opens in the same terminal with the same Current, Queue, History, task details, events and
-output as a local project, and follows the child live; the header names the project and its
-host, such as `billing @ devbox`.
-
-Run, Pause, Stop, Restart, Approve, Reject, Answer, Add, Insert, Edit, Move, Cancel and Mark
-done work through the same dialogs. They are sent to the child, whose own commands and state
-machine decide; a form stays open until the child answers and shows its refusal. Statistics
-and Readiness are the child's. Runs belong to the child and continue when you leave.
-
-**Local-only** on the child: configuration (models, checks, profiles, categories, lenses,
-delivery, settings export and import), tools and dependency setup, storage and build caches,
-project move and delete, reports and fixes, task models, break down, supersede, copy to queue
-and task import and export. Their keys say so.
-
-The Current log shows the newest 256 KiB of a live run; task details page through all of it.
-Each project keeps its own view, selection and scroll while you switch. When the child goes
-**offline**, its screens stay readable, marked offline with the time of last contact, and its
-actions are disabled with that reason until it reconnects. A project that was never opened
-opens once its host is connected. A read-only link (`ktask link control off`) opens for
-reading only.
-
-The TUI sees a child only through the link: it opens none of its files and no database.
-
-### Control a child's tasks
-
-On the parent, add `--host NAME` and name the project by its ID or name on that host:
-
-```sh
-ktask --host devbox --project billing list
-ktask --host devbox --project billing add --title "Fix paging" --goal "Show every row" --criterion "Last row is visible" --approval draft
-ktask --host devbox --project billing approve 12 --if-version 1
-ktask --host devbox --project billing run --background
-ktask --host devbox --project billing pause
-```
-
-`list`, `current`, `show`, `events`, `add`, `edit`, `move`, `approve`, `reject`, `run` (and
-`resume`, `retry`), `pause`, `stop`, `restart`, `done`, `cancel`, `answer` and `stats` run this
-way. The
-child's own `ktask` runs the command line, so JSON, text, exit codes, `--if-version` guards and
-the task state machine are exactly the local ones, and the parent never opens a child's database
-or files. Everything else, including `project-delete`, `project-move`, `shutdown`, `pause --all`,
-`tool` and provisioning commands, is refused by the parent and again by the child. `--host`
-registers nothing: the project must exist on the child.
-
-**Who did it.** Pass `--actor-kind` and `--actor` as for a local command. The child records the
-name followed by the parent it is configured with, such as `claude-code via ktask-parent` (still
-as AI) or `owner via ktask-parent`, and notes every requested change in the project's events.
-
-**Read-only.** `ktask link control off` on the child keeps `list`, `current`, `show`, `events`,
-`stats` and the parent TUI's reads, and refuses every change (exit 4, code `read_only`). `ktask link control on` allows
-changes again, `ktask link control` shows the setting, and naming the parent again keeps it. A
-child only ever takes commands over its own connection to its configured parent.
-
-**When the link fails.** Nothing is ever retried for you.
-
-| Exit | Code | Meaning |
-| --- | --- | --- |
-| 3 | `not_found` | No linked host of that name, or no such project or task there. |
-| 5 | `host_offline`, `host_incompatible` | Fails at once; the command was not sent. |
-| 6 | `outcome_unknown` | The connection was lost before the answer; it may or may not have run. Read the task and events before running it again. |
-
-A command that reached the child runs to its end there even if the connection is lost or you
-interrupt the parent's `ktask`. So a foreground `run` waits like a local one, but Ctrl-C on the
-parent does not pause it: use `ktask --host NAME --project P pause`. A child runs at most 32
-commands for its parent at once, and returns at most 32 MiB each of output and diagnostics.
-
 ## Task CLI
 
 Without a command, the app opens the TUI. Task commands run without a terminal; `--help` and `<command> --help`
@@ -1139,8 +983,7 @@ cargo run --locked -- approve 1 --if-version 1
 - JSON: `--json` emits one `{"schema_version":1,"ok":true,"data":...}` object on stdout;
   errors emit `{"schema_version":1,"ok":false,"error":{"code":"...","message":"..."}}`
   on stderr with empty stdout. Help/version remain plain text. JSON file/path output requires UTF-8.
-  Exit codes: 0 success, 1 I/O/database failure, 2 usage, 3 missing task/project, 4 state/version conflict;
-  with `--host` also 5 host offline or incompatible and 6 outcome unknown.
+  Exit codes: 0 success, 1 I/O/database failure, 2 usage, 3 missing task/project, 4 state/version conflict.
 - Events use ascending IDs, `--after ID`, and `--limit N` (1–1000); JSON returns `next_after`.
   Show includes all revisions/attempts and the latest 2000 stored output records per attempt.
   Missing cost is null, not zero. Check state before retrying after a lost mutation response.

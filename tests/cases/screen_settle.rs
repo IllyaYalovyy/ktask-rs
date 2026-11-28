@@ -44,9 +44,9 @@ fn without_a_store_a_quiet_screen_is_settled() {
 #[test]
 fn the_active_time_heartbeat_is_not_a_change_of_the_store() -> support::Result {
     let sandbox = support::sandbox()?;
-    let homes = [sandbox.path().join("state")];
-    let mut watch = Watch::new(&homes);
-    let instance = homes[0].join("ktask-dev");
+    let home = sandbox.path().join("state");
+    let mut watch = Watch::new(&home);
+    let instance = home.join("ktask-dev");
     assert_eq!(watch.content(), None);
     // Watching never creates a store.
     assert!(!instance.exists());

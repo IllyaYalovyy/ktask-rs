@@ -100,34 +100,6 @@ fn end_investigation(project: &Project<'_>) -> Result<Option<(i64, AgentKind)>> 
     Ok(Some((id, kind)))
 }
 
-/// An upgrade also ends `link run`; the instances whose link it stopped.
-fn end_links(
-    shutdown: bool,
-    instances: &[(Instance, Paths)],
-    errors: &mut Vec<Failure>,
-) -> Vec<&'static str> {
-    let deadline = Instant::now() + control::PATIENCE;
-    let mut ended = Vec::new();
-    for (instance, paths) in instances.iter().filter(|_| shutdown) {
-        match crate::link::shutdown(paths, deadline) {
-            Ok(true) => ended.push(instance.name()),
-            Ok(false) => {}
-            Err(error) => errors.push(context(error.into(), *instance, None)),
-        }
-    }
-    ended
-}
-
-fn with_links(mut reply: output::Reply, links: &[&str]) -> output::Reply {
-    if !links.is_empty() {
-        reply.data["links"] = json!(links);
-        reply
-            .text
-            .push_str(&format!("Stopped link run: {}.\n", links.join(", ")));
-    }
-    reply
-}
-
 fn request<'a>(project: &'a Project<'a>, mut service: Service, lease: File) -> Result<Target<'a>> {
     let task = match service.request_current_pause() {
         Ok(task) => task,
@@ -261,7 +233,6 @@ pub(super) fn run(shutdown: bool) -> Result<output::Reply> {
     } else {
         Vec::new()
     };
-    let links = end_links(shutdown, &instances, &mut errors);
     if !errors.is_empty() {
         let message = errors
             .iter()
@@ -296,7 +267,7 @@ pub(super) fn run(shutdown: bool) -> Result<output::Reply> {
     if !investigations.is_empty() {
         data["investigations"] = json!(investigations);
     }
-    Ok(with_links(output::Reply { data, text }, &links))
+    Ok(output::Reply { data, text })
 }
 
 fn context(mut error: Failure, instance: Instance, root: Option<&Path>) -> Failure {

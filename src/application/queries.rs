@@ -163,15 +163,6 @@ impl Service {
         Ok(chunks)
     }
 
-    /// Whether this project recorded the attempt.
-    pub(crate) fn owns_attempt(&self, attempt: i64) -> Result<bool> {
-        Ok(self.db.connection().query_row(
-            "SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND project_id=?2)",
-            [attempt, self.project_id],
-            |r| r.get(0),
-        )?)
-    }
-
     pub fn artifact_count(&self, attempt: i64) -> Result<usize> {
         let count: i64 = self.db.connection().query_row(
             "SELECT count(*) FROM artifacts WHERE attempt_id=?1",

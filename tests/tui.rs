@@ -18,10 +18,6 @@ mod golden_set;
 mod isolation;
 #[path = "cases/lifecycle.rs"]
 mod lifecycle;
-#[path = "cases/link.rs"]
-mod link;
-#[path = "cases/link_control.rs"]
-mod link_control;
 #[path = "cases/mcp.rs"]
 mod mcp;
 #[path = "cases/persistence.rs"]
@@ -32,8 +28,6 @@ mod profiles;
 mod projects;
 #[path = "cases/provision.rs"]
 mod provision;
-#[path = "cases/remote_tui.rs"]
-mod remote_tui;
 #[path = "cases/runner.rs"]
 mod runner;
 #[path = "cases/screen_settle.rs"]

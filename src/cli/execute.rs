@@ -625,7 +625,6 @@ pub(super) fn command(
         Command::Lens { action } => super::lens::lens(service, action),
         Command::Run { .. }
         | Command::Restart { .. }
-        | Command::Screen { .. }
         | Command::Storage { .. }
         | Command::Cache { .. }
         | Command::Retention { .. } => {
@@ -648,7 +647,6 @@ pub(super) fn command(
         Command::Pause { all: true }
         | Command::Shutdown
         | Command::Projects
-        | Command::Link { .. }
         | Command::ProjectMove { .. }
         | Command::ProjectDelete { .. } => {
             unreachable!("global commands")

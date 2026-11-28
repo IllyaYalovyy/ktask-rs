@@ -193,19 +193,6 @@ Automatic judge replans share a durable ten-handoff budget with inserted prerequ
 When prerequisites are inserted at an exhausted coding limit, one retry is reserved in a
 new ready revision; old attempts keep their original revision and limits.
 
-## Remote link files
-
-The remote link adds no table. A child's parent, and whether it may change anything
-(`control`, true unless turned off), is `config/link.json`; its last connection state is
-`state/link/status.json`. A command forwarded by the parent is run by the child's own `ktask`,
-whose output waits in unnamed files below `state/link/` until it is sent. Each change it asks for
-is appended to `events` as `remote.request`, naming the command, actor kind and
-`NAME via PARENT`; the same name is what the command records as its actor. A parent keeps what each child last reported in
-`state/link/hosts/HOST.json`, written only by its hub (`link run`) and removed by
-`link forget HOST`; it is a copy of another instance's state, never edited here. The lock and
-the hub's two local sockets (`hub.sock` for the TUI and CLI, `children.sock` for
-`link accept`) live in `runtime/link/`.
-
 ## Storage conventions
 
 One SQLite file per instance state root; projects have independent queues. Project names are

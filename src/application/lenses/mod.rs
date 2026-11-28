@@ -21,7 +21,7 @@ pub const MAX_SELECTED: usize = 5;
 pub const MAX_INSTRUCTION_CHARS: usize = MAX_TEMPLATE_CHARS;
 
 /// A lens as defined, or as a revision pinned it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Lens {
     pub name: String,
     pub description: String,
@@ -221,14 +221,14 @@ pub(super) fn pinned(db: &Connection, task: i64, revision: i64) -> Result<Vec<Le
 }
 
 /// One finding of a lens review.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Finding {
     pub critical: bool,
     pub description: String,
 }
 
 /// A finished review of one source state through one lens.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Review {
     /// Position of the lens in the revision's selection.
     pub ordinal: i64,

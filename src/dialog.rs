@@ -208,8 +208,6 @@ impl Field {
 
 pub struct Dialog {
     pub expected: Option<crate::application::VersionedTask>,
-    /// The command sent to a linked host whose answer this form waits for.
-    pub ticket: Option<u64>,
     pub kind: DialogKind,
     pub title: String,
     pub body: String,
@@ -228,7 +226,6 @@ impl Dialog {
     pub fn new(kind: DialogKind, title: &str, body: &str, fields: Vec<Field>) -> Self {
         Self {
             expected: None,
-            ticket: None,
             kind,
             title: title.into(),
             body: body.into(),

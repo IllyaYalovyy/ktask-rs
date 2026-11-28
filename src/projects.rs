@@ -1,23 +1,23 @@
 //! Every project of this instance in one terminal: the Projects screen's list, and the
 //! workspaces opened from it. One project is open at a time; the others keep their screen
 //! (view, selection, scroll) parked until reopened. Each project still owns its queue and
-//! its background supervisor. Projects of linked hosts are listed beside them and open on
-//! the same screens, over the link.
+//! its background supervisor.
 use crate::{
     app::{Action, App, Screen, View},
-    application::{Service, overview::Attention, registry},
+    application::{
+        Service,
+        overview::{Attention, Project},
+        registry,
+    },
     backend::Backend,
     dialog::{Dialog, DialogKind, Field},
     instance::{Instance, Paths},
-    link::{self, HostRecord, fleet},
     persistent::StoredWorkspace,
-    remote_ui::RemoteWorkspace,
     storage::Database,
 };
 use ratatui::{crossterm::event::KeyCode, widgets::ListState};
 use std::{
     collections::BTreeMap,
-    ops::Deref,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -28,26 +28,13 @@ pub(crate) const CONFIRM_NAME: &str = "Type the project name to delete it";
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Row {
-    /// A local project's ID. Remote IDs are per host, so a remote row gets a negative
-    /// number of this terminal's own.
-    pub key: i64,
-    entry: fleet::Entry,
+    pub project: Project,
+    pub runner_alive: bool,
 }
 
 impl Row {
-    /// Whether this terminal can open the project: its own, or one of a host of this
-    /// ktask. Whether an offline one opens depends on whether it was open before.
-    pub fn opens(&self) -> bool {
-        self.remote
-            .as_ref()
-            .is_none_or(|remote| remote.incompatible.is_none() && !remote.placeholder)
-    }
-}
-
-impl Deref for Row {
-    type Target = fleet::Entry;
-    fn deref(&self) -> &fleet::Entry {
-        &self.entry
+    pub fn attention(&self) -> Attention {
+        self.project.attention(self.runner_alive)
     }
 }
 
@@ -70,11 +57,6 @@ pub(crate) struct Hub {
     target: Option<i64>,
     /// Why the last refresh failed; the list then shows what it had.
     pub error: Option<String>,
-    /// Some host is linked, so every row names its host.
-    pub linked: bool,
-    /// What the linked hosts last reported, kept while the hub cannot be asked.
-    hosts: Vec<HostRecord>,
-    remote_keys: BTreeMap<(String, i64), i64>,
     source: Option<Source>,
     parked: BTreeMap<i64, Workspace>,
     refreshed: Instant,
@@ -91,9 +73,6 @@ impl Hub {
             unregistered: None,
             target: None,
             error: None,
-            linked: false,
-            hosts: Vec::new(),
-            remote_keys: BTreeMap::new(),
             source: None,
             parked: BTreeMap::new(),
             refreshed: Instant::now(),
@@ -129,47 +108,29 @@ impl Hub {
             return false;
         };
         let listed = crate::runner::registration::listed(&source.paths, &source.db);
-        let (hosts, link_error) = match link::hosts(&source.paths) {
-            Ok(hosts) => (hosts, None),
-            Err(error) => (self.hosts.clone(), Some(error.to_string())),
-        };
         let (rows, error) = match listed {
-            Ok(listed) => {
-                let rows = fleet::merge(listed, &hosts)
+            Ok(listed) => (
+                listed
                     .into_iter()
-                    .map(|entry| self.row(entry))
-                    .collect();
-                (rows, link_error)
-            }
+                    .map(|(project, runner_alive)| Row {
+                        project,
+                        runner_alive,
+                    })
+                    .collect(),
+                None,
+            ),
             Err(error) => (self.rows.clone(), Some(error.to_string())),
         };
-        let linked = !hosts.is_empty();
-        let changed = rows != self.rows || error != self.error || linked != self.linked;
+        let changed = rows != self.rows || error != self.error;
         self.rows = rows;
         self.error = error;
-        self.linked = linked;
-        self.hosts = hosts;
         if self.position().is_none() {
             self.selected = self
                 .active
-                .filter(|id| self.rows.iter().any(|row| row.key == *id))
-                .or_else(|| self.rows.first().map(|row| row.key));
+                .filter(|id| self.rows.iter().any(|row| row.project.id == *id))
+                .or_else(|| self.rows.first().map(|row| row.project.id));
         }
         changed
-    }
-
-    fn row(&mut self, entry: fleet::Entry) -> Row {
-        let key = match entry.host() {
-            None => entry.project.id,
-            Some(host) => {
-                let next = -(self.remote_keys.len() as i64) - 1;
-                *self
-                    .remote_keys
-                    .entry((host.to_owned(), entry.project.id))
-                    .or_insert(next)
-            }
-        };
-        Row { key, entry }
     }
 
     /// Refreshes on a timer, faster while the list is on screen.
@@ -190,38 +151,19 @@ impl Hub {
     pub fn position(&self) -> Option<usize> {
         self.rows
             .iter()
-            .position(|row| Some(row.key) == self.selected)
+            .position(|row| Some(row.project.id) == self.selected)
     }
 
     pub fn selected_row(&self) -> Option<&Row> {
         self.position().map(|index| &self.rows[index])
     }
 
-    /// Whether this project was opened and its screen is kept.
-    pub fn opened_before(&self, key: i64) -> bool {
-        self.parked.contains_key(&key) || self.active == Some(key)
-    }
-
-    /// The selected row when it is another host's, which is managed there.
-    pub fn selected_remote(&self) -> Option<&Row> {
-        self.selected_row().filter(|row| row.remote.is_some())
-    }
-
-    /// Listed projects, without the rows that only stand for a host.
-    pub fn project_count(&self) -> usize {
-        self.rows
-            .iter()
-            .filter(|row| !row.remote.as_ref().is_some_and(|r| r.placeholder))
-            .count()
-    }
-
-    /// Projects with a live runner, and projects whose current task waits for the owner,
-    /// on this computer and on connected hosts.
+    /// Projects with a live runner, and projects whose current task waits for the owner.
     pub fn counts(&self) -> (usize, usize) {
         let count = |wanted| {
             self.rows
                 .iter()
-                .filter(|row| row.online() && row.attention() == wanted)
+                .filter(|row| row.attention() == wanted)
                 .count()
         };
         (count(Attention::Running), count(Attention::NeedsOwner))
@@ -239,23 +181,19 @@ impl Hub {
             KeyCode::End | KeyCode::Char('G') => last,
             _ => return,
         };
-        self.selected = self.rows.get(next).map(|row| row.key);
+        self.selected = self.rows.get(next).map(|row| row.project.id);
     }
 
     /// The parked workspace of `id`, or a newly opened one.
     fn workspace(&mut self, instance: Instance, id: i64) -> Result<Workspace, String> {
-        if let Some((mut backend, screen)) = self.parked.remove(&id) {
-            backend.resumed();
-            return Ok((backend, screen));
+        if let Some(parked) = self.parked.remove(&id) {
+            return Ok(parked);
         }
         let row = self
             .rows
             .iter()
-            .find(|row| row.key == id && row.opens())
+            .find(|row| row.project.id == id)
             .ok_or("That project is no longer registered")?;
-        if let Some(host) = row.host() {
-            return remote_workspace(instance, row, host);
-        }
         if !row.project.root.is_dir() {
             return Err(format!(
                 "{}: folder is missing · restore {} to open this project",
@@ -319,19 +257,6 @@ impl Hub {
         self.unregistered = None;
         Ok((id, workspace))
     }
-}
-
-/// Opens a linked project; one not open before needs its host.
-fn remote_workspace(instance: Instance, row: &Row, host: &str) -> Result<Workspace, String> {
-    if !row.online() {
-        return Err(format!(
-            "{host} is offline · {} opens when it reconnects",
-            row.project.name
-        ));
-    }
-    let mut screen = Screen::new(instance, &row.project.name);
-    let backend = RemoteWorkspace::open(&mut screen, instance, host, row.project.id)?;
-    Ok((Box::new(backend), screen))
 }
 
 fn stored_workspace(instance: Instance, service: Service) -> Result<Workspace, String> {
@@ -488,31 +413,15 @@ impl App {
             };
         }
         left.1.selection.clear();
-        // Mouse capture is this terminal's setting, which a linked host does not have.
-        if self.screen.remote.is_some() {
-            self.screen.mouse_enabled = left.1.mouse_enabled;
-        }
         if let Some(previous) = self.hub.active.replace(id) {
             self.hub.parked.insert(previous, left);
         }
         self.hub.selected = Some(id);
         self.screen.reconcile();
         let name = self.project_name.clone();
-        let link = self
-            .remote
-            .as_ref()
-            .map(|link| (link.host.clone(), link.offline.is_some()));
-        self.message(match link {
-            Some((host, true)) => {
-                format!("Opened {name} on {host} · offline, showing its last state")
-            }
-            Some((host, false)) => {
-                format!("Opened {name} on {host} · live over the link; its runs continue there")
-            }
-            None => format!(
-                "Opened {name} · 0 Projects lists every project; runs continue in the background"
-            ),
-        });
+        self.message(format!(
+            "Opened {name} · 0 Projects lists every project; runs continue in the background"
+        ));
     }
 
     pub(crate) fn project_controls(&self) -> Vec<(&'static str, Action)> {

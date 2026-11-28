@@ -172,7 +172,6 @@ fn scope(command: &Command) -> Scope {
             Refused("a fix never deletes or moves a project")
         }
         Command::Projects => Refused("a fix works on its own project only"),
-        Command::Link { .. } => Refused("linking hosts is the owner's setup"),
         Command::Shutdown | Command::Pause { all: true } => {
             Refused("a fix never shuts ktask down or touches other projects")
         }
@@ -180,10 +179,9 @@ fn scope(command: &Command) -> Scope {
             Refused("evidence retention and build caches are not part of a fix")
         }
         Command::Evidence { .. } => Refused("run ktask evidence directly, not through the fix"),
-        Command::Mcp
-        | Command::Screen { .. }
-        | Command::FollowUp { .. }
-        | Command::DependencyRequest { .. } => Refused("it is not a command of a fix"),
+        Command::Mcp | Command::FollowUp { .. } | Command::DependencyRequest { .. } => {
+            Refused("it is not a command of a fix")
+        }
         Command::InFix { .. } => Refused("fix commands do not nest"),
     }
 }
@@ -325,13 +323,11 @@ pub(crate) fn run(
         || cli.actor.is_some()
         || cli.actor_kind.is_some()
         || cli.worker_token.is_some()
-        || cli.host.is_some()
-        || cli.from_parent.is_some()
         || cli.paths
         || cli.demo
     {
         return Answer::Refused(
-            "a fix works on its own project as itself; omit project, actor, host and instance options"
+            "a fix works on its own project as itself; omit project, actor and instance options"
                 .into(),
         );
     }

@@ -1,6 +1,4 @@
-//! A stored project as the screens show it, however it was read: the local workspace reads
-//! it through `Service`, a linked child's through the same functions on that host. Reading,
-//! the screen projection, task forms and the detail texts are written once here.
+//! Reads stored projects and prepares their screens, forms and task details.
 use crate::{
     app::{Action, EvidenceSection, Screen},
     application::{self as domain, Service, session::ExecutionSession, usage_report::UsageTotals},
@@ -26,15 +24,13 @@ pub(crate) struct ProjectData {
     pub supervisor_alive: bool,
 }
 
-/// One read. `recover` first settles what a dead supervisor left behind, which changes the
-/// project, so a read-only link may not ask for it.
-pub(crate) fn read(service: &mut Service, recover: bool) -> Result<ProjectData, String> {
+pub(crate) fn read(service: &mut Service) -> Result<ProjectData, String> {
     let service = std::cell::RefCell::new(service);
     let alive = || crate::runner::supervisor_alive(&service.borrow()).map_err(|e| e.to_string());
     while_unchanged(alive, |supervisor_alive| {
         let service = &mut **service.borrow_mut();
         // Recover an orphan to Paused or its committed dependency wait before rendering.
-        if recover && !supervisor_alive {
+        if !supervisor_alive {
             crate::runner::control::settle(service).map_err(|e| e.to_string())?;
             crate::runner::control::finish_pending(service).map_err(|e| e.to_string())?;
         }

@@ -1,7 +1,7 @@
 //! Durable scheduler policy, separate from task and attempt lifecycles.
 use super::*;
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionSession {
     pub generation: i64,
     pub mode: String,

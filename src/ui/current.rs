@@ -479,17 +479,6 @@ fn until(task: &Task) -> String {
 
 /// One line that says what is happening and what the owner can do about it.
 fn situation(app: &App, task: &Task) -> (String, Color) {
-    // The header and run status name the host and its last contact; this says what it means.
-    if app
-        .remote
-        .as_ref()
-        .is_some_and(|link| link.offline.is_some())
-    {
-        return (
-            "Offline · last known state · actions wait for the link".into(),
-            WARN,
-        );
-    }
     if let Some(draft) = task.draft() {
         return (
             format!(

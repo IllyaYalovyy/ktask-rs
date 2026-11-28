@@ -43,7 +43,7 @@ impl View {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     View(View),
     Back,
@@ -241,8 +241,6 @@ pub struct Screen {
     pub supervisor_alive: Option<bool>,
     pub project_name: String,
     pub instance: Instance,
-    /// The link behind these screens when their project is a linked host's.
-    pub(crate) remote: Option<crate::remote_ui::LinkState>,
     pub view: View,
     pub previous: View,
     pub queue: Vec<Task>,
@@ -359,7 +357,6 @@ impl Screen {
             supervisor_alive: None,
             project_name: project_name.into(),
             instance,
-            remote: None,
             view: View::Current,
             previous: View::Current,
             queue: Vec::new(),
@@ -649,14 +646,14 @@ impl App {
     }
     fn view_key(&mut self, code: KeyCode) -> Option<Action> {
         if code == KeyCode::Char('p') && !matches!(self.view, View::Current | View::Projects) {
-            return self.offered(Action::Pause).then_some(Action::Pause);
+            return self.enabled(Action::Pause).then_some(Action::Pause);
         }
         match self.view {
             View::Current => match code {
                 KeyCode::Char('u') => Some(Action::Readiness),
                 KeyCode::Char('r') => Some(Action::Run),
                 KeyCode::Char('+') => self
-                    .offered(Action::RaiseResume)
+                    .enabled(Action::RaiseResume)
                     .then_some(Action::RaiseResume),
                 KeyCode::Char('m') => Some(Action::Configure),
                 KeyCode::Char('p') => Some(Action::Pause),
@@ -672,7 +669,7 @@ impl App {
                 KeyCode::Char('o') => Some(Action::Output),
                 KeyCode::Char('e') => Some(Action::Edit),
                 KeyCode::Char('b') => Some(Action::Breakdown),
-                KeyCode::Char('t') => self.offered(Action::Tools).then_some(Action::Tools),
+                KeyCode::Char('t') => self.enabled(Action::Tools).then_some(Action::Tools),
                 KeyCode::Char('i') => Some(Action::Investigate),
                 KeyCode::Char('f') => Some(Action::Fix),
                 KeyCode::Enter => Some(Action::Inspect),

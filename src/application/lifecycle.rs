@@ -1,8 +1,8 @@
 //! The task state machine (docs/USECASES.md). The TUI, the CLI and the runner all ask this
 //! module what a task allows, so every surface offers and refuses the same actions.
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
     NeedsApproval,

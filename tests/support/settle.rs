@@ -8,7 +8,7 @@
 use rusqlite::{Connection, OpenFlags, types::ValueRef};
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -87,7 +87,7 @@ fn words(screen: &str) -> String {
 /// them, by `PRAGMA data_version`. They are opened read-only, never created, and only while
 /// a wait is watching.
 pub struct Watch<'a> {
-    homes: &'a [PathBuf],
+    home: &'a Path,
     open: Vec<Open>,
 }
 
@@ -99,9 +99,9 @@ struct Open {
 }
 
 impl<'a> Watch<'a> {
-    pub fn new(homes: &'a [PathBuf]) -> Self {
+    pub fn new(home: &'a Path) -> Self {
         Self {
-            homes,
+            home,
             open: Vec::new(),
         }
     }
@@ -121,13 +121,10 @@ impl<'a> Watch<'a> {
 
     /// Opens the stores that exist by now; one created during a wait is picked up.
     fn open_new(&mut self) {
-        let instances = self
-            .homes
-            .iter()
-            .filter_map(|home| std::fs::read_dir(home).ok())
-            .flatten()
-            .flatten();
-        for instance in instances {
+        let Ok(instances) = std::fs::read_dir(self.home) else {
+            return;
+        };
+        for instance in instances.flatten() {
             let path = instance.path().join("ktask.sqlite3");
             if self.open.iter().any(|open| open.path == path) || !path.is_file() {
                 continue;

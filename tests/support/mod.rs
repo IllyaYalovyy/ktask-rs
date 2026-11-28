@@ -295,7 +295,7 @@ pub struct Terminal {
     /// The screen before input that no wait has observed yet.
     before_input: Mutex<Option<String>>,
     /// Where the stores are whose changes this TUI shows.
-    state_homes: Vec<PathBuf>,
+    state_home: PathBuf,
     settle: Mutex<settle::Settle>,
     /// Whether this terminal has been sent mouse input, so its later frames are not proof
     /// of the keyboard path.
@@ -426,7 +426,7 @@ impl Terminal {
             reader: Some(reader),
             exited: false,
             before_input: Mutex::new(None),
-            state_homes: vec![state_home],
+            state_home,
             settle: Mutex::new(settle::Settle::new(Instant::now())),
             mouse_used: false,
             _sandbox: None,
@@ -536,12 +536,6 @@ impl Terminal {
         screen
     }
 
-    /// Also settle on the store under `state_home`: a linked host's, whose project the
-    /// screens show.
-    pub fn watch(&mut self, state_home: PathBuf) {
-        self.state_homes.push(state_home);
-    }
-
     /// Waits until the screen matches and is not [`leaving`] a finished queue. After input, the condition must describe its result:
     /// one that the screen before the input already met cannot tell whether the input has
     /// been handled, so the wait fails at once. Use `still` to check that input changed nothing.
@@ -573,7 +567,7 @@ impl Terminal {
         let mut last = self.parser.lock().unwrap().screen().contents();
         let accepted = |screen: &str| matches(screen) && !leaving(screen);
         let mut matched = accepted(&last);
-        let mut store = settle::Watch::new(&self.state_homes);
+        let mut store = settle::Watch::new(&self.state_home);
         let mut settle = self.settle.lock().unwrap_or_else(|held| held.into_inner());
         settle.store(store.content(), Instant::now());
         settle.frame(&last, Instant::now());

@@ -116,7 +116,7 @@ impl StoredWorkspace {
     }
 
     pub(crate) fn reload(&mut self, screen: &mut Screen) -> Result<(), String> {
-        let data = project_view::read(&mut self.service, true)?;
+        let data = project_view::read(&mut self.service)?;
         let alive = data.supervisor_alive;
         self.stored = project_view::show(screen, data)?;
         let current = screen.current().map(|task| task.id);
