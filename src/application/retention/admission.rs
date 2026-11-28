@@ -157,6 +157,16 @@ pub(in crate::application) fn bump_admission_generation(db: &Connection) -> Resu
     Ok(())
 }
 
+/// A walking scan may already have counted a file that is about to be unlinked
+/// or replaced. Let it finish, then measure again if the projection still matters.
+pub(in crate::application) fn evidence_allocation_changed(db: &Connection) -> Result<()> {
+    db.execute(
+        "UPDATE instance_allocation_scan SET rescan=1 WHERE id=1 AND complete<>2",
+        [],
+    )?;
+    bump_admission_generation(db)
+}
+
 /// Reclamation changes physical allocation without an admission. A lost invalidation
 /// leaves the larger, conservative projection.
 pub(super) fn invalidate_known_allocation(db: &Connection, root: &File) -> Result<()> {
@@ -177,7 +187,7 @@ pub(super) fn scan_base(tx: &Connection) -> Result<(i64, i64, i64)> {
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
     let (pending_bytes, pending_files): (i64, i64) = tx.query_row(
-        "SELECT coalesce(sum(size_bytes),0),count(*) FROM artifact_reservations",
+        "SELECT coalesce(sum(CASE WHEN shared=0 THEN size_bytes ELSE 0 END),0),count(*) FROM artifact_reservations",
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
@@ -202,14 +212,14 @@ pub(super) fn settle_scan(db: &Database, revision: i64, walk: &Walk) -> Result<b
     super::database::unsynced(db.connection(), || {
         let tx =
             rusqlite::Transaction::new_unchecked(db.connection(), TransactionBehavior::Immediate)?;
-        let scan: Option<(i64, i64)> = tx
+        let scan: Option<(i64, i64, bool)> = tx
         .query_row(
-            "SELECT base_bytes,base_files FROM instance_allocation_scan WHERE id=1 AND revision=?1 AND complete=1",
+            "SELECT base_bytes,base_files,rescan FROM instance_allocation_scan WHERE id=1 AND revision=?1 AND complete=1",
             [revision],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()?;
-        let Some((base_bytes, base_files)) = scan else {
+        let Some((base_bytes, base_files, rescan)) = scan else {
             return Ok(false);
         };
         let (generation, projected_bytes, projected_files): (i64, i64, i64) = tx.query_row(
@@ -230,7 +240,7 @@ pub(super) fn settle_scan(db: &Database, revision: i64, walk: &Walk) -> Result<b
     )?;
         tx.execute(
         "UPDATE instance_allocation_scan SET generation=?1,complete=2,revision=revision+1,bytes=?2,files=?3,database_bytes=?4,wal_bytes=?5 WHERE id=1",
-        params![generation.saturating_add(1), observed.bytes, observed.files, observed.database, observed.wal],
+        params![generation.saturating_add(i64::from(!rescan)), observed.bytes, observed.files, observed.database, observed.wal],
     )?;
         tx.commit()?;
         Ok(true)

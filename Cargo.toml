@@ -1,6 +1,6 @@
 [package]
 name = "ktask-rs-mk3"
-version = "0.63.1"
+version = "0.64.0"
 edition = "2024"
 rust-version = "1.97"
 publish = false
@@ -27,6 +27,7 @@ rustix = { version = "1.1", features = ["fs"] }
 signal-hook = "0.4"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 sha2 = "0.10"
+sha2-checkpoint = { package = "sha2", version = "0.11" }
 
 [dev-dependencies]
 portable-pty = "0.9.0"

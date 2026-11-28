@@ -11,12 +11,35 @@ use nix::{
 use rusqlite::Connection;
 use serde::Deserialize;
 use std::{
+    collections::BTreeSet,
     ffi::OsStr,
     os::{
         fd::AsRawFd,
         unix::{ffi::OsStrExt, fs::MetadataExt},
     },
 };
+
+#[derive(Default)]
+struct Links<'a> {
+    earlier: Option<&'a Connection>,
+    visited: BTreeSet<(i64, i64)>,
+}
+
+impl Links<'_> {
+    fn first(&mut self, device: i64, inode: i64) -> Result<bool> {
+        if !self.visited.insert((device, inode)) {
+            return Ok(false);
+        }
+        if let Some(db) = self.earlier {
+            let seen: bool = db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM instance_allocation_links WHERE device=?1 AND inode=?2)",
+                params![device,inode], |r| r.get(0),
+            )?;
+            return Ok(!seen);
+        }
+        Ok(true)
+    }
+}
 
 const DIRECTORY: OFlag = OFlag::O_RDONLY
     .union(OFlag::O_DIRECTORY)
@@ -138,23 +161,29 @@ impl Walk {
 
     /// Visit at most `budget` entries. A directory that vanished while the walk was paused
     /// costs one; `.`, `..` and leaving a finished directory cost nothing.
-    fn step(&mut self, root: &File, mut budget: usize) -> Result<()> {
+    fn step(&mut self, root: &File, mut budget: usize, links: &mut Links<'_>) -> Result<()> {
         if self.finished() {
             return Ok(());
         }
         let directory = File::from(openat(root, ".", DIRECTORY, Mode::empty()).map_err(io)?);
-        self.list(0, &directory, &mut budget)?;
+        self.list(0, &directory, &mut budget, links)?;
         Ok(())
     }
 
     /// Continue listing `frames[depth]`, open as `directory`, descending into each child
     /// while its own listing stays open. False when the budget ran out inside it.
-    fn list(&mut self, depth: usize, directory: &File, budget: &mut usize) -> Result<bool> {
+    fn list(
+        &mut self,
+        depth: usize,
+        directory: &File,
+        budget: &mut usize,
+        links: &mut Links<'_>,
+    ) -> Result<bool> {
         if let Some(resumed) = self.frames.get(depth + 1) {
             let name = OsStr::from_bytes(&resumed.name);
             match openat(directory, name, DIRECTORY, Mode::empty()) {
                 Ok(child) => {
-                    if !self.list(depth + 1, &File::from(child), budget)? {
+                    if !self.list(depth + 1, &File::from(child), budget, links)? {
                         return Ok(false);
                     }
                 }
@@ -194,7 +223,7 @@ impl Walk {
             }
             self.visited += 1;
             *budget -= 1;
-            if let Some(child) = self.count(directory, name)? {
+            if let Some(child) = self.count(directory, name, links)? {
                 require(
                     self.frames.len() < MAX_DEPTH,
                     "Storage scan exceeded directory depth limit",
@@ -203,7 +232,7 @@ impl Walk {
                     name: name.to_vec(),
                     offset: 0,
                 });
-                if !self.list(depth + 1, &child, budget)? {
+                if !self.list(depth + 1, &child, budget, links)? {
                     return Ok(false);
                 }
             }
@@ -212,7 +241,12 @@ impl Walk {
     }
 
     /// Count one entry by its category; return the opened directory to descend into.
-    fn count(&mut self, directory: &File, name: &[u8]) -> Result<Option<File>> {
+    fn count(
+        &mut self,
+        directory: &File,
+        name: &[u8],
+        links: &mut Links<'_>,
+    ) -> Result<Option<File>> {
         // SQLite may remove and recreate these entries behind a directory cookie.
         // Measure the fixed set only after the resumable walk finishes.
         if self.frames.len() == 1
@@ -239,7 +273,14 @@ impl Walk {
         } else {
             None
         };
-        let physical = (stat.st_blocks as i64).saturating_mul(512);
+        let physical = if rustix::fs::FileType::from_raw_mode(stat.st_mode).is_file()
+            && stat.st_nlink > 1
+            && !links.first(stat.st_dev as i64, stat.st_ino as i64)?
+        {
+            0
+        } else {
+            (stat.st_blocks as i64).saturating_mul(512)
+        };
         let name = name.as_bytes();
         let at_root = self.frames.len() == 1;
         let in_evidence = self
@@ -284,13 +325,13 @@ pub(super) fn with_sqlite(root: &File, mut usage: Allocation) -> Result<Allocati
 /// The whole instance in one walk.
 pub(super) fn allocation(root: &File) -> Result<Allocation> {
     let mut walk = Walk::start(root)?;
-    walk.step(root, usize::MAX)?;
+    walk.step(root, usize::MAX, &mut Links::default())?;
     debug_assert!(walk.finished());
     with_sqlite(root, walk.usage)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ScanProgress {
+pub(crate) enum ScanProgress {
     Visited,
     Contended,
     Settled,
@@ -337,14 +378,17 @@ fn start_scan(db: &Database) -> Result<()> {
         return Ok(());
     }
     let walk = Walk::start(db.state_dir())?;
-    let frames = serde_json::json!({"sqlite_excluded":true,"frames":walk.frames}).to_string();
+    let frames = serde_json::json!({"counts_links":true,"frames":walk.frames}).to_string();
     // Scan progress is redoable: a lost commit repeats the step, and a lost settlement
     // leaves the larger projection.
     unsynced(db.connection(), || {
         let tx =
             rusqlite::Transaction::new_unchecked(db.connection(), TransactionBehavior::Immediate)?;
         let (generation, base_bytes, base_files) = scan_base(&tx)?;
-        tx.execute("INSERT INTO instance_allocation_scan(id,generation,revision,frames_json,bytes,files,database_bytes,wal_bytes,runner_log_bytes,evidence_bytes,evidence_entries,directory_entries,entries_visited,complete,base_bytes,base_files) VALUES (1,?1,0,?2,?3,1,0,0,0,0,0,1,0,0,?4,?5) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,revision=instance_allocation_scan.revision+1,frames_json=excluded.frames_json,bytes=excluded.bytes,files=1,database_bytes=0,wal_bytes=0,runner_log_bytes=0,evidence_bytes=0,evidence_entries=0,directory_entries=1,entries_visited=0,complete=0,base_bytes=excluded.base_bytes,base_files=excluded.base_files WHERE instance_allocation_scan.complete=2 AND instance_allocation_scan.generation!=excluded.generation", params![generation,frames,walk.usage.bytes,base_bytes,base_files])?;
+        let started = tx.execute("INSERT INTO instance_allocation_scan(id,generation,revision,frames_json,bytes,files,database_bytes,wal_bytes,runner_log_bytes,evidence_bytes,evidence_entries,directory_entries,entries_visited,complete,base_bytes,base_files) VALUES (1,?1,0,?2,?3,1,0,0,0,0,0,1,0,0,?4,?5) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,revision=instance_allocation_scan.revision+1,frames_json=excluded.frames_json,bytes=excluded.bytes,files=1,database_bytes=0,wal_bytes=0,runner_log_bytes=0,evidence_bytes=0,evidence_entries=0,directory_entries=1,entries_visited=0,complete=0,base_bytes=excluded.base_bytes,base_files=excluded.base_files,rescan=0 WHERE instance_allocation_scan.complete=2 AND instance_allocation_scan.generation!=excluded.generation", params![generation,frames,walk.usage.bytes,base_bytes,base_files])?;
+        if started != 0 {
+            tx.execute("DELETE FROM instance_allocation_links", [])?;
+        }
         tx.commit()?;
         Ok(())
     })
@@ -352,11 +396,11 @@ fn start_scan(db: &Database) -> Result<()> {
 
 /// One bounded step of the shared allocation scan; any process may advance it.
 pub(super) fn bounded_allocation_scan(db: &Database) -> Result<ScanProgress> {
-    // Old cursors counted SQLite through directory cookies. Restart that ephemeral
+    // Old cursors counted each hard link as a separate file. Restart that ephemeral
     // measurement once when upgrading, without changing any retained evidence.
-    let legacy: bool = db.connection().query_row("SELECT EXISTS(SELECT 1 FROM instance_allocation_scan WHERE coalesce(json_extract(frames_json,'$.sqlite_excluded'),0)=0)",[],|r|r.get(0))?;
+    let legacy: bool = db.connection().query_row("SELECT EXISTS(SELECT 1 FROM instance_allocation_scan WHERE coalesce(json_extract(frames_json,'$.counts_links'),0)=0)",[],|r|r.get(0))?;
     if legacy {
-        db.connection().execute("DELETE FROM instance_allocation_scan WHERE coalesce(json_extract(frames_json,'$.sqlite_excluded'),0)=0", [])?;
+        db.connection().execute("DELETE FROM instance_allocation_scan WHERE coalesce(json_extract(frames_json,'$.counts_links'),0)=0", [])?;
     }
     start_scan(db)?;
     let mut state = scan_state(db.connection())?;
@@ -364,7 +408,13 @@ pub(super) fn bounded_allocation_scan(db: &Database) -> Result<ScanProgress> {
         return Ok(ScanProgress::Settled);
     }
     if state.complete == 0 {
-        state.walk.step(db.state_dir(), CLEANUP_BATCH as usize)?;
+        let mut links = Links {
+            earlier: Some(db.connection()),
+            ..Links::default()
+        };
+        state
+            .walk
+            .step(db.state_dir(), CLEANUP_BATCH as usize, &mut links)?;
         let walk = &state.walk;
         let complete = i64::from(walk.finished());
         let changed = unsynced(db.connection(), || {
@@ -372,7 +422,15 @@ pub(super) fn bounded_allocation_scan(db: &Database) -> Result<ScanProgress> {
                 db.connection(),
                 TransactionBehavior::Immediate,
             )?;
-            let changed = tx.execute("UPDATE instance_allocation_scan SET revision=revision+1,frames_json=?1,bytes=?2,files=?3,database_bytes=?4,wal_bytes=?5,runner_log_bytes=?6,evidence_bytes=?7,evidence_entries=?8,directory_entries=?9,entries_visited=?10,complete=?11 WHERE id=1 AND revision=?12 AND complete=0", params![serde_json::json!({"sqlite_excluded":true,"frames":walk.frames}).to_string(),walk.usage.bytes,walk.usage.files,walk.usage.database,walk.usage.wal,walk.usage.runner_logs,walk.usage.evidence,walk.usage.evidence_entries,walk.usage.directories,walk.visited,complete,state.revision])?;
+            let changed = tx.execute("UPDATE instance_allocation_scan SET revision=revision+1,frames_json=?1,bytes=?2,files=?3,database_bytes=?4,wal_bytes=?5,runner_log_bytes=?6,evidence_bytes=?7,evidence_entries=?8,directory_entries=?9,entries_visited=?10,complete=?11 WHERE id=1 AND revision=?12 AND complete=0", params![serde_json::json!({"counts_links":true,"frames":walk.frames}).to_string(),walk.usage.bytes,walk.usage.files,walk.usage.database,walk.usage.wal,walk.usage.runner_logs,walk.usage.evidence,walk.usage.evidence_entries,walk.usage.directories,walk.visited,complete,state.revision])?;
+            if changed != 0 {
+                let mut insert = tx.prepare(
+                    "INSERT OR IGNORE INTO instance_allocation_links(device,inode) VALUES (?1,?2)",
+                )?;
+                for (device, inode) in links.visited {
+                    insert.execute(params![device, inode])?;
+                }
+            }
             tx.commit()?;
             Ok(changed)
         })?;
@@ -385,7 +443,16 @@ pub(super) fn bounded_allocation_scan(db: &Database) -> Result<ScanProgress> {
         state.revision += 1;
     }
     if settle_scan(db, state.revision, &state.walk)? {
-        Ok(ScanProgress::Settled)
+        let rescan: bool = db.connection().query_row(
+            "SELECT rescan FROM instance_allocation_scan WHERE id=1",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(if rescan {
+            ScanProgress::Visited
+        } else {
+            ScanProgress::Settled
+        })
     } else {
         Ok(ScanProgress::Contended)
     }
@@ -410,7 +477,7 @@ mod tests {
         let listing = File::open(&removed)?;
         std::fs::remove_dir(&removed)?;
         let mut budget = usize::MAX;
-        assert!(walk.list(1, &listing, &mut budget)?);
+        assert!(walk.list(1, &listing, &mut budget, &mut Links::default())?);
         assert_eq!(walk.frames.len(), 1, "the walk continues with its parent");
         Ok(())
     }

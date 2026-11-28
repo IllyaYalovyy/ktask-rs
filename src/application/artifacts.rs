@@ -12,12 +12,26 @@ use sha2::{Digest, Sha256};
 use std::{
     fs::{self, OpenOptions, TryLockError},
     io::{Read, Seek, SeekFrom, Write},
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::{
+        fd::AsRawFd,
+        unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    },
     path::Path,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use super::resource_breach::effective_limit;
 use crate::resource::{Breach, Limit};
+
+#[path = "artifact_compaction.rs"]
+mod compaction;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CompactionProgress {
+    Done,
+    More,
+    PublicationBusy,
+}
 
 fn budget_label(bytes: u64) -> String {
     if bytes.is_multiple_of(1024 * 1024) {
@@ -159,13 +173,13 @@ struct ArtifactTarget {
     name: String,
 }
 
-struct Publication<'a> {
-    attempt: i64,
-    token: &'a str,
-    name: &'a str,
-    source: &'a Path,
-    relative: &'a str,
-    tree: &'a str,
+pub(crate) struct Publication<'a> {
+    pub attempt: i64,
+    pub token: &'a str,
+    pub name: &'a str,
+    pub source: &'a Path,
+    pub relative: &'a str,
+    pub tree: &'a str,
 }
 
 impl ArtifactTarget {
@@ -197,7 +211,7 @@ impl ArtifactTarget {
         }
     }
 
-    fn publish_pending(&self) -> Result<()> {
+    fn rename_pending(&self) -> Result<()> {
         renameat2(
             &self.parent,
             self.pending().as_str(),
@@ -205,9 +219,18 @@ impl ArtifactTarget {
             self.name.as_str(),
             RenameFlags::RENAME_NOREPLACE,
         )
-        .map_err(io)?;
-        self.parent.sync_all()?;
-        Ok(())
+        .map_err(io)
+    }
+
+    fn link(&self, source: &fs::File, name: &str) -> Result<()> {
+        rustix::fs::linkat(
+            rustix::fs::CWD,
+            format!("/proc/self/fd/{}", source.as_raw_fd()).as_str(),
+            &self.parent,
+            name,
+            rustix::fs::AtFlags::SYMLINK_FOLLOW,
+        )
+        .map_err(|error| Error::Io(error.into()))
     }
 }
 
@@ -243,7 +266,7 @@ fn artifact_target(
     }))
 }
 
-fn publication_lock(root: &Path) -> Result<fs::File> {
+pub(super) fn publication_lock(root: &Path) -> Result<fs::File> {
     Ok(OpenOptions::new()
         .read(true)
         .write(true)
@@ -254,33 +277,159 @@ fn publication_lock(root: &Path) -> Result<fs::File> {
 }
 
 fn verify(target: &ArtifactTarget, name: &str, size: i64, checksum: &str) -> Result<bool> {
-    let input = match target.open(name)? {
+    let mut input = match target.open(name)? {
         Some(input) => input,
         None => return Ok(false),
     };
+    Ok(file_checksum(&mut input, size, None)?.as_deref() == Some(checksum))
+}
+
+fn file_checksum(
+    input: &mut fs::File,
+    size: i64,
+    stop: Option<&AtomicBool>,
+) -> Result<Option<String>> {
     let metadata = input.metadata()?;
     if !metadata.is_file() || metadata.len() != size as u64 {
-        return Ok(false);
+        return Ok(None);
     }
-    let mut input = input;
     let mut hash = Sha256::new();
     let mut read = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
     loop {
+        check_stop(stop)?;
         let n = input.read(&mut buffer)?;
         if n == 0 {
             break;
         }
         read = read.saturating_add(n as u64);
         if read > size as u64 {
-            return Ok(false);
+            return Ok(None);
         }
         hash.update(&buffer[..n]);
     }
-    Ok(read == size as u64 && format!("{:x}", hash.finalize()) == checksum)
+    Ok((read == size as u64).then(|| format!("{:x}", hash.finalize())))
+}
+
+fn generated_target(
+    root: &fs::File,
+    attempt: i64,
+    relative: &str,
+) -> Result<Option<ArtifactTarget>> {
+    if !super::evidence_path::EvidencePath::parse(relative)
+        .is_some_and(|path| path.attempt == attempt && path.generated())
+    {
+        return Ok(None);
+    }
+    match artifact_target(root, relative, false) {
+        Err(Error::Io(error))
+            if matches!(
+                error.raw_os_error(),
+                Some(nix::libc::ELOOP | nix::libc::ENOTDIR | nix::libc::EACCES | nix::libc::EPERM)
+            ) =>
+        {
+            Ok(None)
+        }
+        result => result,
+    }
+}
+
+struct ArchiveFile {
+    id: i64,
+    attempt: i64,
+    relative: String,
+}
+
+const SHARED_CANDIDATE_PAGE: usize = 4;
+
+fn shared_candidates(
+    db: &rusqlite::Connection,
+    checksum: &str,
+    size: i64,
+    verified_only: bool,
+    after: (bool, i64),
+) -> Result<Vec<(ArchiveFile, bool)>> {
+    let mut statement = db.prepare_cached(
+        "SELECT id,attempt_id,relative_path,needs_compaction FROM artifacts WHERE checksum_sha256=?1 AND size_bytes=?2
+         AND needs_compaction<=?3 AND pruned_at_ms IS NULL AND pruning_requested_at_ms IS NULL
+         AND (needs_compaction,id) > (?4,?5)
+         ORDER BY needs_compaction,id LIMIT ?6",
+    )?;
+    Ok(statement
+        .query_map(
+            params![
+                checksum,
+                size,
+                !verified_only,
+                after.0,
+                after.1,
+                SHARED_CANDIDATE_PAGE as i64
+            ],
+            |row| {
+                Ok((
+                    ArchiveFile {
+                        id: row.get(0)?,
+                        attempt: row.get(1)?,
+                        relative: row.get(2)?,
+                    },
+                    row.get(3)?,
+                ))
+            },
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Use only an intact, immutable published inode. A pruned or incomplete reference
+/// cannot be a link source.
+fn shared_file(
+    db: &rusqlite::Connection,
+    root: &fs::File,
+    checksum: &str,
+    size: i64,
+    stop: Option<&AtomicBool>,
+) -> Result<Option<(i64, fs::File)>> {
+    let mut after = (false, 0);
+    loop {
+        let page = shared_candidates(db, checksum, size, false, after)?;
+        let exhausted = page.len() < SHARED_CANDIDATE_PAGE;
+        for (candidate, legacy) in page {
+            check_stop(stop)?;
+            after = (legacy, candidate.id);
+            if let Some(target) = generated_target(root, candidate.attempt, &candidate.relative)?
+                && let Ok(Some(mut file)) = target.open(&target.name)
+                && file
+                    .metadata()
+                    .is_ok_and(|metadata| metadata.mode() & 0o222 == 0)
+                && file_checksum(&mut file, size, stop)
+                    .is_ok_and(|actual| actual.as_deref() == Some(checksum))
+            {
+                return Ok(Some((candidate.id, file)));
+            }
+            check_stop(stop)?;
+        }
+        if exhausted {
+            return Ok(None);
+        }
+    }
+}
+
+fn check_stop(stop: Option<&AtomicBool>) -> Result<()> {
+    if stop.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return Err(std::io::Error::other("Transcript recovery interrupted").into());
+    }
+    Ok(())
 }
 
 impl Service {
+    pub(crate) fn require_artifact_file_budget(
+        &self,
+        attempt: i64,
+        name: &str,
+        size: u64,
+    ) -> Result<()> {
+        require_file_budget(self.db.connection(), attempt, name, size)
+    }
+
     pub(crate) fn publish_artifact(
         &self,
         attempt: i64,
@@ -299,14 +448,35 @@ impl Service {
                 relative,
                 tree,
             },
+            None,
             || {},
+            fs::File::sync_all,
         )
+    }
+
+    pub(crate) fn publish_artifact_until(
+        &self,
+        publication: Publication<'_>,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        self.publish_artifact_after_reservation(publication, Some(stop), || {}, fs::File::sync_all)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn publish_artifact_with_sync(
+        &self,
+        publication: Publication<'_>,
+        sync_payload: impl FnOnce(&fs::File) -> std::io::Result<()>,
+    ) -> Result<()> {
+        self.publish_artifact_after_reservation(publication, None, || {}, sync_payload)
     }
 
     fn publish_artifact_after_reservation(
         &self,
         publication: Publication<'_>,
+        stop: Option<&AtomicBool>,
         after_reservation: impl FnOnce(),
+        sync_payload: impl FnOnce(&fs::File) -> std::io::Result<()>,
     ) -> Result<()> {
         let Publication {
             attempt,
@@ -341,6 +511,7 @@ impl Service {
         let mut utf8_tail = Vec::new();
         let mut text = true;
         loop {
+            check_stop(stop)?;
             let n = input.read(&mut buffer)?;
             if n == 0 {
                 break;
@@ -361,23 +532,79 @@ impl Service {
         input.seek(SeekFrom::Start(0))?;
         let root = self.db.state_dir();
         let publication = publication_lock(&self.db.state_file("")?)?;
-        publication.lock()?;
+        if stop.is_some() {
+            publication.try_lock().map_err(std::io::Error::other)?;
+        } else {
+            publication.lock()?;
+        }
+        check_stop(stop)?;
         let existing = artifact_target(root, relative, false)?;
         if let Some(target) = existing.as_ref() {
             require(target.absent()?, "Artifact destination already exists")?;
         }
-        let tx = Transaction::new_unchecked(self.db.connection(), TransactionBehavior::Immediate)?;
+        let db = self.db.connection();
+        let repeated = if is_transcript(relative) {
+            None
+        } else {
+            repeated_artifact(db, root, attempt, name, size as i64, &checksum)?
+        };
+        let shared = if repeated.is_none() {
+            shared_file(db, root, &checksum, size as i64, stop)?
+        } else {
+            None
+        };
+        let tx = Transaction::new_unchecked(db, TransactionBehavior::Immediate)?;
         require(tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND project_id=?2 AND execution_token=?3)", params![attempt,self.project_id,token], |r| r.get::<_, bool>(0))?, "Runner lost ownership of artifact attempt")?;
+        require(
+            !tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM evidence_cleanup_admissions WHERE attempt_id=?1)",
+                [attempt],
+                |row| row.get::<_, bool>(0),
+            )?,
+            "Artifact retention has already started for this attempt",
+        )?;
+        if let Some(id) = repeated {
+            let observed = tx.execute(
+                "INSERT INTO artifact_observations(relative_path,artifact_id,source_tree) VALUES (?1,?2,?3)
+                 ON CONFLICT(relative_path) DO UPDATE SET artifact_id=excluded.artifact_id
+                 WHERE artifact_observations.artifact_id=excluded.artifact_id
+                   AND artifact_observations.source_tree=excluded.source_tree",
+                params![relative, id, tree],
+            )?;
+            require(observed == 1, "Artifact destination already exists")?;
+            tx.commit()?;
+            return Ok(());
+        }
+        require(
+            !tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM artifact_observations WHERE relative_path=?1)",
+                [relative],
+                |row| row.get::<_, bool>(0),
+            )?,
+            "Artifact destination already exists",
+        )?;
         require_budget(&tx, attempt, name, size, is_transcript(relative))?;
         super::retention::admit_capacity(
             &tx,
             super::retention::measure_known_bytes(&self.db)?,
             0,
             0,
-            size,
+            if shared.is_some() { 0 } else { size },
             1,
         )?;
-        tx.execute("INSERT INTO artifact_reservations(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)", params![attempt,name,media,relative,size as i64,checksum,tree,now_ms()])?;
+        tx.execute("INSERT INTO artifact_reservations(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms,shared) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![attempt,name,media,relative,size as i64,checksum,tree,now_ms(),shared.is_some()])?;
+        if let Some((source, _)) = shared.as_ref() {
+            // Compaction must preserve the inode we are about to publish, even
+            // if the source was itself a legacy row.
+            let promoted = tx.execute(
+                "UPDATE artifacts SET needs_compaction=0 WHERE id=?1 AND needs_compaction=1",
+                [source],
+            )?;
+            if promoted != 0 {
+                // The source may now sort before a compaction page's cursor.
+                tx.execute("UPDATE artifact_compaction_hashes SET source_after_id=0 WHERE source_after_id<>0", [])?;
+            }
+        }
         tx.commit()?;
         // A crash from here on leaves a reservation that recovery can inspect.
         after_reservation();
@@ -389,7 +616,16 @@ impl Service {
             require(safe.absent()?, "Artifact destination already exists")?;
             let pending = safe.pending();
             target = Some(safe);
+            check_stop(stop)?;
             let safe = target.as_ref().unwrap();
+            if let Some((_, shared)) = shared {
+                safe.link(&shared, &pending)?;
+                staged_created = true;
+                safe.rename_pending()?;
+                published = true;
+                safe.parent.sync_all()?;
+                return self.finish_reservation(relative, false);
+            }
             let mut output = fs::File::from(
                 openat(
                     &safe.parent,
@@ -407,6 +643,7 @@ impl Service {
             let mut copied = 0u64;
             let mut copy_hash = Sha256::new();
             loop {
+                check_stop(stop)?;
                 let n = input.read(&mut buffer)?;
                 if n == 0 {
                     break;
@@ -420,27 +657,27 @@ impl Service {
                 copied == size && format!("{:x}", copy_hash.finalize()) == checksum,
                 "Artifact changed while being archived",
             )?;
-            output.sync_all()?;
+            sync_payload(&output)?;
             output.set_permissions(fs::Permissions::from_mode(0o444))?;
-            safe.publish_pending()?;
+            safe.rename_pending()?;
             published = true;
-            self.finish_reservation(relative)?;
+            safe.parent.sync_all()?;
+            self.finish_reservation(relative, false)?;
             Ok(())
         })();
         if result.is_err()
             && let Some(safe) = target.as_ref()
-            && staged_created
             && !published
-            && safe.remove(&safe.pending()).is_ok()
+            && (!staged_created || safe.remove(&safe.pending()).is_ok())
         {
             let _ = self.drop_reservation(relative);
         }
         result
     }
 
-    pub(super) fn finish_reservation(&self, relative: &str) -> Result<()> {
+    pub(super) fn finish_reservation(&self, relative: &str, recovering: bool) -> Result<()> {
         let tx = Transaction::new_unchecked(self.db.connection(), TransactionBehavior::Immediate)?;
-        tx.execute("INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms) SELECT attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms FROM artifact_reservations WHERE relative_path=?1 ON CONFLICT(relative_path) DO NOTHING", [relative])?;
+        tx.execute("INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms,needs_compaction) SELECT attempt_id,name,media_type,relative_path,size_bytes,checksum_sha256,source_tree,created_at_ms,?2 AND shared=0 FROM artifact_reservations WHERE relative_path=?1 ON CONFLICT(relative_path) DO NOTHING", params![relative, recovering])?;
         tx.execute(
             "DELETE FROM artifact_reservations WHERE relative_path=?1",
             [relative],
@@ -505,14 +742,16 @@ impl Service {
                         .open(&target.name)?
                         .unwrap()
                         .set_permissions(fs::Permissions::from_mode(0o444))?;
-                    self.finish_reservation(&relative)?;
+                    target.parent.sync_all()?;
+                    self.finish_reservation(&relative, true)?;
                 } else if verify(&target, &target.pending(), size, &checksum)? {
                     target
                         .open(&target.pending())?
                         .unwrap()
                         .set_permissions(fs::Permissions::from_mode(0o444))?;
-                    target.publish_pending()?;
-                    self.finish_reservation(&relative)?;
+                    target.rename_pending()?;
+                    target.parent.sync_all()?;
+                    self.finish_reservation(&relative, true)?;
                 } else {
                     // The process stopped before a complete copy; no evidence was published.
                     target.remove(&target.pending())?;
@@ -523,6 +762,31 @@ impl Service {
         }
         Ok(())
     }
+}
+
+fn repeated_artifact(
+    db: &rusqlite::Connection,
+    root: &fs::File,
+    attempt: i64,
+    name: &str,
+    size: i64,
+    checksum: &str,
+) -> Result<Option<i64>> {
+    let mut statement = db.prepare_cached(
+        "SELECT id,relative_path FROM artifacts WHERE attempt_id=?1 AND name=?2
+           AND checksum_sha256=?3 AND size_bytes=?4 AND relative_path NOT LIKE '%.log'
+           AND pruned_at_ms IS NULL AND pruning_requested_at_ms IS NULL ORDER BY id",
+    )?;
+    let mut rows = statement.query(params![attempt, name, checksum, size])?;
+    while let Some(row) = rows.next()? {
+        let path: String = row.get(1)?;
+        if let Some(target) = generated_target(root, attempt, &path)?
+            && verify(&target, &target.name, size, checksum).unwrap_or(false)
+        {
+            return Ok(Some(row.get(0)?));
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -674,7 +938,9 @@ mod tests {
                         relative: &raced_relative,
                         tree: &"a".repeat(40)
                     },
+                    None,
                     || symlink(&external_project, &raced_parent).unwrap(),
+                    fs::File::sync_all,
                 )
                 .is_err()
         );
@@ -757,6 +1023,8 @@ mod tests {
             &tree,
         )?;
         fs::write(&source, b"small capture fixture")?;
+        // Keep 95 distinct listing entries while exercising shared storage for
+        // the small payload across all three source trees.
         for index in 1..95 {
             let source_tree = if index % 3 == 0 {
                 tree.clone()
@@ -768,7 +1036,7 @@ mod tests {
             service.publish_artifact(
                 run.attempt,
                 &run.token,
-                "repeated.png",
+                &format!("capture-{index}.png"),
                 &source,
                 &relative(&format!("file-0-{index}")),
                 &source_tree,
@@ -790,6 +1058,7 @@ mod tests {
         assert_eq!(index.lines().count(), 95);
         assert!(index.contains("\"matches_current_tree\":false"));
         assert!(index.contains("\"matches_current_tree\":true"));
+        assert_eq!(fs::metadata(folder.join("file-0-1"))?.nlink(), 94);
         assert_eq!(
             fs::metadata(folder.join("file-0-0"))?.len(),
             100 * 1024 * 1024

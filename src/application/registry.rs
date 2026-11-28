@@ -216,6 +216,8 @@ pub fn remove(db: &mut Database, paths: &Paths, id: i64, confirm: &str) -> Resul
         "Type the project's exact name to delete it",
     )?;
     let idle = idle(db, paths, id, &name)?;
+    let publication = super::artifacts::publication_lock(&paths.state)?;
+    publication.lock()?;
     let tx = db
         .connection_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -242,6 +244,16 @@ pub fn remove(db: &mut Database, paths: &Paths, id: i64, confirm: &str) -> Resul
         "DELETE FROM evidence_manifest WHERE collection_id IN (SELECT c.id FROM evidence_collections c JOIN attempts a ON a.id=c.attempt_id WHERE a.project_id=?1)",
         [id],
     )?;
+    tx.execute(
+        "DELETE FROM artifact_observations WHERE artifact_id IN (
+            SELECT f.id FROM artifacts f JOIN attempts a ON a.id=f.attempt_id WHERE a.project_id=?1)",
+        [id],
+    )?;
+    tx.execute(
+        "DELETE FROM artifact_compaction_hashes WHERE artifact_id IN (
+            SELECT f.id FROM artifacts f JOIN attempts a ON a.id=f.attempt_id WHERE a.project_id=?1)",
+        [id],
+    )?;
     for table in BY_ATTEMPT {
         tx.execute(
             &format!("DELETE FROM {table} WHERE attempt_id IN (SELECT id FROM attempts WHERE project_id = ?1)"),
@@ -266,13 +278,16 @@ pub fn remove(db: &mut Database, paths: &Paths, id: i64, confirm: &str) -> Resul
         tx.execute(&format!("DELETE FROM {table} WHERE project_id = ?1"), [id])?;
     }
     tx.execute("DELETE FROM projects WHERE id = ?1", [id])?;
-    retention::bump_admission_generation(&tx)?;
+    retention::evidence_allocation_changed(&tx)?;
     tx.commit().map_err(|error| {
         Error::Conflict(format!(
             "{name} was not deleted; something still refers to it: {error}"
         ))
     })?;
     let mut leftovers = remove_files(paths, id, &attempts);
+    if let Err(error) = retention::evidence_allocation_changed(db.connection()) {
+        note!("storage: could not refresh allocation after deleting project {name} ({error})");
+    }
     // Evidence still waiting to be archived lives outside the state directory.
     for path in retained {
         use std::os::unix::ffi::OsStringExt;

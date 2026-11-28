@@ -1714,6 +1714,149 @@ fn storage_capacity_waits_before_launch_and_resumes_after_policy_change() -> Res
 }
 
 #[test]
+fn queue_settles_storage_scan_before_launch_with_publication_locked() -> Result {
+    let f = Fixture::new()?;
+    f.add("Wait for the protected allocation")?;
+    f.ok(&["retention", "30", "--max-files", "256"])?;
+    let state = f.scratch.path().join("state/ktask-dev");
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(state.join("artifact-publication.lock"))?;
+    lock.lock()?;
+    for index in 0..200 {
+        fs::create_dir_all(state.join(format!("evidence/held-{index}")))?;
+    }
+    let db = f.db()?;
+    db.connection().execute(
+        "UPDATE instance_storage_admission SET generation=generation+1 WHERE id=1",
+        [],
+    )?;
+    let projected_files = || -> Result<i64> {
+        Ok(db.connection().query_row(
+            "SELECT projected_files FROM instance_storage_admission WHERE id=1",
+            [],
+            |row| row.get(0),
+        )?)
+    };
+    assert!(
+        projected_files()? < 128,
+        "the old projection permits launch"
+    );
+    let mut runner = Running(
+        f.process()
+            .args(["run", "--queue"])
+            .stdout(Stdio::piped())
+            .spawn()?,
+    );
+    support::eventually(
+        "queue settles a multi-page allocation scan with the lock held",
+        || {
+            let settled: bool = db.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM instance_allocation_scan WHERE complete=2 AND entries_visited>64)",
+            [],
+            |row| row.get(0),
+        )?;
+            Ok(settled.then_some(()))
+        },
+    )?;
+    assert!(
+        projected_files()? >= 128,
+        "the measured allocation exhausts the launch reserve"
+    );
+    assert_eq!(f.ok(&["show", "1"])?["status"], "ready");
+    assert!(!f.scratch.path().join("provider-invocations").exists());
+    drop(lock);
+    let status = support::eventually("queue reports exhausted storage", || {
+        Ok(runner.0.try_wait()?)
+    })?;
+    assert!(status.success());
+    let mut message = String::new();
+    std::io::Read::read_to_string(&mut runner.0.stdout.take().unwrap(), &mut message)?;
+    assert!(
+        message.contains("Storage capacity reserve reached"),
+        "{message}"
+    );
+    assert!(
+        f.ok(&["show", "1"])?["attempts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!f.scratch.path().join("provider-invocations").exists());
+    Ok(())
+}
+
+#[test]
+fn worker_launches_before_oversized_legacy_archive_compaction() -> Result {
+    let f = Fixture::new()?;
+    f.add("Create retained history")?;
+    let first = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    let attempt = f.ok(&["show", "1"])?["attempts"][0]["id"].as_i64().unwrap();
+    let dir = f
+        .scratch
+        .path()
+        .join(format!("state/ktask-dev/evidence/attempt-{attempt}"));
+    fs::create_dir_all(&dir)?;
+    let db = f.db()?;
+    const PAGE_BYTES: usize = 16 * 1024 * 1024;
+    let mut hash = Sha256::new();
+    for _ in 0..16 {
+        for _ in 0..16 {
+            hash.update([0_u8; 64 * 1024]);
+        }
+    }
+    hash.update([0]);
+    let checksum = format!("{:x}", hash.finalize());
+    let mut ids = Vec::new();
+    for step in [900, 901] {
+        let name = format!("step-{step}.log");
+        let file = dir.join(&name);
+        // Sparse files exercise the real read limit without making a large
+        // allocation in the enclosing task's scratch directory.
+        fs::File::create(&file)?.set_len(PAGE_BYTES as u64 + 1)?;
+        fs::set_permissions(file, fs::Permissions::from_mode(0o444))?;
+        db.connection().execute(
+            "INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms,checksum_sha256)
+             VALUES (?1,'legacy','text/plain',?2,?3,1,?4)",
+            rusqlite::params![attempt, format!("evidence/attempt-{attempt}/{name}"), PAGE_BYTES as i64 + 1, checksum],
+        )?;
+        ids.push(db.connection().last_insert_rowid());
+    }
+    assert_ne!(
+        fs::metadata(dir.join("step-900.log"))?.ino(),
+        fs::metadata(dir.join("step-901.log"))?.ino()
+    );
+    f.add("Run before archive maintenance")?;
+    let run = f.process().args(["run", "--one"]).output()?;
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
+    let pending: (i64, i64) = db.connection().query_row(
+        "SELECT artifact_id,bytes_read FROM artifact_compaction_hashes",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(
+        pending,
+        (ids[0], PAGE_BYTES as i64),
+        "only the post-run page ran"
+    );
+    Ok(())
+}
+
+#[test]
 fn queued_run_uses_space_recovered_by_multiple_sqlite_vacuum_batches() -> Result {
     let f = Fixture::new()?;
     f.add("Create closed history")?;
@@ -1871,9 +2014,27 @@ fn capacity_pressure_never_deletes_evidence_younger_than_the_minimum_age() -> Re
 
 #[test]
 fn storage_view_shows_age_protection_by_keyboard_and_mouse() -> Result {
-    for mouse in [false, true] {
+    for (columns, rows, mouse) in [
+        (130, 42, false),
+        (130, 42, true),
+        (100, 35, false),
+        (100, 35, true),
+    ] {
         let (f, _state, proof) = young_evidence_fixture()?;
-        let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 130, 42)?;
+        fs::hard_link(&proof, proof.with_file_name("step-999.log"))?;
+        f.db()?.connection().execute(
+            "INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms)
+             SELECT attempt_id,'shared proof',media_type,replace(relative_path,'/proof.txt','/step-999.log'),
+                    size_bytes,created_at_ms FROM artifacts WHERE name='proof'",
+            [],
+        )?;
+        let preview = &f.ok(&["storage"])?["preview"];
+        assert_eq!(
+            preview["logical_artifact_bytes"].as_i64().unwrap()
+                - preview["distinct_artifact_bytes"].as_i64().unwrap(),
+            1024 * 1024,
+        );
+        let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, columns, rows)?;
         terminal.screen("config tab", |s| s.contains("4 Config"))?;
         if mouse {
             terminal.click("4 Config")?;
@@ -1890,6 +2051,8 @@ fn storage_view_shows_age_protection_by_keyboard_and_mouse() -> Result {
         crate::support::record("STORAGE AGE PROTECTION", mouse, &dialog);
         assert!(dialog.contains("minimum age"), "{dialog}");
         assert!(dialog.contains("eligible: 0 bytes"), "{dialog}");
+        assert!(dialog.contains("distinct bytes"), "{dialog}");
+        assert!(dialog.contains("Other links retain"), "{dialog}");
         if mouse {
             terminal.click("Cancel")?;
         } else {
@@ -2316,9 +2479,63 @@ fn queued_run_drains_more_than_four_cleanup_batches_before_starting_work() -> Re
 }
 
 #[test]
+fn pause_interrupts_live_storage_reclamation_between_pages() -> Result {
+    let f = Fixture::new()?;
+    f.add("Pause a check during cleanup")?;
+    let other = f.second_project("retained")?;
+    let task = Service::open(f.db()?, &f.root, None)?.task(1)?.unwrap();
+    let mut history = Service::open(f.db()?, &other, None)?;
+    let id = history.create(&[task.definition().definition.clone()], None, true)?[0];
+    let version = history.current_task()?.unwrap().version;
+    let old = history.begin_run(VersionedTask { id, version }, "old-proof", "base", false)?;
+    history.finish_run(&old, "succeeded", None, "closed", None)?;
+    let db = f.db()?;
+    db.connection().execute(
+        "INSERT INTO attempt_output(attempt_id,sequence,stream,recorded_at_ms,content)
+         WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM numbers WHERE n<200)
+         SELECT ?1,n,'stdout',1,'old proof' FROM numbers",
+        [old.attempt],
+    )?;
+    // Deliver a durable Pause at a deterministic point in the first foreign cleanup page.
+    db.connection().execute_batch(&format!(
+        "CREATE TRIGGER request_fixture_pause AFTER DELETE ON attempt_output
+         WHEN OLD.attempt_id={} AND OLD.sequence=1 BEGIN
+           INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message)
+           SELECT project_id,task_id,id,1,'runner.pause','info','Pause requested'
+           FROM attempts WHERE state='running' AND task_id=1;
+         END;",
+        old.attempt
+    ))?;
+    f.ok(&[
+        "check-set", "build", "--command",
+        &format!(
+            "env -u KTASK_WORKER_CALLBACK '{BIN}' --project '{}' retention 0 >/dev/null; env -u KTASK_WORKER_CALLBACK '{BIN}' retention 30 --max-bytes 1048576 >/dev/null; printf 'live output'; sleep 30; touch \"$HOME/natural-exit\"",
+            other.display()
+        ),
+    ])?;
+    let mut runner = Running(f.process().args(["run", "--one"]).spawn()?);
+    support::eventually("producer is stopped without draining the archive", || {
+        Ok(runner.0.try_wait()?)
+    })?;
+    let shown = f.ok(&["show", "1"])?;
+    assert_eq!(shown["status"], "paused", "{shown}");
+    assert!(shown["attempts"][0]["resource_pause"].is_null(), "{shown}");
+    let remaining: i64 = db.connection().query_row(
+        "SELECT count(*) FROM attempt_output WHERE attempt_id=?1",
+        [old.attempt],
+        |row| row.get(0),
+    )?;
+    assert_eq!(remaining, 136, "one 64-row page should run before Pause");
+    assert!(!f.scratch.path().join("natural-exit").exists());
+    f.guardian_finished()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
 fn live_output_capacity_pause_reaps_worker_and_resumes_same_attempt() -> Result {
     let f = Fixture::new()?;
-    f.provider("noisy-review-once")?;
+    f.provider("noisy-review-storage")?;
     f.add("Pause during sustained output")?;
     let before = f.ok(&["storage"])?;
     let allocated = before["preview"]["allocated_bytes"].as_i64().unwrap();
@@ -2426,6 +2643,18 @@ fn worker_artifact_survives_scratch_and_reaches_later_judge_and_attempt() -> Res
     f.guardian_finished()?;
     f.no_scratch()?;
     let first = f.ok(&["show", "1"])?;
+    assert!(
+        first["attempts"].as_array().unwrap().iter().all(|attempt| {
+            attempt["artifacts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|artifact| artifact["name"] == "capture.txt")
+                .count()
+                == 1
+        }),
+        "{first}",
+    );
     let artifact = first["attempts"][0]["artifacts"]
         .as_array()
         .unwrap()
@@ -2455,8 +2684,13 @@ fn worker_artifact_survives_scratch_and_reaches_later_judge_and_attempt() -> Res
             .unwrap()
             .is_empty()
     );
-    for mouse in [false, true] {
-        let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, 105, 30)?;
+    for (columns, rows, mouse) in [
+        (105, 30, false),
+        (105, 30, true),
+        (125, 42, false),
+        (125, 42, true),
+    ] {
+        let mut terminal = Terminal::open_project(BIN, f.scratch.path(), &f.root, columns, rows)?;
         terminal.screen("failed current with retained evidence", |screen| {
             screen.contains("Archive worker evidence")
         })?;
@@ -3905,6 +4139,95 @@ fn cross_turn_budget_omits_new_file_without_retaining_untracked_bytes() -> Resul
 }
 
 #[test]
+fn historical_transcript_recovery_runs_after_launch_and_resumes_past_an_oversized_entry() -> Result
+{
+    let f = Fixture::new()?;
+    f.ok(&["check-set", "build", "--command", "printf 'shared proof\n'"])?;
+    f.add("Publish the original payload")?;
+    f.ok(&["run", "--one"])?;
+    let db = f.db()?;
+    let archived: String = db.connection().query_row(
+        "SELECT relative_path FROM artifacts WHERE name='build'",
+        [],
+        |row| row.get(0),
+    )?;
+    f.ok(&["limits", "artifact_file_bytes", "--value", "1024"])?;
+    let mut history = Service::open(f.db()?, &f.root, None)?;
+    let definition = history.task(1)?.unwrap().definition().definition.clone();
+    let mut defer = |output: &str| -> Result<(i64, String)> {
+        let id = history.create(std::slice::from_ref(&definition), None, true)?[0];
+        let version = history.current_task()?.unwrap().version;
+        let run = history.begin_run(
+            VersionedTask { id, version },
+            &format!("old-check-{id}"),
+            "base",
+            false,
+        )?;
+        let check = history.checks()?.remove(0);
+        let step = history.start_check(&run, &check, "unbound")?;
+        history.output(&run, "stdout", output)?;
+        history.finish_check(&step, true, "Recorded", Some(0), None)?;
+        let relative = format!("evidence/attempt-{}/step-{}.log", run.attempt, step.id);
+        db.connection().execute(
+            "INSERT INTO pending_transcripts(step_id,attempt_id,relative_path,source_tree,output_start,output_end)
+             VALUES (?1,?2,?3,?4,0,1)",
+            rusqlite::params![step.id,run.attempt,relative,"a".repeat(40)],
+        )?;
+        history.finish_run(&run, "succeeded", None, "closed", None)?;
+        Ok((step.id, relative))
+    };
+    let (oldest, _) = defer(&"x".repeat(2400))?;
+    f.ok(&["run", "--one"])?;
+    let cursor = || {
+        db.connection().query_row(
+            "SELECT transcript_recovery_cursor FROM projects WHERE id=1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+    };
+    assert_eq!(cursor()?, oldest);
+    let (later, relative) = defer("shared proof\n")?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        "touch \"$HOME/holding-check\"; until test -f \"$HOME/release-check\"; do sleep 0.05; done",
+    ])?;
+    f.add("Launch ahead of historical recovery")?;
+    let mut runner = Running(f.process().args(["run", "--one"]).spawn()?);
+    support::eventually("new check launched before historical recovery", || {
+        Ok(f.scratch
+            .path()
+            .join("holding-check")
+            .exists()
+            .then_some(()))
+    })?;
+    assert_eq!(cursor()?, oldest);
+    f.ok(&["pause"])?;
+    assert!(runner.0.wait()?.success());
+    assert_eq!(cursor()?, oldest, "Pause preserves the recovery checkpoint");
+    let state = f.scratch.path().join("state/ktask-dev");
+    assert!(!state.join(&relative).exists());
+    fs::write(f.scratch.path().join("release-check"), "")?;
+    f.ok(&["run", "--one"])?;
+    let pending: Vec<i64> = db
+        .connection()
+        .prepare("SELECT step_id FROM pending_transcripts ORDER BY step_id")?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    assert_eq!(pending, [oldest]);
+    assert_eq!(cursor()?, later);
+    use std::os::unix::fs::MetadataExt;
+    assert_eq!(
+        fs::metadata(state.join(archived))?.ino(),
+        fs::metadata(state.join(relative))?.ino()
+    );
+    f.guardian_finished()?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
 fn oversized_check_transcript_is_rejected_without_state_file() -> Result {
     let f = Fixture::new()?;
     f.ok(&[
@@ -3920,8 +4243,11 @@ fn oversized_check_transcript_is_rejected_without_state_file() -> Result {
         .args(["run", "--one"])
         .output()?;
     assert_eq!(run.status.code(), Some(0));
-    assert!(String::from_utf8_lossy(&run.stdout).contains("8 MiB per-artifact limit"));
-    assert_eq!(f.ok(&["show", "1"])?["attempts"][0]["state"], "paused");
+    assert!(
+        f.packet_text("review", "steps.jsonl")?
+            .contains("8 MiB per-artifact limit")
+    );
+    assert_eq!(f.ok(&["show", "1"])?["attempts"][0]["state"], "succeeded");
     assert_eq!(
         f.db()?.connection().query_row(
             "SELECT count(*) FROM artifacts WHERE name='build'",
@@ -6642,6 +6968,11 @@ if [ -n "$packet" ]; then
  prompt="$prompt
 $context"
 fi
+if [ '{mode}' = read-pending-check ] && [ "$model" = review ]; then
+ reference=$(sed -n '/"pending_transcript"/s/.*"path":"\([^"]*\)".*/\1/p' "$packet/steps.jsonl" | head -n 1)
+ [ -n "$reference" ] || exit 72
+ '{BIN}' evidence "$reference" --offset 37 --limit 37 > "$HOME/read-pending-check.json" || exit 73
+fi
 printf '%s' "$prompt" > "$HOME/prompt-$model"
 case "$prompt" in *"Verify the revised goal after Stop"*)
  if [ "$model" = execution ]; then printf '%s' "$prompt" > "$HOME/revised-prompt"; fi;;
@@ -6766,6 +7097,15 @@ if [ '{mode}' = noisy-review-once ] && [ "$model" = review ]; then
  i=0
  while [ "$i" -lt 2100 ]; do
   printf '{{"type":"item.completed","item":{{"type":"command_execution","command":"late output","aggregated_output":"late output %s","exit_code":0}}}}\n' "$i"
+  i=$((i + 1))
+ done
+fi
+if [ '{mode}' = noisy-review-storage ] && [ "$model" = review ] && [ ! -f "$HOME/storage-review-started" ]; then
+ touch "$HOME/storage-review-started"
+ padding=$(printf '%02048d' 0)
+ i=0
+ while [ "$i" -lt 2100 ]; do
+  printf '{{"type":"item.completed","item":{{"type":"command_execution","command":"late output","aggregated_output":"late output %s %s","exit_code":0}}}}\n' "$i" "$padding"
   i=$((i + 1))
  done
 fi

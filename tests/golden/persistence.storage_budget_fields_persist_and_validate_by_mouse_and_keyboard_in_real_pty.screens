@@ -8,15 +8,15 @@
 ╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │Project: project                                                                                                      │
 │Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
-│Preferences: saved per project and instance.                                                                          │
-│                    ╭ Storage retention ─────────────────────────────────────────────────────────╮                    │
-│Mouse: Enabled      │Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │                    │
-│Run mode: Continue q│Allocated: 811008 bytes in 4 files/directories · eligible files: 0 ·        │                    │
-│Planner approval: Au│reusable SQLite: 0 · protected: 811008 bytes                                │                    │
-│Delivery: local via │SQLite: 753664 · WAL: 24576 · runner logs: 0 · evidence: 0 · directories: 1 │                    │
+│Preferences: saved p╭ Storage retention ─────────────────────────────────────────────────────────╮                    │
+│                    │Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │                    │
+│Mouse: Enabled      │Artifacts: 0 logical bytes · 0 distinct bytes                               │                    │
+│Run mode: Continue q│Allocated: 847872 bytes in 4 files/directories · eligible files: 0 ·        │                    │
+│Planner approval: Au│reusable SQLite: 0 · protected: 847872 bytes                                │                    │
+│Delivery: local via │SQLite: 790528 · WAL: 24576 · runner logs: 0 · evidence: 0 · directories: 1 │                    │
 │Dependencies: manual│Protected evidence: 0 bytes younger than the 30-day minimum age · 0 bytes   │isite is missing.   │
 │CLI require declares│referenced by reused checks · 0 bytes of open work                          │                    │
-│                    │Cleanup keeps task history and all live or unresolved work.                 │                    │
+│                    │Other links retain 0 allocated bytes after eligible paths are removed.      │                    │
 │Defaults apply to ne│                                                                            │                    │
 │u User defaults: wha│Retain completed attempts (days)                                            │                    │
 │f Profiles: named ro│30▏                                                                         │                    │
@@ -51,15 +51,15 @@ Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
 ╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │Project: project                                                                                                      │
 │Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
-│Preferences: saved per project and instance.                                                                          │
-│                    ╭ Storage retention ─────────────────────────────────────────────────────────╮                    │
-│Mouse: Enabled      │Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │                    │
-│Run mode: Continue q│Allocated: 811008 bytes in 4 files/directories · eligible files: 0 ·        │                    │
-│Planner approval: Au│reusable SQLite: 0 · protected: 811008 bytes                                │                    │
-│Delivery: local via │SQLite: 753664 · WAL: 24576 · runner logs: 0 · evidence: 0 · directories: 1 │                    │
+│Preferences: saved p╭ Storage retention ─────────────────────────────────────────────────────────╮                    │
+│                    │Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │                    │
+│Mouse: Enabled      │Artifacts: 0 logical bytes · 0 distinct bytes                               │                    │
+│Run mode: Continue q│Allocated: 847872 bytes in 4 files/directories · eligible files: 0 ·        │                    │
+│Planner approval: Au│reusable SQLite: 0 · protected: 847872 bytes                                │                    │
+│Delivery: local via │SQLite: 790528 · WAL: 24576 · runner logs: 0 · evidence: 0 · directories: 1 │                    │
 │Dependencies: manual│Protected evidence: 0 bytes younger than the 30-day minimum age · 0 bytes   │isite is missing.   │
 │CLI require declares│referenced by reused checks · 0 bytes of open work                          │                    │
-│                    │Cleanup keeps task history and all live or unresolved work.                 │                    │
+│                    │Other links retain 0 allocated bytes after eligible paths are removed.      │                    │
 │Defaults apply to ne│                                                                            │                    │
 │u User defaults: wha│Retain completed attempts (days)                                            │                    │
 │f Profiles: named ro│30                                                                          │                    │
@@ -94,15 +94,15 @@ Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
 ╭ Config ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │Project: project                                                                                                      │
 │Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.     │
-│Preferences: saved per project and instance.                                                                          │
-│                    ╭ Storage retention ─────────────────────────────────────────────────────────╮                    │
-│Mouse: Enabled      │Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │                    │
-│Run mode: Continue q│Allocated: 819200 bytes in 4 files/directories · eligible files: 0 ·        │                    │
-│Planner approval: Au│reusable SQLite: 0 · protected: 819200 bytes                                │                    │
-│Delivery: local via │SQLite: 753664 · WAL: 32768 · runner logs: 0 · evidence: 0 · directories: 1 │                    │
+│Preferences: saved p╭ Storage retention ─────────────────────────────────────────────────────────╮                    │
+│                    │Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │                    │
+│Mouse: Enabled      │Artifacts: 0 logical bytes · 0 distinct bytes                               │                    │
+│Run mode: Continue q│Allocated: 856064 bytes in 4 files/directories · eligible files: 0 ·        │                    │
+│Planner approval: Au│reusable SQLite: 0 · protected: 856064 bytes                                │                    │
+│Delivery: local via │SQLite: 790528 · WAL: 32768 · runner logs: 0 · evidence: 0 · directories: 1 │                    │
 │Dependencies: manual│Protected evidence: 0 bytes younger than the 30-day minimum age · 0 bytes   │isite is missing.   │
 │CLI require declares│referenced by reused checks · 0 bytes of open work                          │                    │
-│                    │Cleanup keeps task history and all live or unresolved work.                 │                    │
+│                    │Other links retain 0 allocated bytes after eligible paths are removed.      │                    │
 │Defaults apply to ne│                                                                            │                    │
 │u User defaults: wha│Retain completed attempts (days)                                            │                    │
 │f Profiles: named ro│30▏                                                                         │                    │
@@ -165,15 +165,15 @@ Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
  0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
  No current task   |   Queue 0 · History 0
  Queue preference · no queued work · m: run mode in Current
- Config
-             ╭ Storage retention ─────────────────────────────────────────────────────────╮
-╭ Config ────│Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │─────────────╮
-│Project: pro│Allocated: 827392 bytes in 4 files/directories · eligible files: 0 ·        │             │
-│Storage: SQL│reusable SQLite: 0 · protected: 827392 bytes                                │s · R:       │
-│resource lim│SQLite: 753664 · WAL: 40960 · runner logs: 0 · evidence: 0 · directories: 1 │             │
+ Config      ╭ Storage retention ─────────────────────────────────────────────────────────╮
+             │Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │
+╭ Config ────│Artifacts: 0 logical bytes · 0 distinct bytes                               │─────────────╮
+│Project: pro│Allocated: 864256 bytes in 4 files/directories · eligible files: 0 ·        │             │
+│Storage: SQL│reusable SQLite: 0 · protected: 864256 bytes                                │s · R:       │
+│resource lim│SQLite: 790528 · WAL: 40960 · runner logs: 0 · evidence: 0 · directories: 1 │             │
 │Preferences:│Protected evidence: 0 bytes younger than the 30-day minimum age · 0 bytes   │             │
 │            │referenced by reused checks · 0 bytes of open work                          │             │
-│Mouse: Enabl│Cleanup keeps task history and all live or unresolved work.                 │             │
+│Mouse: Enabl│Other links retain 0 allocated bytes after eligible paths are removed.      │             │
 │Run mode: Co│                                                                            │             │
 │Planner appr│Retain completed attempts (days)                                            │             │
 │Delivery: lo│30▏                                                                         │             │
@@ -198,15 +198,15 @@ Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
  0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
  No current task   |   Queue 0 · History 0
  Queue preference · no queued work · m: run mode in Current
- Config
-             ╭ Storage retention ─────────────────────────────────────────────────────────╮
-╭ Config ────│Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │─────────────╮
-│Project: pro│Allocated: 827392 bytes in 4 files/directories · eligible files: 0 ·        │             │
-│Storage: SQL│reusable SQLite: 0 · protected: 827392 bytes                                │s · R:       │
-│resource lim│SQLite: 753664 · WAL: 40960 · runner logs: 0 · evidence: 0 · directories: 1 │             │
+ Config      ╭ Storage retention ─────────────────────────────────────────────────────────╮
+             │Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │
+╭ Config ────│Artifacts: 0 logical bytes · 0 distinct bytes                               │─────────────╮
+│Project: pro│Allocated: 864256 bytes in 4 files/directories · eligible files: 0 ·        │             │
+│Storage: SQL│reusable SQLite: 0 · protected: 864256 bytes                                │s · R:       │
+│resource lim│SQLite: 790528 · WAL: 40960 · runner logs: 0 · evidence: 0 · directories: 1 │             │
 │Preferences:│Protected evidence: 0 bytes younger than the 30-day minimum age · 0 bytes   │             │
 │            │referenced by reused checks · 0 bytes of open work                          │             │
-│Mouse: Enabl│Cleanup keeps task history and all live or unresolved work.                 │             │
+│Mouse: Enabl│Other links retain 0 allocated bytes after eligible paths are removed.      │             │
 │Run mode: Co│                                                                            │             │
 │Planner appr│Retain completed attempts (days)                                            │             │
 │Delivery: lo│30                                                                          │             │
@@ -230,17 +230,17 @@ Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
  ktask-dev  / project   SQLite · real tasks
  0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
  No current task   |   Queue 0 · History 0
- Queue preference · no queued work · m: run mode in Current
- Config      ╭ Storage retention ─────────────────────────────────────────────────────────╮
-             │Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │
-╭ Config ────│Allocated: 5021696 bytes in 5 files/directories · eligible files: 0 ·       │─────────────╮
-│Project: pro│reusable SQLite: 0 · protected: 5021696 bytes · WORK PAUSED AT CAPACITY     │             │
+ Queue prefer╭ Storage retention ─────────────────────────────────────────────────────────╮
+ Config      │Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │
+             │Artifacts: 0 logical bytes · 0 distinct bytes                               │
+╭ Config ────│Allocated: 5058560 bytes in 5 files/directories · eligible files: 0 ·       │─────────────╮
+│Project: pro│reusable SQLite: 0 · protected: 5058560 bytes · WORK PAUSED AT CAPACITY     │             │
 │Storage: SQL│RESERVE                                                                     │s · R:       │
-│resource lim│SQLite: 753664 · WAL: 40960 · runner logs: 4194304 · evidence: 0 ·          │             │
+│resource lim│SQLite: 790528 · WAL: 40960 · runner logs: 4194304 · evidence: 0 ·          │             │
 │Preferences:│directories: 1                                                              │             │
 │            │Protected evidence: 0 bytes younger than the 30-day minimum age · 0 bytes   │             │
 │Mouse: Enabl│referenced by reused checks · 0 bytes of open work                          │             │
-│Run mode: Co│Cleanup keeps task history and all live or unresolved work.                 │             │
+│Run mode: Co│Other links retain 0 allocated bytes after eligible paths are removed.      │             │
 │Planner appr│                                                                            │             │
 │Delivery: lo│Retain completed attempts (days)                                            │             │
 │Dependencies│30▏                                                                         │ prerequisite│

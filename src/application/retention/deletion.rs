@@ -16,7 +16,7 @@ use nix::{
 };
 use rusqlite::Connection;
 use std::collections::{BTreeMap, BTreeSet};
-use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
+use std::os::fd::AsRawFd;
 
 const DIRECTORY: OFlag = OFlag::O_RDONLY
     .union(OFlag::O_DIRECTORY)
@@ -156,18 +156,18 @@ fn open_parent(root: &File, path: &EvidencePath<'_>) -> Result<Parent> {
     Ok(Parent::Open(parent))
 }
 
-/// Allocated bytes of one generated evidence file, or zero if it cannot be resolved.
-pub(super) fn allocated(root: &File, path: &EvidencePath<'_>) -> i64 {
+/// Resolve a retained file's physical identity without following substituted links.
+pub(super) fn file_metadata(root: &File, path: &EvidencePath<'_>) -> Option<std::fs::Metadata> {
     let Ok(Parent::Open(parent)) = open_parent(root, path) else {
-        return 0;
+        return None;
     };
     std::fs::symlink_metadata(format!(
         "/proc/self/fd/{}/{}",
         parent.as_raw_fd(),
         path.name
     ))
-    .map(|meta| (meta.blocks() as i64).saturating_mul(512))
-    .unwrap_or(0)
+    .ok()
+    .filter(std::fs::Metadata::is_file)
 }
 
 /// Unlink the intended files with no transaction open, then sync each parent once.
@@ -214,6 +214,14 @@ pub(super) fn unlink(root: &File, selected: &[Selected]) -> Unlinked {
             }
         }
         let (parent, removed) = parents.get_mut(&key).expect("opened parent");
+        let staging = format!("{}.dedup", path.name);
+        match unlinkat(&*parent, staging.as_str(), UnlinkatFlags::NoRemoveDir) {
+            Ok(()) | Err(Errno::ENOENT) => {}
+            Err(error) => {
+                unlinked.failure = Some(io(error));
+                break;
+            }
+        }
         match unlinkat(&*parent, path.name, UnlinkatFlags::NoRemoveDir) {
             Ok(()) | Err(Errno::ENOENT) => removed.push(index),
             Err(error) => {
@@ -289,7 +297,7 @@ pub(super) fn record_deletion(
             prune_output(&tx, project, intent.cutoff, &mut recorded)?;
         }
         if !recorded.attempts.is_empty() {
-            bump_admission_generation(&tx)?;
+            evidence_allocation_changed(&tx)?;
         }
         vacuum_free_pages(&tx)?;
         tx.commit()?;
@@ -317,6 +325,10 @@ fn prune_output(tx: &Connection, project: i64, cutoff: i64, recorded: &mut Recor
     let now = now_ms();
     for (attempt, sequence) in last {
         tx.execute("INSERT OR IGNORE INTO evidence_cleanup_admissions(attempt_id,admitted_at_ms) VALUES (?1,?2)", params![attempt,now])?;
+        tx.execute(
+            "DELETE FROM pending_transcripts WHERE attempt_id=?1 AND output_start<?2 AND output_end>output_start",
+            params![attempt,sequence],
+        )?;
         let before: i64 = tx.query_row(&size, [attempt], |r| r.get(0))?;
         let removed = tx.execute(
             "DELETE FROM attempt_output WHERE attempt_id=?1 AND sequence<=?2",
@@ -330,6 +342,10 @@ fn prune_output(tx: &Connection, project: i64, cutoff: i64, recorded: &mut Recor
             |r| r.get(0),
         )?;
         if !remains {
+            tx.execute(
+                "DELETE FROM pending_transcripts WHERE attempt_id=?1",
+                [attempt],
+            )?;
             tx.execute("INSERT OR IGNORE INTO output_pruning(attempt_id,pruned_at_ms,size_bytes) SELECT attempt_id,?2,size_bytes FROM output_pruning_progress WHERE attempt_id=?1", params![attempt,now])?;
             tx.execute(
                 "DELETE FROM output_pruning_progress WHERE attempt_id=?1",

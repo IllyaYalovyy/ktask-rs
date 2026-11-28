@@ -368,12 +368,7 @@ impl Service {
         self.extend_for(collection.attempt, &pending)?;
         let db = self.db.connection();
         let limit = |limit| effective_limit(db, collection.attempt, limit);
-        let (file_limit, byte_limit, count_limit) = (
-            limit(Limit::ArtifactFileBytes)?,
-            limit(Limit::ArtifactAttemptBytes)?,
-            limit(Limit::ArtifactAttemptFiles)?,
-        );
-        let (mut files, mut bytes) = retained(db, collection.attempt, false)?;
+        let file_limit = limit(Limit::ArtifactFileBytes)?;
         let mut failures = 0_u32;
         let mut last_failure = String::new();
         let mut omitted: BTreeMap<usize, String> = BTreeMap::new();
@@ -386,10 +381,6 @@ impl Service {
                 Some(why.to_owned())
             } else if found.size > file_limit {
                 Some(format!("larger than artifact_file_bytes ({file_limit})"))
-            } else if files >= count_limit {
-                Some(format!("over artifact_attempt_files ({count_limit})"))
-            } else if bytes.saturating_add(found.size) > byte_limit {
-                Some(format!("over artifact_attempt_bytes ({byte_limit})"))
             } else if failures >= GIVE_UP {
                 Some(format!(
                     "not archived after repeated failures: {last_failure}"
@@ -406,9 +397,15 @@ impl Service {
                 ) {
                     Ok(()) => {
                         failures = 0;
-                        files += 1;
-                        bytes = bytes.saturating_add(found.size);
                         None
+                    }
+                    Err(Error::Breach(breach))
+                        if matches!(
+                            breach.limit,
+                            Limit::ArtifactAttemptBytes | Limit::ArtifactAttemptFiles
+                        ) =>
+                    {
+                        Some(format!("over {} ({})", breach.limit, breach.configured))
                     }
                     Err(error) => {
                         failures += 1;
@@ -439,7 +436,9 @@ impl Service {
         id: i64,
     ) -> Result<BTreeMap<String, Option<String>>> {
         let mut statement = self.db.connection().prepare(
-            "SELECT relative_path,checksum_sha256 FROM artifacts WHERE attempt_id=?1 AND relative_path GLOB ?2",
+            "SELECT relative_path,checksum_sha256 FROM artifacts WHERE attempt_id=?1 AND relative_path GLOB ?2
+             UNION ALL SELECT o.relative_path,a.checksum_sha256 FROM artifact_observations o
+             JOIN artifacts a ON a.id=o.artifact_id WHERE a.attempt_id=?1 AND o.relative_path GLOB ?2",
         )?;
         let rows = statement
             .query_map(params![attempt, format!("{prefix}/file-{id}-*")], |r| {

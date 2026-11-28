@@ -13,7 +13,7 @@ use crate::{
         Definition, Kind, ROLES, Service, Task, VersionedTask,
         lifecycle::{Action, State},
         require,
-        retention::{HousekeepingProgress, Preview},
+        retention::{HousekeepingProgress, Preview, ScanProgress, contention_backoff},
         session::ExecutionSession,
     },
     instance::Paths,
@@ -24,7 +24,6 @@ use std::{
     io::Write,
     ops::ControlFlow,
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
 };
 
 pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<String> {
@@ -37,9 +36,10 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
     // Before anything reclaims scratch: evidence a stopped guardian kept is archived now.
     evidence::finish(service, &workspace, &paths.cache.join("workers"))?;
     require_changed_cause(service, paths, &workspace)?;
+    let stop = process::stopped()?;
     open_session(service, options)?;
     registration.admitted();
-    let result = run_inner(service, paths, options, &workspace);
+    let result = run_inner(service, paths, options, &workspace, &stop);
     let requested = settle_session(service, &result)?;
     // The control is owned by this supervisor, not the terminal that requested it.
     control::finish_pending_with_workspace(service, &workspace)?;
@@ -53,6 +53,17 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
             .is_some_and(|s| s.state == "resume_requested")
     {
         let _ = session::continue_pending_session(service, paths);
+    } else {
+        match halted(service, &stop) {
+            Ok(None) => {
+                super::checks::archive_pending(service, paths, &stop);
+                if !stop.load(Ordering::Relaxed) {
+                    service.compact_retained_evidence();
+                }
+            }
+            Ok(Some(_)) => {}
+            Err(error) => note!("Transcript recovery deferred ({error})"),
+        }
     }
     result
 }
@@ -83,7 +94,7 @@ fn require_changed_cause(
     // Room is judged after the safe-point cleanup: reclaimed capacity resumes by itself.
     if matches!(pause.limit, PauseLimit::Storage(_)) {
         let stop = process::stopped()?;
-        let (storage, progress) = service.automatic_housekeeping_progress(1)?;
+        let (storage, progress) = service.reconcile_storage()?;
         // The session's earlier pause does not apply to this new Run.
         let _ = reclaim(service, &stop, |_| Ok(false), storage, progress)?;
     }
@@ -147,8 +158,8 @@ fn run_inner(
     paths: &Paths,
     options: &Options,
     workspace: &Workspace,
+    stop: &std::sync::Arc<AtomicBool>,
 ) -> Result<String> {
-    let stop = process::stopped()?;
     require(
         !checks_required(service)? || !service.checks()?.is_empty(),
         "Configure at least one real check: check-set build --command 'make check'",
@@ -156,7 +167,7 @@ fn run_inner(
     let launch = attempt::Launch {
         paths,
         workspace,
-        stop: &stop,
+        stop,
         queue: options.queue,
     };
     let mut notified = false;
@@ -167,13 +178,13 @@ fn run_inner(
     let mut repairing = false;
     let mut auto_provision_attempted = std::collections::BTreeSet::new();
     loop {
-        if let Some(halt) = halted(service, &stop)? {
+        if let Some(halt) = halted(service, stop)? {
             return Ok(halt);
         }
         if std::mem::take(&mut owner_start) {
             service.end_limit_wait()?;
         }
-        let task = match next_task(service, &stop)? {
+        let task = match next_task(service, stop)? {
             ControlFlow::Continue(task) => task,
             ControlFlow::Break(halt) => return Ok(halt),
         };
@@ -289,7 +300,7 @@ fn next_task(service: &mut Service, stop: &AtomicBool) -> Result<ControlFlow<Str
     if let Some(freed) = service.enable_incremental_vacuum()? {
         note!("storage: enabled incremental vacuum; the SQLite file shrank by {freed} bytes");
     }
-    let (storage, cleanup_progress) = service.automatic_housekeeping_progress(1)?;
+    let (storage, cleanup_progress) = service.reconcile_storage()?;
     let Some(task) = service.current_task()? else {
         return Ok(ControlFlow::Break("Queue complete".into()));
     };
@@ -314,33 +325,41 @@ fn reclaim(
     mut cleanup_progress: HousekeepingProgress,
 ) -> Result<ControlFlow<String, Preview>> {
     let mut contentions = 0_u32;
-    while matches!(
-        cleanup_progress,
-        HousekeepingProgress::Reconciling | HousekeepingProgress::Contended
-    ) || (storage.launch_capacity_reached
-        && cleanup_progress.continues()
-        && !storage.deferred_for_live_work)
-    {
+    while cleanup_progress.scan != ScanProgress::Settled {
         if stop.load(Ordering::Relaxed) {
             return Ok(ControlFlow::Break(STOPPED.into()));
         }
         if paused(service)? {
             return Ok(ControlFlow::Break(PAUSED.into()));
         }
-        if cleanup_progress == HousekeepingProgress::Contended {
+        if cleanup_progress.scan == ScanProgress::Contended {
             // Other projects can publish output throughout a scan. A fixed
             // retry count would abandon this queue even though those writers
             // will eventually finish and leave a stable accounting window.
             // Keep the wait interruptible and cap its polling rate.
-            contentions = contentions.saturating_add(1);
-            std::thread::sleep(Duration::from_millis(
-                25_u64.saturating_mul(u64::from(contentions).min(10)),
-            ));
+            contention_backoff(&mut contentions);
         } else {
             contentions = 0;
             std::thread::yield_now();
         }
-        (storage, cleanup_progress) = service.automatic_housekeeping_progress(1)?;
+        (storage, cleanup_progress) = service.reconcile_storage()?;
+    }
+    if storage.launch_capacity_reached {
+        if let Err(error) = service.reclaim_projects(true, |service, progress| {
+            Ok(!stop.load(Ordering::Relaxed)
+                && !paused(service)?
+                && (progress.scan != ScanProgress::Settled || service.launch_capacity_reached()?))
+        }) {
+            note!("storage: capacity cleanup deferred ({error})");
+        } else {
+            storage = service.projected_storage()?;
+        }
+        if stop.load(Ordering::Relaxed) {
+            return Ok(ControlFlow::Break(STOPPED.into()));
+        }
+        if paused(service)? {
+            return Ok(ControlFlow::Break(PAUSED.into()));
+        }
     }
     Ok(ControlFlow::Continue(storage))
 }

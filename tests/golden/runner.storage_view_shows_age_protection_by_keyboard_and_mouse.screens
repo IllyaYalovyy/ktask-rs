@@ -7,24 +7,24 @@
 
 ╭ Config ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │Project: project                                                                                                                │
-│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource limits.               │
-│Preferences: saved per pr╭ Storage retention ─────────────────────────────────────────────────────────╮                         │
-│                         │Retained: 1049167 logical bytes · eligible: 0 bytes in 0 attempt(s)         │                         │
-│Mouse: Enabled           │Allocated: 1835008 bytes in 14 files/directories · eligible files: 0 ·      │                         │
-│Run mode: Continue queue │reusable SQLite: 0 · protected: 1835008 bytes · WORK PAUSED AT CAPACITY     │                         │
+│Storage: SQLite output an╭ Storage retention ─────────────────────────────────────────────────────────╮ce limits.               │
+│Preferences: saved per pr│Retained: 2097743 logical bytes · eligible: 0 bytes in 0 attempt(s)         │                         │
+│                         │Artifacts: 2097152 logical bytes · 1048576 distinct bytes                   │                         │
+│Mouse: Enabled           │Allocated: 1871872 bytes in 15 files/directories · eligible files: 0 ·      │                         │
+│Run mode: Continue queue │reusable SQLite: 0 · protected: 1871872 bytes · WORK PAUSED AT CAPACITY     │                         │
 │Planner approval: Automat│RESERVE                                                                     │                         │
-│Delivery: local via origi│SQLite: 753664 · WAL: 0 · runner logs: 0 · evidence: 1048576 · directories: │                         │
+│Delivery: local via origi│SQLite: 790528 · WAL: 0 · runner logs: 0 · evidence: 1048576 · directories: │                         │
 │Dependencies: manual exte│5                                                                           │ is missing. CLI require │
-│declares prerequisites be│Protected evidence: 1049167 bytes younger than the 30-day minimum age · 0   │                         │
+│declares prerequisites be│Protected evidence: 2097743 bytes younger than the 30-day minimum age · 0   │                         │
 │                         │bytes referenced by reused checks · 0 bytes of open work                    │                         │
-│Defaults apply to new tas│Cleanup keeps task history and all live or unresolved work.                 │                         │
+│Defaults apply to new tas│Other links retain 0 allocated bytes after eligible paths are removed.      │                         │
 │u User defaults: what new│                                                                            │                         │
 │f Profiles: named role mo│Retain completed attempts (days)                                            │                         │
 │w Work categories: templa│30▏                                                                         │cuments or art; override │
 │per project.             │Action                                                                      │                         │
 │L Review lenses: opt-in s│< Save policy >   click / Space to change                                   │ect's default selection. │
 │Checks: list, add, edit, │Maximum allocated bytes                                                     │                         │
-│Keyboard remains availabl│1900544                                                                     │                         │
+│Keyboard remains availabl│1937408                                                                     │                         │
 │i Report limits: time and│Maximum files and directories                                               │ts.                      │
 │E Export settings and o I│100000                                                                      │                         │
 │                         │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │                         │
@@ -39,5 +39,41 @@
 [Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks] [g Git delivery] [k Storage]
 [R Limits] [b Build cache] [t Tools] [i Report limits] [E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help]
 [q Quit]
+Runs happen in a background supervisor; quitting this screen does not stop them
+Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
+@@ STORAGE AGE PROTECTION · 100x35 · keyboard+mouse
+ ktask-dev  / project   SQLite · real tasks
+ 0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
+ Current #2 · Pending   |   Queue 1 · History 1
+ Session: Run one · complete · Checks, independent review and validation passed after 0 repair roun…
+ Config
+           ╭ Storage retention ─────────────────────────────────────────────────────────╮
+╭ Config ──│Retained: 2097743 logical bytes · eligible: 0 bytes in 0 attempt(s)         │──────────╮
+│Project: p│Artifacts: 2097152 logical bytes · 1048576 distinct bytes                   │          │
+│Storage: S│Allocated: 1871872 bytes in 15 files/directories · eligible files: 0 ·      │hes · R:  │
+│resource l│reusable SQLite: 0 · protected: 1871872 bytes · WORK PAUSED AT CAPACITY     │          │
+│Preference│RESERVE                                                                     │          │
+│          │SQLite: 790528 · WAL: 0 · runner logs: 0 · evidence: 1048576 · directories: │          │
+│Mouse: Ena│5                                                                           │          │
+│Run mode: │Protected evidence: 2097743 bytes younger than the 30-day minimum age · 0   │          │
+│Planner ap│bytes referenced by reused checks · 0 bytes of open work                    │          │
+│Delivery: │Other links retain 0 allocated bytes after eligible paths are removed.      │          │
+│Dependenci│                                                                            │ a        │
+│prerequisi│Retain completed attempts (days)                                            │          │
+│          │30▏                                                                         │          │
+│Defaults a│Action                                                                      │          │
+│u User def│< Save policy >   click / Space to change                                   │          │
+│f Profiles│Maximum allocated bytes                                                     │          │
+│w Work cat│1937408                                                                     │ediate    │
+│code, docu│Maximum files and directories                                               │          │
+│L Review l│100000                                                                      │n) and the│
+│project's │Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │          │
+│Checks: li│                                                                            │          │
+│Keyboard r│[Copy] [Apply] [Cancel] [Up] [Down]                                         │          │
+│i Report l│                                                                            │ole in m  │
+╰──────────╰────────────────────────────────────────────────────────────────────────────╯──────────╯
+[Copy] [m Defaults] [u User defaults] [f Profiles] [w Work categories] [L Review lenses] [c Checks]
+[g Git delivery] [k Storage] [R Limits] [b Build cache] [t Tools] [i Report limits]
+[E Export settings] [o Import settings] [e Preferences] [Esc Back] [? Help] [q Quit]
 Runs happen in a background supervisor; quitting this screen does not stop them
 Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native

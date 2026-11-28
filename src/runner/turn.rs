@@ -8,7 +8,7 @@ use super::{
     process::Invocation,
     provider::{self, Access, Provider},
     sandbox,
-    worker_io::{Finish, execute},
+    worker_io::{Finish, execute, producer_notice},
 };
 use crate::{
     application::{
@@ -20,7 +20,10 @@ use crate::{
     instance::Paths,
     storage::Result,
 };
-use std::path::{Path, PathBuf};
+use std::{
+    ops::ControlFlow,
+    path::{Path, PathBuf},
+};
 
 /// The worker for one provider turn in `project`. A read-only turn runs in the sandbox, so
 /// whatever its provider allows, it cannot change the project or ktask's own records.
@@ -163,9 +166,10 @@ fn ai_turn(
         Some(_) => service.start_independent_step(run, configured, model, &scope)?,
         None => service.start_ai_step(run, configured, model, &scope, nudge.is_some())?,
     };
-    service.output(
+    let notice = producer_notice(
+        service,
         run,
-        "system",
+        ctx,
         &format!(
             "{}: {}/{} · {}",
             lens.map_or_else(
@@ -189,7 +193,10 @@ fn ai_turn(
         nudge,
         lens,
     };
-    let outcome = answered_turn(service, run, ctx, &ask, &turn, &step);
+    let outcome = match notice {
+        ControlFlow::Continue(()) => answered_turn(service, run, ctx, &ask, &turn, &step),
+        ControlFlow::Break(outcome) => Ok(outcome),
+    };
     if lens.is_some() {
         // However it ended, no later turn resumes a lens review's session.
         let closed = service.close_session(&step);
@@ -239,7 +246,7 @@ fn answered_turn(
         golden_screens,
     )?;
     let packet_context = format!(
-        "{packet_context}\nResolved project tools: {}. Environment fingerprint: {}.\nRead/search without opening the database: '{}' evidence FILE --offset 0 --limit 4096 [--search TEXT]. Use next_offset until eof. This command works in the read-only sandbox.\n",
+        "{packet_context}\nResolved project tools: {}. Environment fingerprint: {}.\nRead/search evidence: '{}' evidence FILE --offset 0 --limit 4096 [--search TEXT]. Use next_offset until eof. This command works in the read-only sandbox.\n",
         ctx.tools.description,
         ctx.tools.fingerprint,
         ctx.paths.executable.display()

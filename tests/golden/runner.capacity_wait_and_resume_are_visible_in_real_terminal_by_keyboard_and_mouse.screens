@@ -2,7 +2,7 @@
  ktask-dev  / project   SQLite · real tasks
  0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
  Current #1 · Pending   |   Queue 1 · History 0
- Session: Queue · waiting · Storage capacity reserve reached: 2895872 of 1048576 bytes and 9 of 100000 f…
+ Session: Queue · waiting · Storage capacity reserve reached: 2936832 of 1048576 bytes and 10 of 100000 …
  #1 Wait for shared capacity
  Ready · r Run queue; checks and repair run automatically
 ╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ───────────────────────╮
@@ -68,7 +68,7 @@ Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
  ktask-dev  / project   SQLite · real tasks
  0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
  Current #1 · Pending   |   Queue 1 · History 0
- Session: Queue · waiting · Storage capacity reserve reached: 2895872 of 1048576 bytes and 9 of 100000 files/directorie…
+ Session: Queue · waiting · Storage capacity reserve reached: 2936832 of 1048576 bytes and 10 of 100000 files/directori…
  #1 Wait for shared capacity
  Ready · r Run queue; checks and repair run automatically
 ╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮

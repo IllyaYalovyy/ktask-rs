@@ -5,6 +5,10 @@ use super::policy::{Reserve, instance_limits, policy};
 use super::*;
 use crate::application::evidence_path::EvidencePath;
 use rusqlite::Connection;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    os::unix::fs::MetadataExt,
+};
 
 /// Logical output size of attempt `a`; counters exist for every attempt once opened.
 pub(super) const OUTPUT_BYTES: &str = "coalesce((SELECT bytes FROM attempt_output_usage WHERE attempt_id=a.id),(SELECT sum(length(CAST(content AS BLOB))) FROM attempt_output WHERE attempt_id=a.id),0)";
@@ -76,23 +80,60 @@ fn candidates(db: &Connection, project: i64, cutoff: i64, limit: i64) -> Result<
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// Allocated bytes of the candidates' generated files, which cleanup would delete.
-fn eligible_file_bytes(db: &Connection, root: &File, candidates: &[Candidate]) -> Result<i64> {
+#[derive(Default)]
+struct FileUsage {
+    logical: i64,
+    distinct: i64,
+    eligible_blocks: i64,
+    shared_blocks: i64,
+}
+
+/// Count each inode once for the project. A candidate's blocks can only be
+/// freed when every link to them is eligible, including any in another project.
+fn file_usage(
+    db: &Connection,
+    root: &File,
+    project: i64,
+    candidates: &[Candidate],
+) -> Result<FileUsage> {
     let mut files = db.prepare(
-        "SELECT relative_path FROM artifacts WHERE attempt_id=?1 AND pruned_at_ms IS NULL",
+        "SELECT f.attempt_id,f.relative_path,f.size_bytes FROM artifacts f
+         JOIN attempts a ON a.id=f.attempt_id WHERE a.project_id=?1 AND f.pruned_at_ms IS NULL",
     )?;
-    let mut total = 0_i64;
-    for candidate in candidates {
-        for path in files.query_map([candidate.attempt_id], |r| r.get::<_, String>(0))? {
-            let path = path?;
-            if let Some(evidence) = EvidencePath::parse(&path)
-                .filter(|evidence| evidence.attempt == candidate.attempt_id && evidence.generated())
-            {
-                total = total.saturating_add(super::deletion::allocated(root, &evidence));
-            }
+    let eligible: BTreeSet<_> = candidates
+        .iter()
+        .map(|candidate| candidate.attempt_id)
+        .collect();
+    let mut usage = FileUsage::default();
+    let mut inodes = BTreeMap::new();
+    let mut rows = files.query([project])?;
+    while let Some(row) = rows.next()? {
+        let attempt: i64 = row.get(0)?;
+        let path: String = row.get(1)?;
+        usage.logical = usage.logical.saturating_add(row.get(2)?);
+        if let Some(path) = EvidencePath::parse(&path).filter(|path| path.attempt == attempt)
+            && let Some(meta) = super::deletion::file_metadata(root, &path)
+        {
+            let (_, _, _, count) = inodes.entry((meta.dev(), meta.ino())).or_insert_with(|| {
+                (
+                    meta.len() as i64,
+                    (meta.blocks() as i64).saturating_mul(512),
+                    meta.nlink(),
+                    0,
+                )
+            });
+            *count += u64::from(path.generated() && eligible.contains(&attempt));
         }
     }
-    Ok(total)
+    for (size, blocks, links, eligible) in inodes.into_values() {
+        usage.distinct = usage.distinct.saturating_add(size);
+        if eligible == links {
+            usage.eligible_blocks = usage.eligible_blocks.saturating_add(blocks);
+        } else if eligible > 0 {
+            usage.shared_blocks = usage.shared_blocks.saturating_add(blocks);
+        }
+    }
+    Ok(usage)
 }
 
 pub(super) fn preview(
@@ -105,11 +146,10 @@ pub(super) fn preview(
 ) -> Result<Preview> {
     let policy = policy(db, project)?;
     let limits = instance_limits(db)?;
-    let (output, artifacts): (i64, i64) = if mode.accounting {
-        (db.query_row("SELECT coalesce(sum(u.bytes),0) FROM attempt_output_usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.project_id=?1", [project], |r| r.get(0))?,
-        db.query_row("SELECT coalesce(sum(f.size_bytes),0) FROM artifacts f JOIN attempts a ON a.id=f.attempt_id WHERE a.project_id=?1 AND f.pruned_at_ms IS NULL", [project], |r| r.get(0))?)
+    let output: i64 = if mode.accounting {
+        db.query_row("SELECT coalesce(sum(u.bytes),0) FROM attempt_output_usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.project_id=?1", [project], |r| r.get(0))?
     } else {
-        (0, 0)
+        0
     };
     let live = protected(db, project)?;
     let cutoff = policy.cutoff(now);
@@ -122,10 +162,10 @@ pub(super) fn preview(
         .iter()
         .map(|c| c.output_bytes.saturating_add(c.artifact_bytes))
         .fold(0_i64, i64::saturating_add);
-    let eligible_file_bytes = if mode.accounting {
-        eligible_file_bytes(db, root, &candidates)?
+    let files = if mode.accounting {
+        file_usage(db, root, project, &candidates)?
     } else {
-        0
+        FileUsage::default()
     };
     let reusable_database_bytes = super::database::free_pages(db)?
         .saturating_mul(db.pragma_query_value(None, "page_size", |r| r.get::<_, i64>(0))?)
@@ -141,7 +181,10 @@ pub(super) fn preview(
         };
     Ok(Preview {
         policy,
-        usage_bytes: output.saturating_add(artifacts),
+        usage_bytes: output.saturating_add(files.logical),
+        logical_artifact_bytes: files.logical,
+        distinct_artifact_bytes: files.distinct,
+        protected_shared_file_bytes: files.shared_blocks,
         reclaimable_bytes,
         allocated_bytes: allocation.bytes,
         allocated_files: allocation.files,
@@ -151,11 +194,11 @@ pub(super) fn preview(
         evidence_bytes: allocation.evidence,
         evidence_entries: allocation.evidence_entries,
         directory_entries: allocation.directories,
-        eligible_file_bytes,
+        eligible_file_bytes: files.eligible_blocks,
         reusable_database_bytes,
         protected_bytes: allocation
             .bytes
-            .saturating_sub(eligible_file_bytes)
+            .saturating_sub(files.eligible_blocks)
             .saturating_sub(reusable_database_bytes),
         protected_by_age_bytes,
         protected_by_reference_bytes,

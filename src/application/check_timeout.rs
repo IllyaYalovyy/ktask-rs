@@ -105,16 +105,16 @@ impl Service {
             .map_err(Into::into)
     }
 
-    pub(crate) fn retained_timeout_transcript(
+    pub(crate) fn retained_check_transcript(
         &self,
-        run: &Run,
+        attempt: i64,
         root: &std::path::Path,
         relative: &str,
     ) -> Result<Option<std::path::PathBuf>> {
         let archived = self.db.connection().query_row(
             "SELECT EXISTS (SELECT 1 FROM artifacts WHERE attempt_id=?1 AND relative_path=?2
                             AND pruned_at_ms IS NULL AND pruning_requested_at_ms IS NULL)",
-            params![run.attempt, relative],
+            params![attempt, relative],
             |r| r.get::<_, bool>(0),
         )?;
         Ok(archived

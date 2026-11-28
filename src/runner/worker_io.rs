@@ -14,7 +14,10 @@ use crate::{
     },
     storage::{Error, Result},
 };
-use std::time::{Duration, Instant};
+use std::{
+    ops::ControlFlow,
+    time::{Duration, Instant},
+};
 
 /// How a worker process ended.
 pub(super) enum Finish {
@@ -63,7 +66,7 @@ pub(super) fn execute(
         started: Instant::now(),
         stage_ms: timeout.filter(|_| ai),
     };
-    let mut sink = Sink::new(stream);
+    let mut sink = Sink::new(stream, |service| limit.reached(service, run, ctx));
     let mut interrupted = None;
     let mut last_tick = Instant::now();
     loop {
@@ -80,13 +83,21 @@ pub(super) fn execute(
         match worker.receive(Duration::from_millis(40))? {
             Received::Idle => {}
             Received::Note(note) => service.note(run, &note)?,
-            Received::Output { stream, bytes } => {
-                sink.record(service, run, step, &mut worker, (stream, bytes))?;
+            Received::Output { stream, bytes } if interrupted.is_none() => {
+                if let ControlFlow::Break(outcome) =
+                    sink.record(service, run, step, &mut worker, (stream, bytes))?
+                {
+                    worker.stop();
+                    interrupted = Some(outcome);
+                }
             }
+            Received::Output { .. } => {}
             Received::Exited(code) => {
                 let (bytes, entries) = worker.scratch_peak();
                 service.record_scratch_peak(run.attempt, bytes, entries)?;
-                sink.finish(service, run)?;
+                if interrupted.is_none() {
+                    sink.finish(service, run)?;
+                }
                 ctx.persist_active_time(service, run)?;
                 let ended = if worker.timed_out() {
                     Finish::Stopped(Outcome::CheckTimedOut)
@@ -95,27 +106,65 @@ pub(super) fn execute(
                 };
                 return Ok(interrupted.map_or(ended, Finish::Stopped));
             }
-            Received::Failed(message) => return Err(worker.failure(message)),
+            Received::Failed(message) => {
+                let error = worker.failure(message);
+                return interrupted.map_or(Err(error), |outcome| Ok(Finish::Stopped(outcome)));
+            }
             Received::Disconnected => {
-                return Err(Error::Conflict(
-                    "Worker exited without cleanup confirmation".into(),
-                ));
+                return interrupted.map_or(
+                    Err(Error::Conflict(
+                        "Worker exited without cleanup confirmation".into(),
+                    )),
+                    |outcome| Ok(Finish::Stopped(outcome)),
+                );
             }
         }
     }
 }
 
 /// Why no worker may start now: the task's time limit or the storage reserve.
-fn launch_refused(service: &Service, run: &Run, ctx: &Context<'_>) -> Result<Option<Outcome>> {
+fn launch_refused(service: &mut Service, run: &Run, ctx: &Context<'_>) -> Result<Option<Outcome>> {
     ctx.persist_active_time(service, run)?;
     if let Some(outcome) = ctx.deadline_outcome(run) {
         ctx.persist_active_time(service, run)?;
         return Ok(Some(outcome));
     }
-    Ok(service
-        .work_capacity()?
-        .refusal()
-        .map(|refusal| Outcome::StorageBlocked(Box::new(refusal))))
+    match service.retry_storage_until(
+        |service| match service.work_capacity()?.refusal() {
+            Some(refusal) => Err(Error::Capacity(Box::new(refusal))),
+            None => Ok(()),
+        },
+        |service| admission_interrupted(service, run, ctx),
+    ) {
+        Ok(ControlFlow::Continue(())) => Ok(None),
+        Ok(ControlFlow::Break(outcome)) => Ok(Some(outcome)),
+        Err(Error::Capacity(refusal)) => Ok(Some(Outcome::StorageBlocked(refusal))),
+        Err(error) => Err(error),
+    }
+}
+
+pub(super) fn producer_notice(
+    service: &mut Service,
+    run: &Run,
+    ctx: &Context<'_>,
+    text: &str,
+) -> Result<ControlFlow<Outcome>> {
+    service.retry_storage_until(
+        |service| service.output(run, "system", text),
+        |service| admission_interrupted(service, run, ctx),
+    )
+}
+
+fn admission_interrupted(
+    service: &Service,
+    run: &Run,
+    ctx: &Context<'_>,
+) -> Result<Option<Outcome>> {
+    if ctx.interrupted(service, run)? {
+        Ok(Some(Outcome::Paused))
+    } else {
+        Ok(ctx.deadline_outcome(run))
+    }
 }
 
 /// The worker's evidence files are archived as this step's.
@@ -179,21 +228,23 @@ impl Limit {
 
 /// Where a worker's output goes: decoded into stored rows, and through the provider stream
 /// for an AI turn.
-struct Sink<'s> {
+struct Sink<'s, F> {
     stream: Option<(&'s mut provider::Stream, &'s str)>,
+    interrupted: F,
     /// Codex reports a resumed session's running totals, not the turn's own usage.
     session_totals: bool,
     stdout: output::Utf8Stream,
     stderr: output::Utf8Stream,
 }
 
-impl<'s> Sink<'s> {
-    fn new(stream: Option<(&'s mut provider::Stream, &'s str)>) -> Self {
+impl<'s, F: FnMut(&Service) -> Result<Option<Outcome>>> Sink<'s, F> {
+    fn new(stream: Option<(&'s mut provider::Stream, &'s str)>, interrupted: F) -> Self {
         Self {
             session_totals: stream
                 .as_ref()
                 .is_some_and(|(s, _)| s.provider == provider::Provider::Codex),
             stream,
+            interrupted,
             stdout: output::Utf8Stream::default(),
             stderr: output::Utf8Stream::default(),
         }
@@ -207,20 +258,24 @@ impl<'s> Sink<'s> {
         step: &Step,
         worker: &mut Worker,
         first: (String, Vec<u8>),
-    ) -> Result<()> {
+    ) -> Result<ControlFlow<Outcome>> {
         let mut rows = Vec::new();
         let mut chunk = Some(first);
         let mut chunks = 0;
         while let Some((source, bytes)) = chunk.take() {
             chunks += 1;
-            self.decode(service, run, step, &mut rows, source, &bytes)?;
+            if let ControlFlow::Break(outcome) =
+                self.decode(service, run, step, &mut rows, source, &bytes)?
+            {
+                return Ok(ControlFlow::Break(outcome));
+            }
             // Output that queued while the database was busy joins this transaction,
             // bounded so pause and time limits are still checked during a flood.
             if rows.len() < 1000 && chunks < 256 {
                 chunk = worker.queued_output();
             }
         }
-        service.output_rows(run, &rows)
+        store_rows(service, run, &rows, &mut self.interrupted)
     }
 
     fn decode(
@@ -231,7 +286,7 @@ impl<'s> Sink<'s> {
         rows: &mut Vec<(String, String)>,
         source: String,
         bytes: &[u8],
-    ) -> Result<()> {
+    ) -> Result<ControlFlow<Outcome>> {
         if let Some((stream, role)) = self.stream.as_mut().filter(|_| source == "stdout") {
             for event in stream.feed(bytes)? {
                 match event {
@@ -241,11 +296,19 @@ impl<'s> Sink<'s> {
                     }
                     // Keep the stored order: earlier output first.
                     provider::Event::Session(id) => {
-                        service.output_rows(run, &std::mem::take(rows))?;
+                        if let ControlFlow::Break(outcome) =
+                            store_rows(service, run, &std::mem::take(rows), &mut self.interrupted)?
+                        {
+                            return Ok(ControlFlow::Break(outcome));
+                        }
                         service.record_session(step, &id)?
                     }
                     provider::Event::Usage(usage, cost) => {
-                        service.output_rows(run, &std::mem::take(rows))?;
+                        if let ControlFlow::Break(outcome) =
+                            store_rows(service, run, &std::mem::take(rows), &mut self.interrupted)?
+                        {
+                            return Ok(ControlFlow::Break(outcome));
+                        }
                         let usage = if self.session_totals {
                             service.step_share(step, usage)?
                         } else {
@@ -255,7 +318,7 @@ impl<'s> Sink<'s> {
                     }
                 }
             }
-            return Ok(());
+            return Ok(ControlFlow::Continue(()));
         }
         let decoder = if source == "stdout" {
             &mut self.stdout
@@ -267,7 +330,7 @@ impl<'s> Sink<'s> {
             self.note(&source, &text);
             rows.push((source, text));
         }
-        Ok(())
+        Ok(ControlFlow::Continue(()))
     }
 
     /// Stores what the decoders still hold once the worker has exited.
@@ -280,7 +343,14 @@ impl<'s> Sink<'s> {
             };
             if !text.is_empty() {
                 self.note(source, &text);
-                service.output(run, source, &text)?;
+                if let Err(error) = service.output(run, source, &text) {
+                    match error {
+                        Error::Capacity(_) => {
+                            note!("Final {source} fragment could not be retained ({error})")
+                        }
+                        other => return Err(other),
+                    }
+                }
             }
         }
         Ok(())
@@ -294,4 +364,13 @@ impl<'s> Sink<'s> {
             stream.note_error(text);
         }
     }
+}
+
+fn store_rows(
+    service: &mut Service,
+    run: &Run,
+    rows: &[(String, String)],
+    interrupted: impl FnMut(&Service) -> Result<Option<Outcome>>,
+) -> Result<ControlFlow<Outcome>> {
+    service.retry_storage_until(|service| service.output_rows(run, rows), interrupted)
 }

@@ -55,6 +55,31 @@ fn record(out: &mut impl Write, value: &Value) -> Result<()> {
     Ok(())
 }
 
+/// A compact reference for the read-only evidence command.
+fn pending_check_output(
+    archive: &Path,
+    folder: &Path,
+    step: i64,
+    attempt: i64,
+    (start, end): (i64, i64),
+    reason: Option<&str>,
+) -> Result<Value> {
+    let path = folder.join(format!("check-output-{step}.ktask-output"));
+    let reference = crate::storage::OutputReference {
+        state: archive.to_path_buf(),
+        attempt,
+        step,
+        start,
+        end,
+    };
+    let encoded = serde_json::to_vec(&reference).map_err(std::io::Error::other)?;
+    std::fs::write(&path, encoded)?;
+    Ok(
+        json!({"output_start_exclusive":start,"output_end_inclusive":end,
+        "status":"Transcript publication pending","reason":reason,"path":path}),
+    )
+}
+
 impl Service {
     /// Looks at the latest run of each check on `tree`, a reused result standing for the
     /// run it reused. Only a report one of them kept, or all their evidence collected
@@ -82,9 +107,14 @@ impl Service {
             let prefix = format!("evidence/attempt-{origin}/step-{step}");
             let report = db
                 .query_row(
-                    "SELECT id,relative_path,pruned_at_ms IS NOT NULL FROM artifacts
-                     WHERE attempt_id=?1 AND relative_path GLOB ?2 AND name=?3 ORDER BY id DESC",
-                    params![origin, format!("{prefix}/*"), SCREEN_REPORT],
+                    "SELECT id,relative_path,pruned FROM (
+                       SELECT id,relative_path,pruned_at_ms IS NOT NULL AS pruned FROM artifacts
+                       WHERE attempt_id=?1 AND relative_path GLOB ?2 AND name=?3
+                       UNION ALL SELECT a.id,a.relative_path,a.pruned_at_ms IS NOT NULL FROM artifact_observations o
+                       JOIN artifacts a ON a.id=o.artifact_id
+                       WHERE a.attempt_id=?1 AND o.relative_path GLOB ?2 AND a.name=?3 AND o.source_tree=?4
+                     ) ORDER BY id DESC",
+                    params![origin, format!("{prefix}/*"), SCREEN_REPORT, tree],
                     |r| Ok((r.get(0)?, r.get::<_, String>(1)?, r.get::<_, bool>(2)?)),
                 )
                 .optional()?;
@@ -114,8 +144,8 @@ impl Service {
         })
     }
 
-    /// Materialize a read-only snapshot for one model turn. No log payload is read here.
-    /// Every index row links to complete evidence; missing and historical records stay explicit.
+    /// Materialize a read-only snapshot for one model turn. Published logs stay in the
+    /// archive and pending check logs refer to their retained output range.
     pub fn review_bundle(
         &self,
         attempt: i64,
@@ -134,10 +164,13 @@ impl Service {
         std::fs::create_dir_all(folder)?;
         std::fs::write(folder.join("workflow.txt"), context)?;
         let mut artifacts = BufWriter::new(File::create(folder.join("artifacts.jsonl"))?);
-        let mut statement = db.prepare("SELECT ar.id,ar.attempt_id,ar.name,ar.media_type,ar.size_bytes,ar.checksum_sha256,ar.source_tree,ar.relative_path,ar.pruned_at_ms FROM artifacts ar JOIN attempts a ON a.id=ar.attempt_id WHERE a.project_id=?1 AND a.task_id=?2 ORDER BY ar.id DESC")?;
+        let mut statement = db.prepare("SELECT ar.id,ar.attempt_id,ar.name,ar.media_type,ar.size_bytes,ar.checksum_sha256,
+            CASE WHEN EXISTS(SELECT 1 FROM artifact_observations WHERE artifact_id=ar.id AND source_tree=?3)
+                 THEN ?3 ELSE ar.source_tree END,ar.relative_path,ar.pruned_at_ms
+            FROM artifacts ar JOIN attempts a ON a.id=ar.attempt_id WHERE a.project_id=?1 AND a.task_id=?2 ORDER BY ar.id DESC")?;
         let mut artifact_count = 0;
         let mut matching = 0;
-        for row in statement.query_map(params![self.project_id, task], |r| {
+        for row in statement.query_map(params![self.project_id, task, tree], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, i64>(1)?,
@@ -190,7 +223,9 @@ impl Service {
                 format!("{} The list is manifest.jsonl.\n", evidence.fact())
             });
         let mut steps = BufWriter::new(File::create(folder.join("steps.jsonl"))?);
-        let mut statement = db.prepare("SELECT s.id,s.attempt_id,s.role,s.state,s.check_name,s.command,s.exit_code,s.source_tree,s.reused_from_step_id,s.report,s.passed_count,s.failed_count,s.ignored_count,s.environment_fingerprint FROM attempt_steps s JOIN attempts a ON a.id=s.attempt_id WHERE a.project_id=?1 AND a.task_id=?2 ORDER BY s.id")?;
+        let mut statement = db.prepare("SELECT s.id,s.attempt_id,s.role,s.state,s.check_name,s.command,s.exit_code,s.source_tree,s.reused_from_step_id,s.report,s.passed_count,s.failed_count,s.ignored_count,s.environment_fingerprint,p.output_start,p.output_end,p.reason
+             FROM attempt_steps s JOIN attempts a ON a.id=s.attempt_id LEFT JOIN pending_transcripts p ON p.step_id=s.id AND s.state IN ('succeeded','failed')
+             WHERE a.project_id=?1 AND a.task_id=?2 ORDER BY s.id")?;
         let mut latest = BTreeMap::new();
         let mut step_count = 0;
         for row in statement.query_map(params![self.project_id, task], |r| {
@@ -209,6 +244,9 @@ impl Service {
                 r.get::<_, Option<i64>>(11)?,
                 r.get::<_, Option<i64>>(12)?,
                 r.get::<_, Option<String>>(13)?,
+                r.get::<_, Option<i64>>(14)?
+                    .zip(r.get::<_, Option<i64>>(15)?),
+                r.get::<_, Option<String>>(16)?,
             ))
         })? {
             let (
@@ -226,16 +264,22 @@ impl Service {
                 failed,
                 ignored,
                 environment,
+                pending,
+                reason,
             ) = row?;
             let path = folder.join(format!("step-{id}.txt"));
             if let Some(report) = &report {
                 std::fs::write(&path, report)?;
             }
-            let item = json!({"step":id,"attempt":origin,"role":role,"state":state,"check":name,
+            let mut item = json!({"step":id,"attempt":origin,"role":role,"state":state,"check":name,
                 "command":command,"exit_code":exit,"source_tree":source,"matches_current_tree":source.as_deref()==Some(tree),"environment_fingerprint":environment,
                 "reused_from_step":reused,"counts":{"passed":passed,"failed":failed,"ignored":ignored},
                 "report":report.as_ref().map(|_|&path),
                 "authority":if role=="execution"{"executor claim, not independent proof"}else if role=="check"{"supervisor result; counts may cover only recognized suites"}else{"independent assessment of its recorded scope; recheck after changes"}});
+            if let Some(output) = pending {
+                item["pending_transcript"] =
+                    pending_check_output(archive, folder, id, origin, output, reason.as_deref())?;
+            }
             record(&mut steps, &item)?;
             step_count += 1;
             if state != "running" {

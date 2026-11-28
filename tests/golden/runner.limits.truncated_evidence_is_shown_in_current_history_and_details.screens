@@ -1,69 +1,69 @@
-@@ evidence-current · 120x36 · keyboard
+@@ evidence-current · 120x36 · keyboard+mouse
  ktask-dev  / project   SQLite · real tasks
  0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
  Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
- Session: Run one · paused · Paused: Resource limit: check transcript evidence incomplete: command conflict: Artifact b…
+ Session: Run one · paused · Paused: Resource limit: managed scratch exceeded 1048576 bytes or 200000 entries; the guar…
  #1 Show what was left out
  Paused · r Resume continues this attempt · s Stop returns it to Pending
 ╭ Status · Enter: details ───────────────────╮╭ Task brief · Enter: full details ──────────────────────────────────────╮
 │Paused · AI                                 ││Goal: Create result.txt containing verified                             │
-│Limit artifact_file_bytes                   ││Proof: result.txt contains verified                                     │
-│Now 1024 · needed 3122                      │╰────────────────────────────────────────────────────────────────────────╯
-│+ Raise to 4096 and resume                  │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
-│Truncated evidence 2/5                      ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
-│Attempt 1                                   ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
-│Model codex/remediation / none              ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
-│Active <t> · waited <t>                     ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
-│Tokens 60 new · 40 cached · 10 out          ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
-│70 new tokens + 1 call(s) unreported        ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
-│Budget 0 of 3 used                          ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
-│Can run · u Readiness                       ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
-│Execution   ✓ succeeded                     ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
-╰────────────────────────────────────────────╯│yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
-╭ Activity · #1 · l: all ────────────────────╮│yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
-│• Supervisor yielded this attempt for resume││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
-│• Resource limit: check transcript evidence ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
-│  incomplete: command conflict: Artifact…   ││yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy                        │
-│• Resource limit artifact_file_bytes:       ││Evidence truncated: 2 of 5 files archived, 3 not archived. Not archived │
-│  measured 3122 against 1024; decision…     ││from proof-3.txt: over artifact_attempt_files (2).                      │
-│• Workflow · Check · repair round 0/10      ││Diagnosing resource limit breach: codex/remediation · read-only         │
-│• Evidence truncated: 2 of 5 files          ││{"judgment":{"action":"escalate","reason":"The use is not something a   │
-│  archived, 3 not archived. Not archived…   ││worker repair would change"}}                                           │
+│Limit scratch_bytes                         ││Proof: result.txt contains verified                                     │
+│Now 1048576 · needed 3022848                │╰────────────────────────────────────────────────────────────────────────╯
+│+ Raise to 4194304 and resume               │╭ Log · following · attempt 1 · o: report ───────────────────────────────╮
+│Truncated evidence 2/5                      ││Execution started; results require checks, review and validation        │
+│Attempt 1                                   ││execution: codex/execution · new session                                │
+│Model codex/remediation / none              ││Worker claim (unverified) · complete: Verified result                   │
+│Active <t> · waited <t>                     ││Worker criterion claim (unverified) #1 · claimed pass: Inspected        │
+│Tokens 60 new · 40 cached · 10 out          ││result.txt                                                              │
+│70 new tokens + 1 call(s) unreported        ││Check build: if [ ! -f "$HOME/proof-created" ]; then touch              │
+│Budget 0 of 3 used                          ││"$HOME/proof-created"; for n in 1 2 3 4 5; do printf p >                │
+│Can run · u Readiness                       ││"$KTASK_ARTIFACT_DIR/proof-$n.txt"; done; head -c 3000000 /dev/zero >   │
+│Execution   ✓ succeeded                     ││"$TMPDIR/flood.bin"; sleep 1; fi; test -f result.txt (timeout 600000 ms)│
+╰────────────────────────────────────────────╯│Evidence truncated: 2 of 5 files archived, 3 not archived. Not archived │
+╭ Activity · #1 · l: all ────────────────────╮│from proof-3.txt: over artifact_attempt_files (2).                      │
+│• Supervisor yielded this attempt for resume││Diagnosing resource limit breach: codex/remediation · read-only         │
+│• Resource limit: managed scratch exceeded  ││{"judgment":{"action":"escalate","reason":"The use is not something a   │
+│  1048576 bytes or 200000 entries; the…     ││worker repair would change"}}                                           │
+│• Resource limit scratch_bytes: measured    ││                                                                        │
+│  3022848 against 1048576; decision…        ││                                                                        │
+│• Workflow · Check · repair round 0/10      ││                                                                        │
+│• Evidence truncated: 2 of 5 files          ││                                                                        │
+│  archived, 3 not archived. Not archived…   ││                                                                        │
 ╰────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
 [Copy] [r Resume] [+ Raise and resume] [s Stop] [T Restart] [D Mark done] [c Models] [e Edit] [u Readiness] [m Run mode]
 [Enter Details] [o Report] [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
 
 Runs happen in a background supervisor; quitting this screen does not stop them
 Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
-@@ evidence-history · 120x36 · keyboard
+@@ evidence-history · 120x36 · keyboard+mouse
  ktask-dev  / project   SQLite · real tasks
  0 Projects   1 Curre╭ Task details / attempts ───────────────────────────────────────────────────╮
  No current task   | │Attempt 1 / 1 · #1 · revision 1 · succeeded                                 │
  Session: Run one · c│Outcome: Checks, independent review and validation passed after 0 repair    │ter 0 repair rounds
  History · 1 shown / │rounds                                                                      │
  Filter: All  |  Sear│Evidence truncated: 2 of 5 files archived (2 of 5 bytes), 3 not archived    │
-╭ History · 1 / 1 · F│Output page 1 / 1 · chunk 1 / 6 · 14 records · newest first · snapshot #14  │ full ──────────────╮
+╭ History · 1 / 1 · F│Output page 1 / 1 · chunk 1 / 1 · 13 records · newest first · snapshot #13  │ full ──────────────╮
 │› #1   Done     Show│                                                                            │ut                  │
-│                    │#14 [stdout] Validation verdict · complete: Verified result                 │ished <date>        │
+│                    │#13 [stdout] Validation verdict · complete: Verified result                 │ished <date>        │
 │                    │Validation criterion verdict #1 · claimed pass: Inspected result.txt        │                    │
-│                    │#13 [system] validation: codex/validation · new session                     │txt containing      │
-│                    │#12 [stdout] Review verdict · complete: Verified result                     │                    │
+│                    │#12 [system] validation: codex/validation · new session                     │txt containing      │
+│                    │#11 [stdout] Review verdict · complete: Verified result                     │                    │
 │                    │Review criterion verdict #1 · claimed pass: Inspected result.txt            │                    │
-│                    │#11 [system] review: codex/review · new session                             │ntains verified     │
-│                    │#10 [system] Check build: transcript archived from the retained output; its │                    │
-│                    │recorded result stands and it is not run again                              │w tokens + 1 call(s)│
-│                    │#9 [system] Execution started; results require checks, review and validation│                    │
-│                    │#8 [stdout] {"judgment":{"action":"escalate","reason":"The use is not       │2 of 5 files        │
-│                    │something a worker repair would change"}}                                   │es), 3 not archived │
-│                    │#7 [system] Diagnosing resource limit breach: codex/remediation · read-only │                    │
-│                    │#6 [system] Evidence truncated: 2 of 5 files archived, 3 not archived. Not  │                    │
-│                    │archived from proof-3.txt: over artifact_attempt_files (2).                 │cution / none       │
-│                    │#5 [stdout]                                                                 │ / none             │
-│                    │yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│lidation / none     │
-│                    │yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│emediation / none   │
-│                    │yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│ctive <t> · waited <t>│
-│                    │yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│80 · cache read 120 │
-│                    │yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│tput 30 (+1 call(s) │
+│                    │#10 [system] review: codex/review · new session                             │ntains verified     │
+│                    │#9 [system] Check build: if [ ! -f "$HOME/proof-created" ]; then touch      │                    │
+│                    │"$HOME/proof-created"; for n in 1 2 3 4 5; do printf p >                    │w tokens + 1 call(s)│
+│                    │"$KTASK_ARTIFACT_DIR/proof-$n.txt"; done; head -c 3000000 /dev/zero >       │                    │
+│                    │"$TMPDIR/flood.bin"; sleep 1; fi; test -f result.txt (timeout 600000 ms)    │2 of 5 files        │
+│                    │#8 [system] Execution started; results require checks, review and validation│es), 3 not archived │
+│                    │#7 [stdout] {"judgment":{"action":"escalate","reason":"The use is not       │                    │
+│                    │something a worker repair would change"}}                                   │                    │
+│                    │#6 [system] Diagnosing resource limit breach: codex/remediation · read-only │cution / none       │
+│                    │#5 [system] Evidence truncated: 2 of 5 files archived, 3 not archived. Not  │ / none             │
+│                    │archived from proof-3.txt: over artifact_attempt_files (2).                 │lidation / none     │
+│                    │#4 [system] Check build: if [ ! -f "$HOME/proof-created" ]; then touch      │emediation / none   │
+│                    │"$HOME/proof-created"; for n in 1 2 3 4 5; do printf p >                    │ctive <t> · waited <t>│
+│                    │"$KTASK_ARTIFACT_DIR/proof-$n.txt"; done; head -c 3000000 /dev/zero >       │80 · cache read 120 │
+│                    │"$TMPDIR/flood.bin"; sleep 1; fi; test -f result.txt (timeout 600000 ms)    │tput 30 (+1 call(s) │
 │                    │Find output                                                                 │w tokens + 1 call(s)│
 │                    │▏                                                                           │                    │
 ╰────────────────────│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │────────────────────╯
@@ -72,48 +72,48 @@ Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
                      │[Refresh] [Up] [Down] [Close] [Copy]                                        │
 Runs happen in a back╰────────────────────────────────────────────────────────────────────────────╯
 Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
-@@ evidence-current · 80x24 · keyboard
+@@ evidence-current · 80x24 · keyboard+mouse
  ktask-dev  / project   SQLite · real tasks
  0 Projects   1 Current   2 Queue   3 History   4 Config   5 About
  Current #1 · Paused · runner stopped · <t> |   Queue 1 · History 0
- Session: Run one · paused · Paused: Resource limit: check transcript evidence …
+ Session: Run one · paused · Paused: Resource limit: managed scratch exceeded 1…
  #1 Show what was left out
  Paused · r Resume continues this attempt · s Stop returns it to Pending
 ╭ Status · Enter: details ───╮╭ Task brief · Enter: full details ──────────────╮
 │Paused · AI                 ││Goal: Create result.txt containing verified     │
-│Limit artifact_file_bytes   ││Proof: result.txt contains verified             │
-│Now 1024 · needed 3122      │╰────────────────────────────────────────────────╯
-│+ Raise to 4096 and resume  │╭ Log · following · attempt 1 · o: report ───────╮
-│Truncated evidence 2/5      ││Evidence truncated: 2 of 5 files archived, 3    │
-│Attempt 1                   ││not archived. Not archived from proof-3.txt:    │
+│Limit scratch_bytes         ││Proof: result.txt contains verified             │
+│Now 1048576 · needed 3022848│╰────────────────────────────────────────────────╯
+│+ Raise to 4194304 and      │╭ Log · following · attempt 1 · o: report ───────╮
+│resume                      ││Evidence truncated: 2 of 5 files archived, 3    │
+│Truncated evidence 2/5      ││not archived. Not archived from proof-3.txt:    │
 ╰────────────────────────────╯│over artifact_attempt_files (2).                │
 ╭ Activity · #1 · l: all ────╮│Diagnosing resource limit breach:               │
 │• Supervisor yielded this   ││codex/remediation · read-only                   │
 │  attempt for resume        ││{"judgment":{"action":"escalate","reason":"The  │
-│• Resource limit: check     ││use is not something a worker repair would      │
-│  transcript evidence…      ││change"}}                                       │
+│• Resource limit: managed   ││use is not something a worker repair would      │
+│  scratch exceeded 1048576… ││change"}}                                       │
 ╰────────────────────────────╯╰────────────────────────────────────────────────╯
 [Copy] [r Resume] [+ Raise and resume] [s Stop] [T Restart] [D Mark done]
 [c Models] [e Edit] [u Readiness] [m Run mode] [Enter Details] [o Report]
 [a Add] [i Investigate] [f Fix] [S Stats] [? Help] [q Quit]
 Runs happen in a background supervisor; quitting this screen does not stop them
-@@ evidence-history · 80x24 · keyboard
+@@ evidence-history · 80x24 · keyboard+mouse
  ktask-dev  / project   SQLite · real tasks
  ╭ Task details / attempts ───────────────────────────────────────────────────╮
  │Attempt 1 / 1 · #1 · revision 1 · succeeded                                 │
  │Outcome: Checks, independent review and validation passed after 0 repair    │…
  │rounds                                                                      │
  │Evidence truncated: 2 of 5 files archived (2 of 5 bytes), 3 not archived    │
-╭│Output page 1 / 1 · chunk 1 / 6 · 14 records · newest first · snapshot #14  │╮
+╭│Output page 1 / 1 · chunk 1 / 1 · 13 records · newest first · snapshot #13  │╮
 ││                                                                            ││
-││#14 [stdout] Validation verdict · complete: Verified result                 ││
+││#13 [stdout] Validation verdict · complete: Verified result                 ││
 ││Validation criterion verdict #1 · claimed pass: Inspected result.txt        ││
-││#13 [system] validation: codex/validation · new session                     ││
-││#12 [stdout] Review verdict · complete: Verified result                     ││
+││#12 [system] validation: codex/validation · new session                     ││
+││#11 [stdout] Review verdict · complete: Verified result                     ││
 ││Review criterion verdict #1 · claimed pass: Inspected result.txt            ││
-││#11 [system] review: codex/review · new session                             ││
-││#10 [system] Check build: transcript archived from the retained output; its ││
-││recorded result stands and it is not run again                              ││
+││#10 [system] review: codex/review · new session                             ││
+││#9 [system] Check build: if [ ! -f "$HOME/proof-created" ]; then touch      ││
+││"$HOME/proof-created"; for n in 1 2 3 4 5; do printf p >                    ││
 ││Find output                                                                 ││
 ││▏                                                                           ││
 ╰│[ ] attempt · s summary · v reviews · f failures · n/p step · o output · t  │╯

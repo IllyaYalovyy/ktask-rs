@@ -53,28 +53,28 @@ Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
 │Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
 │limits.        ╭ Storage retention ─────────────────────────────────────────────────────────╮               │
 │Preferences: sa│Retained: 97 logical bytes · eligible: 78 bytes in 1 attempt(s)             │               │
-│               │Allocated: 794624 bytes in 8 files/directories · eligible files: 8192 ·     │               │
-│Mouse: Enabled │reusable SQLite: 0 · protected: 786432 bytes                                │               │
-│Run mode: Conti│SQLite: 753664 · WAL: 0 · runner logs: 0 · evidence: 8192 · directories: 3  │               │
-│Planner approva│Protected evidence: 0 bytes younger than the 0-day minimum age · 0 bytes    │               │
-│Delivery: local│referenced by reused checks · 19 bytes of open work                         │               │
-│Dependencies: m│Cleanup keeps task history and all live or unresolved work.                 │erequisite is  │
-│missing. CLI re│Task #1 attempt #1: 33 output + 45 artifact bytes (2 files; 0 pending)      │               │
-│               │                                                                            │               │
-│Defaults apply │Retain completed attempts (days)                                            │               │
-│u User defaults│0▏                                                                          │               │
-│f Profiles: nam│Action                                                                      │               │
-│w Work categori│< Save policy >   click / Space to change                                   │e code,        │
-│documents or ar│Maximum allocated bytes                                                     │               │
-│L Review lenses│8589934592                                                                  │d the project's│
-│default selecti│Maximum files and directories                                               │               │
-│Checks: list, a│100000                                                                      │               │
-│Keyboard remain│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │               │
-│i Report limits│                                                                            │n m Defaults.  │
-│E Export settin│[Copy] [Apply] [Cancel] [Up] [Down]                                         │               │
+│               │Artifacts: 45 logical bytes · 19 distinct bytes                             │               │
+│Mouse: Enabled │Allocated: 831488 bytes in 8 files/directories · eligible files: 4096 ·     │               │
+│Run mode: Conti│reusable SQLite: 0 · protected: 827392 bytes                                │               │
+│Planner approva│SQLite: 790528 · WAL: 0 · runner logs: 0 · evidence: 8192 · directories: 3  │               │
+│Delivery: local│Protected evidence: 0 bytes younger than the 0-day minimum age · 0 bytes    │               │
+│Dependencies: m│referenced by reused checks · 19 bytes of open work                         │erequisite is  │
+│missing. CLI re│Other links retain 0 allocated bytes after eligible paths are removed.      │               │
+│               │Task #1 attempt #1: 33 output + 45 artifact bytes (2 files; 0 pending)      │               │
+│Defaults apply │                                                                            │               │
+│u User defaults│Retain completed attempts (days)                                            │               │
+│f Profiles: nam│0▏                                                                          │               │
+│w Work categori│Action                                                                      │e code,        │
+│documents or ar│< Save policy >   click / Space to change                                   │               │
+│L Review lenses│Maximum allocated bytes                                                     │d the project's│
+│default selecti│8589934592                                                                  │               │
+│Checks: list, a│Maximum files and directories                                               │               │
+│Keyboard remain│100000                                                                      │               │
+│i Report limits│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │n m Defaults.  │
+│E Export settin│                                                                            │               │
+│               │[Copy] [Apply] [Cancel] [Up] [Down]                                         │               │
 │               │                                                                            │               │
 │               ╰────────────────────────────────────────────────────────────────────────────╯               │
-│                                                                                                            │
 │                                                                                                            │
 │                                                                                                            │
 │                                                                                                            │
@@ -136,16 +136,16 @@ Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
 
 ╭ Config ────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │Project: project                                                                                            │
-│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
-│limits.        ╭ Storage retention ─────────────────────────────────────────────────────────╮               │
-│Preferences: sa│Retained: 97 logical bytes · eligible: 78 bytes in 1 attempt(s)             │               │
-│               │Allocated: 802816 bytes in 8 files/directories · eligible files: 8192 ·     │               │
-│Mouse: Enabled │reusable SQLite: 0 · protected: 794624 bytes                                │               │
-│Run mode: Conti│SQLite: 753664 · WAL: 8192 · runner logs: 0 · evidence: 8192 · directories: │               │
+│Storage: SQLite╭ Storage retention ─────────────────────────────────────────────────────────╮ R: resource   │
+│limits.        │Retained: 97 logical bytes · eligible: 78 bytes in 1 attempt(s)             │               │
+│Preferences: sa│Artifacts: 45 logical bytes · 19 distinct bytes                             │               │
+│               │Allocated: 839680 bytes in 8 files/directories · eligible files: 4096 ·     │               │
+│Mouse: Enabled │reusable SQLite: 0 · protected: 835584 bytes                                │               │
+│Run mode: Conti│SQLite: 790528 · WAL: 8192 · runner logs: 0 · evidence: 8192 · directories: │               │
 │Planner approva│3                                                                           │               │
 │Delivery: local│Protected evidence: 0 bytes younger than the 0-day minimum age · 0 bytes    │               │
 │Dependencies: m│referenced by reused checks · 19 bytes of open work                         │erequisite is  │
-│missing. CLI re│Cleanup keeps task history and all live or unresolved work.                 │               │
+│missing. CLI re│Other links retain 0 allocated bytes after eligible paths are removed.      │               │
 │               │Task #1 attempt #1: 33 output + 45 artifact bytes (2 files; 0 pending)      │               │
 │Defaults apply │                                                                            │               │
 │u User defaults│Retain completed attempts (days)                                            │               │
@@ -179,16 +179,16 @@ Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
 
 ╭ Config ────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │Project: project                                                                                            │
-│Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
-│limits.        ╭ Storage retention ─────────────────────────────────────────────────────────╮               │
-│Preferences: sa│Retained: 97 logical bytes · eligible: 78 bytes in 1 attempt(s)             │               │
-│               │Allocated: 802816 bytes in 8 files/directories · eligible files: 8192 ·     │               │
-│Mouse: Enabled │reusable SQLite: 0 · protected: 794624 bytes                                │               │
-│Run mode: Conti│SQLite: 753664 · WAL: 8192 · runner logs: 0 · evidence: 8192 · directories: │               │
+│Storage: SQLite╭ Storage retention ─────────────────────────────────────────────────────────╮ R: resource   │
+│limits.        │Retained: 97 logical bytes · eligible: 78 bytes in 1 attempt(s)             │               │
+│Preferences: sa│Artifacts: 45 logical bytes · 19 distinct bytes                             │               │
+│               │Allocated: 839680 bytes in 8 files/directories · eligible files: 4096 ·     │               │
+│Mouse: Enabled │reusable SQLite: 0 · protected: 835584 bytes                                │               │
+│Run mode: Conti│SQLite: 790528 · WAL: 8192 · runner logs: 0 · evidence: 8192 · directories: │               │
 │Planner approva│3                                                                           │               │
 │Delivery: local│Protected evidence: 0 bytes younger than the 0-day minimum age · 0 bytes    │               │
 │Dependencies: m│referenced by reused checks · 19 bytes of open work                         │erequisite is  │
-│missing. CLI re│Cleanup keeps task history and all live or unresolved work.                 │               │
+│missing. CLI re│Other links retain 0 allocated bytes after eligible paths are removed.      │               │
 │               │Task #1 attempt #1: 33 output + 45 artifact bytes (2 files; 0 pending)      │               │
 │Defaults apply │                                                                            │               │
 │u User defaults│Retain completed attempts (days)                                            │               │
@@ -309,15 +309,15 @@ Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
 ╭ Config ────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │Project: project                                                                                            │
 │Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
-│limits.                                                                                                     │
-│Preferences: sa╭ Storage retention ─────────────────────────────────────────────────────────╮               │
-│               │Retained: 19 logical bytes · eligible: 0 bytes in 0 attempt(s)              │               │
-│Mouse: Enabled │Allocated: 786432 bytes in 5 files/directories · eligible files: 0 ·        │               │
-│Run mode: Conti│reusable SQLite: 0 · protected: 786432 bytes                                │               │
-│Planner approva│SQLite: 753664 · WAL: 0 · runner logs: 0 · evidence: 0 · directories: 2     │               │
+│limits.        ╭ Storage retention ─────────────────────────────────────────────────────────╮               │
+│Preferences: sa│Retained: 19 logical bytes · eligible: 0 bytes in 0 attempt(s)              │               │
+│               │Artifacts: 0 logical bytes · 0 distinct bytes                               │               │
+│Mouse: Enabled │Allocated: 823296 bytes in 6 files/directories · eligible files: 0 ·        │               │
+│Run mode: Conti│reusable SQLite: 0 · protected: 823296 bytes                                │               │
+│Planner approva│SQLite: 790528 · WAL: 0 · runner logs: 0 · evidence: 0 · directories: 2     │               │
 │Delivery: local│Protected evidence: 0 bytes younger than the 0-day minimum age · 0 bytes    │               │
 │Dependencies: m│referenced by reused checks · 19 bytes of open work                         │erequisite is  │
-│missing. CLI re│Cleanup keeps task history and all live or unresolved work.                 │               │
+│missing. CLI re│Other links retain 0 allocated bytes after eligible paths are removed.      │               │
 │               │                                                                            │               │
 │Defaults apply │Retain completed attempts (days)                                            │               │
 │u User defaults│0▏                                                                          │               │
@@ -354,28 +354,28 @@ Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
 │Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
 │limits.        ╭ Storage retention ─────────────────────────────────────────────────────────╮               │
 │Preferences: sa│Retained: 19 logical bytes · eligible: 19 bytes in 1 attempt(s)             │               │
-│               │Allocated: 786432 bytes in 5 files/directories · eligible files: 0 ·        │               │
-│Mouse: Enabled │reusable SQLite: 0 · protected: 786432 bytes                                │               │
-│Run mode: Conti│SQLite: 753664 · WAL: 0 · runner logs: 0 · evidence: 0 · directories: 2     │               │
-│Planner approva│Protected evidence: 0 bytes younger than the 0-day minimum age · 0 bytes    │               │
-│Delivery: local│referenced by reused checks · 0 bytes of open work                          │               │
-│Dependencies: m│Cleanup keeps task history and all live or unresolved work.                 │erequisite is  │
-│missing. CLI re│Task #2 attempt #2: 19 output + 0 artifact bytes (0 files; 0 pending)       │               │
-│               │                                                                            │               │
-│Defaults apply │Retain completed attempts (days)                                            │               │
-│u User defaults│0▏                                                                          │               │
-│f Profiles: nam│Action                                                                      │               │
-│w Work categori│< Save policy >   click / Space to change                                   │e code,        │
-│documents or ar│Maximum allocated bytes                                                     │               │
-│L Review lenses│8589934592                                                                  │d the project's│
-│default selecti│Maximum files and directories                                               │               │
-│Checks: list, a│100000                                                                      │               │
-│Keyboard remain│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │               │
-│i Report limits│                                                                            │n m Defaults.  │
-│E Export settin│[Copy] [Apply] [Cancel] [Up] [Down]                                         │               │
+│               │Artifacts: 0 logical bytes · 0 distinct bytes                               │               │
+│Mouse: Enabled │Allocated: 823296 bytes in 6 files/directories · eligible files: 0 ·        │               │
+│Run mode: Conti│reusable SQLite: 0 · protected: 823296 bytes                                │               │
+│Planner approva│SQLite: 790528 · WAL: 0 · runner logs: 0 · evidence: 0 · directories: 2     │               │
+│Delivery: local│Protected evidence: 0 bytes younger than the 0-day minimum age · 0 bytes    │               │
+│Dependencies: m│referenced by reused checks · 0 bytes of open work                          │erequisite is  │
+│missing. CLI re│Other links retain 0 allocated bytes after eligible paths are removed.      │               │
+│               │Task #2 attempt #2: 19 output + 0 artifact bytes (0 files; 0 pending)       │               │
+│Defaults apply │                                                                            │               │
+│u User defaults│Retain completed attempts (days)                                            │               │
+│f Profiles: nam│0▏                                                                          │               │
+│w Work categori│Action                                                                      │e code,        │
+│documents or ar│< Save policy >   click / Space to change                                   │               │
+│L Review lenses│Maximum allocated bytes                                                     │d the project's│
+│default selecti│8589934592                                                                  │               │
+│Checks: list, a│Maximum files and directories                                               │               │
+│Keyboard remain│100000                                                                      │               │
+│i Report limits│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │n m Defaults.  │
+│E Export settin│                                                                            │               │
+│               │[Copy] [Apply] [Cancel] [Up] [Down]                                         │               │
 │               │                                                                            │               │
 │               ╰────────────────────────────────────────────────────────────────────────────╯               │
-│                                                                                                            │
 │                                                                                                            │
 │                                                                                                            │
 │                                                                                                            │
@@ -397,28 +397,28 @@ Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
 │Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
 │limits.        ╭ Storage retention ─────────────────────────────────────────────────────────╮               │
 │Preferences: sa│Retained: 19 logical bytes · eligible: 19 bytes in 1 attempt(s)             │               │
-│               │Allocated: 786432 bytes in 5 files/directories · eligible files: 0 ·        │               │
-│Mouse: Enabled │reusable SQLite: 0 · protected: 786432 bytes                                │               │
-│Run mode: Conti│SQLite: 753664 · WAL: 0 · runner logs: 0 · evidence: 0 · directories: 2     │               │
-│Planner approva│Protected evidence: 0 bytes younger than the 0-day minimum age · 0 bytes    │               │
-│Delivery: local│referenced by reused checks · 0 bytes of open work                          │               │
-│Dependencies: m│Cleanup keeps task history and all live or unresolved work.                 │erequisite is  │
-│missing. CLI re│Task #2 attempt #2: 19 output + 0 artifact bytes (0 files; 0 pending)       │               │
-│               │                                                                            │               │
-│Defaults apply │Retain completed attempts (days)                                            │               │
-│u User defaults│0                                                                           │               │
-│f Profiles: nam│Action                                                                      │               │
-│w Work categori│< Apply preview >   click / Space to change                                 │e code,        │
-│documents or ar│Maximum allocated bytes                                                     │               │
-│L Review lenses│8589934592                                                                  │d the project's│
-│default selecti│Maximum files and directories                                               │               │
-│Checks: list, a│100000                                                                      │               │
-│Keyboard remain│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │               │
-│i Report limits│                                                                            │n m Defaults.  │
-│E Export settin│[Copy] [Apply] [Cancel] [Up] [Down]                                         │               │
+│               │Artifacts: 0 logical bytes · 0 distinct bytes                               │               │
+│Mouse: Enabled │Allocated: 823296 bytes in 6 files/directories · eligible files: 0 ·        │               │
+│Run mode: Conti│reusable SQLite: 0 · protected: 823296 bytes                                │               │
+│Planner approva│SQLite: 790528 · WAL: 0 · runner logs: 0 · evidence: 0 · directories: 2     │               │
+│Delivery: local│Protected evidence: 0 bytes younger than the 0-day minimum age · 0 bytes    │               │
+│Dependencies: m│referenced by reused checks · 0 bytes of open work                          │erequisite is  │
+│missing. CLI re│Other links retain 0 allocated bytes after eligible paths are removed.      │               │
+│               │Task #2 attempt #2: 19 output + 0 artifact bytes (0 files; 0 pending)       │               │
+│Defaults apply │                                                                            │               │
+│u User defaults│Retain completed attempts (days)                                            │               │
+│f Profiles: nam│0                                                                           │               │
+│w Work categori│Action                                                                      │e code,        │
+│documents or ar│< Apply preview >   click / Space to change                                 │               │
+│L Review lenses│Maximum allocated bytes                                                     │d the project's│
+│default selecti│8589934592                                                                  │               │
+│Checks: list, a│Maximum files and directories                                               │               │
+│Keyboard remain│100000                                                                      │               │
+│i Report limits│Tab: field · Space: choice · Ctrl-A: clear · Ctrl-S: apply                  │n m Defaults.  │
+│E Export settin│                                                                            │               │
+│               │[Copy] [Apply] [Cancel] [Up] [Down]                                         │               │
 │               │                                                                            │               │
 │               ╰────────────────────────────────────────────────────────────────────────────╯               │
-│                                                                                                            │
 │                                                                                                            │
 │                                                                                                            │
 │                                                                                                            │
@@ -567,15 +567,15 @@ Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native
 ╭ Config ────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │Project: project                                                                                            │
 │Storage: SQLite output and instance check artifacts. k: usage and cleanup · b: build caches · R: resource   │
-│limits.                                                                                                     │
-│Preferences: sa╭ Storage retention ─────────────────────────────────────────────────────────╮               │
-│               │Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │               │
-│Mouse: Enabled │Allocated: 786432 bytes in 5 files/directories · eligible files: 0 ·        │               │
-│Run mode: Conti│reusable SQLite: 0 · protected: 786432 bytes                                │               │
-│Planner approva│SQLite: 753664 · WAL: 0 · runner logs: 0 · evidence: 0 · directories: 2     │               │
+│limits.        ╭ Storage retention ─────────────────────────────────────────────────────────╮               │
+│Preferences: sa│Retained: 0 logical bytes · eligible: 0 bytes in 0 attempt(s)               │               │
+│               │Artifacts: 0 logical bytes · 0 distinct bytes                               │               │
+│Mouse: Enabled │Allocated: 823296 bytes in 6 files/directories · eligible files: 0 ·        │               │
+│Run mode: Conti│reusable SQLite: 0 · protected: 823296 bytes                                │               │
+│Planner approva│SQLite: 790528 · WAL: 0 · runner logs: 0 · evidence: 0 · directories: 2     │               │
 │Delivery: local│Protected evidence: 0 bytes younger than the 0-day minimum age · 0 bytes    │               │
 │Dependencies: m│referenced by reused checks · 0 bytes of open work                          │erequisite is  │
-│missing. CLI re│Cleanup keeps task history and all live or unresolved work.                 │               │
+│missing. CLI re│Other links retain 0 allocated bytes after eligible paths are removed.      │               │
 │               │                                                                            │               │
 │Defaults apply │Retain completed attempts (days)                                            │               │
 │u User defaults│5▏                                                                          │               │

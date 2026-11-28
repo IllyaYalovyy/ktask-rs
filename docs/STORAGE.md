@@ -331,6 +331,8 @@ erDiagram
     attempts ||--o| evidence_cleanup_admissions : "attempt_id"
     attempts ||--o{ artifacts : "attempt_id"
     attempts ||--o{ artifact_reservations : "attempt_id"
+    artifacts ||--o{ artifact_observations : "artifact_id"
+    artifacts ||--o{ artifact_compaction_hashes : "artifact_id"
     attempts ||--o{ evidence_collections : "attempt_id"
     evidence_collections ||--o{ evidence_manifest : "collection_id"
 ```
@@ -378,6 +380,36 @@ Durable provider chat identity, independent of attempts and worker processes. Co
 - UQ `(id, project_id, provider)`.
 - UQ `(provider, provider_scope, provider_session_id)`.
 
+### artifact_compaction_hashes
+
+Hash checkpoints for the legacy artifact currently being compacted and its candidate sources. Each pass opens the named files again and matches their inode and timestamps before reusing progress.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `artifact_id` | INTEGER | no | Retained file being verified. |
+| `identity` | TEXT | no | Device, inode, size, modification time, and change time. |
+| `bytes_read` | INTEGER | no | Nonnegative verified byte offset. |
+| `hash_state` | BLOB | no | SHA-256 state at a block boundary or the finished digest at EOF. |
+| `source_after_id` | INTEGER | no | Last rejected source ID for this target, or zero when starting a search. |
+
+- PK `(artifact_id)`.
+- FK `(artifact_id)` → `artifacts(id)`.
+
+### artifact_observations
+
+Another step in the same attempt that produced an identical named artifact. Readers
+can resolve the shared artifact from the producing step and its source tree.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `relative_path` | TEXT | no | Publication path for this observation. |
+| `artifact_id` | INTEGER | no | Original retained artifact ID. |
+| `source_tree` | TEXT | no | Source tree at the repeated publication. |
+
+- PK `(relative_path)`.
+- FK `(artifact_id)` → `artifacts(id)`.
+- Index `ix_artifact_observations_id` by artifact and source tree.
+
 ### artifact_reservations
 
 Reservations account for bytes before publication. Recovery finishes complete copies with
@@ -394,6 +426,7 @@ their original source tree, or removes partial copies and releases the budget.
 | `checksum_sha256` | TEXT | no | Checksum of intended bytes. |
 | `source_tree` | TEXT | no | Source tree when the worker or check ended. |
 | `created_at_ms` | INTEGER | no | Reservation time. |
+| `shared` | INTEGER | no | 1 when only path and bookkeeping allocation are reserved. |
 
 - PK `(id)`.
 - FK `(attempt_id)` → `attempts(id)`.
@@ -402,7 +435,10 @@ their original source tree, or removes partial copies and releases the budget.
 
 ### artifacts
 
-Retained files outside SQLite, owned by an attempt. Paths are unique within the instance artifact root. Commands validate containment and reject traversal/symlink escapes; pruning removes bytes and retains metadata.
+Retained files outside SQLite, owned by an attempt. Paths are unique within the
+instance evidence root and may hard-link identical read-only content across projects.
+Commands validate containment and reject traversal and symlink escapes. Pruning
+unlinks one path and retains its metadata.
 
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
@@ -417,10 +453,13 @@ Retained files outside SQLite, owned by an attempt. Paths are unique within the 
 | `created_at_ms` | INTEGER | no | Creation time. |
 | `pruning_requested_at_ms` | INTEGER | yes | Durable cleanup intent; NULL until selected. Retry reconciles interrupted deletion. |
 | `pruned_at_ms` | INTEGER | yes | Deletion time; NULL while retained. |
+| `needs_compaction` | INTEGER | no | 1 for legacy rows that are still pending compaction. |
 
 - PK `(id)`.
 - FK `(attempt_id)` → `attempts(id)`.
 - Index `ix_artifacts_attempt`: `INDEX ix_artifacts_attempt ON artifacts(attempt_id, id)`.
+- Index `ix_artifacts_content` by checksum, size, compaction status and ID for retained link sources.
+- Index `ix_artifacts_compaction` by ID for pending legacy rows.
 - UQ `(relative_path)`.
 
 ### attempt_delivery
@@ -838,6 +877,17 @@ workspace lease and explicit worker recovery still govern execution.
 - PK `(project_id)`.
 - FK `(project_id)` → `projects(id)`.
 
+### instance_allocation_links
+
+Multiply linked files already counted in the current resumable allocation scan.
+
+| Column | Type | Nullable | Definition |
+| --- | --- | --- | --- |
+| `device` | INTEGER | no | Device number. |
+| `inode` | INTEGER | no | Inode number. |
+
+- PK `(device, inode)`.
+
 ### instance_allocation_scan
 
 Durable cursor for bounded automatic physical accounting. A checkpoint visits at most 64
@@ -865,6 +915,7 @@ installed.
 | `complete` | INTEGER | no | 0 traversing, 1 pending guarded reconciliation, 2 reconciled. |
 | `base_bytes` | INTEGER | no | Projected bytes when traversal began, less the claims of reservations then pending; projected growth beyond it is added on installation. |
 | `base_files` | INTEGER | no | Projected files when traversal began, less those pending reservations' entries. |
+| `rescan` | INTEGER | no | A file was reclaimed during this walk and settlement needs a fresh pass. |
 
 - PK `(id)`.
 
@@ -1051,6 +1102,11 @@ A finished check whose transcript still has to be archived from the retained out
 | `source_tree` | TEXT | no | Source tree when the check ended. |
 | `output_start` | INTEGER | no | Output sequence before the check. |
 | `output_end` | INTEGER | no | Last output sequence of the check. |
+| `reason` | TEXT | yes | Most recent refusal to publish the transcript. |
+| `output_bytes` | INTEGER | yes | Exact transcript byte count. NULL until a legacy range has been measured. |
+| `sizing_sequence` | INTEGER | yes | Next row to measure for a legacy transcript. NULL before sizing begins or after it completes. |
+| `sizing_row_bytes` | INTEGER | no | Bytes already charged to sizing within the next row. |
+| `sizing_bytes` | INTEGER | no | Payload bytes measured across legacy recovery passes. |
 
 - PK `(step_id)`.
 - FK `(step_id)` → `attempt_steps(id)`.
@@ -1445,6 +1501,7 @@ Registered checkout. Names and canonical native root paths are independently uni
 | `initial_continuation` | TEXT | no | Run mode (single or queue) the project started with; applies until it saves its own preferences. |
 | `initial_planner_approval` | TEXT | no | Planner approval (automatic or review_required) the project started with; applies until it saves its own preferences. |
 | `profile_id` | INTEGER | yes | Selected model profile; NULL inherits the user defaults alone. New projects start with `user_defaults.default_profile_id`. A selected profile cannot be deleted. |
+| `transcript_recovery_cursor` | INTEGER | no | Last step considered in the historical transcript recovery sweep. |
 
 - PK `(id)`.
 - UQ `(root_path)`.

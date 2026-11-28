@@ -2,7 +2,7 @@
 //! workflow and Git delivery, and settled into what the queue does next.
 use super::{
     Context, Outcome, Workspace, backoff, cycle, delivery, holds_own_work, judge, record_pause,
-    resource_limit, workspace,
+    resource_limit, worker_io::producer_notice, workspace,
 };
 use crate::{
     application::{
@@ -13,6 +13,7 @@ use crate::{
     storage::{Error, Result},
 };
 use std::{
+    ops::ControlFlow,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -309,7 +310,11 @@ pub(super) fn drive(
     opening: cycle::Opening,
     delivery: Result<()>,
 ) -> Result<Outcome> {
-    service.output(run, "system", opening_notice(opening, run))?;
+    if let ControlFlow::Break(outcome) =
+        producer_notice(service, run, ctx, opening_notice(opening, run))?
+    {
+        return Ok(outcome);
+    }
     if let Err(error) = delivery {
         return Ok(Outcome::DeliveryFailure(error.to_string()));
     }

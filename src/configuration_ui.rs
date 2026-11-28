@@ -154,7 +154,7 @@ impl StoredWorkspace {
             Action::Storage => {
                 let preview = self.service.storage_preview().map_err(|e| e.to_string())?;
                 let mut body = format!(
-                    "Retained: {} logical bytes · eligible: {} bytes in {} attempt(s){}\nAllocated: {} bytes in {} files/directories · eligible files: {} · reusable SQLite: {} · protected: {} bytes{}\nSQLite: {} · WAL: {} · runner logs: {} · evidence: {} · directories: {}\nProtected evidence: {} bytes younger than the {}-day minimum age · {} bytes referenced by reused checks · {} bytes of open work\nCleanup keeps task history and all live or unresolved work.\n",
+                    "Retained: {} logical bytes · eligible: {} bytes in {} attempt(s){}\nArtifacts: {} logical bytes · {} distinct bytes\nAllocated: {} bytes in {} files/directories · eligible files: {} · reusable SQLite: {} · protected: {} bytes{}\nSQLite: {} · WAL: {} · runner logs: {} · evidence: {} · directories: {}\nProtected evidence: {} bytes younger than the {}-day minimum age · {} bytes referenced by reused checks · {} bytes of open work\nOther links retain {} allocated bytes after eligible paths are removed.\n",
                     preview.usage_bytes,
                     preview.reclaimable_bytes,
                     preview.candidates.len(),
@@ -163,6 +163,8 @@ impl StoredWorkspace {
                     } else {
                         ""
                     },
+                    preview.logical_artifact_bytes,
+                    preview.distinct_artifact_bytes,
                     preview.allocated_bytes,
                     preview.allocated_files,
                     preview.eligible_file_bytes,
@@ -182,6 +184,7 @@ impl StoredWorkspace {
                     preview.policy.days,
                     preview.protected_by_reference_bytes,
                     preview.protected_open_bytes,
+                    preview.protected_shared_file_bytes,
                 );
                 if let Some(note) = &preview.vacuum_note {
                     body.push_str(&format!("{note}.\n"));

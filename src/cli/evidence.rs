@@ -20,10 +20,43 @@ pub(super) fn read(path: &Path, offset: u64, limit: usize, search: Option<&str>)
     if !meta.is_file() {
         return Err(Failure::usage("Evidence must be a regular file"));
     }
-    file.seek(SeekFrom::Start(offset))?;
     let budget = if search.is_some() { SCAN } else { limit };
-    let mut bytes = Vec::new();
-    (&mut file).take(budget as u64).read_to_end(&mut bytes)?;
+    let (mut bytes, end_of_input) = if path
+        .extension()
+        .is_some_and(|ext| ext == crate::storage::output_reference::EXTENSION)
+    {
+        let mut encoded = Vec::new();
+        file.take(8193).read_to_end(&mut encoded)?;
+        if encoded.len() > 8192 {
+            return Err(Failure::usage("Check output reference is too large"));
+        }
+        let reference: crate::storage::OutputReference = serde_json::from_slice(&encoded)
+            .map_err(|_| Failure::usage("Invalid check output reference"))?;
+        let sample = budget + usize::from(search.is_none()) * 3;
+        let mut bytes = reference.read(offset, sample + 1)?;
+        let end = bytes.len() <= sample;
+        bytes.truncate(sample);
+        (bytes, end)
+    } else {
+        file.seek(SeekFrom::Start(offset))?;
+        let mut bytes = Vec::new();
+        file.take(budget as u64).read_to_end(&mut bytes)?;
+        let end = offset.saturating_add(bytes.len() as u64) >= meta.len();
+        (bytes, end)
+    };
+    let end_of_sample = offset.saturating_add(bytes.len() as u64);
+    if search.is_none() && bytes.len() > budget {
+        let text = std::str::from_utf8(&bytes).unwrap_or_else(|error| {
+            std::str::from_utf8(&bytes[..error.valid_up_to()]).expect("valid prefix")
+        });
+        let end = text.floor_char_boundary(budget);
+        // A tiny page still makes progress when its first character takes several bytes.
+        bytes.truncate(if end == 0 {
+            text.chars().next().map_or(budget, char::len_utf8)
+        } else {
+            end
+        });
+    }
     if let Some(needle) = search {
         let mut matches = Vec::new();
         let mut next = offset;
@@ -50,16 +83,16 @@ pub(super) fn read(path: &Path, offset: u64, limit: usize, search: Option<&str>)
         }
         if matches.is_empty() || next == offset + bytes.len() as u64 {
             next = offset + bytes.len() as u64;
-            if next < meta.len() {
+            if !end_of_input {
                 next = next.saturating_sub((needle.len() - 1) as u64);
             }
         }
         Ok(
-            json!({"file":path,"matches":matches,"scanned_bytes":bytes.len(),"next_offset":next,"eof":next>=meta.len()}),
+            json!({"file":path,"matches":matches,"scanned_bytes":bytes.len(),"next_offset":next,"eof":end_of_input && next>=end_of_sample}),
         )
     } else {
         Ok(
-            json!({"file":path,"offset":offset,"text":String::from_utf8_lossy(&bytes),"next_offset":offset+bytes.len() as u64,"eof":offset+bytes.len() as u64>=meta.len()}),
+            json!({"file":path,"offset":offset,"text":String::from_utf8_lossy(&bytes),"next_offset":offset+bytes.len() as u64,"eof":end_of_input && offset.saturating_add(bytes.len() as u64)>=end_of_sample}),
         )
     }
 }

@@ -1,6 +1,8 @@
 //! Durable application storage. UI state and deterministic execution fixtures do not belong here.
 pub mod execution;
 mod migrations;
+pub(crate) mod output_reference;
+pub(crate) use output_reference::OutputReference;
 pub mod ordering;
 pub mod usage;
 

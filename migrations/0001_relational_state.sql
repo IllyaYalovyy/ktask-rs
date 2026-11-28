@@ -35,7 +35,8 @@ CREATE TABLE projects (
     initial_planner_approval TEXT NOT NULL DEFAULT 'automatic' CHECK (initial_planner_approval IN ('automatic', 'review_required')),
     -- The model profile this project inherits from; NULL inherits the user defaults alone.
     -- A profile a project selects cannot be deleted.
-    profile_id INTEGER REFERENCES model_profiles(id)
+    profile_id INTEGER REFERENCES model_profiles(id),
+    transcript_recovery_cursor INTEGER NOT NULL DEFAULT 0 CHECK (transcript_recovery_cursor >= 0)
 ) STRICT;
 
 -- Tools are shared within one explicit application instance. External paths remain
@@ -643,7 +644,12 @@ CREATE TABLE pending_transcripts (
     relative_path TEXT NOT NULL,
     source_tree TEXT NOT NULL CHECK (length(source_tree) IN (40,64)),
     output_start INTEGER NOT NULL CHECK (output_start >= 0),
-    output_end INTEGER NOT NULL CHECK (output_end >= output_start)
+    output_end INTEGER NOT NULL CHECK (output_end >= output_start),
+    reason TEXT,
+    output_bytes INTEGER CHECK (output_bytes >= 0),
+    sizing_sequence INTEGER CHECK (sizing_sequence > output_start AND sizing_sequence <= output_end),
+    sizing_row_bytes INTEGER NOT NULL DEFAULT 0 CHECK (sizing_row_bytes >= 0),
+    sizing_bytes INTEGER NOT NULL DEFAULT 0 CHECK (sizing_bytes >= sizing_row_bytes)
 ) STRICT;
 
 -- One worker's deliberate evidence. While 'collecting', `source_path` holds the files kept
@@ -869,7 +875,8 @@ CREATE TABLE instance_allocation_scan (
     entries_visited INTEGER NOT NULL CHECK (entries_visited >= 0),
     complete INTEGER NOT NULL CHECK (complete IN (0,1,2)),
     base_bytes INTEGER NOT NULL DEFAULT 0,
-    base_files INTEGER NOT NULL DEFAULT 0
+    base_files INTEGER NOT NULL DEFAULT 0,
+    rescan INTEGER NOT NULL DEFAULT 0 CHECK (rescan IN (0,1))
 ) STRICT;
 
 -- A bounded pass over closed attempts can resume without revisiting the same
@@ -907,7 +914,8 @@ CREATE TABLE artifacts (
     source_tree TEXT CHECK (source_tree IS NULL OR length(source_tree) IN (40,64)),
     created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
     pruning_requested_at_ms INTEGER CHECK (pruning_requested_at_ms >= created_at_ms),
-    pruned_at_ms INTEGER CHECK (pruned_at_ms >= created_at_ms)
+    pruned_at_ms INTEGER CHECK (pruned_at_ms >= created_at_ms),
+    needs_compaction INTEGER NOT NULL DEFAULT 1 CHECK (needs_compaction IN (0,1))
 ) STRICT;
 
 -- A reservation is committed before bytes enter state storage. Recovery can finish
@@ -921,8 +929,33 @@ CREATE TABLE artifact_reservations (
     size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
     checksum_sha256 TEXT NOT NULL CHECK (length(checksum_sha256) = 64),
     source_tree TEXT NOT NULL CHECK (length(source_tree) IN (40,64)),
-    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0)
+    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+    shared INTEGER NOT NULL DEFAULT 0 CHECK (shared IN (0,1))
 ) STRICT;
+
+-- A repeated named worker artifact can serve several steps of one attempt.
+-- Keep each observation's provenance and the original artifact's public ID.
+CREATE TABLE artifact_observations (
+    relative_path TEXT PRIMARY KEY,
+    artifact_id INTEGER NOT NULL REFERENCES artifacts(id),
+    source_tree TEXT NOT NULL CHECK (length(source_tree) IN (40,64))
+) STRICT;
+CREATE INDEX ix_artifact_observations_id ON artifact_observations(artifact_id,source_tree);
+
+CREATE TABLE artifact_compaction_hashes (
+    artifact_id INTEGER PRIMARY KEY REFERENCES artifacts(id),
+    identity TEXT NOT NULL,
+    bytes_read INTEGER NOT NULL CHECK (bytes_read >= 0),
+    hash_state BLOB NOT NULL,
+    source_after_id INTEGER NOT NULL DEFAULT 0 CHECK (source_after_id >= 0)
+) STRICT;
+
+-- Only multiply linked inodes need a durable seen set for the allocation walk.
+CREATE TABLE instance_allocation_links (
+    device INTEGER NOT NULL,
+    inode INTEGER NOT NULL,
+    PRIMARY KEY(device,inode)
+) STRICT, WITHOUT ROWID;
 
 -- Eligibility can change behind a bounded sweep cursor between Storage applies.
 -- Mark that pass stale; the next sweep restarts at the oldest attempt.
@@ -1107,6 +1140,9 @@ CREATE INDEX ix_events_project ON events(project_id, id);
 CREATE INDEX ix_events_task ON events(task_id, id);
 CREATE INDEX ix_events_attempt ON events(attempt_id, id);
 CREATE INDEX ix_artifacts_attempt ON artifacts(attempt_id, id);
+CREATE INDEX ix_artifacts_content ON artifacts(checksum_sha256,size_bytes,needs_compaction,id)
+    WHERE pruned_at_ms IS NULL AND pruning_requested_at_ms IS NULL;
+CREATE INDEX ix_artifacts_compaction ON artifacts(id) WHERE needs_compaction=1;
 CREATE INDEX ix_artifact_reservations_attempt ON artifact_reservations(attempt_id);
 
 CREATE VIEW task_details AS

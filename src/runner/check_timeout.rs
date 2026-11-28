@@ -148,13 +148,13 @@ pub(super) fn resolve(
 }
 
 fn archive_timeout(
-    service: &Service,
+    service: &mut Service,
     run: &Run,
     ctx: &Context<'_>,
     timeout: &CheckTimeout,
 ) -> Result<String> {
     let relative = format!("evidence/attempt-{}/step-{}.log", run.attempt, timeout.step);
-    let path = match service.retained_timeout_transcript(run, &ctx.paths.state, &relative)? {
+    let path = match service.retained_check_transcript(run.attempt, &ctx.paths.state, &relative)? {
         Some(path) => path,
         None => archive_transcript(
             service,
@@ -165,6 +165,7 @@ fn archive_timeout(
                 name: &timeout.name,
                 tree: &timeout.tree,
                 output: timeout.output,
+                bytes: None,
             },
         )?,
     };

@@ -101,9 +101,74 @@ pub(crate) struct PendingTranscript {
     pub step: i64,
     pub relative: String,
     pub output: (i64, i64),
+    pub bytes: Option<i64>,
     pub passed: bool,
     pub report: String,
     pub counts: Option<CheckCounts>,
+}
+
+pub(crate) struct DeferredCheckLog {
+    pub step: i64,
+    pub attempt: i64,
+    pub token: String,
+    pub name: String,
+    pub relative: String,
+    pub tree: String,
+    pub output: (i64, i64),
+    pub bytes: Option<i64>,
+    sizing: TranscriptSizing,
+}
+
+#[derive(Clone, Copy)]
+struct TranscriptSizing {
+    sequence: Option<i64>,
+    row_bytes: i64,
+    bytes: i64,
+}
+
+pub(crate) struct TranscriptSizePage {
+    pub spent: u64,
+    pub bytes: Option<i64>,
+}
+
+pub(crate) struct CheckResult<'a> {
+    pub passed: bool,
+    pub report: &'a str,
+    pub exit: Option<i32>,
+    pub counts: Option<CheckCounts>,
+}
+
+fn save_check_result(
+    db: &rusqlite::Connection,
+    step: &Step,
+    result: CheckResult<'_>,
+    tree: Option<&str>,
+) -> Result<()> {
+    let CheckResult {
+        passed,
+        report,
+        exit,
+        counts,
+    } = result;
+    require(
+        db.execute(
+            "UPDATE attempt_steps SET state=?2, report=?3, finished_at_ms=?4, exit_code=?5,
+                passed_count=?6, failed_count=?7, ignored_count=?8, source_tree=?9
+             WHERE id=?1 AND role='check' AND state='running'",
+            params![
+                step.id,
+                if passed { "succeeded" } else { "failed" },
+                report,
+                now_ms(),
+                exit,
+                counts.map(|c| c.passed),
+                counts.map(|c| c.failed),
+                counts.map(|c| c.ignored),
+                tree
+            ],
+        )? == 1,
+        "Check step changed before its result was recorded",
+    )
 }
 
 pub struct ReusableCheck {
@@ -696,6 +761,7 @@ impl Service {
         tx.commit()?;
         Ok(())
     }
+
     /// Appends (stream, text) rows to the attempt's output in one transaction, so output that
     /// queued while other projects held the shared database costs one disk flush, not one each.
     pub fn output_rows(&mut self, run: &Run, rows: &[(String, String)]) -> Result<()> {
@@ -755,23 +821,28 @@ impl Service {
         cursor: i64,
         writer: &mut impl std::io::Write,
     ) -> Result<()> {
-        self.write_output_range(run, (cursor, i64::MAX), writer)
+        self.write_output_range(run.attempt, (cursor, i64::MAX), writer)
     }
 
     pub(crate) fn write_output_range(
         &self,
-        run: &Run,
+        attempt: i64,
         (start, end): (i64, i64),
         writer: &mut impl std::io::Write,
     ) -> Result<()> {
         let mut query = self.db.connection().prepare(
             "SELECT content FROM attempt_output WHERE attempt_id=?1 AND sequence>?2 AND sequence<=?3 ORDER BY sequence",
         )?;
-        let mut rows = query.query(params![run.attempt, start, end])?;
+        let mut rows = query.query(params![attempt, start, end])?;
+        let mut written = 0;
         while let Some(row) = rows.next()? {
             writer.write_all(row.get::<_, String>(0)?.as_bytes())?;
+            written += 1;
         }
-        Ok(())
+        require(
+            end == i64::MAX || written == end - start,
+            "The captured check output range is no longer retained in full",
+        )
     }
     /// The last `cap` bytes at most of the attempt's output through sequence `end`, cut on a
     /// character boundary. Rows are read newest first and never past what the cap needs.
@@ -1279,38 +1350,39 @@ impl Service {
         exit: Option<i32>,
         counts: Option<CheckCounts>,
     ) -> Result<()> {
-        require(
-            self.db.connection().execute(
-                "UPDATE attempt_steps SET state=?2, report=?3, finished_at_ms=?4, exit_code=?5,
-                    passed_count=?6, failed_count=?7, ignored_count=?8
-                 WHERE id=?1 AND role='check' AND state='running'",
-                params![
-                    step.id,
-                    if passed { "succeeded" } else { "failed" },
-                    report,
-                    now_ms(),
-                    exit,
-                    counts.map(|c| c.passed),
-                    counts.map(|c| c.failed),
-                    counts.map(|c| c.ignored),
-                ],
-            )? == 1,
-            "Check step changed before its result was recorded",
+        save_check_result(
+            self.db.connection(),
+            step,
+            CheckResult {
+                passed,
+                report,
+                exit,
+                counts,
+            },
+            None,
         )
     }
-    /// Keeps a finished check's transcript to be archived from its retained output later.
-    pub(crate) fn defer_transcript(
+
+    /// The verdict and its output bounds become durable together before publication.
+    pub(crate) fn finish_check_with_output(
         &self,
         step: &Step,
-        run: &Run,
-        relative: &str,
-        tree: &str,
-        (start, end): (i64, i64),
+        result: CheckResult<'_>,
+        (relative, tree): (&str, &str),
+        ((start, end), bytes): ((i64, i64), Option<i64>),
+        verified_tree: bool,
     ) -> Result<()> {
-        self.db.connection().execute(
-            "INSERT OR REPLACE INTO pending_transcripts(step_id,attempt_id,relative_path,source_tree,output_start,output_end) VALUES (?1,?2,?3,?4,?5,?6)",
-            params![step.id, run.attempt, relative, tree, start, end],
-        )?;
+        let tx = Transaction::new_unchecked(self.db.connection(), TransactionBehavior::Immediate)?;
+        let exited = result.exit.is_some();
+        save_check_result(&tx, step, result, verified_tree.then_some(tree))?;
+        if exited {
+            tx.execute(
+                "INSERT INTO pending_transcripts(step_id,attempt_id,relative_path,source_tree,output_start,output_end,output_bytes)
+                 SELECT id,attempt_id,?2,?3,?4,?5,?6 FROM attempt_steps WHERE id=?1",
+                params![step.id, relative, tree, start, end, bytes],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1326,9 +1398,9 @@ impl Service {
             .db
             .connection()
             .query_row(
-                "SELECT p.step_id,p.relative_path,p.output_start,p.output_end,s.state,coalesce(s.report,''),s.passed_count,s.failed_count,s.ignored_count
+                "SELECT p.step_id,p.relative_path,p.output_start,p.output_end,s.state,coalesce(s.report,''),s.passed_count,s.failed_count,s.ignored_count,p.output_bytes
                  FROM pending_transcripts p JOIN attempt_steps s ON s.id=p.step_id
-                 WHERE p.attempt_id=?1 AND p.source_tree=?2 AND s.project_check_id=?3 AND s.check_name=?4
+                 WHERE p.attempt_id=?1 AND p.source_tree=?2 AND s.source_tree=p.source_tree AND s.project_check_id=?3 AND s.check_name=?4
                    AND s.command=?5 AND s.working_directory=?6 AND s.timeout_ms=?7 AND s.environment_fingerprint=?8
                    AND s.state IN ('succeeded','failed') ORDER BY p.step_id DESC LIMIT 1",
                 params![run.attempt, tree, check.id, check.name, check.command, check.directory, check.timeout_ms, environment],
@@ -1345,6 +1417,7 @@ impl Service {
                         step: r.get(0)?,
                         relative: r.get(1)?,
                         output: (r.get(2)?, r.get(3)?),
+                        bytes: r.get(9)?,
                         passed: r.get::<_, String>(4)? == "succeeded",
                         report: r.get(5)?,
                         counts,
@@ -1352,6 +1425,136 @@ impl Service {
                 },
             )
             .optional()?)
+    }
+
+    /// An ended attempt can archive its original output without using its verdict for new work.
+    pub(crate) fn transcript_recovery_cursor(&self) -> Result<i64> {
+        Ok(self.db.connection().query_row(
+            "SELECT transcript_recovery_cursor FROM projects WHERE id=?1",
+            [self.project_id],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub(crate) fn advance_transcript_recovery(&self, cursor: i64, step: i64) -> Result<bool> {
+        Ok(self.db.connection().execute(
+            "UPDATE projects SET transcript_recovery_cursor=?3 WHERE id=?1 AND transcript_recovery_cursor=?2",
+            params![self.project_id, cursor, step],
+        )? == 1)
+    }
+
+    pub(crate) fn transcript_deferred(&self, step: i64, reason: &str) -> Result<()> {
+        self.db.connection().execute(
+            "UPDATE pending_transcripts SET reason=?2 WHERE step_id=?1",
+            params![step, reason],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn transcript_file_limit(&self, attempt: i64) -> Result<u64> {
+        super::resource_breach::effective_limit(
+            self.db.connection(),
+            attempt,
+            Limit::ArtifactFileBytes,
+        )
+    }
+
+    /// Measure legacy output using row metadata. Charge every byte, and at least
+    /// one unit for an empty row, so large or empty rows cannot escape the allowance.
+    pub(crate) fn size_legacy_transcript(
+        &self,
+        log: &DeferredCheckLog,
+        budget: u64,
+        mut interrupted: impl FnMut() -> bool,
+    ) -> Result<Option<TranscriptSizePage>> {
+        let (start, end) = log.output;
+        let mut sizing = log.sizing;
+        let db = self.db.connection();
+        let mut spent = 0;
+        let mut total = (start == end).then_some(0);
+        if total.is_none() {
+            let mut next = sizing.sequence.unwrap_or(start + 1);
+            let mut query = db.prepare(
+                "SELECT sequence,octet_length(content) FROM attempt_output
+                 WHERE attempt_id=?1 AND sequence>=?2 AND sequence<=?3 ORDER BY sequence",
+            )?;
+            let mut rows = query.query(params![log.attempt, next, end])?;
+            while spent < budget && !interrupted() {
+                let row = rows.next()?.ok_or_else(|| {
+                    Error::Conflict("Retained transcript output is incomplete".into())
+                })?;
+                let sequence: i64 = row.get(0)?;
+                let size: i64 = row.get(1)?;
+                require(
+                    sequence == next && size >= sizing.row_bytes,
+                    "Retained transcript output is incomplete",
+                )?;
+                let remaining = (size - sizing.row_bytes) as u64;
+                let consumed = remaining.min(budget - spent);
+                spent += consumed.max(1);
+                sizing.bytes += consumed as i64;
+                if consumed < remaining {
+                    sizing.sequence = Some(sequence);
+                    sizing.row_bytes += consumed as i64;
+                    break;
+                }
+                if sequence == end {
+                    total = Some(sizing.bytes);
+                    sizing.sequence = None;
+                    sizing.row_bytes = 0;
+                    break;
+                }
+                next = sequence + 1;
+                sizing.sequence = Some(next);
+                sizing.row_bytes = 0;
+            }
+        }
+        let updated = db.execute(
+            "UPDATE pending_transcripts SET output_bytes=?2,sizing_sequence=?3,sizing_row_bytes=?4,sizing_bytes=?5
+             WHERE step_id=?1 AND output_bytes IS NULL AND sizing_sequence IS ?6 AND sizing_row_bytes=?7 AND sizing_bytes=?8",
+            params![log.step, total, sizing.sequence, sizing.row_bytes, sizing.bytes,
+                log.sizing.sequence, log.sizing.row_bytes, log.sizing.bytes],
+        )?;
+        Ok((updated == 1).then_some(TranscriptSizePage {
+            spent,
+            bytes: total,
+        }))
+    }
+
+    /// List by step for a restartable, project-local sweep.
+    pub(crate) fn deferred_check_logs(&self, after: i64) -> Result<Vec<DeferredCheckLog>> {
+        Ok(self
+            .db
+            .connection()
+            .prepare(
+                "SELECT p.step_id,p.attempt_id,a.execution_token,s.check_name,p.relative_path,
+                    p.source_tree,p.output_start,p.output_end,p.output_bytes,
+                    p.sizing_sequence,p.sizing_row_bytes,p.sizing_bytes
+             FROM pending_transcripts p JOIN attempts a ON a.id=p.attempt_id
+             JOIN attempt_steps s ON s.id=p.step_id
+             WHERE a.project_id=?1 AND p.step_id>?2 AND a.state NOT IN ('running','waiting','paused')
+               AND s.state IN ('succeeded','failed')
+               AND NOT EXISTS(SELECT 1 FROM evidence_cleanup_admissions WHERE attempt_id=a.id)
+             ORDER BY p.step_id LIMIT 16",
+            )?
+            .query_map(params![self.project_id, after], |row| {
+                Ok(DeferredCheckLog {
+                    step: row.get(0)?,
+                    attempt: row.get(1)?,
+                    token: row.get(2)?,
+                    name: row.get(3)?,
+                    relative: row.get(4)?,
+                    tree: row.get(5)?,
+                    output: (row.get(6)?, row.get(7)?),
+                    bytes: row.get(8)?,
+                    sizing: TranscriptSizing {
+                        sequence: row.get(9)?,
+                        row_bytes: row.get(10)?,
+                        bytes: row.get(11)?,
+                    },
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     pub(crate) fn settle_transcript(&self, step: i64) -> Result<()> {

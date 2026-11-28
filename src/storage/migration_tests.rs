@@ -3,10 +3,6 @@ use rusqlite::Connection;
 use super::{ALL, Migration, apply};
 use crate::{scratch::Scratch, storage::Database};
 
-/// The last column of `projects` and the end of its definition, where tests add columns.
-const PROJECTS_COLUMN: &str = "    profile_id INTEGER REFERENCES model_profiles(id)";
-const PROJECTS_END: &str = "    profile_id INTEGER REFERENCES model_profiles(id)\n) STRICT;";
-
 type Result = std::result::Result<(), Box<dyn std::error::Error>>;
 
 fn sandbox() -> std::io::Result<Scratch> {
@@ -187,15 +183,8 @@ fn v1_reconciliation_copies_data_and_rejects_incompatible_columns() -> Result {
 
     // The recorded definition is still genuine, but a required new column has
     // no value for an existing project. The entire attempted rebuild rolls back.
-    let incompatible = Box::leak(
-        ALL[0]
-            .sql
-            .replace(
-                PROJECTS_END,
-                &format!("{PROJECTS_COLUMN},\n    required_new TEXT NOT NULL\n) STRICT;"),
-            )
-            .into_boxed_str(),
-    );
+    let incompatible =
+        Box::leak(with_project_column("required_new TEXT NOT NULL").into_boxed_str());
     let newer = [Migration {
         name: ALL[0].name,
         sql: incompatible,
@@ -219,7 +208,8 @@ fn v1_reconciliation_adds_nullable_column_without_losing_rows() -> Result {
     let mut store = Database::open_in(scratch.path())?;
     let db = store.connection_mut();
     db.execute(
-        "INSERT INTO projects(name, root_path, created_at_ms) VALUES ('kept', x'2f776f726b', 1)",
+        "INSERT INTO projects(name, root_path, created_at_ms, transcript_recovery_cursor)
+         VALUES ('kept', x'2f776f726b', 1, 17)",
         [],
     )?;
     // A rebuilt table gets a new schema entry.
@@ -236,17 +226,23 @@ fn v1_reconciliation_adds_nullable_column_without_losing_rows() -> Result {
     );
     let edited = [Migration {
         name: ALL[0].name,
-        sql: Box::leak(with_project_description().into_boxed_str()),
+        sql: Box::leak(with_project_column("description TEXT").into_boxed_str()),
     }];
     apply(db, &edited)?;
     // Only the changed table is rebuilt; large unchanged tables stay where they are.
     assert_ne!(schema_entry(db, "projects")?, projects_before);
     assert_eq!(schema_entry(db, "attempt_output")?, output_before);
     assert_eq!(
-        db.query_row("SELECT name, description FROM projects", [], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
-        })?,
-        ("kept".into(), None)
+        db.query_row(
+            "SELECT name, description, transcript_recovery_cursor FROM projects",
+            [],
+            |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, i64>(2)?
+            )),
+        )?,
+        ("kept".into(), None, 17)
     );
     assert_eq!(count(db, "schema_migrations"), 1);
     assert!(!db.prepare("PRAGMA foreign_key_check")?.exists([])?);
@@ -266,7 +262,7 @@ fn v1_reconciliation_rejects_silent_row_loss_and_rolls_back() -> Result {
         format!(
             "{}\nCREATE TRIGGER discard_copied_project AFTER INSERT ON projects \
              BEGIN DELETE FROM projects WHERE id = NEW.id; END;",
-            with_project_description()
+            with_project_column("description TEXT")
         )
         .into_boxed_str(),
     );
@@ -499,10 +495,14 @@ fn v1_accepts_sqlite_quoted_table_declaration_but_rejects_changed_constraints() 
     Ok(())
 }
 
-/// The V1 schema with one nullable column added to `projects`.
-fn with_project_description() -> String {
-    ALL[0].sql.replace(
-        PROJECTS_END,
-        &format!("{PROJECTS_COLUMN},\n    description TEXT\n) STRICT;"),
-    )
+/// The V1 schema with a column appended to `projects`, independent of its last column.
+fn with_project_column(column: &str) -> String {
+    const START: &str = "CREATE TABLE projects (\n";
+    const END: &str = "\n) STRICT;";
+    let (before, projects) = ALL[0]
+        .sql
+        .split_once(START)
+        .expect("projects table declaration");
+    let (columns, after) = projects.split_once(END).expect("end of projects table");
+    format!("{before}{START}{columns},\n    {column}{END}{after}")
 }

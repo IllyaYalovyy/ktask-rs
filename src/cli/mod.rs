@@ -761,7 +761,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             None
         };
         let mut text = format!(
-            "Storage: {} logical bytes retained; {} bytes eligible across {} attempt(s){}\nAllocation: {} bytes in {} files/directories (SQLite {}, WAL {}, runner logs {}, evidence {}, directories {}); {} eligible file bytes, {} reusable SQLite bytes, {} protected bytes ({} younger than the {}-day minimum age, {} referenced by reused checks, {} open work). Limits: {} bytes, {} files{}{}{}\n{}",
+            "Storage: {} logical bytes retained; {} bytes eligible across {} attempt(s){}\nArtifacts: {} logical bytes, {} distinct bytes. Other links retain {} allocated bytes after eligible paths are removed.\nAllocation: {} bytes in {} files/directories (SQLite {}, WAL {}, runner logs {}, evidence {}, directories {}); {} eligible file bytes, {} reusable SQLite bytes, {} protected bytes ({} younger than the {}-day minimum age, {} referenced by reused checks, {} open work). Limits: {} bytes, {} files{}{}{}\n{}",
             preview.usage_bytes,
             preview.reclaimable_bytes,
             preview.candidates.len(),
@@ -770,6 +770,9 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             } else {
                 ""
             },
+            preview.logical_artifact_bytes,
+            preview.distinct_artifact_bytes,
+            preview.protected_shared_file_bytes,
             preview.allocated_bytes,
             preview.allocated_files,
             preview.database_bytes,

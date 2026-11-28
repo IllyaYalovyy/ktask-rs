@@ -438,7 +438,7 @@ pub enum Command {
         #[command(subcommand)]
         action: ToolAction,
     },
-    /// Page or search an evidence file without opening the database (safe in judge sandboxes).
+    /// Page or search an evidence file or a read-only check output reference.
     Evidence {
         /// Regular evidence file to inspect.
         file: PathBuf,

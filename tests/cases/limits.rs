@@ -23,7 +23,7 @@ fn setting(f: &Fixture, limit: &str) -> Result<Value> {
 }
 
 /// A passing check whose transcript is larger than twice a 1 KiB per-file limit.
-fn paused_transcript_fixture(title: &str) -> Result<Fixture> {
+fn pending_transcript_fixture(title: &str) -> Result<Fixture> {
     let f = Fixture::new()?;
     escalate(&f)?;
     check(
@@ -31,6 +31,18 @@ fn paused_transcript_fixture(title: &str) -> Result<Fixture> {
         "printf x >> \"$HOME/check-runs\"; head -c 3000 /dev/zero | tr '\\000' y; test -f result.txt",
     )?;
     f.ok(&["limits", "artifact_file_bytes", "--value", "1024"])?;
+    f.add(title)?;
+    Ok(f)
+}
+
+fn paused_producer_fixture(title: &str) -> Result<Fixture> {
+    let f = Fixture::new()?;
+    escalate(&f)?;
+    check(
+        &f,
+        "printf x >> \"$HOME/check-runs\"; head -c 3000000 /dev/zero > \"$TMPDIR/flood.bin\"; sleep 1; test -f result.txt",
+    )?;
+    f.ok(&["limits", "scratch_bytes", "--value", "1048576"])?;
     f.add(title)?;
     Ok(f)
 }
@@ -163,27 +175,30 @@ fn an_unchanged_deterministic_breach_is_refused_until_the_limit_is_raised() -> R
 }
 
 #[test]
-fn a_passed_check_is_not_repeated_after_its_transcript_pauses_the_attempt() -> Result {
-    let f = paused_transcript_fixture("Archive the recorded check later")?;
-    let run = f.process().args(["run", "--one"]).output()?;
-    assert!(run.status.success(), "{run:?}");
-    assert!(
-        String::from_utf8_lossy(&run.stdout).contains("transcript evidence incomplete"),
-        "{run:?}"
-    );
-    let task = f.ok(&["show", "1"])?;
-    assert_eq!(task["status"], "paused", "{task}");
-    assert_eq!(
-        task["attempts"][0]["resource_pause"]["limit"],
-        "artifact_file_bytes"
-    );
-    assert_eq!(task["attempts"][0]["resource_pause"]["measured"], 3000);
-    // A changed stored limit applies to the next step of the paused attempt.
-    f.ok(&["limits", "artifact_file_bytes", "--value", "8192"])?;
-    let resumed = f.process().args(["run", "--one"]).output()?;
-    assert!(resumed.status.success(), "{resumed:?}");
+fn an_oversized_transcript_stays_pending_without_pausing_the_finished_check() -> Result {
+    let f = pending_transcript_fixture("Archive the recorded check later")?;
+    f.provider("read-pending-check")?;
+    f.ok(&["run", "--one"])?;
     let task = f.ok(&["show", "1"])?;
     assert_eq!(task["status"], "succeeded", "{task}");
+    assert!(task["attempts"][0]["resource_pause"].is_null(), "{task}");
+    let path = f.packet_text("review", "steps.jsonl")?;
+    assert!(
+        path.contains("artifact_file_bytes") && path.contains("per-artifact limit"),
+        "{path}"
+    );
+    let references = pending_references(&f, "review")?;
+    assert_eq!(references.len(), 1);
+    assert_eq!(read_transcript(&f, &references[0])?, "y".repeat(3000));
+    let from_sandbox: Value =
+        serde_json::from_slice(&fs::read(f.scratch.path().join("read-pending-check.json"))?)?;
+    assert_eq!(from_sandbox["text"], "y".repeat(37));
+    assert_eq!(from_sandbox["next_offset"], 74);
+    assert!(f.packet_artifact("review", "build").is_err());
+
+    f.ok(&["limits", "artifact_file_bytes", "--value", "8192"])?;
+    f.ok(&["run", "--one"])?;
+    let task = f.ok(&["show", "1"])?;
     assert_eq!(check_runs(&f), "x", "the passed check is not run again");
     assert_eq!(
         f.db()?.connection().query_row(
@@ -201,23 +216,71 @@ fn a_passed_check_is_not_repeated_after_its_transcript_pauses_the_attempt() -> R
             .any(|artifact| artifact["name"] == "build" && artifact["size_bytes"] == 3000),
         "{task}"
     );
+    // The same reference reads the archive even after the database rows are gone.
+    f.db()?.connection().execute(
+        "DELETE FROM attempt_output WHERE attempt_id=1 AND stream='stdout' AND length(content)=3000",
+        [],
+    )?;
+    assert_eq!(read_transcript(&f, &references[0])?, "y".repeat(3000));
+    f.ok(&["retention", "0"])?;
+    f.ok(&["storage", "--apply"])?;
+    let pruned = f.process().arg("evidence").arg(&references[0]).output()?;
+    assert!(!pruned.status.success());
+    assert!(String::from_utf8(pruned.stderr)?.contains("was pruned"));
     f.guardian_finished()?;
     f.no_scratch()?;
     Ok(())
 }
 
+fn pending_references(f: &Fixture, role: &str) -> Result<Vec<PathBuf>> {
+    let packet = fs::read_to_string(f.scratch.path().join(format!("packet-{role}")))?;
+    let steps = fs::read_to_string(Path::new(&packet).join("steps.jsonl"))?;
+    let mut references = Vec::new();
+    for line in steps.lines() {
+        let item: Value = serde_json::from_str(line)?;
+        if let Some(reference) = item["pending_transcript"]["path"].as_str() {
+            let name = Path::new(reference).file_name().unwrap();
+            references.push(Path::new(&packet).join(name));
+        }
+    }
+    Ok(references)
+}
+
+fn read_transcript(f: &Fixture, path: &Path) -> Result<String> {
+    let path = path.to_str().unwrap();
+    let mut text = String::new();
+    let mut offset = 0;
+    loop {
+        let page = f.ok(&[
+            "evidence",
+            path,
+            "--offset",
+            &offset.to_string(),
+            "--limit",
+            "37",
+        ])?;
+        text.push_str(page["text"].as_str().unwrap());
+        if page["eof"] == true {
+            return Ok(text);
+        }
+        let next = page["next_offset"].as_u64().unwrap();
+        assert!(next > offset);
+        offset = next;
+    }
+}
+
 #[test]
 fn a_limit_raised_from_the_cli_is_honoured_by_a_tui_started_resume() -> Result {
-    let f = paused_transcript_fixture("Resume from the terminal")?;
+    let f = paused_producer_fixture("Resume from the terminal")?;
     let run = f.process().args(["run", "--one"]).output()?;
     assert!(run.status.success(), "{run:?}");
     f.state("paused")?;
-    f.ok(&["limits", "artifact_file_bytes", "--value", "8192"])?;
+    f.ok(&["limits", "scratch_bytes", "--value", "4194304"])?;
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
     t.screen("paused task", |s| s.contains("[r Resume]"))?;
     t.send("r")?;
     f.state("succeeded")?;
-    assert_eq!(check_runs(&f), "x");
+    assert_eq!(check_runs(&f), "xx");
     f.supervisor_stopped()?;
     t.send("q")?;
     t.finish()?;
@@ -229,7 +292,7 @@ fn a_limit_raised_from_the_cli_is_honoured_by_a_tui_started_resume() -> Result {
 fn resource_pause_and_raise_and_resume_by_keyboard_and_mouse_at_both_sizes() -> Result {
     for (cols, rows) in SIZES {
         for mouse in [false, true] {
-            let f = paused_transcript_fixture("Raise and resume the pause")?;
+            let f = paused_producer_fixture("Raise and resume the pause")?;
             let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
             t.screen("task ready", |s| s.contains("[r Run queue]"))?;
             if mouse {
@@ -238,9 +301,9 @@ fn resource_pause_and_raise_and_resume_by_keyboard_and_mouse_at_both_sizes() -> 
                 t.send("r")?;
             }
             let paused = t.screen("pause with its limit", |s| {
-                s.contains("Limit artifact_file_bytes")
-                    && s.contains("Now 1024 · needed 3000")
-                    && s.contains("+ Raise to 4096")
+                s.contains("Limit scratch_bytes")
+                    && s.contains("Now 1048576 · needed")
+                    && s.contains("+ Raise to 4194304")
                     && s.contains("[+ Raise and resume]")
             })?;
             crate::support::record("resource-pause", mouse, &paused);
@@ -267,7 +330,7 @@ fn resource_pause_and_raise_and_resume_by_keyboard_and_mouse_at_both_sizes() -> 
                 t.send("+")?;
             }
             let dialog = t.screen("raise dialog", |s| {
-                s.contains("New value") && s.contains("4096") && s.contains("[Raise and resume]")
+                s.contains("New value") && s.contains("4194304") && s.contains("[Raise and resume]")
             })?;
             crate::support::record("resource-raise", mouse, &dialog);
             assert_eq!(check_runs(&f), "x");
@@ -277,8 +340,8 @@ fn resource_pause_and_raise_and_resume_by_keyboard_and_mouse_at_both_sizes() -> 
                 t.send("\r")?;
             }
             f.state("succeeded")?;
-            assert_eq!(check_runs(&f), "x", "the recorded check is not repeated");
-            assert_eq!(setting(&f, "artifact_file_bytes")?["value"], 4096);
+            assert_eq!(check_runs(&f), "xx", "the interrupted check is rerun once");
+            assert_eq!(setting(&f, "scratch_bytes")?["value"], 4194304);
             f.supervisor_stopped()?;
             let done = t.screen("queue complete", |s| {
                 s.contains("Queue complete") && s.contains("Session: Queue · complete")
@@ -536,44 +599,65 @@ fn kept_evidence_is_archived_or_recorded_as_truncated_when_the_runner_continues(
 #[test]
 fn truncated_evidence_is_shown_in_current_history_and_details() -> Result {
     for (cols, rows) in SIZES {
-        let f = paused_transcript_fixture("Show what was left out")?;
-        f.ok(&[
-            "limits",
-            "artifact_attempt_files",
-            "--value",
-            "2",
-            "--ceiling",
-            "2",
-        ])?;
-        check(
-            &f,
-            "for n in 1 2 3 4 5; do printf p > \"$KTASK_ARTIFACT_DIR/proof-$n.txt\"; done; head -c 3000 /dev/zero | tr '\\000' y; test -f result.txt",
-        )?;
-        f.ok(&["run", "--one"])?;
-        f.state("paused")?;
-        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
-        let current = t.screen("current evidence", |s| s.contains("Truncated evidence 2/5"))?;
-        crate::support::record("evidence-current", false, &current);
-        t.send("q")?;
-        t.finish()?;
-        f.ok(&["limits", "artifact_file_bytes", "--value", "8192"])?;
-        f.ok(&["run", "--one"])?;
-        f.state("succeeded")?;
-        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
-        t.screen("started", |s| s.contains("Queue complete"))?;
-        t.send("3")?;
-        t.screen("history", |s| s.contains("History · 1 shown"))?;
-        t.send("\r")?;
-        let details = t.screen("details evidence", |s| {
-            s.contains("Task details") && s.contains("Evidence truncated: 2 of 5 files archived")
-        })?;
-        crate::support::record("evidence-history", false, &details);
-        t.send("\x1b")?;
-        t.screen("details closed", |s| !s.contains("Task details"))?;
-        t.send("q")?;
-        t.finish()?;
-        f.no_scratch()?;
+        for mouse in [false, true] {
+            truncated_evidence_in_terminal(cols, rows, mouse)?;
+        }
     }
+    Ok(())
+}
+
+fn truncated_evidence_in_terminal(cols: u16, rows: u16, mouse: bool) -> Result {
+    let f = paused_producer_fixture("Show what was left out")?;
+    f.ok(&[
+        "limits",
+        "artifact_attempt_files",
+        "--value",
+        "2",
+        "--ceiling",
+        "2",
+    ])?;
+    check(
+        &f,
+        "if [ ! -f \"$HOME/proof-created\" ]; then touch \"$HOME/proof-created\"; for n in 1 2 3 4 5; do printf p > \"$KTASK_ARTIFACT_DIR/proof-$n.txt\"; done; head -c 3000000 /dev/zero > \"$TMPDIR/flood.bin\"; sleep 1; fi; test -f result.txt",
+    )?;
+    f.ok(&["run", "--one"])?;
+    f.state("paused")?;
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
+    if mouse {
+        t.screen("current tab", |s| s.contains("1 Current"))?;
+        t.click("2 Queue")?;
+        t.screen("queue opened", |s| s.contains("Queue · 1 shown"))?;
+        t.click("1 Current")?;
+    }
+    let current = t.screen("current evidence", |s| s.contains("Truncated evidence 2/5"))?;
+    crate::support::record("evidence-current", mouse, &current);
+    t.send("q")?;
+    t.finish()?;
+    f.ok(&["limits", "scratch_bytes", "--value", "4194304"])?;
+    f.ok(&["run", "--one"])?;
+    f.state("succeeded")?;
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
+    t.screen("started", |s| s.contains("Queue complete"))?;
+    if mouse {
+        t.click("3 History")?;
+    } else {
+        t.send("3")?;
+    }
+    t.screen("history", |s| s.contains("History · 1 shown"))?;
+    if mouse {
+        t.click("Enter Details")?;
+    } else {
+        t.send("\r")?;
+    }
+    let details = t.screen("details evidence", |s| {
+        s.contains("Task details") && s.contains("Evidence truncated: 2 of 5 files archived")
+    })?;
+    crate::support::record("evidence-history", mouse, &details);
+    t.send("\x1b")?;
+    t.screen("details closed", |s| !s.contains("Task details"))?;
+    t.send("q")?;
+    t.finish()?;
+    f.no_scratch()?;
     Ok(())
 }
 
@@ -694,14 +778,13 @@ fn a_launch_refused_by_the_storage_budget_records_the_same_pause() -> Result {
     Ok(())
 }
 
-/// A silent passing check that first shrinks the storage budget to its minimum, so only
-/// its own transcript is refused.
+/// The first check invocation lowers capacity and then tries to produce new output.
 fn paused_by_storage_fixture(title: &str) -> Result<Fixture> {
     let f = Fixture::new()?;
     check(
         &f,
         &format!(
-            "printf x >> \"$HOME/check-runs\"; env -u KTASK_WORKER_CALLBACK '{BIN}' retention 30 --max-bytes 1048576 >/dev/null 2>&1; test -f result.txt"
+            "printf x >> \"$HOME/check-runs\"; if [ ! -f \"$HOME/storage-flooded\" ]; then touch \"$HOME/storage-flooded\"; env -u KTASK_WORKER_CALLBACK '{BIN}' retention 30 --max-bytes 1048576 >/dev/null 2>&1; printf 'live output'; fi; test -f result.txt"
         ),
     )?;
     f.add(title)?;
@@ -709,26 +792,126 @@ fn paused_by_storage_fixture(title: &str) -> Result<Fixture> {
 }
 
 #[test]
-fn a_transcript_refused_by_storage_is_archived_after_the_raise_without_a_rerun() -> Result {
-    let f = paused_by_storage_fixture("Keep the recorded check")?;
-    let run = f.process().args(["run", "--one"]).output()?;
-    assert!(run.status.success(), "{run:?}");
-    assert!(
-        String::from_utf8_lossy(&run.stdout).contains("transcript evidence incomplete"),
-        "{run:?}"
-    );
-    storage_pause(&f)?;
-    assert_refused_without_work(&f)?;
-    raise_and_succeed(&f)?;
-    assert_eq!(check_runs(&f), "x");
-    assert_eq!(
-        f.db()?.connection().query_row(
-            "SELECT count(*) FROM artifacts WHERE attempt_id=1 AND name='build'",
+fn exited_checks_keep_verdict_and_exact_output_while_transcript_publication_is_pending() -> Result {
+    for (code, state) in [(0, "succeeded"), (7, "failed")] {
+        let f = Fixture::new()?;
+        let archive = f.scratch.path().join("state/ktask-dev");
+        if code == 0 {
+            // Give the file budget room for a narrow reserve that admits output
+            // rows and later launches but refuses the transcript's file claim.
+            for index in 0..16 {
+                fs::write(archive.join(format!("protected-{index}")), "")?;
+            }
+        }
+        let summary = if code == 0 {
+            "test result: ok. 1 passed; 0 failed; 0 ignored"
+        } else {
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored"
+        };
+        let output = format!("{}\n{summary}", "界Z".repeat(250));
+        let command = format!(
+            "printf x >> \"$HOME/check-runs\"; printf '%s\\n' '{output}'; until test -f \"$HOME/check-exit\"; do sleep 0.05; done; exit {code}"
+        );
+        check(&f, &command)?;
+        f.add("Keep the recorded check")?;
+        let mut runner = Running(f.process().args(["run", "--one"]).spawn()?);
+        let db = f.db()?;
+        support::eventually(
+            "check output is retained before the capacity change",
+            || {
+                let recorded: bool = db.connection().query_row(
+                "SELECT EXISTS(SELECT 1 FROM attempt_output WHERE instr(content,?1)>0 AND stream='stdout')",
+                [summary], |row| row.get(0),
+            )?;
+                Ok(recorded.then_some(()))
+            },
+        )?;
+        if code == 0 {
+            let files = f.ok(&["storage"])?["preview"]["allocated_files"]
+                .as_i64()
+                .unwrap();
+            f.ok(&[
+                "retention",
+                "30",
+                "--max-files",
+                &((files + 2) * 4 / 3).to_string(),
+            ])?;
+        } else {
+            f.ok(&["retention", "30", "--max-bytes", "1048576"])?;
+        }
+        fs::write(f.scratch.path().join("check-exit"), "")?;
+        assert!(runner.0.wait()?.success());
+        let (step, tree): (i64, String) = db.connection().query_row(
+            "SELECT s.id,s.source_tree FROM pending_transcripts p JOIN attempt_steps s ON s.id=p.step_id
+             WHERE s.state=?1 AND s.exit_code=?2 AND s.passed_count=?3 AND s.failed_count=?4",
+            rusqlite::params![state,code,i64::from(code == 0),i64::from(code != 0)],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let service = Service::open(f.db()?, &f.root, None)?;
+        let mut references = Vec::new();
+        for name in ["pending-packet-a", "pending-packet-b"] {
+            let packet = f.scratch.path().join(name);
+            service.review_bundle(1, &archive, &packet, &tree, "", false)?;
+            let index = fs::read_to_string(packet.join("steps.jsonl"))?;
+            assert!(index.contains("Transcript publication pending"), "{index}");
+            let reference = packet.join(format!("check-output-{step}.ktask-output"));
+            assert!(fs::metadata(&reference)?.len() < 512);
+            assert!(!packet.join(format!("check-output-{step}.txt")).exists());
+            assert_eq!(read_transcript(&f, &reference)?, format!("{output}\n"));
+            let result = f.ok(&[
+                "evidence",
+                reference.to_str().unwrap(),
+                "--search",
+                "ignored",
+            ])?;
+            assert_eq!(
+                result["matches"][0]["offset"],
+                output.find("ignored").unwrap()
+            );
+            references.push(reference);
+        }
+
+        // Closing the attempt and restoring the budget permits housekeeping to archive the
+        // pending evidence without another check invocation, even for the failed result.
+        if code == 0 {
+            assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+            assert_eq!(
+                read_transcript(&f, &pending_references(&f, "review")?[0])?,
+                format!("{output}\n")
+            );
+        } else {
+            f.ok(&["done", "1", "--reason", "Close the retained check fixture"])?;
+        }
+        f.ok(&[
+            "retention",
+            "30",
+            "--max-bytes",
+            "1073741824",
+            "--max-files",
+            "100000",
+        ])?;
+        f.ok(&["run", "--one"])?;
+        let relative: String = db.connection().query_row(
+            "SELECT relative_path FROM artifacts WHERE attempt_id=1 AND name='build'",
             [],
-            |r| r.get::<_, i64>(0)
-        )?,
-        1
-    );
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            fs::read_to_string(archive.join(relative))?,
+            format!("{output}\n")
+        );
+        let pending: i64 = db.connection().query_row(
+            "SELECT count(*) FROM pending_transcripts WHERE step_id=?1",
+            [step],
+            |row| row.get(0),
+        )?;
+        assert_eq!(pending, 0);
+        assert_eq!(check_runs(&f), "x");
+        for reference in references {
+            assert_eq!(read_transcript(&f, &reference)?, format!("{output}\n"));
+        }
+        f.no_scratch()?;
+    }
     Ok(())
 }
 
@@ -739,7 +922,7 @@ fn a_storage_pause_another_projects_budget_governs_cannot_be_raised_here() -> Re
     check(
         &f,
         &format!(
-            "printf x >> \"$HOME/check-runs\"; env -u KTASK_WORKER_CALLBACK '{BIN}' --project '{}' retention 30 --max-bytes 1048576 >/dev/null 2>&1; test -f result.txt",
+            "printf x >> \"$HOME/check-runs\"; if [ ! -f \"$HOME/storage-flooded\" ]; then touch \"$HOME/storage-flooded\"; env -u KTASK_WORKER_CALLBACK '{BIN}' --project '{}' retention 30 --max-bytes 1048576 >/dev/null 2>&1; printf 'live output'; fi; test -f result.txt",
             other.display()
         ),
     )?;
@@ -770,7 +953,7 @@ fn a_storage_pause_another_projects_budget_governs_cannot_be_raised_here() -> Re
     let resumed = f.process().args(["run", "--one"]).output()?;
     assert!(resumed.status.success(), "{resumed:?}");
     assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
-    assert_eq!(check_runs(&f), "x");
+    assert_eq!(check_runs(&f), "xx");
     f.no_scratch()?;
     Ok(())
 }
@@ -833,7 +1016,7 @@ fn storage_pause_and_raise_and_resume_by_keyboard_and_mouse_at_both_sizes() -> R
                 t.send("\r")?;
             }
             f.state("succeeded")?;
-            assert_eq!(check_runs(&f), "x");
+            assert_eq!(check_runs(&f), "xx");
             assert!(storage_budget(&f)? > 1_048_576);
             f.supervisor_stopped()?;
             let done = t.screen("queue complete", |s| {

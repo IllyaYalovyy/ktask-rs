@@ -2,7 +2,7 @@ use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 
 use super::{Error, Result};
 
-const APPLICATION_ID: i64 = 0x4b54_534b; // KTSK
+pub(super) const APPLICATION_ID: i64 = 0x4b54_534b; // KTSK
 
 #[derive(Clone, Copy)]
 pub(super) struct Migration {

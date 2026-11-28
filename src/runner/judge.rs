@@ -7,6 +7,7 @@ use super::{
     provider::{self, Access, Provider},
     remediation,
     turn::{operational_failure, provider_invocation, provider_turn, role_model},
+    worker_io::producer_notice,
 };
 use crate::{
     application::{
@@ -19,6 +20,7 @@ use crate::{
     instance::Paths,
     storage::{Error, Result},
 };
+use std::ops::ControlFlow;
 
 /// Judges the task's latest failed attempt.
 pub(super) fn judge(service: &mut Service, run: &Run, ctx: &mut Context<'_>) -> Result<Outcome> {
@@ -146,11 +148,15 @@ pub(super) fn read_only_turn(
         &format!("{}#{scope}", provider.auth_scope()?),
         false,
     )?;
-    service.output(
+    let mut stream = provider::Stream::new(provider);
+    if let ControlFlow::Break(outcome) = producer_notice(
+        service,
         run,
-        "system",
+        ctx,
         &format!("{label}: {}/{} · read-only", model.provider, model.model),
-    )?;
+    )? {
+        return Ok((step, stream, Some(outcome)));
+    }
     let launch = provider.launch(
         model,
         step.provider_session.as_deref(),
@@ -173,7 +179,6 @@ pub(super) fn read_only_turn(
             sandbox.protect(path)?;
         }
     }
-    let mut stream = provider::Stream::new(provider);
     let outcome = provider_turn(
         service,
         run,

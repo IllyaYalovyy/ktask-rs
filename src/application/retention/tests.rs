@@ -136,7 +136,12 @@ fn completed_allocation_scan_remeasures_successive_vacuum_batches() -> Result<()
     assert_eq!(scan_state(service.db.connection())?.complete, 2);
     assert!(
         service
-            .preview_with_allocation(CLEANUP_BATCH, false, &projected_allocation(&service.db)?)?
+            .preview_with_allocation(
+                service.project_id,
+                CLEANUP_BATCH,
+                false,
+                &projected_allocation(&service.db)?
+            )?
             .launch_capacity_reached
     );
     let mut recovered = false;
@@ -296,7 +301,7 @@ fn completed_artifact_invalidates_measurement_before_releasing_reservation() -> 
     // The walk starts while the copy is reserved; it completes before the walk ends,
     // and the walk never sees its file.
     let visited = scan_in_progress(&sandbox, &service)?;
-    service.finish_reservation(&relative)?;
+    service.finish_reservation(&relative, true)?;
     let scan = settle(&service, visited)?;
     let claim = 8192 + 4 * 4096;
     assert!(
@@ -2089,5 +2094,706 @@ fn breach_transcript_is_bounded_and_ends_at_the_recorded_breach() -> Result<()> 
     assert!(tail.ends_with("line 3999\n"), "{tail}");
     assert!(!tail.contains("after the breach"));
     assert_eq!(service.output_tail(&run, 0, 1024)?, "");
+    Ok(())
+}
+
+#[test]
+fn shared_payloads_keep_ids_and_judge_paths_through_interrupted_pruning() -> Result<()> {
+    let (sandbox, mut first, task) = closed_service()?;
+    let state = sandbox.path().join("state");
+    let other_root = sandbox.path().join("other-project");
+    std::fs::create_dir(&other_root)?;
+    let mut second = Service::open(Database::open_in(&state)?, &other_root, None)?;
+    second.set_check("screens", "true", 1000)?;
+    let second_task = second.create(
+        &[first.task(task)?.unwrap().definition().definition.clone()],
+        None,
+        true,
+    )?[0];
+    let version = first.current_task()?.unwrap().version;
+    let first_run = first.begin_run(VersionedTask { id: task, version }, "first", "base", false)?;
+    let version = second.current_task()?.unwrap().version;
+    let second_run = second.begin_run(
+        VersionedTask {
+            id: second_task,
+            version,
+        },
+        "second",
+        "base",
+        false,
+    )?;
+    let tree_a = "a".repeat(40);
+    let tree_b = "b".repeat(40);
+    let check = &second.checks()?[0];
+    let step = second.start_check(&second_run, check, "fixture")?;
+    second.finish_check(&step, true, "screens recorded", Some(0), None)?;
+    second.record_check_tree(&step, &tree_b)?;
+    let transcript = format!("evidence/attempt-{}/step-1.log", first_run.attempt);
+    let artifact = format!("evidence/attempt-{}/step-999/file-1-0", second_run.attempt);
+    let observation = format!(
+        "evidence/attempt-{}/step-{}/file-1-0",
+        second_run.attempt, step.id
+    );
+    let source = sandbox.path().join("payload");
+    let content = "retained proof\n".repeat(4096);
+    std::fs::write(&source, &content)?;
+    first.publish_artifact(
+        first_run.attempt,
+        &first_run.token,
+        "check",
+        &source,
+        &transcript,
+        &tree_a,
+    )?;
+    second.publish_artifact(
+        second_run.attempt,
+        &second_run.token,
+        "changed-screens.txt",
+        &source,
+        &artifact,
+        &tree_a,
+    )?;
+    second.publish_artifact(
+        second_run.attempt,
+        &second_run.token,
+        "changed-screens.txt",
+        &source,
+        &observation,
+        &tree_b,
+    )?;
+    let transcript_path = state.join(&transcript);
+    let artifact_path = state.join(&artifact);
+    assert_eq!(
+        std::fs::metadata(&transcript_path)?.ino(),
+        std::fs::metadata(&artifact_path)?.ino()
+    );
+    assert_eq!(std::fs::metadata(&artifact_path)?.nlink(), 2);
+    assert!(!state.join(&observation).exists());
+
+    let packet = sandbox.path().join("packet");
+    let summary = second.review_bundle(second_run.attempt, &state, &packet, &tree_b, "", true)?;
+    let index = std::fs::read_to_string(packet.join("artifacts.jsonl"))?;
+    assert_eq!(index.lines().count(), 1, "{index}");
+    let entry: serde_json::Value = serde_json::from_str(index.trim()).unwrap();
+    assert_eq!(entry["matches_current_tree"], true);
+    let artifact_id = entry["id"].as_i64().unwrap();
+    assert!(summary.contains(&format!("changed-screens report, artifact #{artifact_id}")));
+    assert_eq!(
+        std::fs::read_to_string(entry["path"].as_str().unwrap())?,
+        content
+    );
+
+    first.finish_run(&first_run, "succeeded", None, "done", None)?;
+    let policy = first.retention_policy()?;
+    first.set_storage_policy(policy, 0, 2 * 1024 * 1024, 10_000)?;
+    let preview = first.storage_preview()?;
+    assert_eq!(preview.logical_artifact_bytes, content.len() as i64);
+    assert_eq!(preview.distinct_artifact_bytes, content.len() as i64);
+    assert_eq!(preview.eligible_file_bytes, 0);
+    assert!(preview.protected_shared_file_bytes > 0);
+
+    // Simulate the crash window after unlink and before the pruning receipt commits.
+    let observed = allocation(first.db.state_dir())?;
+    let intent = deletion::record_intent(
+        first.db.connection(),
+        first.db.state_dir(),
+        first.project_id,
+        &preview,
+        &observed,
+        PreviewMode {
+            candidate_limit: i64::MAX,
+            accounting: false,
+        },
+    )?;
+    assert_eq!(intent.selected.len(), 1);
+    assert!(
+        deletion::unlink(first.db.state_dir(), &intent.selected)
+            .failure
+            .is_none()
+    );
+    drop(first);
+    let mut first = Service::open(
+        Database::open_in(&state)?,
+        &sandbox.path().join("project"),
+        None,
+    )?;
+    let interrupted = first.storage_preview()?;
+    assert_eq!(interrupted.candidates[0].pending_artifacts, 1);
+    first.cleanup_storage(&interrupted)?;
+    assert!(!transcript_path.exists());
+    assert_eq!(std::fs::metadata(&artifact_path)?.nlink(), 1);
+    assert_eq!(second.open_text_artifact(artifact_id)?.1, content);
+    assert_eq!(
+        std::fs::read_to_string(entry["path"].as_str().unwrap())?,
+        content
+    );
+    Ok(())
+}
+
+#[test]
+fn compaction_resumes_legacy_payloads_and_counts_one_inode_across_scan_pages() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let (sandbox, mut service, task) = closed_service()?;
+    let state = sandbox.path().join("state");
+    let other_root = sandbox.path().join("publisher");
+    std::fs::create_dir(&other_root)?;
+    let mut publisher = Service::open(Database::open_in(&state)?, &other_root, None)?;
+    let other_task = publisher.create(
+        &[service.task(task)?.unwrap().definition().definition.clone()],
+        None,
+        true,
+    )?[0];
+    let version = publisher.current_task()?.unwrap().version;
+    let published_run = publisher.begin_run(
+        VersionedTask {
+            id: other_task,
+            version,
+        },
+        "publisher",
+        "base",
+        false,
+    )?;
+    let version = service.current_task()?.unwrap().version;
+    let run = service.begin_run(VersionedTask { id: task, version }, "legacy", "base", false)?;
+    let payload = vec![b'x'; 16 * 1024];
+    let parent = state.join(format!("evidence/attempt-{}", run.attempt));
+    std::fs::create_dir_all(&parent)?;
+    let files = 70;
+    for index in 0..files {
+        let relative = format!("evidence/attempt-{}/step-{}.log", run.attempt, index + 1);
+        let path = state.join(&relative);
+        std::fs::write(&path, &payload)?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o444))?;
+        service.db.connection().execute("INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms)
+            VALUES (?1,'check','text/plain',?2,?3,1)", params![run.attempt,relative,payload.len() as i64])?;
+    }
+    let first = parent.join("step-1.log");
+    let relative = format!("evidence/attempt-{}/step-72.log", published_run.attempt);
+    publisher.publish_artifact(
+        published_run.attempt,
+        &published_run.token,
+        "new check",
+        &first,
+        &relative,
+        &"b".repeat(40),
+    )?;
+    let published = state.join(&relative);
+    assert_ne!(
+        std::fs::metadata(&first)?.ino(),
+        std::fs::metadata(&published)?.ino()
+    );
+    let interrupted = parent.join("step-17.log.dedup");
+    std::fs::hard_link(&first, &interrupted)?;
+    let before = service.storage_preview()?;
+    assert_eq!(service.compact_artifacts()?, CompactionProgress::More);
+    assert!(
+        interrupted.exists(),
+        "one page must stop before the next 16 files"
+    );
+    assert!(std::fs::metadata(&first)?.nlink() < files);
+    drop(service);
+    let mut service = Service::open(
+        Database::open_in(&state)?,
+        &sandbox.path().join("project"),
+        None,
+    )?;
+    let policy = service.retention_policy()?;
+    service.set_storage_policy(policy, 0, 2 * 1024 * 1024, 10_000)?;
+    for _ in 0..20 {
+        service.automatic_housekeeping_progress(1)?;
+    }
+    assert!(!interrupted.exists());
+    assert_eq!(std::fs::metadata(&first)?.nlink(), files + 1);
+    assert_eq!(
+        std::fs::metadata(&first)?.ino(),
+        std::fs::metadata(&published)?.ino()
+    );
+    assert_eq!(std::fs::read(&first)?, payload);
+    assert_eq!(std::fs::read(&published)?, payload);
+    let after = service.storage_preview()?;
+    assert_eq!(after.logical_artifact_bytes, before.logical_artifact_bytes);
+    assert_eq!(after.distinct_artifact_bytes, payload.len() as i64);
+    assert!(after.protected_open_bytes >= after.logical_artifact_bytes);
+    assert!(
+        before.evidence_bytes - after.evidence_bytes >= (files as i64 - 1) * payload.len() as i64
+    );
+    assert_eq!(
+        projected_allocation(&service.db)?.evidence,
+        after.evidence_bytes
+    );
+    service.finish_run(&run, "succeeded", None, "done", None)?;
+    let preview = service.storage_preview()?;
+    service.cleanup_storage(&preview)?;
+    assert!(!first.exists());
+    assert_eq!(std::fs::read(published)?, payload);
+    Ok(())
+}
+
+#[test]
+fn checksummed_legacy_compaction_preserves_published_inode_across_bounded_pages() -> Result<()> {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::PermissionsExt;
+
+    let (sandbox, mut legacy, task) = closed_service()?;
+    let state = sandbox.path().join("state");
+    let publisher_root = sandbox.path().join("publisher");
+    std::fs::create_dir(&publisher_root)?;
+    let mut publisher = Service::open(Database::open_in(&state)?, &publisher_root, None)?;
+    let publisher_task = publisher.create(
+        &[legacy.task(task)?.unwrap().definition().definition.clone()],
+        None,
+        true,
+    )?[0];
+    let version = publisher.current_task()?.unwrap().version;
+    let published_run = publisher.begin_run(
+        VersionedTask {
+            id: publisher_task,
+            version,
+        },
+        "publisher",
+        "base",
+        false,
+    )?;
+    let version = legacy.current_task()?.unwrap().version;
+    let run = legacy.begin_run(VersionedTask { id: task, version }, "legacy", "base", false)?;
+    // Deliberately larger than a page and not block-aligned.
+    let payload = "retained evidence".repeat(2049);
+    let checksum = format!("{:x}", Sha256::digest(&payload));
+    let size = payload.len();
+    let first = format!("evidence/attempt-{}/step-1.log", run.attempt);
+    let second = format!("evidence/attempt-{}/step-2.log", run.attempt);
+    std::fs::create_dir_all(state.join(&first).parent().unwrap())?;
+    for path in [&first, &second] {
+        std::fs::write(state.join(path), &payload)?;
+        std::fs::set_permissions(state.join(path), std::fs::Permissions::from_mode(0o444))?;
+        legacy.db.connection().execute(
+            "INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms,checksum_sha256)
+             VALUES (?1,'legacy','text/plain',?2,?3,1,?4)",
+            params![run.attempt,path,size as i64,checksum],
+        )?;
+    }
+    let inode = std::fs::metadata(state.join(&first))?.ino();
+    assert_ne!(inode, std::fs::metadata(state.join(&second))?.ino());
+    let published = format!("evidence/attempt-{}/step-3.log", published_run.attempt);
+    publisher.publish_artifact(
+        published_run.attempt,
+        &published_run.token,
+        "new check",
+        &state.join(&first),
+        &published,
+        &"b".repeat(40),
+    )?;
+    assert_eq!(std::fs::metadata(state.join(&published))?.ino(), inode);
+
+    const BUDGET: u64 = 4096;
+    assert_eq!(
+        legacy.compact_artifact_page(BUDGET)?,
+        (CompactionProgress::More, BUDGET)
+    );
+    assert_ne!(std::fs::metadata(state.join(&second))?.ino(), inode);
+    drop(legacy);
+    let legacy = Service::open(
+        Database::open_in(&state)?,
+        &sandbox.path().join("project"),
+        None,
+    )?;
+    let mut total = BUDGET;
+    let mut finished = false;
+    for _ in 0..24 {
+        let (progress, read) = legacy.compact_artifact_page(BUDGET)?;
+        assert!(read <= BUDGET, "read {read} with a {BUDGET}-byte budget");
+        total += read;
+        assert_ne!(progress, CompactionProgress::PublicationBusy);
+        if progress == CompactionProgress::Done {
+            finished = true;
+            break;
+        }
+    }
+    assert!(finished);
+    assert_eq!(total, 2 * size as u64, "both paths were verified once");
+    assert_eq!(std::fs::metadata(state.join(&second))?.ino(), inode);
+    assert_eq!(std::fs::metadata(state.join(&published))?.ino(), inode);
+
+    publisher.finish_run(&published_run, "succeeded", None, "done", None)?;
+    publisher.set_storage_policy(publisher.retention_policy()?, 0, 2 * 1024 * 1024, 10_000)?;
+    let preview = publisher.storage_preview()?;
+    publisher.cleanup_storage(&preview)?;
+    assert!(!state.join(published).exists());
+    assert_eq!(std::fs::read_to_string(state.join(first))?, payload);
+    assert_eq!(std::fs::read_to_string(state.join(second))?, payload);
+    Ok(())
+}
+
+#[test]
+fn publication_and_restarted_compaction_find_the_fifth_readable_source() -> Result<()> {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::PermissionsExt;
+
+    let (sandbox, mut legacy, task) = closed_service()?;
+    let state = sandbox.path().join("state");
+    let publisher_root = sandbox.path().join("publisher");
+    std::fs::create_dir(&publisher_root)?;
+    let mut publisher = Service::open(Database::open_in(&state)?, &publisher_root, None)?;
+    let publisher_task = publisher.create(
+        &[legacy.task(task)?.unwrap().definition().definition.clone()],
+        None,
+        true,
+    )?[0];
+    let version = publisher.current_task()?.unwrap().version;
+    let published_run = publisher.begin_run(
+        VersionedTask {
+            id: publisher_task,
+            version,
+        },
+        "publisher",
+        "base",
+        false,
+    )?;
+    let version = legacy.current_task()?.unwrap().version;
+    let run = legacy.begin_run(VersionedTask { id: task, version }, "legacy", "base", false)?;
+    let relative = |step| format!("evidence/attempt-{}/step-{step}.log", run.attempt);
+    std::fs::create_dir_all(state.join(relative(1)).parent().unwrap())?;
+    let payload = b"retained proof";
+    let checksum = format!("{:x}", Sha256::digest(payload));
+    for step in 1..=6 {
+        let path = state.join(relative(step));
+        if step >= 3 {
+            let bytes = if step < 5 { b"corrupt proof!" } else { payload };
+            std::fs::write(&path, bytes)?;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444))?;
+        }
+        legacy.db.connection().execute(
+            "INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms,checksum_sha256,needs_compaction)
+             VALUES (?1,'legacy','text/plain',?2,?3,1,?4,?5)",
+            params![run.attempt, relative(step), payload.len() as i64, checksum, step == 6],
+        )?;
+    }
+    let fourth: i64 = legacy.db.connection().query_row(
+        "SELECT id FROM artifacts WHERE relative_path=?1",
+        [relative(4)],
+        |row| row.get(0),
+    )?;
+    let fifth = state.join(relative(5));
+    let duplicate = state.join(relative(6));
+    let inode = std::fs::metadata(&fifth)?.ino();
+    assert_ne!(std::fs::metadata(&duplicate)?.ino(), inode);
+    let published = format!("evidence/attempt-{}/step-7.log", published_run.attempt);
+    publisher.publish_artifact(
+        published_run.attempt,
+        &published_run.token,
+        "new check",
+        &fifth,
+        &published,
+        &"b".repeat(40),
+    )?;
+    assert_eq!(std::fs::metadata(state.join(&published))?.ino(), inode);
+
+    let (progress, read) = legacy.compact_artifact_page(4096)?;
+    assert_eq!(progress, CompactionProgress::More);
+    assert_eq!(read, 3 * payload.len() as u64, "target and corrupt sources");
+    let cursor: i64 = legacy.db.connection().query_row(
+        "SELECT source_after_id FROM artifact_compaction_hashes WHERE source_after_id<>0",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(cursor, fourth);
+    drop(legacy);
+    let legacy = Service::open(
+        Database::open_in(&state)?,
+        &sandbox.path().join("project"),
+        None,
+    )?;
+    assert_eq!(
+        legacy.compact_artifact_page(4096)?,
+        (CompactionProgress::Done, payload.len() as u64)
+    );
+    assert_eq!(std::fs::metadata(&duplicate)?.ino(), inode);
+    assert_eq!(std::fs::read(&duplicate)?, payload);
+    Ok(())
+}
+
+#[test]
+fn named_artifact_repeats_reuse_the_readable_replacement() -> Result<()> {
+    let (sandbox, mut service, task) = closed_service()?;
+    let state = sandbox.path().join("state");
+    let version = service.current_task()?.unwrap().version;
+    let run = service.begin_run(VersionedTask { id: task, version }, "writer", "base", false)?;
+    let source = sandbox.path().join("payload");
+    std::fs::write(&source, "retained proof")?;
+    let path = |step| format!("evidence/attempt-{}/step-{step}/file-1-0", run.attempt);
+    let publish = |service: &Service, step| {
+        service.publish_artifact(
+            run.attempt,
+            &run.token,
+            "proof.txt",
+            &source,
+            &path(step),
+            &"b".repeat(40),
+        )
+    };
+    let listed_ids = |service: &mut Service| -> Result<Vec<i64>> {
+        let task = service.task(task)?.unwrap();
+        Ok(task
+            .attempts
+            .last()
+            .unwrap()
+            .artifacts
+            .iter()
+            .map(|artifact| artifact.id)
+            .collect())
+    };
+
+    publish(&service, 1)?;
+    let original = listed_ids(&mut service)?[0];
+    std::fs::remove_file(state.join(path(1)))?;
+    publish(&service, 2)?;
+    let listing = listed_ids(&mut service)?;
+    assert_eq!(listing.len(), 2);
+    assert_eq!(listing[0], original);
+    let replacement = listing[1];
+    for step in 3..=4 {
+        publish(&service, step)?;
+        let observed: i64 = service.db.connection().query_row(
+            "SELECT artifact_id FROM artifact_observations WHERE relative_path=?1",
+            [path(step)],
+            |row| row.get(0),
+        )?;
+        assert_eq!(observed, replacement);
+        assert_eq!(listed_ids(&mut service)?, listing);
+    }
+    assert_eq!(service.open_text_artifact(replacement)?.1, "retained proof");
+    Ok(())
+}
+
+#[test]
+fn capacity_retry_reclaims_eligible_foreign_evidence_and_keeps_protected_links() -> Result<()> {
+    let (sandbox, mut archive, task) = closed_service()?;
+    let state = sandbox.path().join("state");
+    let other_root = sandbox.path().join("producer");
+    std::fs::create_dir(&other_root)?;
+    let mut producer = Service::open(Database::open_in(&state)?, &other_root, None)?;
+    let producer_task = producer.create(
+        &[archive.task(task)?.unwrap().definition().definition.clone()],
+        None,
+        true,
+    )?[0];
+    let version = archive.current_task()?.unwrap().version;
+    let finished = archive.begin_run(VersionedTask { id: task, version }, "old", "base", false)?;
+    let version = producer.current_task()?.unwrap().version;
+    let running = producer.begin_run(
+        VersionedTask {
+            id: producer_task,
+            version,
+        },
+        "live",
+        "base",
+        false,
+    )?;
+    let unique = sandbox.path().join("unique");
+    let shared = sandbox.path().join("shared");
+    std::fs::write(&unique, vec![b'u'; 768 * 1024])?;
+    std::fs::write(&shared, vec![b's'; 128 * 1024])?;
+    let old_unique = format!("evidence/attempt-{}/step-1.log", finished.attempt);
+    let old_shared = format!("evidence/attempt-{}/step-2.log", finished.attempt);
+    let live_shared = format!("evidence/attempt-{}/step-3.log", running.attempt);
+    let tree = "a".repeat(40);
+    archive.publish_artifact(
+        finished.attempt,
+        &finished.token,
+        "unique",
+        &unique,
+        &old_unique,
+        &tree,
+    )?;
+    archive.publish_artifact(
+        finished.attempt,
+        &finished.token,
+        "shared",
+        &shared,
+        &old_shared,
+        &tree,
+    )?;
+    producer.publish_artifact(
+        running.attempt,
+        &running.token,
+        "shared",
+        &shared,
+        &live_shared,
+        &tree,
+    )?;
+    archive.finish_run(&finished, "succeeded", None, "done", None)?;
+    for _ in 0..4 {
+        producer.automatic_housekeeping_progress(1)?;
+    }
+    let allocated = projected_allocation(&producer.db)?.bytes;
+    let policy = archive.retention_policy()?;
+    archive.set_storage_policy(policy, 0, allocated.max(1_048_576), 10_000)?;
+    let rows = vec![("stdout".into(), "new output\n".repeat(8192))];
+    assert!(matches!(
+        producer.output_rows(&running, &rows),
+        Err(Error::Capacity(_))
+    ));
+    // With an already settled scan, the publication lock alone prevents
+    // deleting the eligible foreign attempt.
+    let mut settled = false;
+    for _ in 0..16 {
+        if bounded_allocation_scan(&producer.db)? == ScanProgress::Settled {
+            settled = true;
+            break;
+        }
+    }
+    assert!(settled);
+    assert!(archive.storage_preview()?.eligible_file_bytes >= 768 * 1024);
+    let mut controls = Service::open(Database::open_in(&state)?, &other_root, None)?;
+    let cursor = producer.control_cursor(&running)?;
+    let lock = super::super::artifacts::publication_lock(&state)?;
+    lock.lock()?;
+    let (_, blocked) = archive.reconcile_storage()?;
+    assert_eq!(blocked.cleanup, CleanupProgress::PublicationBusy);
+
+    let mut checks = 0;
+    let interrupted = producer.retry_storage_until(
+        |service| service.output_rows(&running, &rows),
+        |service| {
+            checks += 1;
+            let paused = service.control_cursor(&running)? > cursor;
+            if checks == 1 {
+                // Deliver Pause between polls with publication still blocked.
+                controls.request_current_pause()?;
+            }
+            assert!(checks < 3, "cleanup waited through Pause");
+            Ok(paused.then_some("pause"))
+        },
+    )?;
+    assert_eq!(interrupted, std::ops::ControlFlow::Break("pause"));
+    assert_eq!(producer.output_cursor(&running)?, 0);
+    assert!(state.join(&old_unique).exists());
+
+    let mut lock = Some(lock);
+    let mut checks = 0;
+    let resumed = producer.retry_storage_until(
+        |service| service.output_rows(&running, &rows),
+        |_| {
+            checks += 1;
+            assert!(checks < 16, "capacity never recovered");
+            if checks == 2 {
+                assert!(state.join(&old_unique).exists());
+                drop(lock.take());
+            }
+            Ok(None::<()>)
+        },
+    )?;
+    assert_eq!(resumed, std::ops::ControlFlow::Continue(()));
+    assert!(!state.join(old_unique).exists());
+    assert!(!state.join(old_shared).exists());
+    assert_eq!(
+        std::fs::read(state.join(live_shared))?,
+        std::fs::read(shared)?
+    );
+    assert_eq!(producer.output_cursor(&running)?, 1);
+    Ok(())
+}
+
+#[test]
+fn capacity_retry_waits_for_compaction_when_live_work_defers_deletion() -> Result<()> {
+    use crate::resource::StorageBudget;
+
+    let (sandbox, mut service, task) = closed_service()?;
+    let state = sandbox.path().join("state");
+    let version = service.current_task()?.unwrap().version;
+    let run = service.begin_run(VersionedTask { id: task, version }, "live", "base", false)?;
+    let source = sandbox.path().join("payload");
+    let payload = vec![b'p'; 768 * 1024];
+    std::fs::write(&source, &payload)?;
+    let published = format!("evidence/attempt-{}/step-1.log", run.attempt);
+    let legacy = format!("evidence/attempt-{}/step-2.log", run.attempt);
+    service.publish_artifact(
+        run.attempt,
+        &run.token,
+        "proof",
+        &source,
+        &published,
+        &"a".repeat(40),
+    )?;
+    std::fs::write(state.join(&legacy), &payload)?;
+    service.db.connection().execute(
+        "INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms,checksum_sha256)
+         SELECT attempt_id,name,media_type,?1,size_bytes,created_at_ms,checksum_sha256 FROM artifacts
+         WHERE relative_path=?2",
+        params![legacy, published],
+    )?;
+    evidence_allocation_changed(service.db.connection())?;
+    let inode = std::fs::metadata(state.join(&published))?.ino();
+    let legacy_path = state.join(&legacy);
+    assert_ne!(inode, std::fs::metadata(&legacy_path)?.ino());
+
+    let mut controls = Service::open(
+        Database::open_in(&state)?,
+        &sandbox.path().join("project"),
+        None,
+    )?;
+    let lock = super::super::artifacts::publication_lock(&state)?;
+    lock.lock()?;
+    // Checkpoint setup writes before measuring the budget so WAL reclamation
+    // cannot satisfy the refused write on its own.
+    service.reconcile_storage()?;
+    assert_eq!(bounded_allocation_scan(&service.db)?, ScanProgress::Settled);
+    let allocated = projected_allocation(&service.db)?.bytes;
+    let budget = Reserve::Work
+        .smallest_budget(StorageBudget::StorageMaxBytes, allocated)
+        .saturating_sub(128 * 1024)
+        .max(1_048_576);
+    service.set_storage_policy(service.retention_policy()?, 0, budget, 10_000)?;
+    let rows = vec![("stdout".into(), "new output\n".repeat(8192))];
+    assert!(matches!(
+        service.output_rows(&run, &rows),
+        Err(Error::Capacity(_))
+    ));
+    assert_eq!(bounded_allocation_scan(&service.db)?, ScanProgress::Settled);
+    let (preview, progress) = service.automatic_housekeeping_progress(1)?;
+    assert!(preview.deferred_for_live_work);
+    assert_eq!(preview.eligible_file_bytes, 0);
+    assert_eq!(progress.cleanup, CleanupProgress::PublicationBusy);
+    assert!(matches!(
+        service.retry_storage(|service| service.output_rows(&run, &rows)),
+        Err(Error::Capacity(_))
+    ));
+
+    let cursor = service.control_cursor(&run)?;
+    let mut polls = 0;
+    let interrupted = service.retry_storage_until(
+        |service| service.output_rows(&run, &rows),
+        |service| {
+            polls += 1;
+            let paused = service.control_cursor(&run)? > cursor;
+            if polls == 1 {
+                controls.request_current_pause()?;
+            }
+            assert!(polls < 3, "compaction waited through Pause");
+            Ok(paused.then_some(()))
+        },
+    )?;
+    assert_eq!(interrupted, std::ops::ControlFlow::Break(()));
+    assert_eq!(service.output_cursor(&run)?, 0);
+    assert_ne!(inode, std::fs::metadata(&legacy_path)?.ino());
+
+    let mut lock = Some(lock);
+    let mut polls = 0;
+    let admitted = service.retry_storage_until(
+        |service| service.output_rows(&run, &rows),
+        |_| {
+            polls += 1;
+            assert!(polls < 16, "compaction did not recover capacity");
+            if polls == 2 {
+                drop(lock.take());
+            }
+            Ok(None::<()>)
+        },
+    )?;
+    assert_eq!(admitted, std::ops::ControlFlow::Continue(()));
+    assert_eq!(service.output_cursor(&run)?, 1);
+    assert_eq!(std::fs::metadata(&legacy_path)?.ino(), inode);
+    assert_eq!(std::fs::read(&legacy_path)?, payload);
+    assert_eq!(std::fs::read(state.join(published))?, payload);
     Ok(())
 }
