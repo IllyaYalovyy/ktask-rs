@@ -342,6 +342,7 @@ fn remove_files(paths: &Paths, id: i64, attempts: &[i64]) -> Vec<String> {
         provision_file(paths, id, "lock"),
         paths.config.join(format!("project-{id}.json")),
         paths.cache.join("project-runtime").join(id.to_string()),
+        crate::runner::evidence::deferred_root(&paths.cache.join("workers"), id),
     ]
     .into_iter()
     .chain(investigate::files(paths, id))
@@ -445,6 +446,8 @@ mod tests {
             f.paths.state.join(format!("provision/{id}.lock")),
             f.paths.config.join(format!("project-{id}.json")),
             f.paths.cache.join(format!("project-runtime/{id}/bin/tool")),
+            crate::runner::evidence::deferred_root(&f.paths.cache.join("workers"), id)
+                .join("collection-example/files/proof.txt"),
         ] {
             fs::create_dir_all(file.parent().unwrap())?;
             fs::write(file, "ktask")?;

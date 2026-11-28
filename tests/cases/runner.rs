@@ -3621,6 +3621,113 @@ fn mixed_artifacts_keep_valid_siblings_and_omit_oversize_without_orphans() -> Re
 }
 
 #[test]
+fn guardian_retains_evidence_after_sqlite_busy_timeout() -> Result {
+    let f = Fixture::new()?;
+    f.add("Recover evidence after a database lock")?;
+    f.ok(&["run", "--one"])?;
+    let (project, attempt, token, step): (i64, i64, String, i64) = f.db()?.connection().query_row(
+        "SELECT a.project_id,a.id,a.execution_token,s.id FROM attempts a
+             JOIN attempt_steps s ON s.attempt_id=a.id WHERE s.role='execution'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )?;
+    let state = f.scratch.path().join("state/ktask-dev");
+    let workers = f.scratch.path().join("cache/ktask-dev/workers");
+    let lock = rusqlite::Connection::open(state.join("ktask.sqlite3"))?;
+    lock.execute_batch("BEGIN IMMEDIATE")?;
+    let spec = serde_json::json!({
+        "executable": "/bin/sh",
+        "args": ["-c", "printf 'saved after lock\\n' > \"$KTASK_ARTIFACT_DIR/locked.txt\""],
+        "cwd": f.root,
+        "prompt": "",
+        "scratch_root": workers,
+        "scratch_limits": [65536, 64],
+        "worker_lock": f.root.join(".git/ktask-worker.lock"),
+        "artifact_target": {
+            "state": state,
+            "project_id": project,
+            "project": f.root,
+            "scratch_root": workers,
+            "attempt": attempt,
+            "token": token,
+            "relative_prefix": format!("evidence/attempt-{attempt}/step-{step}"),
+            "record_empty": false
+        }
+    });
+    // The note channel has no consumer. Recovery must still leave a visible note.
+    let started = Instant::now();
+    let mut guardian = Running(
+        f.process()
+            .arg("__worker")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()?,
+    );
+    let input = guardian.0.stdin.as_mut().unwrap();
+    serde_json::to_writer(&mut *input, &spec)?;
+    std::io::Write::write_all(input, b"\n")?;
+    let status = support::eventually("guardian exits with the database still locked", || {
+        Ok(guardian.0.try_wait()?)
+    })?;
+    assert!(status.success(), "{status}");
+    assert!(started.elapsed() >= ktask_rs_mk3::storage::BUSY_TIMEOUT);
+    assert!(
+        fs::read_dir(&workers)?.all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("run-")),
+        "managed worker scratch must be cleaned while SQLite is still locked"
+    );
+    lock.execute_batch("ROLLBACK")?;
+
+    f.ok(&["run", "--one"])?;
+    // Simulate a runner that archived the collection, moved it out of the import
+    // namespace, and died during recursive deletion after removing the manifest.
+    let leftover = workers.join(format!("evidence-project-{project}/cleanup-interrupted"));
+    fs::create_dir_all(&leftover)?;
+    fs::write(leftover.join("remaining"), b"partially deleted staging")?;
+    f.ok(&["run", "--one"])?;
+    assert!(
+        !leftover.exists(),
+        "runner should finish interrupted cleanup"
+    );
+    let shown = f.ok(&["show", "1"])?;
+    let artifacts: Vec<_> = shown["attempts"][0]["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|artifact| artifact["name"] == "locked.txt")
+        .collect();
+    assert_eq!(artifacts.len(), 1, "{shown}");
+    let relative: String = f.db()?.connection().query_row(
+        "SELECT relative_path FROM artifacts WHERE attempt_id=?1 AND name='locked.txt'",
+        [attempt],
+        |r| r.get(0),
+    )?;
+    assert_eq!(
+        fs::read_to_string(state.join(relative))?,
+        "saved after lock\n"
+    );
+    let events = f.ok(&["events", "--limit", "100"])?;
+    let deferred: Vec<_> = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["kind"] == "evidence.deferred")
+        .collect();
+    assert_eq!(deferred.len(), 1, "{events}");
+    assert!(
+        deferred[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("database is locked")
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
 fn interrupted_artifact_publication_reconciles_original_source_tree() -> Result {
     let f = Fixture::new()?;
     f.add("Recover archived evidence")?;

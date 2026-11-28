@@ -1,11 +1,11 @@
 //! A small worker guardian: stdin is a lifeline, not a terminal. Losing the supervisor
 //! stops the entire child process group before releasing its workspace/scratch leases.
+use super::evidence::{ArtifactTarget, archive_artifacts};
 use crate::{
-    application::{Service, collection::Collection},
     resource::{Breach, Limit},
     runner::callback::{Capability, Server},
     scratch::Scratch,
-    storage::{Database, Error, Result},
+    storage::{Error, Result},
 };
 use nix::{
     sys::signal::{Signal, kill, killpg},
@@ -82,19 +82,6 @@ impl Invocation {
             sandbox: None,
         }
     }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct ArtifactTarget {
-    pub state: PathBuf,
-    pub project: PathBuf,
-    pub scratch_root: PathBuf,
-    pub attempt: i64,
-    pub token: String,
-    pub relative_prefix: String,
-    /// Record the collection even when the worker kept nothing, so that a reader can tell
-    /// that from evidence that was never collected.
-    pub record_empty: bool,
 }
 
 /// Use the isolated guardian so descendants cannot retain pipes or outlive cancellation.
@@ -689,7 +676,7 @@ pub fn worker() -> Result<WorkerResult> {
     let note = spec
         .artifact_target
         .as_ref()
-        .and_then(|target| archive_artifacts(&artifact_dir, &spec.scratch_root, target));
+        .and_then(|target| archive_artifacts(&artifact_dir, target));
     if let Some(note) = note {
         let _ = enqueue_final(&outbound, Message::Note(note));
     }
@@ -817,67 +804,6 @@ fn enqueue_final(outbound: &mpsc::SyncSender<Message>, message: Message) -> io::
             }
         }
     }
-}
-
-/// The guardian owns the worker lease until every selected file is in state storage. The
-/// collection is recorded first and the artifact directory then leaves the scratch, which
-/// is deleted whatever happens here, so an interrupted pass can be finished from the kept
-/// files. Only regular, flat files are accepted; a worker cannot redirect the copy with a
-/// symlink. Returns the note about anything that was not archived.
-fn archive_artifacts(
-    source: &std::path::Path,
-    root: &std::path::Path,
-    target: &ArtifactTarget,
-) -> Option<String> {
-    let metadata = std::fs::symlink_metadata(source);
-    if !metadata.is_ok_and(|metadata| metadata.is_dir()) {
-        return Some(
-            "Evidence could not be archived: the artifact directory was replaced or removed".into(),
-        );
-    }
-    // A readable directory with nothing in it needs no record unless one was asked for.
-    if !target.record_empty
-        && std::fs::read_dir(source).is_ok_and(|mut entries| entries.next().is_none())
-    {
-        return None;
-    }
-    let kept = root.join(format!(
-        "evidence-{}-{}",
-        target.attempt,
-        std::process::id()
-    ));
-    let opened = (|| -> Result<(Service, String)> {
-        let service = Service::open(Database::open_in(&target.state)?, &target.project, None)?;
-        let tree =
-            super::workspace::Workspace::fingerprint_at(&target.project, &target.scratch_root)?;
-        Ok((service, tree))
-    })();
-    let (service, tree) = match opened {
-        Ok(opened) => opened,
-        Err(error) => return Some(format!("Evidence could not be archived: {error}")),
-    };
-    let collection = |source| Collection {
-        attempt: target.attempt,
-        token: &target.token,
-        prefix: &target.relative_prefix,
-        source,
-        tree: &tree,
-    };
-    if let Err(error) = service.reserve_collection(&collection(&kept)) {
-        return Some(format!("Evidence could not be archived: {error}"));
-    }
-    let source = match std::fs::rename(source, &kept) {
-        Ok(()) => kept.as_path(),
-        Err(_) => source,
-    };
-    service
-        .collect_evidence(&collection(source))
-        .unwrap_or_else(|error| {
-            Some(format!(
-                "Evidence not archived yet: {error}. The files are kept in {} and the runner finishes or records them when it continues",
-                source.display()
-            ))
-        })
 }
 
 pub struct Worker {

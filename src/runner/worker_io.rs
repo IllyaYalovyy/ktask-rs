@@ -1,8 +1,10 @@
 //! One worker under the attempt: launched through the guardian, its output streamed into the
 //! attempt as it arrives, stopped by Pause, Stop or a time limit.
 use super::{
-    Context, Outcome, agent, output,
-    process::{self, Invocation, Received, Worker},
+    Context, Outcome, agent,
+    evidence::ArtifactTarget,
+    output,
+    process::{Invocation, Received, Worker},
     provider,
 };
 use crate::{
@@ -40,7 +42,7 @@ pub(super) fn execute(
     }
     let ai = stream.is_some();
     // A check's completed collection says what it left, also when that is nothing.
-    let mut spec = with_evidence(spec, run, step, ctx, !ai);
+    let mut spec = with_evidence(spec, run, step, ctx, service.project_id, !ai);
     spec.scratch_limits = Some(service.scratch_limits(run.attempt)?);
     // A check's timeout is for its command, which only the guardian can time exactly. An
     // agent's stage limit stays here.
@@ -122,11 +124,13 @@ fn with_evidence(
     run: &Run,
     step: &Step,
     ctx: &Context<'_>,
+    project_id: i64,
     record_empty: bool,
 ) -> Invocation {
     let mut spec = spec.clone();
-    spec.artifact_target = Some(process::ArtifactTarget {
+    spec.artifact_target = Some(ArtifactTarget {
         state: ctx.paths.state.clone(),
+        project_id,
         project: ctx.workspace.root.clone(),
         scratch_root: ctx.scratch_root(),
         attempt: run.attempt,

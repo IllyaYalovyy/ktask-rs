@@ -1,6 +1,6 @@
 //! Findings are normal work within one durable attempt, not failed attempts.
 use super::{
-    Context, Outcome, check_timeout, checks, finish_evidence,
+    Context, Outcome, check_timeout, checks, evidence,
     judge::{judge, judge_attempt},
     record_pause, resource_breach,
     turn::ai,
@@ -65,7 +65,7 @@ fn phases(
             return Ok(wait);
         }
         // Reviewers are given complete evidence, or the fact that it is truncated.
-        finish_evidence(service, ctx.workspace)?;
+        evidence::finish(service, ctx.workspace, &ctx.scratch_root())?;
         refresh_verified_proof(service, run, ctx, progress)?;
         if let Some(breach) = service.pending_breach(run)? {
             match resource_breach::resolve(service, run, ctx, progress, &breach) {

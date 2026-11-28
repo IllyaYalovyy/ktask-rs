@@ -3,7 +3,7 @@
 use super::{
     Options, Workspace,
     attempt::{self, Then},
-    control, cycle, finish_evidence, process, provider,
+    control, cycle, evidence, process, provider,
     provider::Provider,
     registration::Registration,
     sandbox, session, workspace,
@@ -35,7 +35,7 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
     control::finish_pending_with_workspace(service, &workspace)?;
     workspace::git_identity(&workspace.root)?;
     // Before anything reclaims scratch: evidence a stopped guardian kept is archived now.
-    finish_evidence(service, &workspace)?;
+    evidence::finish(service, &workspace, &paths.cache.join("workers"))?;
     require_changed_cause(service, paths, &workspace)?;
     open_session(service, options)?;
     registration.admitted();

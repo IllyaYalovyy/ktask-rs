@@ -16,6 +16,7 @@ pub mod control;
 mod cycle;
 mod delivery;
 mod diagnosis;
+pub(crate) mod evidence;
 mod failure_summary;
 pub mod fix;
 pub(crate) mod investigate;
@@ -116,18 +117,6 @@ fn record_pause(
             claim: 0,
         },
     )
-}
-
-/// Finishes the evidence a guardian could not archive. A held worker lease means a
-/// guardian is still at it.
-fn finish_evidence(service: &Service, workspace: &Workspace) -> Result<()> {
-    let Ok(_lease) = process::lock(&workspace.worker_lock) else {
-        return Ok(());
-    };
-    for note in service.finish_pending_evidence()? {
-        note!("{note}");
-    }
-    Ok(())
 }
 
 /// The reason of a resource-limit pause: capacity, not the work, stopped the attempt.

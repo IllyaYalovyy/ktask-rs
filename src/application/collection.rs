@@ -279,6 +279,46 @@ impl Service {
         Ok(db.last_insert_rowid())
     }
 
+    /// Register a disk handoff and its visible note together. The same handoff can be
+    /// replayed after a crash, including after its collection has already closed.
+    pub(crate) fn import_deferred_collection(
+        &self,
+        collection: &Collection<'_>,
+        note: &str,
+    ) -> Result<()> {
+        let tx = Transaction::new_unchecked(self.db.connection(), TransactionBehavior::Immediate)?;
+        let task: Option<i64> = tx
+            .query_row(
+                "SELECT task_id FROM attempts WHERE id=?1 AND project_id=?2 AND execution_token=?3",
+                params![collection.attempt, self.project_id, collection.token],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(task) = task else {
+            return Ok(());
+        };
+        let inserted = tx.execute(
+            "INSERT INTO evidence_collections(attempt_id,relative_prefix,source_path,source_tree,state)
+             SELECT ?1,?2,?3,?4,'collecting' WHERE NOT EXISTS (
+                 SELECT 1 FROM evidence_collections WHERE attempt_id=?1 AND relative_prefix=?2 AND source_path=?3
+             )",
+            params![
+                collection.attempt,
+                collection.prefix,
+                collection.source.as_os_str().as_bytes(),
+                collection.tree,
+            ],
+        )?;
+        if inserted != 0 {
+            tx.execute(
+                "INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message)
+                 VALUES (?1,?2,?3,?4,'evidence.deferred','warning',?5)",
+                params![self.project_id, task, collection.attempt, now_ms(), note],
+            )?;
+        }
+        Ok(tx.commit()?)
+    }
+
     /// Raise the artifact limits the evidence has steadily grown past.
     fn extend_for(&self, attempt: i64, pending: &[&Found]) -> Result<()> {
         let sizes = pending.iter().map(|found| found.size);
